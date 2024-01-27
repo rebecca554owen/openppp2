@@ -100,6 +100,12 @@ namespace ppp {
 
                                     RinetdConnection::Dispose();
                                 }
+                                virtual void                                                        Update() noexcept override {
+                                    std::shared_ptr<TapTcpClient> owner = owner_;
+                                    if (NULL != owner) {
+                                        owner->Update();
+                                    }
+                                }
 
                             private:
                                 std::shared_ptr<TapTcpClient>                                       owner_;
@@ -161,7 +167,7 @@ namespace ppp {
                 // If the link is relayed through the VPN remote switcher, then run the VPN link relay subroutine.
                 if (std::shared_ptr<VirtualEthernetTcpipConnection> connection = connection_; NULL != connection) {
                     bool ok = connection->Run(y);
-                    connection->Dispose();
+                    IDisposable::DisposeReferences(connection);
                     return ok;
                 }
                 

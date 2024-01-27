@@ -358,20 +358,25 @@ int ppp_vslprintf(char *buf, int buflen, const char *fmt, va_list args) {
 	}
 	if (base != 0) {
 	    str = num + sizeof(num);
-	    *--str = 0;
+		str--;
+	    *str = 0;
 	    while (str > num + neg) {
-		*--str = hexchars[val % base];
+		str--;
+		*str = hexchars[val % base];
 		val = val / base;
 		if (--prec <= 0 && val == 0)
 		    break;
 	    }
 	    switch (neg) {
 	    case 1:
-		*--str = '-';
+		str--;
+		*str = '-';
 		break;
 	    case 2:
-		*--str = 'x';
-		*--str = '0';
+		str--;
+		*str = 'x';
+		str--;
+		*str = '0';
 		break;
 	    default:
 		break;

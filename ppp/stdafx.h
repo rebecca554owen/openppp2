@@ -227,6 +227,14 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 
+#ifndef TRUE
+#define TRUE 1
+#endif
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+
 static constexpr int         PPP_BUFFER_SIZE              = 65536; 
 static constexpr int         PPP_LISTEN_BACKLOG           = 511;
 static constexpr int         PPP_TCP_CONNECT_TIMEOUT      = 5;
@@ -320,6 +328,21 @@ static constexpr const char* PPP_PUBLIC_DNS_SERVER_LIST[] = {
     "211.148.192.141"
 };
 
+namespace ppp {
+    typedef unsigned char                                                   Byte;
+    typedef signed char                                                     SByte;
+    typedef signed short int                                                Int16;
+    typedef signed int                                                      Int32;
+    typedef signed long long                                                Int64;
+    typedef unsigned short int                                              UInt16;
+    typedef unsigned int                                                    UInt32;
+    typedef unsigned long long                                              UInt64;
+    typedef double                                                          Double;
+    typedef float                                                           Single;
+    typedef bool                                                            Boolean;
+    typedef signed char                                                     Char;
+}
+
 namespace std {
     inline int _snprintf(char* const _Buffer, size_t const _BufferCount, char const* const _Format, ...) noexcept {
         va_list ap;
@@ -352,6 +375,36 @@ namespace stl {
 
     using true_type = bool_constant<true>;
     using false_type = bool_constant<false>;
+
+    template <typename _Ty>
+    struct is_signed : false_type {};
+
+    template <>
+    struct is_signed<char> : true_type {};
+
+    template <>
+    struct is_signed<int> : true_type {};
+
+    template <>
+    struct is_signed<short> : true_type {};
+
+    template <>
+    struct is_signed<long> : true_type {};
+
+    template <>
+    struct is_signed<long long> : true_type {};
+
+    template <>
+    struct is_signed<float> : true_type {};
+
+    template <>
+    struct is_signed<double> : true_type {};
+
+    template <>
+    struct is_signed<long double> : true_type {};
+
+    template <>
+    struct is_signed<signed char> : true_type {};
 
     template<class T, class U>
     struct is_same : false_type {};
@@ -477,45 +530,128 @@ namespace stl {
         return snprintf(buf, sizeof(buf), "%Lf", num) > 0 ? buf : "";
     }
 
+    template <typename TString>
+    inline TString                                                          to_string(bool v) noexcept {
+        return v ? "true" : "false";
+    }
+
     template <typename TString, typename TNumber>
     inline TString                                                          to_string(TNumber num, int radix = 10) noexcept {
         static constexpr char hex[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        char buf[536];
         if (radix < 2) {
             radix = 10;
         }
-        elif(radix > 36) {
+        else if (radix > 36) {
             radix = 36;
         }
 
-        char buf[536];
         if (num == 0) {
             buf[0] = '0';
             buf[1] = '\x0';
             return buf;
         }
+        
+        bool n = false;
+        if constexpr (stl::is_signed<TNumber>::value) {
+            n = num < 0;
+        }
 
-        int len = 0;
-        if (std::is_signed<TNumber>::value) {
-            int64_t n = (int64_t)(num);
-            if (n < 0) {
-                buf[0] = '-';
-                num = (TNumber)(-n);
-                ++len;
+        char* p = buf + sizeof(buf);
+        char* m = p;
+
+        p--;
+        *p = '\x0';
+
+        TNumber t;
+        if constexpr (stl::is_signed<TNumber>::value) {
+            t = n ? -num : num;
+        }
+        else {
+            t = num;
+        }
+
+        while (t > 0) {
+            p--;
+            *p = hex[(int)(t % radix)];
+            t = t / radix;
+        }
+
+        if (n) {
+            p--;
+            *p = '-';
+        }
+
+        return TString(p, m - p - 1);
+    }
+
+    template <typename TNumber, typename TString>
+    inline TNumber                                                          to_number(const TString& v, int radix)
+    {
+        int length = v.size();
+        if (length < 1)
+        {
+            return 0;
+        }
+
+        if (radix < 2)
+        {
+            radix = 10;
+        }
+        else if (radix > 36)
+        {
+            radix = 36;
+        }
+
+        TNumber num = 0;
+        bool is_negative = false;
+        int i = 0;
+
+        if (v[i] == '-')
+        {
+            is_negative = true;
+            i++;
+        }
+        else if (v[i] == '+')
+        {
+            i++;
+        }
+
+        while (i < length)
+        {
+            char ch = v[i];
+            int val = -1;
+            if (ch >= '0' && ch <= '9')
+            {
+                val = ch - '0';
+            }
+            else if (ch >= 'A' && ch <= 'Z')
+            {
+                val = ch - 'A' + 10;
+            }
+            else if (ch >= 'a' && ch <= 'z')
+            {
+                val = ch - 'a' + 10;
+            }
+
+            if (val >= 0 && val < radix)
+            {
+                num = num * radix + val;
+                i++;
+            }
+            else
+            {
+                break;
             }
         }
 
-        int tmp = num;
-        while (tmp > 0) {
-            tmp /= radix;
-            ++len;
+        if (is_negative)
+        {
+            num = -num;
         }
 
-        buf[len] = '\x0';
-        while (num > 0) {
-            buf[--len] = '0' + (num % radix);
-            num /= radix;
-        }
-        return buf;
+        return num;
     }
 }
 
@@ -658,19 +794,6 @@ namespace ppp {
         }
     }
 
-    typedef unsigned char                                                   Byte;
-    typedef signed char                                                     SByte;
-    typedef signed short int                                                Int16;
-    typedef signed int                                                      Int32;
-    typedef signed long long                                                Int64;
-    typedef unsigned short int                                              UInt16;
-    typedef unsigned int                                                    UInt32;
-    typedef unsigned long long                                              UInt64;
-    typedef double                                                          Double;
-    typedef float                                                           Single;
-    typedef bool                                                            Boolean;
-    typedef signed char                                                     Char;
-
     template <class _Ty>
     class allocator {
     public:
@@ -809,7 +932,9 @@ namespace ppp {
 
     template <typename TKey, typename TValue>
     using unordered_map = std::unordered_map<TKey, TValue, std::hash<TKey>, std::equal_to<TKey>, allocator<std::pair<const TKey, TValue>>>;
+}
 
+namespace ppp {
     template<typename _Ty>
     inline int                                                              Tokenize(const _Ty& str, ppp::vector<_Ty>& tokens, const _Ty& delimiters) noexcept {
         if (str.empty()) {
@@ -1184,8 +1309,6 @@ namespace ppp {
     const char*                                                             GetSystemCode() noexcept;
 
     const char*                                                             GetPlatformCode() noexcept;
-
-    int                                                                     GetPlatformCPU() noexcept;
 
     const char*                                                             GetDefaultCipherSuites() noexcept;
 
@@ -1576,15 +1699,15 @@ namespace ppp {
     private:
         inline void                             lock() noexcept {
             for (;;) {
-                bool expected = false;
-                if (lk_.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+                int expected = FALSE;
+                if (lk_.compare_exchange_strong(expected, TRUE, std::memory_order_acquire)) {
                     break;
                 }
             }
         }
         inline void                             unlock() {
-            bool expected = true;
-            bool ok = lk_.compare_exchange_strong(expected, false, std::memory_order_release);
+            int expected = TRUE;
+            bool ok = lk_.compare_exchange_strong(expected, FALSE, std::memory_order_release);
             if (!ok) {
                 throw std::runtime_error("failed to acquire the atomic lock.");
             }
@@ -1658,7 +1781,7 @@ namespace ppp {
         };
 
     private:
-        mutable std::atomic<bool>               lk_       = false;
+        mutable std::atomic<int>                lk_       = false;
         mutable Function                        f_        = NULL;
         mutable std::shared_ptr<ICallable>      callable_ = NULL; // COW.
     };

@@ -105,11 +105,6 @@ namespace ppp {
             const std::shared_ptr<ITap>                                     Tap;
 
         public:
-            uint64_t                                                        MaxConnectTimeout     = 10 * 1000;
-            uint64_t                                                        MaxFinalizeTimeout    = 20 * 1000;
-            uint64_t                                                        MaxEstablishedTimeout = 72 * 1000;
-
-        public:
             VNetstack() noexcept;
             virtual ~VNetstack() noexcept;
 
@@ -123,6 +118,9 @@ namespace ppp {
 
         protected:
             virtual std::shared_ptr<TapTcpClient>                           BeginAcceptClient(const boost::asio::ip::tcp::endpoint& localEP, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept;
+            virtual uint64_t                                                GetMaxConnectTimeout() noexcept;
+            virtual uint64_t                                                GetMaxFinalizeTimeout() noexcept;
+            virtual uint64_t                                                GetMaxEstablishedTimeout() noexcept;
 
         private:
             bool                                                            RST(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept;

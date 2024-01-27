@@ -41,10 +41,14 @@ namespace ppp
 
                 void PaperAirplaneController::Finalize() noexcept
                 {
-                    PaperAirplaneControlBlockPortPtr block_port = block_port_;
-                    if (NULL != block_port && block_port->IsAvailable())
+                    PaperAirplaneControlBlockPortPtr block_port = std::move(block_port_);
+                    if (NULL != block_port)
                     {
-                        block_port->Set(-1, IPEndPoint::MinPort);
+                        block_port_.reset();
+                        if (block_port->IsAvailable())
+                        {
+                            block_port->Set(-1, IPEndPoint::MinPort);
+                        }
                     }
 
                     for (int i = 0; i < arraysizeof(acceptors_); i++)
@@ -54,7 +58,6 @@ namespace ppp
                     }
 
                     disposed_ = true;
-                    block_port_.reset();
                 }
 
                 void PaperAirplaneController::Dispose() noexcept

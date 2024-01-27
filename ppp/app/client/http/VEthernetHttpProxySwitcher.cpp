@@ -110,8 +110,7 @@ namespace ppp {
                     ppp::net::Socket::AdjustDefaultSocketOptional(sockfd, false);
                     ppp::net::Socket::SetTypeOfService(sockfd);
                     ppp::net::Socket::SetSignalPipeline(sockfd, false);
-                    ppp::net::Socket::SetDontFragment(sockfd, false);
-
+                    
                     auto self = shared_from_this();
                     acceptor->AcceptSocket = make_shared_object<ppp::net::SocketAcceptor::AcceptSocketEventHandler>(
                         [self, this](ppp::net::SocketAcceptor*, ppp::net::SocketAcceptor::AcceptSocketEventArgs& e) noexcept {

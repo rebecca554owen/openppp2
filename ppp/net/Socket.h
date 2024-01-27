@@ -87,14 +87,13 @@ namespace ppp {
 
         public:
             static void                                                                 AdjustDefaultSocketOptional(int sockfd, bool in4) noexcept;
-            static void                                                                 AdjustSocketOptional(const boost::asio::ip::tcp::socket& socket, bool fastOpen, bool noDealy) noexcept;
-            static void                                                                 AdjustSocketOptional(const boost::asio::ip::udp::socket& socket) noexcept;
+            static void                                                                 AdjustSocketOptional(const boost::asio::ip::tcp::socket& socket, bool in4, bool fastOpen, bool noDealy) noexcept;
+            static void                                                                 AdjustSocketOptional(const boost::asio::ip::udp::socket& socket, bool in4) noexcept;
 
         public:
             static int                                                                  GetDefaultTTL() noexcept;
             static bool                                                                 SetTypeOfService(int fd, int tos = ~0) noexcept;
             static bool                                                                 SetSignalPipeline(int fd, bool sigpipe) noexcept;
-            static bool                                                                 SetDontFragment(int fd, bool dontFragment) noexcept;
             static bool                                                                 ReuseSocketAddress(int fd, bool reuse) noexcept;
 
         public:

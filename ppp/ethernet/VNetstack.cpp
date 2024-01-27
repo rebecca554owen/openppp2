@@ -23,7 +23,7 @@ namespace ppp {
             uint64_t src_ep = MAKE_QWORD(src_ip, src_port);
             uint64_t dst_ep = MAKE_QWORD(dst_ip, dst_port);
 
-            return Int128(src_ep, dst_ep);
+            return MAKE_OWORD(dst_ep, src_ep);
         }
 
         VNetstack::TapTcpLink::TapTcpLink() noexcept {
@@ -180,8 +180,7 @@ namespace ppp {
                     ppp::net::Socket::AdjustDefaultSocketOptional(handle, false);
                     ppp::net::Socket::SetTypeOfService(handle);
                     ppp::net::Socket::SetSignalPipeline(handle, false);
-                    ppp::net::Socket::SetDontFragment(handle, false);
-
+                    
                     listenEP_ = IPEndPoint::ToEndPoint(Socket::GetLocalEndPoint(acceptor->GetHandle()));
                     constantof(localPort) = listenEP_.Port;
                 }
@@ -321,7 +320,23 @@ namespace ppp {
             return this->Output(lan2wan, ip, tcp, tcp_len);
         }
 
+        uint64_t VNetstack::GetMaxConnectTimeout() noexcept {
+            return 10000;
+        }
+
+        uint64_t VNetstack::GetMaxFinalizeTimeout() noexcept {
+            return 20000;
+        }
+
+        uint64_t VNetstack::GetMaxEstablishedTimeout() noexcept {
+            return 72000;;
+        }
+
         bool VNetstack::Update(uint64_t now) noexcept {
+            const uint64_t MaxEstablishedTimeout = GetMaxEstablishedTimeout();
+            const uint64_t MaxFinalizeTimeout = GetMaxFinalizeTimeout();
+            const uint64_t MaxConnectTimeout = GetMaxConnectTimeout();
+
             ppp::vector<TapTcpLink::Ptr> releases;
             for (auto tail = this->wan2lan_.begin(); tail != this->wan2lan_.end();) {
                 std::shared_ptr<TapTcpLink> link = tail->second;
@@ -345,9 +360,15 @@ namespace ppp {
                     elif(socket->IsDisposed()) {
                         releases.emplace_back(link);
                     }
-                    elif(deltaTime >= MaxFinalizeTimeout) {
-                        releases.emplace_back(link);
+                    else {
+                        uint64_t maxTimeout = link->state == TcpState::TCP_STATE_ESTABLISHED ? MaxEstablishedTimeout : MaxFinalizeTimeout;
+                        if (deltaTime >= maxTimeout) {
+                            releases.emplace_back(link);
+                        }
                     }
+                }
+                elif(link->state == TcpState::TCP_STATE_ESTABLISHED) {
+                    goto TCP_STATE_INACTIVE;
                 }
                 elif(link->state == TcpState::TCP_STATE_CLOSED) {
                     releases.emplace_back(link);
@@ -362,8 +383,11 @@ namespace ppp {
                         releases.emplace_back(link);
                     }
                 }
-                elif(deltaTime >= MaxEstablishedTimeout) {
-                    releases.emplace_back(link);
+                else {
+                TCP_STATE_INACTIVE:
+                    if (deltaTime >= MaxEstablishedTimeout) {
+                        releases.emplace_back(link);
+                    }
                 }
             }
 

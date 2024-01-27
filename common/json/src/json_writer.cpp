@@ -96,10 +96,12 @@ String valueToString(LargestInt value) {
   char* current = buffer + sizeof(buffer);
   if (value == Value::minLargestInt) {
     uintToString(LargestUInt(Value::maxLargestInt) + 1, current);
-    *--current = '-';
+    current--;
+    *current = '-';
   } else if (value < 0) {
     uintToString(LargestUInt(-value), current);
-    *--current = '-';
+    current--;
+    *current = '-';
   } else {
     uintToString(LargestUInt(value), current);
   }

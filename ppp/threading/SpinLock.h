@@ -29,7 +29,7 @@ namespace ppp
             void                        unlock() noexcept { Leave(); }
 
         public:
-            std::atomic<bool>           _;
+            std::atomic<int>            _;
         };
 
         class RecursiveSpinLock final

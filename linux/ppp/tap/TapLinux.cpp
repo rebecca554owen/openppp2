@@ -41,6 +41,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/threading/SpinLock.h>
 
 // ip tuntap add mode tun dev tun0
 // ip addr add 10.0.0.1/24 dev tun0
@@ -834,14 +835,14 @@ namespace ppp {
         }
 
         void TapLinux::Finalize() noexcept {
-            bool disposed = disposed_.exchange(true);
-            if (!disposed) {
+            int disposed = disposed_.exchange(TRUE);
+            if (disposed != TRUE) {
                 SetNetifUp(false);
             }
         }
 
         // When you turn on optimized compilation, try to ask the CXX compiler to embed the following functions into the caller.
-        static inline bool WritePacketToKernelNio(TapLinux* my, std::atomic<bool>& disposed_, const void* packet, int packet_size) noexcept {
+        static inline bool WritePacketToKernelNio(TapLinux* my, std::atomic<int>& disposed_, const void* packet, int packet_size) noexcept {
             // Windows virtual nics need to use Event to write to the kernel asynchronously, 
             // Linux virtual nics can directly write to the kernel ::write function,
             // Can reduce a memory allocation and replication, improve throughput efficiency.
@@ -849,8 +850,8 @@ namespace ppp {
                 return false;
             }
 
-            bool disposed = disposed_.load();
-            if (disposed) {
+            int disposed = disposed_.load();
+            if (disposed != FALSE) {
                 return false;
             }
 
@@ -1125,8 +1126,8 @@ namespace ppp {
                 SIG_IGN_V = SIG_DFL;
             }
 
-            /*retrieve old and set new handlers*/
-            /*restore prevouis signal actions*/
+            /* retrieve old and set new handlers */
+            /* restore prevouis signal actions   */
 #ifdef ANDROID
             Watch(35, SIG_IGN_V); // FDSCAN(SI_QUEUE)
 #endif
@@ -1143,15 +1144,20 @@ namespace ppp {
             signal(SIGXCPU, SIG_EEH_V);
             signal(SIGXFSZ, SIG_EEH_V);
 
-            signal(SIGTRAP, SIG_EEH_V); // 调试陷阱
-            signal(SIGBUS, SIG_EEH_V); // 总线错误(常见于结构对齐问题)
-            signal(SIGQUIT, SIG_EEH_V); // CTRL+\退出终端
-            signal(SIGSTKFLT, SIG_EEH_V); // 进程堆栈崩坏
+            signal(SIGTRAP, SIG_EEH_V);   // 调试陷阱
+            signal(SIGBUS, SIG_EEH_V);    // 总线错误(常见于结构对齐问题)
+            signal(SIGQUIT, SIG_EEH_V);   // CTRL+\退出终端
 
-            signal(SIGSEGV, SIG_EEH_V); // 段错误(试图访问无效地址)
-            signal(SIGFPE, SIG_EEH_V); // 致命的算术运算问题(常见于试图除以零或者FPU/IEEE-754浮点数问题)
-            signal(SIGABRT, SIG_EEH_V); // 程式被中止执行(常见于三方库或固有程式遭遇一般性错误执行abort()强行关闭主板程式）
-            signal(SIGILL, SIG_EEH_V); // 非法硬件指令(CPU/RING 0 ABORT)
+            /* Some specific cpu architecture platforms do not support this signal macro, */
+            /* Such as mips and mips64 instruction set cpu architecture platforms.        */
+#ifdef SIGSTKFLT
+            signal(SIGSTKFLT, SIG_EEH_V); // 进程堆栈崩坏
+#endif
+
+            signal(SIGSEGV, SIG_EEH_V);   // 段错误(试图访问无效地址)
+            signal(SIGFPE, SIG_EEH_V);    // 致命的算术运算问题(常见于试图除以零或者FPU/IEEE-754浮点数问题)
+            signal(SIGABRT, SIG_EEH_V);   // 程式被中止执行(常见于三方库或固有程式遭遇一般性错误执行abort()强行关闭主板程式）
+            signal(SIGILL, SIG_EEH_V);    // 非法硬件指令(CPU/RING 0 ABORT)
             return true;
         }
 
@@ -1238,3 +1244,62 @@ namespace ppp {
         }
     }
 }
+
+/* risv: undefined reference to `__atomic_compare_exchange_1'、`__atomic_fetch_add_2`... */
+#if defined(JEMALLOC)
+#if defined(__riscv) || defined(__riscv__) || defined(__riscv32__) || defined(__riscv64__)
+/* patch: jemalloc-risv */
+static struct __ATOMIC final {
+public:
+    typedef ppp::threading::SpinLock                SynchronizedObject;
+    typedef std::lock_guard<SynchronizedObject>     SynchronizedObjectScope;
+
+public:
+    SynchronizedObject                              Lock;
+}                                                   __ATOMIC_;
+
+// LLVM-CC:
+// GUNL-CC:
+// https://doc.dpdk.org/api-18.11/rte__atomic_8h_source.html
+#ifdef __cplusplus 
+extern "C" { 
+#endif
+    /* 
+     * __atomic_exchange_n(dst, val, __ATOMIC_SEQ_CST);
+     * __atomic_exchange_4(dst, val, __ATOMIC_SEQ_CST);
+     */
+    __attribute__((visibility("default"))) unsigned char __atomic_exchange_1(volatile void* ptr, unsigned char value, int memorder) noexcept {
+        __ATOMIC::SynchronizedObjectScope scope(__ATOMIC_.Lock);
+        unsigned char* dst = (unsigned char*)ptr;
+        unsigned char old = *dst;
+        *dst = value;
+        return old;
+    }
+
+    /*
+        volatile void *ptr: Pointer to the variable to be operated on.
+        void *expected: Pointer to the value to be compared.
+        void *desired: expected new value.
+        bool weak: Indicates whether to use weak memory order (true indicates weak memory order, false indicates strong memory order).
+        int success_memorder: Memory order upon success.
+        int failure_memorder: Memory sequence of failure.
+    */
+    __attribute__((visibility("default"))) bool __atomic_compare_exchange_1(volatile void* ptr, void* expected, unsigned char desired, bool weak, int success_memorder, int failure_memorder) noexcept {
+        __ATOMIC::SynchronizedObjectScope scope(__ATOMIC_.Lock);
+        unsigned char* dst = (unsigned char*)ptr;
+        unsigned char* exchange = (unsigned char*)expected;
+        
+        unsigned char old = *dst;
+        if (old != *exchange) {
+            return false;
+        }
+
+        *dst = desired;
+        *exchange = old;
+        return true;
+    }
+#ifdef __cplusplus 
+}
+#endif
+#endif
+#endif

@@ -68,6 +68,7 @@ namespace ppp
             bool                                        SetInterfaceName(int interface_index, const ppp::string& interface_name) noexcept;
             bool                                        SetDnsAddresses(int interface_index, const ppp::vector<ppp::string>& servers) noexcept;
             bool                                        SetDefaultIPGateway(int interface_index, const ppp::vector<ppp::string>& servers) noexcept;
+            bool                                        SetDefaultIPGateway(int interface_index, const ppp::vector<boost::asio::ip::address>& servers) noexcept;
             bool                                        SetIPAddresses(const ppp::string& interface_name, const ppp::string& ip, const ppp::string& mask) noexcept;
             bool                                        SetIPAddresses(int interface_index, const ppp::vector<ppp::string>& ips, const ppp::vector<ppp::string>& masks) noexcept;
             bool                                        DhcpEnabled(int interface_index) noexcept;

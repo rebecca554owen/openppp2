@@ -131,11 +131,12 @@ namespace ppp {
                 boost::system::error_code ec;
                 socket->open(protocol, ec);
 
+                bool in4 = protocol == boost::asio::ip::tcp::v4();
                 if (ec) {
                     return NULL;
                 }
 
-                Socket::AdjustSocketOptional(*socket, configuration->tcp.fast_open, configuration->tcp.turbo);
+                Socket::AdjustSocketOptional(*socket, in4, configuration->tcp.fast_open, configuration->tcp.turbo);
                 return socket;
             }
 

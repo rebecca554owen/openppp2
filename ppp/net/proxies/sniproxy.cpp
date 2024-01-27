@@ -332,7 +332,6 @@ namespace ppp {
                 int handle_ = remote_socket_.native_handle();
                 Socket::SetTypeOfService(handle_);
                 Socket::SetSignalPipeline(handle_, false);
-                Socket::SetDontFragment(handle_, false);
                 Socket::ReuseSocketAddress(handle_, false);
 
                 // [CONNECT]SSL VPN

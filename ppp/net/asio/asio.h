@@ -38,7 +38,7 @@ namespace ppp {
                     typedef boost::asio::ip::basic_resolver<TProtocol> protocol_resolver;
 
                     boost::system::error_code ec;
-                    typename protocol_resolver::query q(hostname, std::to_string(port).c_str());
+                    typename protocol_resolver::query q(hostname, stl::to_string<ppp::string>(port).data());
 #ifndef _WIN32
                     typename protocol_resolver::iterator i;
                     typename protocol_resolver::iterator l;

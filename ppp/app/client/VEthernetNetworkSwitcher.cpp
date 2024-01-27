@@ -962,6 +962,13 @@ namespace ppp {
 
                 // Add and delete all windows default route information!
                 ppp::win32::network::AddAllRoutes(default_routes_);
+
+                // Force to set the network card gateway server, not just manually add the routing table, 
+                // In the previous system can add routes, 
+                // The system will automatically set the network card, but the latest WIN11 can not.
+                if (std::shared_ptr<NetworkInterface> ni = underlying_ni_; NULL != ni) {
+                    ppp::win32::network::SetDefaultIPGateway(ni->Index, { ni->GatewayServer });
+                }
 #elif _LINUX
                 // Delete the loaded route table from the linux operating system.
                 if (auto underlying_ni = GetUnderlyingNetowrkInterface(); NULL != underlying_ni) {
@@ -1015,7 +1022,7 @@ namespace ppp {
                     server_ep_ = remoteEP;
                     server_ru_ = hostname;
                     server_ru_ += ":";
-                    server_ru_ += std::to_string(port);
+                    server_ru_ += stl::to_string<ppp::string>(port);
                     server_ru_ += "/";
                     
                     if (protocol_type == ProtocolType::ProtocolType_Http || protocol_type == ProtocolType::ProtocolType_WebSocket) {

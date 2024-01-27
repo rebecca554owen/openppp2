@@ -275,7 +275,7 @@ namespace ppp {
             }
 
             int VirtualEthernetLinklayer::NewId() noexcept {
-                static std::atomic<unsigned short> aid = /*ATOMIC_FLAG_INIT*/RandomNext();
+                static std::atomic<unsigned int> aid = /*ATOMIC_FLAG_INIT*/RandomNext();
                 static constexpr int max_aid = (1 << 24) - 1;
 
                 for (;;) {

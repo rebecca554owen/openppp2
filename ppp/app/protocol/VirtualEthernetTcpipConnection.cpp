@@ -190,8 +190,8 @@ namespace ppp {
                     return false;
                 }
 
-#ifdef _LINUX
                 boost::asio::ip::address destinationIP = destinationEP.address();
+#ifdef _LINUX
                 if (!destinationIP.is_loopback()) {
                     if (auto protector_network = ProtectorNetwork; NULL != protector_network) {
                         if (!protector_network->Protect(socket_->native_handle())) {
@@ -202,7 +202,7 @@ namespace ppp {
 #endif
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                ppp::net::Socket::AdjustSocketOptional(*socket_, configuration->tcp.fast_open, configuration->tcp.turbo);
+                ppp::net::Socket::AdjustSocketOptional(*socket_, destinationIP.is_v4(), configuration->tcp.fast_open, configuration->tcp.turbo);
 
                 bool ok = ppp::coroutines::asio::async_connect(*socket_, destinationEP, y);
                 if (NULL != logger) {

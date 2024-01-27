@@ -463,7 +463,7 @@ namespace ppp
                 });
             if (NULL == t)
             {
-                return NULL;
+                return false;
             }
 
             t->SetPriority(ThreadPriority::Highest);

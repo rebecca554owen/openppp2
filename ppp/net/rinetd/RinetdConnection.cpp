@@ -120,7 +120,7 @@ namespace ppp {
 #endif
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                ppp::net::Socket::AdjustSocketOptional(*socket, configuration->tcp.fast_open, configuration->tcp.turbo);
+                ppp::net::Socket::AdjustSocketOptional(*socket, remoteIP.is_v4(), configuration->tcp.fast_open, configuration->tcp.turbo);
 
                 std::shared_ptr<RinetdConnection> self = shared_from_this();
                 socket->async_connect(remoteEP,

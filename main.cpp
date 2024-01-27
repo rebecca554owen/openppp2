@@ -28,7 +28,7 @@
 #endif
 
 #ifndef PPP_APPLICATION_VERSION
-#define PPP_APPLICATION_VERSION ("1.0.0.24044") /* 10.0.0.240125 */
+#define PPP_APPLICATION_VERSION ("1.0.0.24045") /* 10.0.0.240126 */
 #endif
 
 #ifndef PPP_APPLICATION_NAME
@@ -384,7 +384,7 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
             }
 
             ppp::string tmp = "Service ";
-            tmp += std::to_string(++j);
+            tmp += stl::to_string<ppp::string>(++j);
             tmp = ppp::PaddingRight(tmp, 22, ' ');
             tmp += ": " + IPEndPoint::ToEndPoint(serverEP).ToString();
             tmp += "/";
@@ -445,7 +445,7 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
 
                 for (std::size_t i = 0, l = ni->DnsAddresses.size(); i < l; i++)
                 {
-                    std::string tmp = "DNS Server " + std::to_string(i + 1);
+                    ppp::string tmp = "DNS Server " + stl::to_string<ppp::string>(i + 1);
                     tmp = ppp::PaddingRight(tmp, 22, ' ');
                     tmp += ": " + ni->DnsAddresses[i].to_string();
                     printfn("%s", tmp.data());
@@ -478,7 +478,7 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
     printfn("Duration              : %s", stopwatch_.Elapsed().ToString("HH:mm:ss").data());
     if (NULL != server) 
     {
-        printfn("Sessions              : %s", std::to_string(server->GetAllExchangerNumber()).data());
+        printfn("Sessions              : %s", stl::to_string<ppp::string>(server->GetAllExchangerNumber()).data());
     }
 
     printfn("TX                    : %s", ppp::StrFormatByteSize(TransmissionStatistics.outgoing_traffic).data());

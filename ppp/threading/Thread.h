@@ -82,7 +82,7 @@ namespace ppp
             SynchronizedObject                                              _syncobj;
             ThreadStart                                                     _start;
             ThreadLocalStorageData                                          _tls;
-            std::atomic<bool>                                               _ready;
+            std::atomic<int>                                                _ready;
         };
     }
 }

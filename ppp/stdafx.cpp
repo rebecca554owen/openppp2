@@ -571,6 +571,8 @@ namespace ppp {
         return "ARMv7A";
 #elif defined(__ARM_ARCH_7__)
         return "ARMv7";
+#elif defined(__arm__)
+        return "ARM";
 #elif defined(__aarch64__) || defined(_M_ARM64)
         return "ARMv8A"; /* AARCH64 */
 #elif defined(mips) || defined(__mips__) || defined(__mips)
@@ -588,11 +590,17 @@ namespace ppp {
 #elif defined(__s390x__)
         return "S390X";
 #elif defined(__riscv) || defined(__riscv__) || defined(__riscv32__) || defined(__riscv64__)
-#if __riscv_xlen == 32   // https://chromium.googlesource.com/external/webrtc/+/master/rtc_base/system/arch.h
-        return "RISC-V"
+#if __riscv_xlen == 32 // https://chromium.googlesource.com/external/webrtc/+/master/rtc_base/system/arch.h
+        return "RISC-V";
 #else
-        return "RISC-V64" // 64
+        return "RISC-V64"; // 64
 #endif
+#elif defined(__loongarch32) /* https://github.com/gcc-mirror/gcc/blob/master/gcc/config/loongarch/loongarch.h */
+        return "LOONGARCH32";
+#elif defined(__loongarch64) /* https://www.boost.org/doc/libs/1_81_0/boost/predef/architecture/loongarch.h */
+        return "LOONGARCH64";
+#elif defined(__loongarch)
+        return sizeof(void*) == 8 ? "LOONGARCH32" : "LOONGARCH64";
 #else
         return "UNKNOWN";
 #endif
@@ -619,10 +627,12 @@ namespace ppp {
     }
 
     const char* GetDefaultCipherSuites() noexcept {
-        int cpu_platfrom = GetPlatformCPU();
-        if (cpu_platfrom == 3) {
+#if defined(__arm__) || defined(__aarch64__)
+        if (sizeof(void*) < 8) {
             return "TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384";
         }
+#endif
+
         return "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256";
     }
 

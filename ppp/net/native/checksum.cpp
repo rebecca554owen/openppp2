@@ -24,7 +24,7 @@ namespace ppp
 
             unsigned short ip_hdr::NewId() noexcept
             {
-                static std::atomic<unsigned short> aid = ATOMIC_FLAG_INIT;
+                static std::atomic<unsigned int> aid = ATOMIC_FLAG_INIT;
 
                 unsigned short r = 0;
                 do

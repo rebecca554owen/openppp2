@@ -115,14 +115,14 @@ namespace ppp
 
         bool SpinLock::TryEnter() noexcept
         {
-            bool expected = false;
-            return _.compare_exchange_strong(expected, true, std::memory_order_acquire);
+            int expected = FALSE;
+            return _.compare_exchange_strong(expected, TRUE, std::memory_order_acquire);
         }
 
         void SpinLock::Leave()
         {
-            bool expected = true;
-            bool ok = _.compare_exchange_strong(expected, false, std::memory_order_release);
+            int expected = TRUE;
+            bool ok = _.compare_exchange_strong(expected, FALSE, std::memory_order_release);
             if (!ok)
             {
                 throw std::runtime_error("failed to acquire the atomic lock.");

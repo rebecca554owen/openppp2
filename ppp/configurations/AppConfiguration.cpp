@@ -79,7 +79,7 @@ namespace ppp {
             config.server.backend = "";
             config.server.backend_key = "";
 
-            config.client.guid = StringAuxiliary::Int128ToGuidString(Int128(UINT64_MAX, UINT64_MAX));
+            config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
             config.client.server = "";
             config.client.reconnections.timeout = PPP_TCP_CONNECT_TIMEOUT;
             config.client.http_proxy.bind = "";
@@ -157,7 +157,7 @@ namespace ppp {
             LRTrim(config, 1);
 
             if (config.client.guid.empty()) {
-                config.client.guid = StringAuxiliary::Int128ToGuidString(Int128(UINT64_MAX, UINT64_MAX));
+                config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
             }
 
             if (config.client.reconnections.timeout < 1) {

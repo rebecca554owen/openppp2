@@ -8,7 +8,8 @@ namespace ppp {
         namespace client {
             VEthernetNetworkTcpipStack::VEthernetNetworkTcpipStack(const std::shared_ptr<VEthernetNetworkSwitcher>& ethernet) noexcept
                 : VNetstack()
-                , Ethernet(ethernet) {
+                , Ethernet(ethernet)
+                , configuration_(ethernet->GetConfiguration()) {
 
             }
 
@@ -19,6 +20,10 @@ namespace ppp {
                 }
 
                 auto context = ppp::threading::Executors::GetExecutor();
+                if (NULL == context) {
+                    return NULL;
+                }
+
                 auto connection = make_shared_object<VEthernetNetworkTcpipConnection>(ethernet->GetExchanger(), context);
                 if (NULL == connection) {
                     return NULL;
@@ -26,6 +31,14 @@ namespace ppp {
 
                 connection->Constructor(localEP, remoteEP);
                 return connection;
+            }
+
+            uint64_t VEthernetNetworkTcpipStack::GetMaxConnectTimeout() noexcept {
+                return (uint64_t)configuration_->tcp.connect.timeout * 1000;
+            }
+
+            uint64_t VEthernetNetworkTcpipStack::GetMaxEstablishedTimeout() noexcept {
+                return (uint64_t)configuration_->tcp.inactive.timeout * 1000;
             }
         }
     }

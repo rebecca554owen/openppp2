@@ -651,13 +651,13 @@ namespace ppp {
             ppp::string session_id_string;
             if (session_id) {
                 kfs[0] = RandomNext(0x00, 0x7f);
-                session_id_string = session_id.ToString<ppp::string>();
+                session_id_string = stl::to_string<ppp::string>(session_id);
             }
             else {
                 kfs[0] = RandomNext(0x80, 0xff);
                 int64_t v1 = (int64_t)RandomNext() << 32 | (int64_t)(uint32_t)RandomNext();
                 int64_t v2 = (int64_t)RandomNext() << 32 | (int64_t)(uint32_t)RandomNext();
-                session_id_string = Int128(v1, v2).ToString<ppp::string>();
+                session_id_string = stl::to_string<ppp::string>(MAKE_OWORD(v2, v1));
             }
 
             kfs[1] = RandomNext(0x01, 0xff);
@@ -748,7 +748,7 @@ namespace ppp {
             }
 
             // GUID is an INT128 integer and cannot be 0.
-            Int128 session_id = Int128::Parse(std::string_view(reinterpret_cast<char*>(packet), packet_length), 10);
+            Int128 session_id = stl::to_number<Int128>(std::string_view(reinterpret_cast<char*>(packet), packet_length), 10);
             return session_id;
         }
 
@@ -935,7 +935,7 @@ namespace ppp {
                     }
 
                     if (NULL != protocol_ && NULL != transport_) {
-                        ppp::string ivv_string = ivv.ToString<ppp::string>(32);
+                        ppp::string ivv_string = stl::to_string<ppp::string>(ivv, 32);
                         if (ivv > 0) {
                             ivv_string = "+" + ivv_string;
                         }
@@ -989,7 +989,7 @@ namespace ppp {
             if (ivv != 0) {
                 handshaked_ = true;
                 if (NULL != protocol_ && NULL != transport_) {
-                    ppp::string ivv_string = ivv.ToString<ppp::string>(32);
+                    ppp::string ivv_string = stl::to_string<ppp::string>(ivv, 32);
                     if (ivv > 0) {
                         ivv_string = "+" + ivv_string;
                     }

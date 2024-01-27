@@ -341,8 +341,7 @@ static bool http_easy_request(boost::asio::ip::tcp::socket& socket, const ppp::s
         headers = ppp::Replace<ppp::string>(headers, "{HTTP_HEADER_HOST}", host);
     }
     else {
-        std::string port_string = std::to_string(port);
-        ppp::string header_host = host + ":" + port_string.data();
+        ppp::string header_host = host + ":" + stl::to_string<ppp::string>(port);
         headers = ppp::Replace<ppp::string>(headers, "{HTTP_HEADER_HOST}", header_host.data());
     }
 

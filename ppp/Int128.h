@@ -4,17 +4,27 @@
 
 namespace ppp
 {
+    /* ABI: https://developer.android.com/ndk/guides/cpu-features 
+     * ABI: Use the preprocessor's pre-defined macros
+     * It's usually most convenient to determine the ABI at build time using #ifdef in conjunction with:
+     * 
+     * __arm__ for 32-bit ARM
+     * __aarch64__ for 64-bit ARM
+     * __i386__ for 32-bit X86
+     * __x86_64__ for 64-bit X86
+     * Note that 32-bit X86 is called __i386__, not __x86__ as you might expect!
+     */ 
+#if defined(_WIN32) || defined(__arm__)
+#ifndef _PPP_INT128_H
+#define _PPP_INT128_H
+#endif
+
 #pragma pack(push, 1)
     class Int128
     {
     public:
-#if (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
         unsigned long long                                              lo;
         signed long long                                                hi;
-#else
-        signed long long                                                hi;
-        unsigned long long                                              lo;
-#endif
 
     public:
         Int128() : lo(0), hi(0) {};
@@ -530,114 +540,9 @@ namespace ppp
     }
 
     template <typename TString>
-    inline Int128 Int128::Parse(const TString& v, int radix)
-    {
-        int length = v.size();
-        if (length < 1)
-        {
-            return 0;
-        }
-
-        if (radix < 2)
-        {
-            radix = 10;
-        }
-        else if (radix > 36)
-        {
-            radix = 36;
-        }
-
-        Int128 num = 0;
-        bool is_negative = false;
-        int i = 0;
-
-        if (v[i] == '-')
-        {
-            is_negative = true;
-            i++;
-        }
-        else if (v[i] == '+')
-        {
-            i++;
-        }
-
-        while (i < length)
-        {
-            char ch = v[i];
-            int val = -1;
-            if (ch >= '0' && ch <= '9')
-            {
-                val = ch - '0';
-            }
-            else if (ch >= 'A' && ch <= 'Z')
-            {
-                val = ch - 'A' + 10;
-            }
-            else if (ch >= 'a' && ch <= 'z')
-            {
-                val = ch - 'a' + 10;
-            }
-
-            if (val >= 0 && val < radix)
-            {
-                num = num * radix + val;
-                i++;
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        if (is_negative)
-        {
-            num = -num;
-        }
-
-        return num;
-    }
-
-    template <typename TString>
     inline TString Int128::ToString(int radix)
     {
-        static constexpr char hex[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        if (radix < 2)
-        {
-            radix = 10;
-        }
-        else if (radix > 36)
-        {
-            radix = 36;
-        }
-
-        char buf[536];
-        char* sz = buf + sizeof(buf);
-        *--sz = '\x0';
-
-        Int128 n = Sign() < 0 ? -(*this) : *this;
-        if (n.lo == 0 && n.hi == 0)
-        {
-            buf[0] = '0';
-            buf[1] = '\x0';
-            return buf;
-        }
-
-        Int128 x = radix;
-        while (0 != n.Sign())
-        {
-            Int128 r = 0;
-            n = Int128::DivRem(n, x, r);
-            if (r.lo > 0 || n.Sign() != 0)
-            {
-                *--sz = hex[r.lo];
-            }
-        }
-
-        if (Sign() < 0 && *sz != '0')
-        {
-            *--sz = '-';
-        }
-        return sz;
+        return stl::to_string<TString, Int128>(*this, radix);
     }
 
     template <typename TString>
@@ -649,49 +554,13 @@ namespace ppp
     template <typename TString>
     inline TString Int128::ToHex()
     {
-        char bf[536];
-        char* sz = bf;
-        unsigned char* p = (unsigned char*)&lo;
-        for (int i = 15; i >= 0; --i)
-        {
-            unsigned char ch = p[i];
-            for (int j = 0; j < 2; j++)
-            {
-                char pi = (char)(ch & 0xf);
-                if (pi >= 10)
-                    pi = 'A' + (pi - 10);
-                else
-                    pi = '0' + pi;
-                sz[1 - j] = pi;
-                ch = ch >> 4;
-            }
-            sz += 2;
-        }
-        *sz++ = '\x0';
-        return bf;
+        return ToString<TString>(16);
     }
 
     template <typename TString>
     inline TString Int128::ToBinary()
     {
-        char bf[536];
-        char* sz = bf;
-        unsigned char* p = (unsigned char*)&lo;
-        for (int i = 15; i >= 0; --i)
-        {
-            unsigned char ch = p[i];
-            for (int j = 0; j < 8; j++)
-            {
-                if (ch & 0x01)
-                    sz[7 - j] = '1';
-                else
-                    sz[7 - j] = '0';
-                ch = ch >> 1;
-            }
-            sz += 8;
-        }
-        *sz++ = '\x0';
-        return bf;
+        return ToString<TString>(2);
     }
 
     inline Int128 Int128::Multiply(Int128 left, Int128 right)
@@ -735,7 +604,10 @@ namespace ppp
     {
         int index = uintslen - 1;
         while ((index >= 0) && (uints[index] == 0))
+        {
             index--;
+        }
+
         index = index < 0 ? 0 : index;
         return index + 1;
     }
@@ -900,11 +772,20 @@ namespace ppp
             for (int j = m - n; j >= 0; j--)
             {
                 unsigned long long rr, qq;
+                unsigned int tvn;
                 int i;
 
                 rr = Base32 * un[j + n] + un[j + n - 1];
-                qq = rr / vn[n - 1];
-                rr -= qq * vn[n - 1];
+                tvn = vn[n - 1];
+                if (tvn != 0) 
+                {
+                    qq = rr / tvn;
+                    rr -= qq * tvn;
+                }
+                else
+                {
+                    qq = 0;
+                }
 
                 for (;;)
                 {
@@ -935,6 +816,7 @@ namespace ppp
                     t >>= 32;
                     b = (signed long long)p - t;
                 }
+
                 t = un[j + n] - b;
                 un[j + n] = (unsigned int)t;
 
@@ -967,6 +849,27 @@ namespace ppp
             memcpy(r, u, 16);
         }
     }
+#else
+    typedef __int128_t Int128;
+#endif
+
+    inline Int128 MAKE_OWORD(uint64_t low, uint64_t high) noexcept 
+    {
+        // 1 byte (8 bit): byte, DB, RESB
+        // 2 bytes (16 bit): word, DW, RESW
+        // 4 bytes (32 bit): dword, DD, RESD
+        // 8 bytes (64 bit): qword, DQ, RESQ
+        // 10 bytes (80 bit): tword, DT, REST
+        // 16 bytes (128 bit): oword, DO, RESO, DDQ, RESDQ
+        // 32 bytes (256 bit): yword, DY, RESY
+        // 64 bytes (512 bit): zword, DZ, RESZ
+    
+#ifdef _PPP_INT128_H
+        return Int128(high, low);
+#else
+        return ((Int128)high << 64) | ((Int128)low);
+#endif
+    }
 }
 
 namespace std
@@ -978,9 +881,20 @@ namespace std
         std::size_t operator()(const ppp::Int128& v) const noexcept
         {
             std::hash<int64_t> h;
+#ifdef _PPP_INT128_H
             std::size_t h1 = h(v.lo);
             std::size_t h2 = h(v.hi);
+#else
+            std::size_t h1 = h((int64_t)(v));
+            std::size_t h2 = h((int64_t)(v >> 64));
+#endif
             return h1 ^ (h2 << 1); 
         }
     };
+}
+
+namespace stl
+{
+    template <>
+    struct is_signed<ppp::Int128> : true_type {};
 }

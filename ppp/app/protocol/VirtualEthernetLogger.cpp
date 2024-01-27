@@ -173,7 +173,7 @@ namespace ppp {
                 log += ppp::net::IPEndPoint::ToEndPoint(dstEP).ToString();
                 if (hostDomain.size() > 0) {
                     log += " DOMAIN:" + hostDomain + ":";
-                    log += std::to_string(dstEP.port());
+                    log += stl::to_string<ppp::string>(dstEP.port());
                 }
 
                 log += "\r\n";

@@ -359,55 +359,98 @@ namespace ppp {
             return err == 0;
         }
 
-        bool Socket::SetDontFragment(int fd, bool dontFragment) noexcept {
-            if (fd == -1) {
-                return false;
-            }
-
-            int err = 0;
-#ifdef _WIN32 
-            int val = dontFragment ? 1 : 0;
-            err = ::setsockopt(fd, IPPROTO_IP, IP_DONTFRAGMENT, (char*)&val, sizeof(val));
-#elif IP_MTU_DISCOVER
-            int val = dontFragment ? IP_PMTUDISC_DO : IP_PMTUDISC_WANT;
-            err = ::setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, (char*)&val, sizeof(val));
-#endif
-            return err == 0;
-        }
-
         bool Socket::ReuseSocketAddress(int fd, bool reuse) noexcept {
             if (fd == -1) {
                 return false;
             }
+
             int flag = reuse ? 1 : 0;
             return ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag)) == 0;
         }
+
+        static class SOCKET_RESTRICTIONS final {
+        public:
+            bool IP_TOS_ON;
+            bool IPV6_TCLASS_ON;
+
+        public:
+            SOCKET_RESTRICTIONS() noexcept 
+                : IP_TOS_ON(true)
+                , IPV6_TCLASS_ON(true) {
+
+                int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
+                if (fd != -1) {
+                    ValidV4(fd);
+                    Socket::Closesocket(fd);
+                }
+
+                fd = (int)socket(AF_INET6, SOCK_STREAM, 0);
+                if (fd != -1) {
+                    ValidV6(fd);
+                    Socket::Closesocket(fd);
+                }
+
+                ClearConsoleOutputCharacter();
+            }
+
+        private:
+            bool ValidV4(int sockfd) noexcept {
+                uint8_t tos = IPTOS_LOWDELAY;
+                int err = ::setsockopt(sockfd, SOL_IP, IP_TOS, (char*)&tos, sizeof(tos));
+                if (err > -1) {
+                    return true;
+                }
+
+                IP_TOS_ON = false;
+                return false;
+            }
+
+            bool ValidV6(int sockfd) noexcept {
+                uint8_t tos = IPTOS_LOWDELAY;
+#if IPV6_TCLASS
+                int err = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_TCLASS, (char*)&tos, sizeof(tos));
+                if (err > -1) {
+                    return true;
+                }
+#endif
+
+                IPV6_TCLASS_ON = false;
+                return false;
+            }
+        } SOCKET_RESTRICTIONS_;
 
         void Socket::AdjustDefaultSocketOptional(int sockfd, bool in4) noexcept {
             if (sockfd != -1) {
                 uint8_t tos = IPTOS_LOWDELAY;
                 if (in4) {
-                    ::setsockopt(sockfd, SOL_IP, IP_TOS, (char*)&tos, sizeof(tos));
+                    if (SOCKET_RESTRICTIONS_.IP_TOS_ON) {
+                        ::setsockopt(sockfd, SOL_IP, IP_TOS, (char*)&tos, sizeof(tos));
+                    }
 
-#ifdef _WIN32
-                    int dont_frag = 0;
+#if IP_DONTFRAGMENT
+                    int dont_frag = IP_PMTUDISC_DO;
                     ::setsockopt(sockfd, IPPROTO_IP, IP_DONTFRAGMENT, (char*)&dont_frag, sizeof(dont_frag));
-#elif IP_MTU_DISCOVER
+#elif IP_PMTUDISC_WANT
                     int dont_frag = IP_PMTUDISC_WANT;
                     ::setsockopt(sockfd, IPPROTO_IP, IP_MTU_DISCOVER, &dont_frag, sizeof(dont_frag));
 #endif
                 }
                 else {
-                    ::setsockopt(sockfd, SOL_IPV6, IP_TOS, (char*)&tos, sizeof(tos));
+                    // linux-user: Add missing IP_TOS, IPV6_TCLASS and IPV6_RECVTCLASS sockopts
+                    // QEMU:
+                    // https://patchwork.kernel.org/project/qemu-devel/patch/20170311195906.GA13187@ls3530.fritz.box/
+#if IPV6_TCLASS
+                    if (SOCKET_RESTRICTIONS_.IPV6_TCLASS_ON) {
+                        ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_TCLASS, (char*)&tos, sizeof(tos)); /* SOL_IPV6 */
+                    }
+#endif
 
-#ifdef _WIN32
-                    int dont_frag = 0;
-                    ::setsockopt(sockfd, IPPROTO_IPV6, IP_DONTFRAGMENT, (char*)&dont_frag, sizeof(dont_frag));
-#elif IPV6_MTU_DISCOVER
+#if IPV6_MTU_DISCOVER && IPV6_PMTUDISC_WANT
                     int dont_frag = IPV6_PMTUDISC_WANT;
                     ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &dont_frag, sizeof(dont_frag));
 #endif
                 }
+
 #ifdef SO_NOSIGPIPE
                 int no_sigpipe = 1;
                 ::setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
@@ -565,7 +608,7 @@ namespace ppp {
             boost::asio::post(acceptor_->get_executor(),
                 [context_, acceptor_, accept_, socket_]() noexcept {
                     acceptor_->async_accept(*socket_,
-                        [context_, acceptor_, accept_, socket_](const boost::system::error_code& ec) noexcept {
+                        [context_, acceptor_, accept_, socket_](boost::system::error_code ec) noexcept {
                             if (ec == boost::system::errc::operation_canceled) {
                                 return;
                             }
@@ -576,11 +619,15 @@ namespace ppp {
                                     break;
                                 }
 
+                                boost::asio::ip::tcp::endpoint remoteEP = socket_->local_endpoint(ec);
+                                if (ec) {
+                                    break;
+                                }
+
                                 int handle_ = socket_->native_handle();
-                                Socket::AdjustDefaultSocketOptional(handle_, false);
+                                Socket::AdjustDefaultSocketOptional(handle_, remoteEP.address().is_v4());
                                 Socket::SetTypeOfService(handle_);
                                 Socket::SetSignalPipeline(handle_, false);
-                                Socket::SetDontFragment(handle_, false);
                                 Socket::ReuseSocketAddress(handle_, true);
 
                                 /* Accept Socket?? */
@@ -643,10 +690,9 @@ namespace ppp {
             }
 
             int handle = acceptor_.native_handle();
-            ppp::net::Socket::AdjustDefaultSocketOptional(handle, false);
+            ppp::net::Socket::AdjustDefaultSocketOptional(handle, address_.is_v4());
             ppp::net::Socket::SetTypeOfService(handle);
             ppp::net::Socket::SetSignalPipeline(handle, false);
-            ppp::net::Socket::SetDontFragment(handle, false);
             ppp::net::Socket::ReuseSocketAddress(handle, listenPort);
 
             acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(listenPort), ec);
@@ -711,10 +757,9 @@ namespace ppp {
             }
 
             int handle = socket_.native_handle();
-            ppp::net::Socket::AdjustDefaultSocketOptional(handle, false);
+            ppp::net::Socket::AdjustDefaultSocketOptional(handle, address_.is_v4());
             ppp::net::Socket::SetTypeOfService(handle);
             ppp::net::Socket::SetSignalPipeline(handle, false);
-            ppp::net::Socket::SetDontFragment(handle, false);
             ppp::net::Socket::ReuseSocketAddress(handle, listenPort);
 
             socket_.set_option(boost::asio::ip::udp::socket::reuse_address(listenPort), ec);
@@ -734,14 +779,13 @@ namespace ppp {
             return true;
         }
 
-        void Socket::AdjustSocketOptional(const boost::asio::ip::tcp::socket& socket, bool fastOpen, bool noDealy) noexcept {
+        void Socket::AdjustSocketOptional(const boost::asio::ip::tcp::socket& socket, bool in4, bool fastOpen, bool noDealy) noexcept {
             boost::asio::ip::tcp::socket& s = const_cast<boost::asio::ip::tcp::socket&>(socket);
             if (s.is_open()) {
                 int handle = s.native_handle();
-                ppp::net::Socket::AdjustDefaultSocketOptional(handle, false);
+                ppp::net::Socket::AdjustDefaultSocketOptional(handle, in4);
                 ppp::net::Socket::SetTypeOfService(handle);
                 ppp::net::Socket::SetSignalPipeline(handle, false);
-                ppp::net::Socket::SetDontFragment(handle, false);
                 ppp::net::Socket::ReuseSocketAddress(handle, true);
 
                 boost::system::error_code ec;
@@ -750,14 +794,13 @@ namespace ppp {
             }
         }
 
-        void Socket::AdjustSocketOptional(const boost::asio::ip::udp::socket& socket) noexcept {
+        void Socket::AdjustSocketOptional(const boost::asio::ip::udp::socket& socket, bool in4) noexcept {
             boost::asio::ip::udp::socket& s = const_cast<boost::asio::ip::udp::socket&>(socket);
             if (s.is_open()) {
                 int handle = s.native_handle();
-                ppp::net::Socket::AdjustDefaultSocketOptional(handle, false);
+                ppp::net::Socket::AdjustDefaultSocketOptional(handle, in4);
                 ppp::net::Socket::SetTypeOfService(handle);
                 ppp::net::Socket::SetSignalPipeline(handle, false);
-                ppp::net::Socket::SetDontFragment(handle, false);
                 ppp::net::Socket::ReuseSocketAddress(handle, true);
             }
         }

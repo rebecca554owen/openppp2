@@ -81,7 +81,7 @@ namespace ppp
 
         private:
             bool                                                                promisc_;
-            std::atomic<bool>                                                   disposed_;
+            std::atomic<int>                                                    disposed_; 
             ppp::vector<boost::asio::ip::address>                               dns_addresses_;
         };
     }

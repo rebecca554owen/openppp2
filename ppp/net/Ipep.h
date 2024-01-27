@@ -187,7 +187,7 @@ namespace ppp {
                         }
                 };
 
-                typename protocol_resolver::query q(hostname.c_str(), std::to_string(port).c_str());
+                typename protocol_resolver::query q(hostname.data(), stl::to_string<ppp::string>(port).data());
 #ifndef _WIN32
                 resolver.async_resolve(q,
                     [completion_resolve, callback_](const boost::system::error_code& ec, typename protocol_resolver::iterator results) noexcept {
@@ -231,8 +231,7 @@ namespace ppp {
                 for (int i = 0; i < sizeof(network); i++) {
                     __src--;
                     *__dst = *__src;
-                    __dst++;
-                    /* *__dst++ = *--__src; */
+                    __dst++; /* *__dst++ = *--__src; */
                 }
                 return hostorder;
 #endif

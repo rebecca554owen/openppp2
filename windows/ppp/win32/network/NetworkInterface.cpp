@@ -820,6 +820,36 @@ namespace ppp
                     });
             }
 
+            bool SetDefaultIPGateway(int interface_index, const ppp::vector<boost::asio::ip::address>& servers) noexcept
+            {
+                ppp::vector<ppp::string> addresses;
+                for (const boost::asio::ip::address& ip : servers)
+                {
+                    if (ip.is_v4() || ip.is_v6())
+                    {
+                        if (ppp::net::IPEndPoint::IsInvalid(ip))
+                        {
+                            continue;
+                        }
+
+                        std::string ips = ip.to_string();
+                        if (ips.empty())
+                        {
+                            continue;
+                        }
+
+                        addresses.emplace_back(ppp::string(ips.data(), ips.size()));
+                    }
+                }
+
+                if (addresses.empty())
+                {
+                    addresses.emplace_back("0.0.0.0");
+                }
+
+                return SetDefaultIPGateway(interface_index, addresses);
+            }
+
             bool SetDefaultIPGateway(int interface_index, const ppp::vector<ppp::string>& servers) noexcept
             {
                 return SetNetifAddressesInternal(interface_index,

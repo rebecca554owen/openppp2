@@ -267,7 +267,7 @@ namespace ppp {
                     return NULL;
                 }
 
-                int length_num = (int)Int128::Parse<ppp::string>(ppp::string(length_hex, sizeof(length_hex)), 16);
+                int length_num = (int)stl::to_number<Int128, ppp::string>(ppp::string(length_hex, sizeof(length_hex)), 16);
                 if (length_num < 1) {
                     return NULL;
                 }
@@ -560,12 +560,11 @@ namespace ppp {
                     traffics_.clear();
                 }
 
-                auto s = [](const std::string& i) noexcept { return ppp::string(i.data(), i.size()); };
                 for (auto&& [guid, task] : traffics) {
                     Json::Value json_value;
                     json_value["Guid"] = StringAuxiliary::Int128ToGuidString(guid);
-                    json_value["RX"] = s(std::to_string(task.tx)); // server:tx = client:rx
-                    json_value["TX"] = s(std::to_string(task.rx)); // server:rx = client:tx
+                    json_value["RX"] = stl::to_string<ppp::string>(task.tx); // server:tx = client:rx
+                    json_value["TX"] = stl::to_string<ppp::string>(task.rx); // server:rx = client:tx
                     json_array.append(json_value);
                 }
 
@@ -670,9 +669,9 @@ namespace ppp {
                 if (ec) {
                     return NULL;
                 }
-                else {
-                    ppp::net::Socket::AdjustSocketOptional(*socket, configuration_->tcp.fast_open, configuration_->tcp.turbo);
-                }
+                
+                boost::asio::ip::address remoteIP = remoteEP.address();
+                ppp::net::Socket::AdjustSocketOptional(*socket, remoteIP.is_v4(), configuration_->tcp.fast_open, configuration_->tcp.turbo);
 
                 bool connect_ok = ppp::coroutines::asio::async_connect(*socket, remoteEP, y);
                 if (!connect_ok) {
