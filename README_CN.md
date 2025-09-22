@@ -314,6 +314,8 @@
 | 命令 | 功能 | 格式 | 默认值 |
 |------|------|------|:------:|
 | `--bypass-iplist` | 绕过列表 | `--bypass-iplist <文件>` | `./ip.txt` |
+| `--bypass-iplist-nic` | 指定绕过列表的接口 | `--bypass-iplist-nic <网卡>` | |
+| `--bypass-iplist-ngw` | 指定绕过列表的网关 | `--bypass-iplist-ngw <IP>` | `0.0.0.0` |
 | `--auto-pull-iplist` | 自动更新 | `--auto-pull-iplist [文件]/[国家]` | 禁用 |
 | `--dns-rules` | DNS规则 | `--dns-rules <文件>` | [./dns-rules.txt](#dns-rules-guide) |
 

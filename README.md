@@ -310,13 +310,14 @@ Next-generation security network access technology, providing high-performance V
 | `--block-quic` | Block QUIC traffic | `--block-quic=[yes\|no]` | `no` |
 | `--auto-restart` | Auto-restart program | `--auto-restart=[seconds]` | `0` |
 
-
 #### Routing Settings
-| Command | Function | Format | Default |
-|---------|----------|--------|---------|
-| `--bypass-iplist` | Bypass list | `--bypass-iplist <file>` | `./ip.txt` |
-| `--auto-pull-iplist` | Auto-update | `--auto-pull-iplist [file]/[country]` | Disabled |
-| `--dns-rules` | DNS rules | `--dns-rules <file>` | [./dns-rules.txt](#dns-rules-guide) |
+| Command | Function | Format | Default Value |
+|---------|----------|--------|--------------|
+| `--bypass-iplist` | Bypass list | `<file>` | `./ip.txt` |
+| `--bypass-iplist-nic` | Specify interface for bypass list | `<network interface>` | |
+| `--bypass-iplist-ngw` | Specify gateway for bypass list | `<IP>` | `0.0.0.0` |
+| `--auto-pull-iplist` | Auto-update | `[file]/[country]` | Disabled |
+| `--dns-rules` | DNS rules | `<file>` | [./dns-rules.txt](#dns-rules-guide) |
 
 #### Platform Specific
 | Command | Platform | Function | Format | Default |
