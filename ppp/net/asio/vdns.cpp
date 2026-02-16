@@ -16,9 +16,10 @@ namespace ppp {
             namespace vdns {
                 static constexpr int                                                            PPP_MAX_HOSTNAME_SIZE_LIMIT = 64;
                 static constexpr int                                                            PPP_IP_DNS_MERGE_WAIT       = 100;
-                // Linux  : systemd-resolved set 50ms               
-                // glibc  : getaddrinfo set 500ms               
-                // MacOS  : 50 ~ 100ms              
+                static constexpr int                                                            PPP_DNS_CACHE_MAX_SIZE      = 10000;
+                // Linux  : systemd-resolved set 50ms
+                // glibc  : getaddrinfo set 500ms
+                // MacOS  : 50 ~ 100ms
                 // Windows: 100 ~ 300ms             
 
                 typedef ppp::collections::Dictionary                                            Dictionary;
@@ -343,6 +344,13 @@ namespace ppp {
                         }
 
                         if (c.nr_list.AddLast(node)) {
+                            if (c.nr_list.Count() > PPP_DNS_CACHE_MAX_SIZE) {
+                                NamespaceRecordNodePtr first = c.nr_list.First();
+                                if (NULLPTR != first) {
+                                    c.nr_list.Remove(first);
+                                    Dictionary::TryRemove(c.nr_hmap, first->Value.hostname);
+                                }
+                            }
                             break;
                         }
 
@@ -766,6 +774,13 @@ namespace ppp {
 
                     if (Dictionary::TryAdd(c.nr_hmap, hostname, node)) {
                         if (c.nr_list.AddLast(node)) {
+                            if (c.nr_list.Count() > PPP_DNS_CACHE_MAX_SIZE) {
+                                NamespaceRecordNodePtr first = c.nr_list.First();
+                                if (NULLPTR != first) {
+                                    c.nr_list.Remove(first);
+                                    Dictionary::TryRemove(c.nr_hmap, first->Value.hostname);
+                                }
+                            }
                             return true;
                         }
 

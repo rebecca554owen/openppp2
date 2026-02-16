@@ -126,7 +126,7 @@ namespace ppp {
                         }
                     }
 
-                    if (socks_proxy.username != strings[0] && socks_proxy.password != strings[1]) {
+                    if (socks_proxy.username != strings[0] || socks_proxy.password != strings[1]) {
                         return SOCKS_ERR_NO;
                     }
 

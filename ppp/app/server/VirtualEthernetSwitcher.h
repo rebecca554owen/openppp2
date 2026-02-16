@@ -219,6 +219,10 @@ namespace ppp {
                 VirtualEthernetStaticEchoAllocatedTable                 static_echo_allocateds_;
 
                 std::shared_ptr<boost::asio::ip::tcp::acceptor>         acceptors_[NetworkAcceptorCategories_Max];
+
+                static constexpr int                                    MAX_NAT_TABLE_SIZE = 65536;
+                static constexpr int                                    MAX_STATIC_ECHO_ALLOCATE_ATTEMPTS = 100;
+                static constexpr int                                    MAX_STATIC_ECHO_TABLE_SIZE = 10000;
             };
         }
     }

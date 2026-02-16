@@ -31,7 +31,13 @@ namespace ppp {
                     cli.enable_server_certificate_verification(true);
                 }
                 else {
+#if defined(_DEBUG)
                     cli.enable_server_certificate_verification(false);
+                    LOG_WARN("SSL certificate verification is disabled in DEBUG mode. This is a security risk.", "");
+#else
+                    cli.enable_server_certificate_verification(true);
+                    LOG_WARN("No CA certificate path specified, but SSL certificate verification is enforced for security.", "");
+#endif
                 }
 
                 cli.set_read_timeout(20);

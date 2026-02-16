@@ -790,7 +790,9 @@ namespace ppp {
             }
 
             bool VEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                // For the client, LAN traffic should be allowed normally.
+                // The server handles subnet configuration and ARP.
+                return true;
             }
 
             bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {

@@ -18,6 +18,10 @@
 
 namespace ppp {
     namespace cryptography {
+        // PBKDF2 iteration count - minimum 100,000 for strong key derivation
+        // RFC 2898 recommends at least 1000 iterations; modern standards recommend 100,000+
+        static constexpr int PBKDF2_ITERATIONS_MIN = 100000;
+        static constexpr int PBKDF2_ITERATIONS_DEFAULT = 100000;
         void EVP_cctor() noexcept {
             /* initialize OpenSSL */
             OpenSSL_add_all_ciphers();
@@ -214,7 +218,17 @@ namespace ppp {
                 return false;
             }
 
-            if (EVP_BytesToKey(_cipher, EVP_md5(), NULLPTR, (Byte*)password.data(), (int)password.length(), 1, _key.get(), _iv.get()) < 1) {
+            // Use PBKDF2-HMAC-SHA256 for secure key derivation (RFC 2898)
+            // EVP_BytesToKey is deprecated and uses only MD5 with 1 iteration
+            const unsigned char salt[] = "openppp2_pbkdf2_salt_v1";
+            int key_len = EVP_CIPHER_key_length(_cipher);
+
+            // PBKDF2-HMAC-SHA256 key derivation
+            if (PKCS5_PBKDF2_HMAC(password.data(), static_cast<int>(password.length()),
+                                  salt, sizeof(salt) - 1,
+                                  PBKDF2_ITERATIONS_DEFAULT,
+                                  EVP_sha256(),
+                                  key_len, _key.get()) != 1) {
                 return false;
             }
 

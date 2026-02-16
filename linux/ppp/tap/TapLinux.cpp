@@ -223,7 +223,7 @@ namespace ppp {
             }
 
             char ip_buf[UINT8_MAX];
-            strcpy(ip_buf, inet_ntoa(addr->sin_addr));
+            snprintf(ip_buf, sizeof(ip_buf), "%s", inet_ntoa(addr->sin_addr));
             return ip_buf;
         }
 
@@ -249,7 +249,7 @@ namespace ppp {
             }
 
             char ip_buf[UINT8_MAX];
-            strcpy(ip_buf, inet_ntoa(addr->sin_addr));
+            snprintf(ip_buf, sizeof(ip_buf), "%s", inet_ntoa(addr->sin_addr));
             return ip_buf;
         }
 
@@ -654,7 +654,8 @@ namespace ppp {
                         }
                     }
 
-                    strcpy(ifrName, interface_name);
+                    strncpy(ifrName, interface_name, IF_NAMESIZE - 1);
+                    ifrName[IF_NAMESIZE - 1] = '\x0';
                     return true;
                 });
         }
