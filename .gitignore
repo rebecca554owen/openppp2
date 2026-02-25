@@ -71,3 +71,7 @@ ppp.log
 /ppp/x64
 /ppp/Debug
 /ppp/Release
+
+# Claude Code
+.claude/
+!CLAUDE.md
