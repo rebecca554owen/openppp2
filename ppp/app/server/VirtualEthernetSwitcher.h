@@ -50,6 +50,15 @@ namespace ppp {
                 typedef std::shared_ptr<VirtualEthernetLogger>          VirtualEthernetLoggerPtr;
                 typedef ppp::configurations::AppConfiguration           AppConfiguration;
                 typedef std::shared_ptr<AppConfiguration>               AppConfigurationPtr;
+
+                static constexpr int                                    PPP_SESSION_TIMEOUT = 300;
+                static constexpr int                                    PPP_MAX_SESSIONS = 10000;
+
+                struct SessionInfo {
+                    VirtualEthernetExchangerPtr                        exchanger;
+                    UInt64                                             last_activity;
+                };
+                typedef std::shared_ptr<SessionInfo>                   SessionInfoPtr;
                 typedef ppp::transmissions::ITransmission               ITransmission;
                 typedef std::shared_ptr<ITransmission>                  ITransmissionPtr;
                 typedef ppp::threading::Timer                           Timer;
@@ -151,6 +160,7 @@ namespace ppp {
                 void                                                    TickAllExchangers(UInt64 now) noexcept;
                 void                                                    TickAllConnections(UInt64 now) noexcept;
                 bool                                                    OpenManagedServerIfNeed() noexcept;
+                void                                                    CleanupExpiredSessions(UInt64 now) noexcept;
 
             private:
                 VirtualEthernetStaticEchoAllocatedContextPtr            StaticEchoUnallocated(int allocated_id) noexcept;
@@ -202,6 +212,7 @@ namespace ppp {
                 NatInformationTable                                     nats_;
                 FirewallPtr                                             firewall_;
                 VirtualEthernetExchangerTable                           exchangers_;
+                ppp::unordered_map<Int128, SessionInfoPtr>              session_infos_;
                 TimerPtr                                                timeout_;
                 AppConfigurationPtr                                     configuration_;
                 ContextPtr                                              context_;

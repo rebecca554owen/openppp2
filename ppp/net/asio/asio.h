@@ -100,7 +100,8 @@ namespace ppp {
 
                     return bytes_transferred == buffers.size();
                 }
-                catch (const std::exception&) {
+                catch (const std::exception& e) {
+                    LOG_ERROR("async_read failed: %s", e.what());
                     return false;
                 }
             }
@@ -120,7 +121,8 @@ namespace ppp {
 
                     return bytes_transferred > 0;
                 }
-                catch (const std::exception&) {
+                catch (const std::exception& e) {
+                    LOG_ERROR("async_read_some failed: %s", e.what());
                     return false;
                 }
             }
@@ -137,10 +139,11 @@ namespace ppp {
                     if (ec) {
                         return false;
                     }
-                    
+
                     return bytes_transferred == buffers.size();
                 }
-                catch (const std::exception&) {
+                catch (const std::exception& e) {
+                    LOG_ERROR("async_write failed: %s", e.what());
                     return false;
                 }
             }
@@ -168,7 +171,13 @@ namespace ppp {
 
                 return ppp::net::asio::internal::GetAddressByHostName(resolver, hostname, port,
                     [](protocol_resolver& resolver, typename protocol_resolver::query& q, boost::system::error_code& ec) noexcept {
-                        return resolver.resolve(q, ec);
+                        try {
+                            return resolver.resolve(q, ec);
+                        }
+                        catch (const std::exception& e) {
+                            LOG_ERROR("GetAddressByHostName resolve failed: %s", e.what());
+                            return typename protocol_resolver::results_type();
+                        }
                     });
             }
 
@@ -178,7 +187,13 @@ namespace ppp {
 
                 return ppp::net::asio::internal::GetAddressByHostName(resolver, hostname, port,
                     [&y](protocol_resolver& resolver, typename protocol_resolver::query& q, boost::system::error_code& ec) noexcept {
-                        return resolver.async_resolve(q, y[ec]);
+                        try {
+                            return resolver.async_resolve(q, y[ec]);
+                        }
+                        catch (const std::exception& e) {
+                            LOG_ERROR("GetAddressByHostName async_resolve failed: %s", e.what());
+                            return typename protocol_resolver::results_type();
+                        }
                     });
             }
         }

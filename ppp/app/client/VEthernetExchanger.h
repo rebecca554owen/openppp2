@@ -4,6 +4,7 @@
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/mux/vmux_net.h>
+#include <ppp/app/client/StaticEchoTunnel.h>
 #include <ppp/cryptography/Ciphertext.h>
 #include <ppp/Int128.h>
 #include <ppp/net/Ipep.h>
@@ -20,10 +21,12 @@ namespace ppp {
         namespace client {
             class VEthernetNetworkSwitcher;
             class VEthernetDatagramPort;
+            class PortMappingManager;
 
             class VEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer {
                 friend class                                                            VEthernetDatagramPort;
                 friend class                                                            VEthernetNetworkSwitcher;
+                friend class                                                            PortMappingManager;
 
             public:
                 typedef std::weak_ptr<VEthernetNetworkSwitcher>                         VEthernetNetworkSwitcherWeakPtr;
@@ -42,6 +45,8 @@ namespace ppp {
             private:
                 typedef ppp::unordered_map<boost::asio::ip::udp::endpoint,
                     VEthernetDatagramPortPtr>                                           VEthernetDatagramPortTable;
+
+            private:
                 typedef ppp::app::protocol::VirtualEthernetMappingPort                  VirtualEthernetMappingPort;
                 typedef std::shared_ptr<VirtualEthernetMappingPort>                     VirtualEthernetMappingPortPtr;
                 typedef ppp::unordered_map<uint32_t, VirtualEthernetMappingPortPtr>     VirtualEthernetMappingPortTable;
@@ -123,6 +128,8 @@ namespace ppp {
                 virtual VEthernetDatagramPortPtr                                        NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
                 virtual VEthernetDatagramPortPtr                                        GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
                 virtual VEthernetDatagramPortPtr                                        ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
+                SynchronizedObject                                                      syncobj_datagrams_;
+                VEthernetDatagramPortTable                                              datagrams_;
 
             protected:
                 virtual ITransmissionPtr                                                NewTransmission(
@@ -176,11 +183,6 @@ namespace ppp {
                 }
 
             private:
-                VirtualEthernetMappingPortPtr                                           GetMappingPort(bool in, bool tcp, int remote_port) noexcept;
-                VirtualEthernetMappingPortPtr                                           NewMappingPort(bool in, bool tcp, int remote_port) noexcept;
-                bool                                                                    RegisterMappingPort(ppp::configurations::AppConfiguration::MappingConfiguration& mapping) noexcept;
-                void                                                                    UnregisterAllMappingPorts() noexcept;
-                bool                                                                    RegisterAllMappingPorts() noexcept;
                 bool                                                                    ReleaseDeadlineTimer(const boost::asio::deadline_timer* deadline_timer) noexcept;
                 bool                                                                    NewDeadlineTimer(const ContextPtr& context, int64_t timeout, const ppp::function<void(bool)>& event) noexcept;
                 bool                                                                    Sleep(int64_t timeout, const ContextPtr& context, YieldContext& y) noexcept;
@@ -192,24 +194,6 @@ namespace ppp {
                 bool                                                                    MuxConnectAllLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<vmux::vmux_net>& mux) noexcept;
 
             private:
-                class StaticEchoDatagarmSocket final : public boost::asio::ip::udp::socket {
-                public:
-                    StaticEchoDatagarmSocket(boost::asio::io_context& context) noexcept 
-                        : basic_datagram_socket(context)
-                        , opened(false) {
-
-                    }
-                    virtual ~StaticEchoDatagarmSocket() noexcept {
-                        boost::asio::ip::udp::socket* my = this;
-                        destructor_invoked(my);
-                    }
-
-                public:
-                    bool                                                                is_open(bool only_native = false) noexcept { return only_native ? basic_datagram_socket::is_open() : opened && basic_datagram_socket::is_open(); }
-
-                public:
-                    bool                                                                opened = false;
-                };
                 bool                                                                    StaticEchoAddRemoteEndPoint(boost::asio::ip::udp::endpoint& remoteEP) noexcept;
                 boost::asio::ip::udp::endpoint                                          StaticEchoGetRemoteEndPoint() noexcept;
                 void                                                                    StaticEchoClean() noexcept;
@@ -217,14 +201,12 @@ namespace ppp {
                 bool                                                                    StaticEchoSwapAsynchronousSocket() noexcept;
                 bool                                                                    StaticEchoGatewayServer(int ack_id) noexcept;
                 int                                                                     StaticEchoYieldReceiveForm(Byte* incoming_packet, int incoming_traffic) noexcept;
-                bool                                                                    StaticEchoLoopbackSocket(const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept;
-                bool                                                                    StaticEchoOpenAsynchronousSocket(StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept;
                 bool                                                                    StaticEchoAllocatedToRemoteExchanger(YieldContext& y) noexcept;
                 bool                                                                    StaticEchoPacketToRemoteExchanger(const std::shared_ptr<Byte>& packet, int packet_length) noexcept;
                 bool                                                                    StaticEchoPacketToRemoteExchanger(const ppp::net::packet::IPFrame* packet) noexcept;
                 bool                                                                    StaticEchoPacketToRemoteExchanger(const std::shared_ptr<ppp::net::packet::UdpFrame>& frame) noexcept;
+                std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>          StaticEchoReadPacket(const void* packet, int packet_length) noexcept;
                 bool                                                                    StaticEchoPacketInput(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet) noexcept;
-                std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>              StaticEchoReadPacket(const void* packet, int packet_length) noexcept;
 
             private:
                 virtual bool                                                            OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept override;
@@ -237,7 +219,6 @@ namespace ppp {
 
                 struct {
                     bool                                                                disposed_           : 1;
-                    bool                                                                static_echo_input_  : 7;
                 };
 
                 std::shared_ptr<Byte>                                                   buffer_;            
@@ -247,11 +228,10 @@ namespace ppp {
 
                 VEthernetNetworkSwitcherWeakPtr                                         switcher_;
                 std::shared_ptr<VirtualEthernetInformation>                             information_;
-                VEthernetDatagramPortTable                                              datagrams_;
                 ITransmissionPtr                                                        transmission_;
                 std::atomic<NetworkState>                                               network_state_      = NetworkState_Connecting;
-                VirtualEthernetMappingPortTable                                         mappings_;
                 DeadlineTimerTable                                                      deadline_timers_;
+                std::shared_ptr<PortMappingManager>                                     port_mapping_manager_;
 
                 std::shared_ptr<vmux::vmux_net>                                         mux_;
                 uint16_t                                                                mux_vlan_           = 0;
@@ -270,14 +250,7 @@ namespace ppp {
 
                 CiphertextPtr                                                           static_echo_protocol_;
                 CiphertextPtr                                                           static_echo_transport_;
-                std::shared_ptr<StaticEchoDatagarmSocket>                               static_echo_sockets_[2];
-                boost::asio::ip::udp::endpoint                                          static_echo_source_ep_;
-                ppp::list<boost::asio::ip::udp::endpoint>                               static_echo_server_ep_balances_;
-                ppp::unordered_set<boost::asio::ip::udp::endpoint>                      static_echo_server_ep_set_;
-                
-                uint64_t                                                                static_echo_timeout_     = 0;
-                int                                                                     static_echo_session_id_  = 0;
-                int                                                                     static_echo_remote_port_ = 0;
+                std::shared_ptr<StaticEchoTunnel>                                       static_echo_tunnel_;
             };
         }
     }

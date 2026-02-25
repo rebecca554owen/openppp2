@@ -212,6 +212,10 @@ namespace ppp {
                         return NULLPTR;
                     }
 
+                    if (exchangers_.size() >= PPP_MAX_SESSIONS) {
+                        return NULLPTR;
+                    }
+
                     newExchanger = NewExchanger(transmission, session_id);
                     if (NULLPTR == newExchanger) {
                         return NULLPTR;
@@ -222,6 +226,15 @@ namespace ppp {
                         ok = true;
                         oldExchanger = tmpExchanger;
                         tmpExchanger = newExchanger;
+
+                        SessionInfoPtr& session_info = session_infos_[session_id];
+                        if (NULLPTR == session_info) {
+                            session_info = make_shared_object<SessionInfo>();
+                        }
+                        if (NULLPTR != session_info) {
+                            session_info->exchanger = newExchanger;
+                            session_info->last_activity = newExchanger->GetLastActivity();
+                        }
                     }
                 }
 
@@ -385,6 +398,7 @@ namespace ppp {
                             exchangers_.erase(tail);
                         }
                     }
+                    session_infos_.erase(exchanger->GetId());
                 }
 
                 if (channel) {
@@ -873,6 +887,7 @@ namespace ppp {
                 VirtualEthernetLoggerPtr logger;
                 VirtualEthernetExchangerTable exchangers;
                 VirtualEthernetNetworkTcpipConnectionTable connections;
+                ppp::unordered_map<Int128, SessionInfoPtr> session_infos;
 
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
@@ -892,6 +907,9 @@ namespace ppp {
 
                     connections = std::move(connections_);
                     connections_.clear();
+
+                    session_infos = std::move(session_infos_);
+                    session_infos_.clear();
 
                     static_echo_allocateds_.clear();
                     break;
@@ -986,7 +1004,19 @@ namespace ppp {
 
             void VirtualEthernetSwitcher::TickAllExchangers(UInt64 now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
-                ppp::collections::Dictionary::UpdateAllObjects2(exchangers_, now);
+
+                for (auto& pair : exchangers_) {
+                    const Int128& session_id = pair.first;
+                    const VirtualEthernetExchangerPtr& exchanger = pair.second;
+                    if (NULLPTR != exchanger) {
+                        exchanger->Update(now);
+
+                        auto it = session_infos_.find(session_id);
+                        if (it != session_infos_.end() && NULLPTR != it->second) {
+                            it->second->last_activity = exchanger->GetLastActivity();
+                        }
+                    }
+                }
             }
 
             void VirtualEthernetSwitcher::TickAllConnections(UInt64 now) noexcept {
@@ -1007,12 +1037,44 @@ namespace ppp {
                     cache->Update();
                 }
 
-                VirtualEthernetManagedServerPtr server = managed_server_; 
+                VirtualEthernetManagedServerPtr server = managed_server_;
                 if (NULLPTR != server) {
                     server->Update(now);
                 }
 
+                CleanupExpiredSessions(now);
+
                 return true;
+            }
+
+            void VirtualEthernetSwitcher::CleanupExpiredSessions(UInt64 now) noexcept {
+                std::vector<SessionInfoPtr> expired_sessions;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        return;
+                    }
+
+                    UInt64 timeout_threshold = now - (UInt64)PPP_SESSION_TIMEOUT * 1000;
+
+                    for (auto it = session_infos_.begin(); it != session_infos_.end(); ) {
+                        const SessionInfoPtr& info = it->second;
+                        if (NULLPTR != info && info->last_activity < timeout_threshold) {
+                            expired_sessions.push_back(info);
+                            it = session_infos_.erase(it);
+                        }
+                        else {
+                            ++it;
+                        }
+                    }
+                }
+
+                for (const auto& info : expired_sessions) {
+                    if (NULLPTR != info && NULLPTR != info->exchanger) {
+                        DeleteExchanger(info->exchanger.get());
+                    }
+                }
             }
 
             bool VirtualEthernetSwitcher::OnInformation(const Int128& session_id, const std::shared_ptr<VirtualEthernetInformation>& info, YieldContext& y) noexcept {
