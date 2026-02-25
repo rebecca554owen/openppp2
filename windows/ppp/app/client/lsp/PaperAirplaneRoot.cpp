@@ -64,7 +64,14 @@ namespace ppp
                     {
                         WCHAR message[1024];
                         wvsprintfW(message, fmt, va_list(&fmt + 1));
-                        StrCatW(message, L"\r\n");
+
+                        size_t msg_len = wcslen(message);
+                        if (msg_len < sizeof(message) / sizeof(WCHAR) - 2)
+                        {
+                            message[msg_len] = L'\r';
+                            message[msg_len + 1] = L'\n';
+                            message[msg_len + 2] = L'\0';
+                        }
 
                         OutputDebugStringW(message);
                     }
@@ -73,7 +80,14 @@ namespace ppp
                     {
                         CHAR message[1024];
                         wvsprintfA(message, fmt, va_list(&fmt + 1));
-                        strcat(message, "\r\n");
+
+                        size_t msg_len = strlen(message);
+                        if (msg_len < sizeof(message) - 2)
+                        {
+                            message[msg_len] = '\r';
+                            message[msg_len + 1] = '\n';
+                            message[msg_len + 2] = '\0';
+                        }
 
                         OutputDebugStringA(message);
                     }

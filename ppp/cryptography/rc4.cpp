@@ -1,5 +1,6 @@
 #include "rc4.h"
 #include "digest.h"
+#include <iostream>
 
 // ============================================================================
 // Standard RC4 Implementation (for reference)
@@ -68,13 +69,7 @@ void standard_rc4_crypt(unsigned char* key, int keylen, unsigned char* data, int
 
 namespace ppp {
     namespace cryptography {
-        // Standard RC4 Key Scheduling Algorithm (KSA):
-        //   1. Initialize S[0..255] with values 0..255 in ascending order.
-        //   2. for i from 0 to 255:
-        //        j = (j + S[i] + key[i mod keylen]) mod 256
-        //        swap S[i] and S[j]
-        // This function implements a generic version that can also fill the S‑box
-        // in descending order, a non‑standard variant.
+        static bool g_rc4_disabled_warning_printed = false;
         bool rc4_sbox_impl(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen, bool ascending) noexcept {
             if (NULLPTR == sbox || NULLPTR == key || keylen < 1 || sboxlen < 1) {
                 return false;
@@ -268,13 +263,12 @@ namespace ppp {
                 return false;
             }
 
-            if (method == "rc4-md5" ||
-                method == "rc4-sha1" ||
-                method == "rc4-sha224" ||
-                method == "rc4-sha256" ||
-                method == "rc4-sha384" ||
-                method == "rc4-sha512") {
-                return true;
+            // RC4 is deprecated by RFC 7465 due to serious security vulnerabilities.
+            // All RC4 variants are disabled and will be rejected for security reasons.
+            // Please migrate to AES-GCM or other modern authenticated encryption algorithms.
+            if (method == "rc4-md5" || method == "rc4-sha1" || method == "rc4-sha224" ||
+                method == "rc4-sha256" || method == "rc4-sha384" || method == "rc4-sha512") {
+                return false;
             }
 
             return false;
@@ -286,28 +280,17 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            if (method == "rc4-md5") {
-                return make_shared_object<RC4MD5>(method, password);
-            }
-
-            if (method == "rc4-sha1") {
-                return make_shared_object<RC4SHA1>(method, password);
-            }
-
-            if (method == "rc4-sha224") {
-                return make_shared_object<RC4SHA224>(method, password);
-            }
-
-            if (method == "rc4-sha256") {
-                return make_shared_object<RC4SHA256>(method, password);
-            }
-
-            if (method == "rc4-sha384") {
-                return make_shared_object<RC4SHA384>(method, password);
-            }
-
-            if (method == "rc4-sha512") {
-                return make_shared_object<RC4SHA512>(method, password);
+            // RC4 is deprecated by RFC 7465 due to serious security vulnerabilities.
+            // All RC4 variants are disabled for security reasons.
+            // Please migrate to AES-GCM or other modern authenticated encryption algorithms.
+            if (method == "rc4-md5" || method == "rc4-sha1" || method == "rc4-sha224" ||
+                method == "rc4-sha256" || method == "rc4-sha384" || method == "rc4-sha512") {
+                if (!g_rc4_disabled_warning_printed) {
+                    g_rc4_disabled_warning_printed = true;
+                    std::cerr << "[SECURITY WARNING] RC4 encryption algorithm is disabled due to serious security vulnerabilities (RFC 7465). "
+                              << "Method '" << method << "' is rejected. Please migrate to AES-GCM or other modern authenticated encryption algorithms." << std::endl;
+                }
+                return NULLPTR;
             }
 
             return NULLPTR;
