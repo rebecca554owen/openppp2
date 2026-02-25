@@ -50,6 +50,9 @@ namespace ppp {
                 typedef std::shared_ptr<VirtualEthernetLogger>          VirtualEthernetLoggerPtr;
                 typedef ppp::configurations::AppConfiguration           AppConfiguration;
                 typedef std::shared_ptr<AppConfiguration>               AppConfigurationPtr;
+
+                static constexpr int                                    PPP_MAX_SESSIONS = 10000;
+
                 typedef ppp::transmissions::ITransmission               ITransmission;
                 typedef std::shared_ptr<ITransmission>                  ITransmissionPtr;
                 typedef ppp::threading::Timer                           Timer;

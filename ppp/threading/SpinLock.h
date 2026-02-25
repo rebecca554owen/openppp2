@@ -12,7 +12,7 @@ namespace ppp
             explicit SpinLock() noexcept;
             SpinLock(const SpinLock&) = delete;
             SpinLock(SpinLock&&) = delete;
-            ~SpinLock() noexcept(false);
+            ~SpinLock() noexcept;
 
         public:
             SpinLock&                   operator=(const SpinLock&) = delete;
@@ -21,7 +21,7 @@ namespace ppp
             bool                        TryEnter() noexcept;
             bool                        TryEnter(int loop, int timeout) noexcept;
             void                        Enter() noexcept { TryEnter(-1, -1); }
-            void                        Leave();
+            void                        Leave() noexcept;
             bool                        IsLockTaken() noexcept { return _.load(); }
 
         public:
@@ -56,7 +56,7 @@ namespace ppp
 
         private:
             SpinLock                    lockobj_;
-            volatile int64_t            tid_       = 0;
+            std::atomic<int64_t>        tid_       = 0;
             std::atomic<int>            reentries_ = 0;
         };
     }

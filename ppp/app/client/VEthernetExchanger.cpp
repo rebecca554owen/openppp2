@@ -1,6 +1,7 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetDatagramPort.h>
+#include <ppp/app/client/PortMappingManager.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -42,7 +43,6 @@ namespace ppp {
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT = 1000;
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT = 5000;
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MMX_TIMEOUT = SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT << 2;
-            static constexpr int STATIC_ECHO_KEEP_ALIVED_ID              = IPEndPoint::NoneAddress - 1;
 
             VEthernetExchanger::VEthernetExchanger(
                 const VEthernetNetworkSwitcherPtr&      switcher,
@@ -54,20 +54,16 @@ namespace ppp {
                 , sekap_last_(0)
                 , sekap_next_(0)
                 , switcher_(switcher)
-                , network_state_(NetworkState_Connecting)
-                , static_echo_input_(false)
-                , static_echo_timeout_(UINT64_MAX)
-                , static_echo_session_id_(0)
-                , static_echo_remote_port_(IPEndPoint::MinPort) {
+                , network_state_(NetworkState_Connecting) {
 
-                if (configuration->key.protocol.size() > 0 && configuration->key.protocol_key.size() > 0 && 
+                if (configuration->key.protocol.size() > 0 && configuration->key.protocol_key.size() > 0 &&
                     configuration->key.transport.size() > 0 && configuration->key.transport_key.size() > 0) {
                     if (Ciphertext::Support(configuration->key.protocol) && Ciphertext::Support(configuration->key.transport)) {
                         static_echo_protocol_ = make_shared_object<Ciphertext>(configuration->key.protocol, configuration->key.protocol_key);
                         static_echo_transport_ = make_shared_object<Ciphertext>(configuration->key.transport, configuration->key.transport_key);
                     }
                 }
-                
+
                 buffer_                   = Executors::GetCachedBuffer(context);
                 server_url_.port          = 0;
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
@@ -78,27 +74,31 @@ namespace ppp {
             }
 
             void VEthernetExchanger::Finalize() noexcept {
-                VirtualEthernetMappingPortTable mappings;
                 VEthernetDatagramPortTable datagrams;
                 ITransmissionPtr transmission;
                 DeadlineTimerTable deadline_timers;
+                std::shared_ptr<PortMappingManager> port_mapping_manager;
                 std::shared_ptr<vmux::vmux_net> mux;
 
                 for (;;) {
-                    SynchronizedObjectScope scope(syncobj_);
-
-                    mappings = std::move(mappings_);
-                    mappings_.clear();
-
+                    SynchronizedObjectScope scope(syncobj_datagrams_);
                     datagrams = std::move(datagrams_);
                     datagrams_.clear();
+                    break;
+                }
+
+                for (;;) {
+                    SynchronizedObjectScope scope(syncobj_);
 
                     transmission = std::move(transmission_);
                     transmission_.reset();
 
                     deadline_timers = std::move(deadline_timers_);
                     deadline_timers_.clear();
-                    
+
+                    port_mapping_manager = std::move(port_mapping_manager_);
+                    port_mapping_manager_.reset();
+
                     mux_vlan_ = 0;
                     mux = std::move(mux_);
                     mux_.reset();
@@ -115,8 +115,11 @@ namespace ppp {
                     ppp::net::Socket::Cancel(*deadline_timer);
                 }
 
-                Dictionary::ReleaseAllObjects(mappings);
                 Dictionary::ReleaseAllObjects(datagrams);
+
+                if (NULLPTR != port_mapping_manager) {
+                    port_mapping_manager->Dispose();
+                }
 
                 if (NULLPTR != mux) {
                     mux->close_exec();
@@ -155,8 +158,11 @@ namespace ppp {
                 }
 
                 if (NULLPTR != transmission) {
-                    transmission->QoS = switcher_->GetQoS();
-                    transmission->Statistics = switcher_->GetStatistics();
+                    std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                    if (switcher) {
+                        transmission->QoS = switcher->GetQoS();
+                        transmission->Statistics = switcher->GetStatistics();
+                    }
                 }
                 
                 return transmission;
@@ -217,7 +223,11 @@ namespace ppp {
                     return false;
                 }
 
-                std::shared_ptr<ppp::transmissions::proxys::IForwarding> forwarding = switcher_->GetForwarding(); ;
+                std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                std::shared_ptr<ppp::transmissions::proxys::IForwarding> forwarding;
+                if (switcher) {
+                    forwarding = switcher->GetForwarding();
+                }
                 if (NULLPTR != forwarding) {
                     ppp::string abs_url;
                     server = UriAuxiliary::Parse(client_server_string, hostname, address, path, port, protocol_type, &abs_url, *y, false);
@@ -296,14 +306,17 @@ namespace ppp {
                 }
 
 #if defined(_LINUX)
-                // If IPV4 is not a loop IP address, it needs to be linked to a physical network adapter. 
-                // IPV6 does not need to be linked, because VPN is IPV4, 
+                // If IPV4 is not a loop IP address, it needs to be linked to a physical network adapter.
+                // IPV6 does not need to be linked, because VPN is IPV4,
                 // And IPV6 does not affect the physical layer network communication of the VPN.
                 if (remoteIP.is_v4() && !remoteIP.is_loopback()) {
-                    auto protector_network = switcher_->GetProtectorNetwork(); 
-                    if (NULLPTR != protector_network) {
-                        if (!protector_network->Protect(socket->native_handle(), y)) {
-                            return NULLPTR;
+                    std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                    if (switcher) {
+                        auto protector_network = switcher->GetProtectorNetwork();
+                        if (NULLPTR != protector_network) {
+                            if (!protector_network->Protect(socket->native_handle(), y)) {
+                                return NULLPTR;
+                            }
                         }
                     }
                 }
@@ -335,6 +348,11 @@ namespace ppp {
                 auto self = shared_from_this();
                 auto allocator = configuration->GetBufferAllocator();
 
+                if (!port_mapping_manager_) {
+                    auto exchanger = std::static_pointer_cast<VEthernetExchanger>(shared_from_this());
+                    port_mapping_manager_ = make_shared_object<PortMappingManager>(exchanger, configuration, context);
+                }
+
                 return YieldContext::Spawn(allocator.get(), *context,
                     [self, this, context](YieldContext& y) noexcept {
                         Loopback(context, y);
@@ -348,17 +366,24 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
-                boost::asio::post(*context, 
+                boost::asio::post(*context,
                     [self, this, context]() noexcept {
                         uint64_t now = ppp::threading::Executors::GetTickCount();
-                        SendEchoKeepAlivePacket(now, false); 
+                        SendEchoKeepAlivePacket(now, false);
                         DoMuxEvents();
                         DoKeepAlived(GetTransmission(), now);
 
                         for (;;) {
-                            SynchronizedObjectScope scope(syncobj_);
+                            SynchronizedObjectScope scope(syncobj_datagrams_);
                             Dictionary::UpdateAllObjects(datagrams_, now);
-                            Dictionary::UpdateAllObjects2(mappings_, now);
+                            break;
+                        }
+
+                        for (;;) {
+                            SynchronizedObjectScope scope(syncobj_);
+                            if (port_mapping_manager_) {
+                                port_mapping_manager_->UpdateAllMappings(now);
+                            }
                             break;
                         }
                     });
@@ -415,16 +440,22 @@ namespace ppp {
 
 #if defined(_ANDROID)
             bool VEthernetExchanger::AwaitJniAttachThread(const ContextPtr& context, YieldContext& y) noexcept {
-                // On the Android platform, when the VPN tunnel transport layer is enabled, 
-                // Ensure that the JVM thread has been attached to the PPP. Otherwise, the link cannot be protected, 
+                // On the Android platform, when the VPN tunnel transport layer is enabled,
+                // Ensure that the JVM thread has been attached to the PPP. Otherwise, the link cannot be protected,
                 // Resulting in loop problems and VPN loopback crashes.
                 bool attach_ok = false;
                 while (!disposed_) {
-                    if (std::shared_ptr<ppp::net::ProtectorNetwork> protector = switcher_->GetProtectorNetwork(); NULLPTR != protector) {
-                        if (NULLPTR != protector->GetContext() && NULLPTR != protector->GetEnvironment()) {
-                            attach_ok = true;
-                            break;
+                    std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                    if (switcher) {
+                        if (std::shared_ptr<ppp::net::ProtectorNetwork> protector = switcher->GetProtectorNetwork(); NULLPTR != protector) {
+                            if (NULLPTR != protector->GetContext() && NULLPTR != protector->GetEnvironment()) {
+                                attach_ok = true;
+                                break;
+                            }
                         }
+                    }
+                    else {
+                        break;
                     }
 
                     bool sleep_ok = Sleep(10, context, y); // Poll.
@@ -455,13 +486,17 @@ namespace ppp {
                             if (transmission->HandshakeServer(y, GetId(), true) && EchoLanToRemoteExchanger(transmission, y) > -1) {
                                 ExchangeToEstablishState(); {
                                     transmission_ = transmission; {
-                                        RegisterAllMappingPorts();
+                                        if (port_mapping_manager_) {
+                                            port_mapping_manager_->RegisterAllMappingPorts();
+                                        }
                                         if (StaticEchoAllocatedToRemoteExchanger(y) && Run(transmission, y)) {
                                             run_once = true;
                                             StaticEchoClean();
                                         }
 
-                                        UnregisterAllMappingPorts();
+                                        if (port_mapping_manager_) {
+                                            port_mapping_manager_->UnregisterAllMappingPorts();
+                                        }
                                     }
                                     transmission_.reset();
                                 }
@@ -481,7 +516,12 @@ namespace ppp {
             bool VEthernetExchanger::DoMuxEvents() noexcept {
                 bool successes = false;
                 while (!disposed_) {
-                    uint16_t max_connections = switcher_->mux_;
+                    std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                    if (!switcher) {
+                        break;
+                    }
+
+                    uint16_t max_connections = switcher->mux_;
                     if (max_connections == 0) {
                         break;
                     }
@@ -527,7 +567,7 @@ namespace ppp {
                         break;
                     }
                     else {
-                        mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0);
+                        mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0);
                         if (NULLPTR == mux) {
                             break;
                         }
@@ -543,11 +583,11 @@ namespace ppp {
                         break;
                     }
 
-                    std::shared_ptr<ppp::threading::BufferswapAllocator> buffer_allocator = switcher_->GetBufferAllocator();
+                    std::shared_ptr<ppp::threading::BufferswapAllocator> buffer_allocator = switcher->GetBufferAllocator();
                     mux->AppConfiguration = configuration;
                     mux->BufferAllocator  = buffer_allocator;
 #if defined(_LINUX)
-                    mux->ProtectorNetwork = switcher_->GetProtectorNetwork();
+                    mux->ProtectorNetwork = switcher->GetProtectorNetwork();
 #endif
 
                     for (;;) {
@@ -562,12 +602,13 @@ namespace ppp {
                     std::shared_ptr<VirtualEthernetLinklayer> self = shared_from_this();
                     mux_ = mux;
 
-                    successes = YieldContext::Spawn(buffer_allocator.get(), *vnet_context, 
-                        [self, this, vnet_transmission, mux, vnet_context](YieldContext& y) noexcept {
+                    uint8_t mux_acceleration = switcher->mux_acceleration_;
+                    successes = YieldContext::Spawn(buffer_allocator.get(), *vnet_context,
+                        [self, this, vnet_transmission, mux, vnet_context, mux_acceleration](YieldContext& y) noexcept {
                             bool ok = false;
                             if (!disposed_) {
                                 uint16_t max_connections = mux->get_max_connections();
-                                ok = DoMux(vnet_transmission, mux->Vlan, max_connections, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_REMOTE) != 0, y);
+                                ok = DoMux(vnet_transmission, mux->Vlan, max_connections, (mux_acceleration & PPP_MUX_ACCELERATION_REMOTE) != 0, y);
                             }
 
                             if (!ok) {
@@ -766,37 +807,21 @@ namespace ppp {
                 reconnection_count_++;
             }
 
-            bool VEthernetExchanger::RegisterAllMappingPorts() noexcept {
-                if (disposed_) {
-                    return false;
-                }
-
-                AppConfigurationPtr configuration = GetConfiguration();
-                for (AppConfiguration::MappingConfiguration& mapping : configuration->client.mappings) {
-                    RegisterMappingPort(mapping);
-                }
-
+            bool VEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
+                // For the client, LAN traffic should be allowed normally.
+                // The server handles subnet configuration and ARP.
                 return true;
             }
 
-            void VEthernetExchanger::UnregisterAllMappingPorts() noexcept {
-                VirtualEthernetMappingPortTable mappings; {
-                    SynchronizedObjectScope scope(syncobj_);
-                    mappings = std::move(mappings_);
-                    mappings_.clear();
+            bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                if (!switcher) {
+                    return false;
                 }
 
-                ppp::collections::Dictionary::ReleaseAllObjects(mappings);
-            }
-
-            bool VEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
-            }
-
-            bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                bool vnet = switcher_->IsVNet();
+                bool vnet = switcher->IsVNet();
                 if (vnet) {
-                    return switcher_->Output(packet, packet_length);
+                    return switcher->Output(packet, packet_length);
                 }
                 else {
                     return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
@@ -837,13 +862,16 @@ namespace ppp {
                 if (NULLPTR == ei) {
                     return false;
                 }
-                
+
                 auto self = shared_from_this();
-                boost::asio::post(*context, 
+                boost::asio::post(*context,
                     [self, this, context, ei]() noexcept {
                         information_ = ei;
                         if (!disposed_) {
-                            switcher_->OnInformation(ei);
+                            std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                            if (switcher) {
+                                switcher->OnInformation(ei);
+                            }
                         }
                     });
                 return true;
@@ -869,7 +897,7 @@ namespace ppp {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
-            bool VEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {                
+            bool VEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {
                 if (remote_port < IPEndPoint::MinPort || remote_port > IPEndPoint::MaxPort) {
                     return false;
                 }
@@ -883,27 +911,35 @@ namespace ppp {
                     StaticEchoClean();
                 }
                 else {
-                    static_echo_session_id_ = session_id;
-                    static_echo_remote_port_ = remote_port;
+                    if (static_echo_tunnel_) {
+                        static_echo_tunnel_->SetSessionId(session_id);
+                        static_echo_tunnel_->SetRemotePort(remote_port);
 
-                    AppConfigurationPtr configuration = GetConfiguration();
-                    VirtualEthernetPacket::Ciphertext(configuration, GetId(), fsid, session_id, static_echo_protocol_, static_echo_transport_);
+                        AppConfigurationPtr configuration = GetConfiguration();
+                        VirtualEthernetPacket::Ciphertext(configuration, GetId(), fsid, session_id, static_echo_protocol_, static_echo_transport_);
+                    }
                 }
 
-                StaticEchoGatewayServer(STATIC_ECHO_KEEP_ALIVED_ID);
+                StaticEchoGatewayServer(StaticEchoTunnel::STATIC_ECHO_KEEP_ALIVED_ID);
                 return true;
             }
 
             bool VEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept {
                 if (ack_id != 0) {
-                    switcher_->ERORTE(ack_id);
+                    std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                    if (switcher) {
+                        switcher->ERORTE(ack_id);
+                    }
                 }
-                
+
                 return true;
             }
 
             bool VEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                switcher_->Output(packet, packet_length);
+                std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                if (switcher) {
+                    switcher->Output(packet, packet_length);
+                }
                 return true;
             }
 
@@ -928,7 +964,10 @@ namespace ppp {
                     }
                 }
                 elif(NULLPTR != packet && packet_length > 0) {
-                    switcher_->DatagramOutput(sourceEP, destinationEP, packet, packet_length);
+                    std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                    if (switcher) {
+                        switcher->DatagramOutput(sourceEP, destinationEP, packet, packet_length);
+                    }
                 }
 
                 return true;
@@ -1023,7 +1062,12 @@ namespace ppp {
                     return -1;
                 }
 
-                bool vnet = switcher_->IsVNet();
+                std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                if (!switcher) {
+                    return -1;
+                }
+
+                bool vnet = switcher->IsVNet();
                 if (!vnet) {
                     return 0;
                 }
@@ -1032,7 +1076,7 @@ namespace ppp {
                     return -1;
                 }
 
-                std::shared_ptr<ppp::tap::ITap> tap = switcher_->GetTap();
+                std::shared_ptr<ppp::tap::ITap> tap = switcher->GetTap();
                 if (NULLPTR == tap) {
                     return -1;
                 }
@@ -1047,37 +1091,22 @@ namespace ppp {
             }
 
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::AddNewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                if (NULLPTR == transmission) {
-                    return NULLPTR;
-                }
-
-                VEthernetDatagramPortPtr datagram = GetDatagramPort(sourceEP);
-                if (NULLPTR != datagram) {
-                    return datagram;
-                }
-
                 if (disposed_) {
                     return NULLPTR;
                 }
 
-                bool ok = true; 
-                datagram = NewDatagramPort(transmission, sourceEP);
+                auto my = shared_from_this();
+                std::shared_ptr<VEthernetExchanger> exchanger
+                    = std::dynamic_pointer_cast<VEthernetExchanger>(my);
 
-                if (NULLPTR == datagram) {
-                    return NULLPTR;
-                }
-                else {
-                    SynchronizedObjectScope scope(syncobj_);
-                    auto r = datagrams_.emplace(sourceEP, datagram);
-                    ok = r.second;
-                }
-
-                if (!ok) {
-                    datagram->Dispose();
+                VEthernetDatagramPortPtr datagram_port = make_shared_object<VEthernetDatagramPort>(exchanger, transmission, sourceEP);
+                if (NULLPTR == datagram_port) {
                     return NULLPTR;
                 }
 
-                return datagram;
+                SynchronizedObjectScope scope(syncobj_datagrams_);
+                datagrams_[sourceEP] = datagram_port;
+                return datagram_port;
             }
 
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
@@ -1086,20 +1115,37 @@ namespace ppp {
                 }
 
                 auto my = shared_from_this();
-                std::shared_ptr<VEthernetExchanger> exchanger 
+                std::shared_ptr<VEthernetExchanger> exchanger
                     = std::dynamic_pointer_cast<VEthernetExchanger>(my);
 
-                return make_shared_object<VEthernetDatagramPort>(exchanger, transmission, sourceEP);
+                VEthernetDatagramPortPtr datagram_port = make_shared_object<VEthernetDatagramPort>(exchanger, transmission, sourceEP);
+                if (NULLPTR == datagram_port) {
+                    return NULLPTR;
+                }
+
+                SynchronizedObjectScope scope(syncobj_datagrams_);
+                datagrams_[sourceEP] = datagram_port;
+                return datagram_port;
             }
 
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                return Dictionary::FindObjectByKey(datagrams_, sourceEP);
+                SynchronizedObjectScope scope(syncobj_datagrams_);
+                auto iter = datagrams_.find(sourceEP);
+                if (iter != datagrams_.end()) {
+                    return iter->second;
+                }
+                return NULLPTR;
             }
 
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                return Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
+                SynchronizedObjectScope scope(syncobj_datagrams_);
+                auto iter = datagrams_.find(sourceEP);
+                if (iter != datagrams_.end()) {
+                    VEthernetDatagramPortPtr datagram_port = iter->second;
+                    datagrams_.erase(iter);
+                    return datagram_port;
+                }
+                return NULLPTR;
             }
 
             bool VEthernetExchanger::SendEchoKeepAlivePacket(UInt64 now, bool immediately) noexcept {
@@ -1137,269 +1183,59 @@ namespace ppp {
                 return successed;
             }
 
-            bool VEthernetExchanger::RegisterMappingPort(ppp::configurations::AppConfiguration::MappingConfiguration& mapping) noexcept {
-                if (disposed_) {
-                    return false;
-                }
-
-                boost::system::error_code ec;
-                boost::asio::ip::address local_ip = StringToAddress(mapping.local_ip.data(), ec);
-                if (ec) {
-                    return false;
-                }
-
-                boost::asio::ip::address remote_ip = StringToAddress(mapping.remote_ip.data(), ec);
-                if (ec) {
-                    return false;
-                }
-
-                bool in = remote_ip.is_v4();
-                bool protocol_tcp_or_udp = mapping.protocol_tcp_or_udp;
-
-                VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, protocol_tcp_or_udp, mapping.remote_port);
-                if (NULLPTR != mapping_port) {
-                    return false;
-                }
-
-                mapping_port = NewMappingPort(in, protocol_tcp_or_udp, mapping.remote_port);
-                if (NULLPTR == mapping_port) {
-                    return false;
-                }
-
-                bool ok = mapping_port->OpenFrpClient(local_ip, mapping.local_port);
-                if (ok) {
-                    SynchronizedObjectScope scope(syncobj_);
-                    ok = VirtualEthernetMappingPort::AddMappingPort(mappings_, in, protocol_tcp_or_udp, mapping.remote_port, mapping_port);
-                }
-
-                if (!ok) {
-                    mapping_port->Dispose();
-                }
-
-                return ok;
-            }
-
-            VEthernetExchanger::VirtualEthernetMappingPortPtr VEthernetExchanger::NewMappingPort(bool in, bool tcp, int remote_port) noexcept {
-                class VIRTUAL_ETHERNET_MAPPING_PORT final : public VirtualEthernetMappingPort {
-                public:
-                    VIRTUAL_ETHERNET_MAPPING_PORT(const std::shared_ptr<VirtualEthernetLinklayer>& linklayer, const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port) noexcept
-                        : VirtualEthernetMappingPort(linklayer, transmission, tcp, in, remote_port) {
-
-                    }
-
-                public:
-                    virtual void Dispose() noexcept override {
-                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer();  NULLPTR != linklayer) {
-                            VEthernetExchanger* exchanger = dynamic_cast<VEthernetExchanger*>(linklayer.get());
-                            if (NULLPTR != exchanger) {
-                                SynchronizedObjectScope scope(exchanger->syncobj_);
-                                VirtualEthernetMappingPort::DeleteMappingPort(
-                                    exchanger->mappings_, ProtocolIsNetworkV4(), ProtocolIsTcpNetwork(), GetRemotePort());
-                            }
-                        }
-
-                        VirtualEthernetMappingPort::Dispose();
-                    }
-                };
-
-                ITransmissionPtr transmission = transmission_;
-                if (NULLPTR == transmission) {
-                    return NULLPTR;
-                }
-
-                auto self = shared_from_this();
-                return make_shared_object<VIRTUAL_ETHERNET_MAPPING_PORT>(self, transmission, tcp, in, remote_port);
-            }
-
-            VEthernetExchanger::VirtualEthernetMappingPortPtr VEthernetExchanger::GetMappingPort(bool in, bool tcp, int remote_port) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                return VirtualEthernetMappingPort::FindMappingPort(mappings_, in, tcp, remote_port);
-            }
-
             bool VEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
-#if defined(_ANDROID)
-                AppConfigurationPtr configuration = GetConfiguration();
-                if (!configuration) {
-                    return false;
+                if (port_mapping_manager_) {
+                    return port_mapping_manager_->OnFrpSendTo(transmission, in, remote_port, sourceEP, packet, packet_length, y);
                 }
-
-                std::shared_ptr<Byte> packet_managed = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(configuration->GetBufferAllocator(), packet, packet_length);
-                Post(
-                    [this, packet_managed, sourceEP, packet_length, in, remote_port]() noexcept {
-                        VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
-                        if (NULLPTR != mapping_port) {
-                            mapping_port->Client_OnFrpSendTo(packet_managed.get(), packet_length, sourceEP);
-                        }
-                    });
-#else
-                VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
-                if (NULLPTR != mapping_port) {
-                    mapping_port->Client_OnFrpSendTo(packet, packet_length, sourceEP);
-                }
-#endif
-                return true;
+                return false;
             }
 
             bool VEthernetExchanger::OnFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept {
-#if defined(_ANDROID)
-                Post(
-                    [this, in, remote_port, connection_id]() noexcept {
-                        VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
-                        if (NULLPTR != mapping_port) {
-                            mapping_port->Client_OnFrpConnect(connection_id);
-                        }
-                    });
-#else
-                VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
-                if (NULLPTR != mapping_port) {
-                    mapping_port->Client_OnFrpConnect(connection_id);
+                if (port_mapping_manager_) {
+                    return port_mapping_manager_->OnFrpConnect(transmission, connection_id, in, remote_port, y);
                 }
-#endif
-                return true;
+                return false;
             }
 
             bool VEthernetExchanger::OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept {
-                VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
-                if (NULLPTR != mapping_port) {
-                    mapping_port->Client_OnFrpDisconnect(connection_id);
+                if (port_mapping_manager_) {
+                    return port_mapping_manager_->OnFrpDisconnect(transmission, connection_id, in, remote_port);
                 }
-
-                return true;
+                return false;
             }
 
             bool VEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
-                VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
-                if (NULLPTR != mapping_port) {
-                    mapping_port->Client_OnFrpPush(connection_id, packet, packet_length);
+                if (port_mapping_manager_) {
+                    return port_mapping_manager_->OnFrpPush(transmission, connection_id, in, remote_port, packet, packet_length);
                 }
-
-                return true;
+                return false;
             }
 
             void VEthernetExchanger::StaticEchoClean() noexcept {
-                for (int i = 0; i < arraysizeof(static_echo_sockets_); i++) {
-                    std::shared_ptr<StaticEchoDatagarmSocket>& r = static_echo_sockets_[i];
-                    std::shared_ptr<StaticEchoDatagarmSocket> socket = std::move(r);
-                    r.reset();
-
-                    Socket::Closesocket(socket);
+                if (static_echo_tunnel_) {
+                    static_echo_tunnel_->Clean();
                 }
-                
-                static_echo_input_       = false;
-                static_echo_timeout_     = UINT64_MAX;
-                static_echo_session_id_  = 0;
-                static_echo_remote_port_ = IPEndPoint::MinPort;
-
-                static_echo_protocol_    = NULLPTR;
-                static_echo_transport_   = NULLPTR;
             }
 
             bool VEthernetExchanger::StaticEchoAllocated() noexcept {
-                if (disposed_) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->Allocated();
                 }
-
-                std::shared_ptr<StaticEchoDatagarmSocket> socket = static_echo_sockets_[0];
-                if (NULLPTR == socket) {
-                    return false;
-                }
-
-                return socket->is_open() && static_echo_timeout_ != 0 && static_echo_session_id_ != 0 && static_echo_remote_port_ != 0;
+                return false;
             }
 
             bool VEthernetExchanger::StaticEchoSwapAsynchronousSocket() noexcept {
-                if (disposed_) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->SwapAsynchronousSocket();
                 }
-
-                if (static_echo_timeout_ != UINT64_MAX && switcher_->StaticMode(NULLPTR)) {
-                    UInt64 now = ppp::threading::Executors::GetTickCount();
-                    if (now >= static_echo_timeout_) {
-                        std::shared_ptr<StaticEchoDatagarmSocket> socket = std::move(static_echo_sockets_[0]);
-                        static_echo_sockets_[0] = std::move(static_echo_sockets_[1]);
-                        static_echo_sockets_[1] = NULLPTR;
-                        
-                        static_echo_input_ = false;
-                        if (!StaticEchoNextTimeout()) {
-                            return false;
-                        }
-
-                        auto self = shared_from_this();
-                        auto notifiy_if_need = 
-                            [self, this]() noexcept {
-                                // Notifies the VPN server of domestic port changes for smoother dynamic switchover of virtual links.
-                                if (!static_echo_input_ && static_echo_sockets_[0]) {
-                                    StaticEchoGatewayServer(STATIC_ECHO_KEEP_ALIVED_ID);
-                                }
-                            };
-                        
-                        // Here do not close the socket immediately, delay one second, because the data sent by the VPN server may not reach the network card, 
-                        // Reduce the packet loss rate during switching and improve the smoothness of the cross.
-                        bool closesocket = true;
-                        std::shared_ptr<boost::asio::io_context> context = GetContext();
-                        if (NULLPTR != context) {
-                            int milliseconds = RandomNext(500, 1000);
-                            std::shared_ptr<Timer> timeout = Timer::Timeout(context, milliseconds, 
-                                [socket, notifiy_if_need](Timer*) noexcept {
-                                    notifiy_if_need();
-                                    Socket::Closesocket(socket);
-                                });
-                            if (NULLPTR != timeout) {
-                                closesocket = false;
-                            }
-                        }
-
-                        // Handles whether you can delay closing the socket. If not, close the socket immediately.
-                        if (closesocket) {
-                            Socket::Closesocket(socket);
-                        }
-
-                        notifiy_if_need();
-                        if (NULLPTR == context) {
-                            return false;
-                        }
-
-                        // Re-instance and try to open the Datagram Port.
-                        socket = make_shared_object<StaticEchoDatagarmSocket>(*context);
-                        if (NULLPTR == socket) {
-                            return false;
-                        }
-
-                        auto configuration = GetConfiguration();
-                        auto allocator = configuration->GetBufferAllocator();
-                        static_echo_sockets_[1] = socket;
-
-                        return YieldContext::Spawn(allocator.get(), *context,
-                            [self, this, socket, context](YieldContext& y) noexcept {
-                                bool opened = StaticEchoOpenAsynchronousSocket(*socket, y);
-                                if (opened) {
-                                    StaticEchoLoopbackSocket(socket);
-                                }
-                            });
-                    }
-                }
-
-                return true;
+                return false;
             }
 
             bool VEthernetExchanger::StaticEchoGatewayServer(int ack_id) noexcept {
-                if (disposed_) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->GatewayServer(ack_id);
                 }
-
-                std::shared_ptr<ppp::net::packet::IPFrame> packet = make_shared_object<ppp::net::packet::IPFrame>(); 
-                if (NULLPTR == packet) {
-                    return false;
-                }
-
-                packet->AddressesFamily = AddressFamily::InterNetwork;
-                packet->Destination     = htonl(ack_id);
-                packet->Id              = ppp::net::packet::IPFrame::NewId();
-                packet->Source          = IPEndPoint::LoopbackAddress;
-                packet->ProtocolType    = ppp::net::native::ip_hdr::IP_PROTO_ICMP;
-                ppp::app::protocol::VirtualEthernetPacket::FillBytesToPayload(packet.get());
-            
-                return StaticEchoPacketToRemoteExchanger(packet.get());
+                return false;
             }
 
             bool VEthernetExchanger::StaticEchoAllocatedToRemoteExchanger(YieldContext& y) noexcept {
@@ -1417,292 +1253,88 @@ namespace ppp {
                     return false;
                 }
 
-                bool static_mode = switcher_->StaticMode(NULLPTR);
+                std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_.lock();
+                if (!switcher) {
+                    return false;
+                }
+
+                bool static_mode = switcher->StaticMode(NULLPTR);
                 if (!static_mode) {
                     return true;
                 }
 
-                for (int i = 0; i < arraysizeof(static_echo_sockets_); i++) {
-                    std::shared_ptr<StaticEchoDatagarmSocket>& socket = static_echo_sockets_[i];
-                    if (NULLPTR == socket) {
-                        socket = make_shared_object<StaticEchoDatagarmSocket>(*context);
-                        if (NULLPTR == socket) {
-                            return false;
-                        }
+                // Create the StaticEchoTunnel object if it doesn't exist
+                if (!static_echo_tunnel_) {
+                    AppConfigurationPtr configuration = GetConfiguration();
+                    if (NULLPTR == configuration) {
+                        return false;
                     }
 
-                    if (socket->is_open(true)) {
-                        continue;
-                    }
-
-                    bool opened = StaticEchoOpenAsynchronousSocket(*socket, y) && StaticEchoLoopbackSocket(socket);
-                    if (!opened) {
-                        socket.reset();
+                    static_echo_tunnel_ = make_shared_object<StaticEchoTunnel>(
+                        switcher,
+                        configuration,
+                        context,
+                        buffer_,
+                        static_echo_protocol_,
+                        static_echo_transport_,
+                        server_url_.remoteEP,
+                        server_url_.port,
+                        server_url_.protocol_type
+                    );
+                    if (NULLPTR == static_echo_tunnel_) {
                         return false;
                     }
                 }
 
-                ITransmissionPtr transmission = GetTransmission();
-                if (NULLPTR == transmission) {
-                    return false;
-                }
-
-                return DoStatic(transmission, y);
+                return static_echo_tunnel_->AllocatedToRemoteExchanger(y);
             }
 
             bool VEthernetExchanger::StaticEchoNextTimeout() noexcept {
-                if (disposed_) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->NextTimeout();
                 }
-
-                std::shared_ptr<StaticEchoDatagarmSocket> socket = static_echo_sockets_[0];
-                if (NULLPTR == socket) {
-                    return false;
-                }
-
-                bool opened = socket->is_open(true);
-                if (!opened) {
-                    return false;
-                }
-
-                AppConfigurationPtr configuration = GetConfiguration();
-                int min = std::max<int>(0, configuration->udp.static_.keep_alived[0]);
-                int max = std::max<int>(0, configuration->udp.static_.keep_alived[1]);
-                if (min == 0) {
-                    min = PPP_UDP_KEEP_ALIVED_MIN_TIMEOUT;
-                }
-
-                if (max == 0) {
-                    max = PPP_UDP_KEEP_ALIVED_MAX_TIMEOUT;
-                }
-
-                if (min > max) {
-                    std::swap(min, max);
-                }
-
-                uint64_t tick = ppp::threading::Executors::GetTickCount();
-                min = std::max<int>(1, min) * 1000;
-                max = std::max<int>(1, max) * 1000;
-
-                if (min == max) {
-                    static_echo_timeout_ = tick + min;
-                }
-                else {
-                    uint64_t next = RandomNext(min, max + 1);
-                    static_echo_timeout_ = tick + next;
-                }
-
-                return true;
+                return false;
             }
 
             bool VEthernetExchanger::StaticEchoPacketToRemoteExchanger(const ppp::net::packet::IPFrame* packet) noexcept {
-                if (NULLPTR == packet || packet->AddressesFamily != AddressFamily::InterNetwork) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->PacketToRemoteExchanger(packet);
                 }
-
-                if (disposed_) {
-                    return false;
-                }
-
-                std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                if (NULLPTR == configuration) {
-                    return false;
-                }
-
-                int session_id = static_echo_session_id_;
-                if (session_id < 1) {
-                    return false;
-                }
-
-                int message_length = -1;
-                std::shared_ptr<Byte> messages = VirtualEthernetPacket::Pack(configuration,
-                    configuration->GetBufferAllocator(),
-                    VirtualEthernetPacket::SessionCiphertext([this](int) noexcept { return static_echo_protocol_; }),
-                    VirtualEthernetPacket::SessionCiphertext([this](int) noexcept { return static_echo_transport_; }),
-                    session_id,
-                    packet,
-                    message_length);
-                return StaticEchoPacketToRemoteExchanger(messages, message_length);
+                return false;
             }
 
             bool VEthernetExchanger::StaticEchoPacketToRemoteExchanger(const std::shared_ptr<ppp::net::packet::UdpFrame>& frame) noexcept {
-                if (NULLPTR == frame || frame->AddressesFamily != AddressFamily::InterNetwork) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->PacketToRemoteExchanger(frame);
                 }
-
-                if (disposed_) {
-                    return false;
-                }
-
-                std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                if (NULLPTR == configuration) {
-                    return false;
-                }
-
-                int session_id = static_echo_session_id_;
-                if (session_id < 1) {
-                    return false;
-                }
-
-                std::shared_ptr<ppp::net::packet::BufferSegment> payload_buffers = frame->Payload;
-                if (NULLPTR == payload_buffers) {
-                    return false;
-                }
-
-                int packet_length = -1;
-                uint32_t source_ip = frame->Source.GetAddress();
-                uint32_t destination_ip = frame->Destination.GetAddress();
-                std::shared_ptr<Byte> packet = VirtualEthernetPacket::Pack(configuration,
-                    configuration->GetBufferAllocator(),
-                    VirtualEthernetPacket::SessionCiphertext([this](int) noexcept { return static_echo_protocol_; }),
-                    VirtualEthernetPacket::SessionCiphertext([this](int) noexcept { return static_echo_transport_; }),
-                    session_id,
-                    source_ip,
-                    frame->Source.Port,
-                    destination_ip,
-                    frame->Destination.Port,
-                    payload_buffers->Buffer.get(),
-                    payload_buffers->Length,
-                    packet_length);
-                return StaticEchoPacketToRemoteExchanger(packet, packet_length);
+                return false;
             }
 
             bool VEthernetExchanger::StaticEchoPacketToRemoteExchanger(const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
-                if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->PacketToRemoteExchanger(packet, packet_length);
                 }
-
-                if (disposed_) {
-                    return false;
-                }
-
-                std::shared_ptr<StaticEchoDatagarmSocket> socket = static_echo_sockets_[0];
-                if (NULLPTR == socket) {
-                    return false;
-                }
-
-                bool opened = socket->is_open();
-                if (!opened) {
-                    return false;
-                }
-
-                boost::asio::ip::udp::endpoint serverEP = StaticEchoGetRemoteEndPoint();
-                if (int serverPort = serverEP.port(); serverPort > IPEndPoint::MinPort && serverPort <= IPEndPoint::MaxPort) {
-                    std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = switcher_->GetStatistics();
-                    boost::asio::post(socket->get_executor(),
-                        [statistics, socket, packet, packet_length, serverEP]() noexcept {
-                            boost::system::error_code ec;
-                            socket->send_to(boost::asio::buffer(packet.get(), packet_length), serverEP,
-                                boost::asio::socket_base::message_end_of_record, ec);
-
-                            if (ec == boost::system::errc::success) {
-                                if (NULLPTR != statistics) {
-                                    statistics->AddOutgoingTraffic(packet_length);
-                                }
-                            }
-                        });
-                    return true;
-                }
-
                 return false;
             }
 
             std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket> VEthernetExchanger::StaticEchoReadPacket(const void* packet, int packet_length) noexcept {
-                if (NULLPTR == packet || packet_length < 1) {
-                    return NULLPTR;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->ReadPacket(packet, packet_length);
                 }
-
-                if (disposed_) {
-                    return NULLPTR;
-                }
-
-                std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                if (NULLPTR == configuration) {
-                    return NULLPTR;
-                }
-
-                std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = configuration->GetBufferAllocator();
-                return VirtualEthernetPacket::Unpack(configuration, 
-                    allocator, 
-                    VirtualEthernetPacket::SessionCiphertext([this](int) noexcept { return static_echo_protocol_; }), 
-                    VirtualEthernetPacket::SessionCiphertext([this](int) noexcept { return static_echo_transport_; }),
-                    packet, 
-                    packet_length);
+                return NULLPTR;
             }
 
             bool VEthernetExchanger::StaticEchoPacketInput(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet) noexcept {
-                if (NULLPTR == packet || disposed_) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->PacketInput(packet);
                 }
-
-                std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                if (NULLPTR == configuration) {
-                    return false;
-                }
-
-                std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = configuration->GetBufferAllocator();
-                static_echo_input_ = true;
-
-                if (packet->Protocol == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
-                    auto tap = switcher_->GetTap();
-                    if (NULLPTR == tap) {
-                        return false;
-                    }
-
-                    std::shared_ptr<ppp::net::packet::UdpFrame> frame = packet->GetUdpPacket();
-                    if (NULLPTR == frame) {
-                        return false;
-                    }
-
-                    std::shared_ptr<ppp::net::packet::IPFrame> ip = frame->ToIp(allocator);
-                    if (NULLPTR == ip) {
-                        return false;
-                    }
-                    
-                    if (configuration->udp.dns.cache && frame->Source.Port == PPP_DNS_SYS_PORT) {
-                        auto payload = frame->Payload;
-                        if (NULLPTR != payload) {
-                            ppp::net::asio::vdns::AddCache(payload->Buffer.get(), payload->Length);
-                        }
-                    }
-
-                    return switcher_->Output(ip.get());
-                }
-                elif(packet->Protocol == ppp::net::native::ip_hdr::IP_PROTO_IP) {
-                    std::shared_ptr<ppp::net::packet::IPFrame> frame = packet->GetIPPacket(allocator);
-                    if (NULLPTR == frame) {
-                        return false;
-                    }
-
-                    if (frame->ProtocolType == ppp::net::native::ip_hdr::IP_PROTO_ICMP) {
-                        if (frame->Source == IPEndPoint::LoopbackAddress) {
-                            int ack_id = ntohl(frame->Destination);
-                            if (ack_id == 0 || ack_id == STATIC_ECHO_KEEP_ALIVED_ID) {
-                                return false;
-                            }
-
-                            return switcher_->ERORTE(ack_id);
-                        }
-                    }
-
-                    return switcher_->Output(frame.get());
-                }
-                else {
-                    return false;
-                }
+                return false;
             }
 
             int VEthernetExchanger::StaticEchoYieldReceiveForm(Byte* incoming_packet, int incoming_traffic) noexcept {
-                std::shared_ptr<VirtualEthernetPacket> packet = StaticEchoReadPacket(incoming_packet, incoming_traffic);
-                if (NULLPTR != packet) {
-                    StaticEchoPacketInput(packet);
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->YieldReceiveForm(incoming_packet, incoming_traffic);
                 }
-
-                auto statistics = switcher_->GetStatistics(); 
-                if (NULLPTR != statistics) {
-                    statistics->AddIncomingTraffic(incoming_traffic);
-                }
-
                 return incoming_traffic;
             }
 
@@ -1731,160 +1363,20 @@ namespace ppp {
                 return status->load() > 0;
             }
             
-            bool VEthernetExchanger::StaticEchoLoopbackSocket(const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
-                if (disposed_) {
-                    return false;
-                }
-
-                bool openped = socket->is_open();
-                if (!openped) {
-                    return false;
-                }
-
-                auto self = shared_from_this();
-                if (std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = switcher_->GetQoS(); NULLPTR != qos) {
-                    return qos->BeginRead(
-                        [self, this, socket, qos]() noexcept {
-                            socket->async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), static_echo_source_ep_,
-                                [self, this, qos, socket](const boost::system::error_code& ec, std::size_t sz) noexcept {
-                                    int bytes_transferred = std::max<int>(-1, ec ? -1 : (int)sz);
-                                    if (bytes_transferred > 0) { 
-                                        qos->EndRead(StaticEchoYieldReceiveForm(buffer_.get(), bytes_transferred));
-                                    }
-
-                                    StaticEchoLoopbackSocket(socket);
-                                });
-                        });
-                }
-                else {
-                    socket->async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), static_echo_source_ep_,
-                        [self, this, qos, socket](const boost::system::error_code& ec, std::size_t sz) noexcept {
-                            int bytes_transferred = std::max<int>(-1, ec ? -1 : (int)sz);
-                            if (bytes_transferred > 0) {
-                                StaticEchoYieldReceiveForm(buffer_.get(), bytes_transferred);
-                            }
-
-                            StaticEchoLoopbackSocket(socket);
-                        });
-                    return true;
-                }
-            }
-
             bool VEthernetExchanger::StaticEchoAddRemoteEndPoint(boost::asio::ip::udp::endpoint& remoteEP) noexcept {
-                boost::asio::ip::udp::endpoint destinationEP = Ipep::V4ToV6(remoteEP);
-                boost::asio::ip::address destinationIP = destinationEP.address();
-                if (!destinationIP.is_v6()) {
-                    return false;
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->AddRemoteEndPoint(remoteEP);
                 }
-
-                SynchronizedObjectScope scope(syncobj_);
-                auto r = static_echo_server_ep_set_.emplace(destinationEP);
-                if (!r.second) {
-                    return false;
-                }
-
-                static_echo_server_ep_balances_.emplace_back(destinationEP);
-                return true;
+                return false;
             }
 
             boost::asio::ip::udp::endpoint VEthernetExchanger::StaticEchoGetRemoteEndPoint() noexcept {
-                std::shared_ptr<aggligator::aggligator> aggligator = switcher_->GetAggligator();
-                if (NULLPTR != aggligator) {
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                    auto ni = switcher_->GetUnderlyingNetowrkInterface(); 
-                    if (NULLPTR != ni) {
-                        boost::asio::ip::udp::endpoint ep = aggligator->client_endpoint(ni->IPAddress);
-                        return Ipep::V4ToV6(ep);
-                    }
-#endif
-                    return aggligator->client_endpoint(boost::asio::ip::address_v6::loopback());
+                if (static_echo_tunnel_) {
+                    return static_echo_tunnel_->GetRemoteEndPoint();
                 }
-
-                boost::asio::ip::udp::endpoint destinationEP;
-                for (SynchronizedObjectScope scope(syncobj_);;) {
-                    auto tail = static_echo_server_ep_balances_.begin();
-                    auto endl = static_echo_server_ep_balances_.end();
-                    if (tail == endl) {
-                        destinationEP = boost::asio::ip::udp::endpoint(server_url_.remoteEP.address(), static_echo_remote_port_);
-                        break;
-                    }
-                    
-                    std::size_t server_addrsss_num = static_echo_server_ep_set_.size();
-                    if (server_addrsss_num == 1) {
-                        destinationEP = *static_echo_server_ep_balances_.begin();
-                    }
-                    else {
-                        destinationEP = *tail;
-                        static_echo_server_ep_balances_.erase(tail);
-                        static_echo_server_ep_balances_.emplace_back(destinationEP);
-                    }
-
-                    break;
-                }
-
-                return Ipep::V4ToV6(destinationEP);
+                return boost::asio::ip::udp::endpoint();
             }
 
-            bool VEthernetExchanger::StaticEchoOpenAsynchronousSocket(StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
-                if (disposed_) {
-                    return false;
-                }
-
-                bool opened = socket.is_open(true);
-                if (opened) {
-                    return true;
-                }
-
-                if (server_url_.port <= IPEndPoint::MinPort || server_url_.port > IPEndPoint::MaxPort) {
-                    return false;
-                }   
-
-                AppConfigurationPtr configuration = GetConfiguration();
-                if (NULLPTR == configuration) {
-                    return false;
-                }
-
-                opened = ppp::coroutines::asio::async_open<boost::asio::ip::udp::socket>(y, socket, boost::asio::ip::udp::v6()) && !disposed_;
-                if (!opened) {
-                    return false;
-                }
-
-                bool ok = false;
-                for (;;) {
-                    opened = Socket::OpenSocket(socket, boost::asio::ip::address_v6::any(), IPEndPoint::MinPort, opened);
-                    if (!opened) {
-                        break;
-                    }
-                    else {
-                        Socket::SetWindowSizeIfNotZero(socket.native_handle(), configuration->udp.cwnd, configuration->udp.rwnd);
-                    }
-                    
-#if defined(_ANDROID)
-                    std::shared_ptr<aggligator::aggligator> aggligator = switcher_->GetAggligator();
-                    if (NULLPTR == aggligator) {
-                        auto protector_network = switcher_->GetProtectorNetwork(); 
-                        if (NULLPTR != protector_network) {
-                            opened = protector_network->Protect(socket.native_handle(), y);
-                            if (!opened) {
-                                break;
-                            }
-                        }
-                    }
-#endif
-                    // Mark that the socket has been opened.
-                    socket.opened = opened;
-
-                    // Set the timeout period for closing and re-opening the socket next-timed.
-                    ok = StaticEchoNextTimeout();
-                    break;
-                }
-
-                if (!ok) {
-                    Socket::Closesocket(socket);
-                }
-
-                return ok;
-            }
         }
     }
 }

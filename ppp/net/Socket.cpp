@@ -202,7 +202,9 @@ namespace ppp {
                 try {
                     s.cancel(ec);
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Cancel(udp::socket) failed: %s", e.what());
+                }
             }
         }
 
@@ -213,7 +215,9 @@ namespace ppp {
                 try {
                     s.cancel(ec);
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Cancel(tcp::socket) failed: %s", e.what());
+                }
             }
         }
 
@@ -224,7 +228,9 @@ namespace ppp {
                 try {
                     s.cancel(ec);
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Cancel(tcp::acceptor) failed: %s", e.what());
+                }
             }
         }
 
@@ -233,7 +239,9 @@ namespace ppp {
             try {
                 s.cancel();
             }
-            catch (const std::exception&) {}
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::Cancel(udp::resolver) failed: %s", e.what());
+            }
         }
 
         void Socket::Cancel(const boost::asio::ip::tcp::resolver& resolver) noexcept {
@@ -241,7 +249,9 @@ namespace ppp {
             try {
                 s.cancel();
             }
-            catch (const std::exception&) {}
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::Cancel(tcp::resolver) failed: %s", e.what());
+            }
         }
 
         void Socket::Cancel(const boost::asio::deadline_timer& deadline_timer) noexcept {
@@ -250,7 +260,9 @@ namespace ppp {
             try {
                 t.cancel(ec);
             }
-            catch (const std::exception&) {}
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::Cancel(deadline_timer) failed: %s", e.what());
+            }
         }
 
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::udp::socket>& socket) noexcept {
@@ -596,13 +608,17 @@ namespace ppp {
                 try {
                     s.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Closesocket(tcp::socket) shutdown failed: %s", e.what());
+                }
 
                 try {
                     s.close(ec);
                     return ec == boost::system::errc::success;
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Closesocket(tcp::socket) close failed: %s", e.what());
+                }
             }
             return false;
         }
@@ -615,7 +631,9 @@ namespace ppp {
                     s.close(ec);
                     return ec == boost::system::errc::success;
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Closesocket(tcp::acceptor) failed: %s", e.what());
+                }
             }
             return false;
         }
@@ -628,7 +646,9 @@ namespace ppp {
                     s.close(ec);
                     return ec == boost::system::errc::success;
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Closesocket(udp::socket) failed: %s", e.what());
+                }
             }
             return false;
         }
@@ -643,7 +663,8 @@ namespace ppp {
                 int ndfs = s.native_handle();
                 return ndfs;
             }
-            catch (const std::exception&) {
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::GetHandle(tcp::socket) failed: %s", e.what());
                 return -1;
             }
         }
@@ -658,7 +679,8 @@ namespace ppp {
                 int ndfs = s.native_handle();
                 return ndfs;
             }
-            catch (const std::exception&) {
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::GetHandle(tcp::acceptor) failed: %s", e.what());
                 return -1;
             }
         }
@@ -673,7 +695,8 @@ namespace ppp {
                 int ndfs = s.native_handle();
                 return ndfs;
             }
-            catch (const std::exception&) {
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::GetHandle(udp::socket) failed: %s", e.what());
                 return -1;
             }
         }
@@ -1014,7 +1037,9 @@ namespace ppp {
                 try {
                     stream->cancel(ec);
                 }
-                catch (const std::exception&) {}
+                catch (const std::exception& e) {
+                    LOG_ERROR("Socket::Closestream cancel failed: %s", e.what());
+                }
             }
 
             try {
@@ -1023,7 +1048,9 @@ namespace ppp {
                     return true;
                 }
             }
-            catch (const std::exception&) {}
+            catch (const std::exception& e) {
+                LOG_ERROR("Socket::Closestream close failed: %s", e.what());
+            }
             return false;
         }
 

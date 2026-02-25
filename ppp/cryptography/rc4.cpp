@@ -1,5 +1,6 @@
 #include "rc4.h"
 #include "digest.h"
+#include <iostream>
 
 #ifndef RC4_MAXBIT
 #define RC4_MAXBIT 0xff
@@ -7,6 +8,8 @@
 
 namespace ppp {
     namespace cryptography {
+        static bool g_rc4_disabled_warning_printed = false;
+
         bool rc4_sbox_impl(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen, bool ascending) noexcept {
             if (NULLPTR == sbox || NULLPTR == key || keylen < 1 || sboxlen < 1) {
                 return false;
@@ -156,28 +159,12 @@ namespace ppp {
                 return false;
             }
 
-            if (method == "rc4-md5") {
-                return true;
-            }
-
-            if (method == "rc4-sha1") {
-                return true;
-            }
-
-            if (method == "rc4-sha224") {
-                return true;
-            }
-
-            if (method == "rc4-sha256") {
-                return true;
-            }
-
-            if (method == "rc4-sha386") {
-                return true;
-            }
-
-            if (method == "rc4-sha512") {
-                return true;
+            // RC4 is deprecated by RFC 7465 due to serious security vulnerabilities.
+            // All RC4 variants are disabled and will be rejected for security reasons.
+            // Please migrate to AES-GCM or other modern authenticated encryption algorithms.
+            if (method == "rc4-md5" || method == "rc4-sha1" || method == "rc4-sha224" ||
+                method == "rc4-sha256" || method == "rc4-sha386" || method == "rc4-sha512") {
+                return false;
             }
 
             return false;
@@ -188,28 +175,17 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            if (method == "rc4-md5") {
-                return make_shared_object<RC4MD5>(method, password);
-            }
-
-            if (method == "rc4-sha1") {
-                return make_shared_object<RC4SHA1>(method, password);
-            }
-
-            if (method == "rc4-sha224") {
-                return make_shared_object<RC4SHA224>(method, password);
-            }
-
-            if (method == "rc4-sha256") {
-                return make_shared_object<RC4SHA256>(method, password);
-            }
-
-            if (method == "rc4-sha386") {
-                return make_shared_object<RC4SHA386>(method, password);
-            }
-
-            if (method == "rc4-sha512") {
-                return make_shared_object<RC4SHA512>(method, password);
+            // RC4 is deprecated by RFC 7465 due to serious security vulnerabilities.
+            // All RC4 variants are disabled for security reasons.
+            // Please migrate to AES-GCM or other modern authenticated encryption algorithms.
+            if (method == "rc4-md5" || method == "rc4-sha1" || method == "rc4-sha224" ||
+                method == "rc4-sha256" || method == "rc4-sha386" || method == "rc4-sha512") {
+                if (!g_rc4_disabled_warning_printed) {
+                    g_rc4_disabled_warning_printed = true;
+                    std::cerr << "[SECURITY WARNING] RC4 encryption algorithm is disabled due to serious security vulnerabilities (RFC 7465). "
+                              << "Method '" << method << "' is rejected. Please migrate to AES-GCM or other modern authenticated encryption algorithms." << std::endl;
+                }
+                return NULLPTR;
             }
 
             return NULLPTR;
