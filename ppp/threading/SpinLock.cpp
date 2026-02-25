@@ -1,5 +1,6 @@
 #include <ppp/threading/SpinLock.h>
 #include <ppp/threading/Thread.h>
+#include <iostream>
 
 namespace ppp
 {
@@ -100,12 +101,12 @@ namespace ppp
 
         }
 
-        SpinLock::~SpinLock() noexcept(false)
+        SpinLock::~SpinLock() noexcept
         {
             bool lockTaken = IsLockTaken();
             if (lockTaken)
             {
-                throw std::runtime_error("Failed to release the atomic lock.");
+                std::cerr << "[ERROR] SpinLock destroyed with lock still held." << std::endl;
             }
         }
 
@@ -120,13 +121,13 @@ namespace ppp
             return _.compare_exchange_strong(expected, TRUE, std::memory_order_acquire);
         }
 
-        void SpinLock::Leave()
+        void SpinLock::Leave() noexcept
         {
             int expected = TRUE;
             bool ok = _.compare_exchange_strong(expected, FALSE, std::memory_order_release);
             if (!ok)
             {
-                throw std::runtime_error("Failed to acquire the atomic lock.");
+                std::cerr << "[ERROR] SpinLock::Leave() called without lock being held." << std::endl;
             }
         }
 

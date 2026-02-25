@@ -26,6 +26,7 @@ namespace ppp {
                 friend class                                                            VEthernetNetworkSwitcher;
 
             public:
+                typedef std::weak_ptr<VEthernetNetworkSwitcher>                         VEthernetNetworkSwitcherWeakPtr;
                 typedef std::shared_ptr<VEthernetNetworkSwitcher>                       VEthernetNetworkSwitcherPtr;
                 typedef ppp::app::protocol::VirtualEthernetInformation                  VirtualEthernetInformation;
                 typedef ppp::auxiliary::UriAuxiliary                                    UriAuxiliary;
@@ -68,7 +69,7 @@ namespace ppp {
                 NetworkState                                                            GetNetworkState()       noexcept { return network_state_.load(); }
                 std::shared_ptr<Byte>                                                   GetBuffer()             noexcept { return buffer_; }
                 std::shared_ptr<vmux::vmux_net>                                         GetMux()                noexcept { return mux_; }
-                VEthernetNetworkSwitcherPtr                                             GetSwitcher()           noexcept { return switcher_; }
+                VEthernetNetworkSwitcherPtr                                             GetSwitcher()           noexcept { return switcher_.lock(); }
                 std::shared_ptr<VirtualEthernetInformation>                             GetInformation()        noexcept { return information_; }
                 ITransmissionPtr                                                        GetTransmission()       noexcept { return transmission_; }
                 int                                                                     GetReconnectionCount()  noexcept { return reconnection_count_; }
@@ -244,7 +245,7 @@ namespace ppp {
                 UInt64                                                                  sekap_last_         = 0;
                 UInt64                                                                  sekap_next_         = 0;
 
-                VEthernetNetworkSwitcherPtr                                             switcher_;
+                VEthernetNetworkSwitcherWeakPtr                                         switcher_;
                 std::shared_ptr<VirtualEthernetInformation>                             information_;
                 VEthernetDatagramPortTable                                              datagrams_;
                 ITransmissionPtr                                                        transmission_;

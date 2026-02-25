@@ -28,7 +28,11 @@ jobs:
 
     steps:
     - name: Checkout openppp2
-      run: git clone https://github.com/liulilittle/openppp2.git openppp2 # uses: actions/checkout@v2
+      uses: actions/checkout@v6
+      with:
+        repository: rebecca554owen/openppp2
+        path: openppp2
+        ref: main
 
     - name: Get number of cpus
       run: echo ::set-env name=ncpu::$(nproc)
