@@ -5,12 +5,7 @@
 
 name: PPP PRIVATE NETWORK™ 2 MACOS BUILD SCRIPT.(X) 1.0.0 VERSION.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   build:
