@@ -8,7 +8,7 @@ namespace ppp {
     namespace app {
         namespace client {
             PortMappingManager::PortMappingManager(
-                VEthernetExchanger*                                                         exchanger,
+                const std::shared_ptr<VEthernetExchanger>&                                      exchanger,
                 const AppConfigurationPtr&                                                  configuration,
                 const ContextPtr&                                                           context) noexcept
                 : exchanger_(exchanger)
@@ -30,7 +30,7 @@ namespace ppp {
             }
 
             bool PortMappingManager::RegisterAllMappingPorts() noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -61,7 +61,7 @@ namespace ppp {
             }
 
             bool PortMappingManager::RegisterMappingPort(AppConfiguration::MappingConfiguration& mapping) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -121,17 +121,17 @@ namespace ppp {
                     }
                 };
 
-                if (!exchanger_) {
+                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_.lock();
+                if (!exchanger) {
                     return NULLPTR;
                 }
 
-                ITransmissionPtr transmission = exchanger_->GetTransmission();
+                ITransmissionPtr transmission = exchanger->GetTransmission();
                 if (NULLPTR == transmission) {
                     return NULLPTR;
                 }
 
-                auto self = exchanger_->shared_from_this();
-                return make_shared_object<VIRTUAL_ETHERNET_MAPPING_PORT>(self, transmission, tcp, in, remote_port);
+                return make_shared_object<VIRTUAL_ETHERNET_MAPPING_PORT>(exchanger, transmission, tcp, in, remote_port);
             }
 
             bool PortMappingManager::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
@@ -141,8 +141,9 @@ namespace ppp {
                 }
 
                 std::shared_ptr<Byte> packet_managed = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(configuration_->GetBufferAllocator(), packet, packet_length);
-                if (exchanger_) {
-                    exchanger_->Post(
+                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_.lock();
+                if (exchanger) {
+                    exchanger->Post(
                         [this, packet_managed, sourceEP, packet_length, in, remote_port]() noexcept {
                             VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                             if (NULLPTR != mapping_port) {
@@ -161,8 +162,9 @@ namespace ppp {
 
             bool PortMappingManager::OnFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept {
 #if defined(_ANDROID)
-                if (exchanger_) {
-                    exchanger_->Post(
+                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_.lock();
+                if (exchanger) {
+                    exchanger->Post(
                         [this, in, remote_port, connection_id]() noexcept {
                             VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                             if (NULLPTR != mapping_port) {

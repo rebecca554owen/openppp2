@@ -90,21 +90,21 @@ namespace ppp {
                 boost::asio::ip::udp::endpoint                                          GetRemoteEndPoint() noexcept;
 
             public:
-                bool                                                                    GetInput() noexcept { return static_echo_input_; }
-                void                                                                    SetInput(bool value) noexcept { static_echo_input_ = value; }
-                int                                                                     GetSessionId() noexcept { return static_echo_session_id_; }
-                void                                                                    SetSessionId(int value) noexcept { static_echo_session_id_ = value; }
-                int                                                                     GetRemotePort() noexcept { return static_echo_remote_port_; }
-                void                                                                    SetRemotePort(int value) noexcept { static_echo_remote_port_ = value; }
-                bool                                                                    IsDisposed() noexcept { return disposed_; }
+                bool                                                                    GetInput() noexcept { return static_echo_input_.load(std::memory_order_relaxed); }
+                void                                                                    SetInput(bool value) noexcept { static_echo_input_.store(value, std::memory_order_relaxed); }
+                int                                                                     GetSessionId() noexcept { return static_echo_session_id_.load(std::memory_order_relaxed); }
+                void                                                                    SetSessionId(int value) noexcept { static_echo_session_id_.store(value, std::memory_order_relaxed); }
+                int                                                                     GetRemotePort() noexcept { return static_echo_remote_port_.load(std::memory_order_relaxed); }
+                void                                                                    SetRemotePort(int value) noexcept { static_echo_remote_port_.store(value, std::memory_order_relaxed); }
+                bool                                                                    IsDisposed() noexcept { return disposed_.load(std::memory_order_relaxed); }
 
             private:
                 SynchronizedObject                                                      syncobj_;
                 std::atomic<bool>                                                      disposed_ = false;
-                bool                                                                    static_echo_input_ = false;
-                uint64_t                                                                static_echo_timeout_ = UINT64_MAX;
-                int                                                                     static_echo_session_id_ = 0;
-                int                                                                     static_echo_remote_port_ = ppp::net::IPEndPoint::MinPort;
+                std::atomic<bool>                                                      static_echo_input_ = false;
+                std::atomic<uint64_t>                                                  static_echo_timeout_ = UINT64_MAX;
+                std::atomic<int>                                                       static_echo_session_id_ = 0;
+                std::atomic<int>                                                       static_echo_remote_port_ = ppp::net::IPEndPoint::MinPort;
                 BytePtr                                                                 buffer_;
                 VEthernetNetworkSwitcherWeakPtr                                         switcher_;
                 AppConfigurationPtr                                                    configuration_;

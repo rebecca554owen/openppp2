@@ -56,10 +56,10 @@ namespace ppp
         }
 
         template <class LockObject, class LockInternalObject, typename... TryEnterArguments>
-        static constexpr bool RecursiveLock_TryEnter(LockObject&    lock, 
-            LockInternalObject&                                     lock_internal, 
-            volatile int64_t*                                       tid,
-            std::atomic<int>&                                       reentries, 
+        static constexpr bool RecursiveLock_TryEnter(LockObject&    lock,
+            LockInternalObject&                                     lock_internal,
+            std::atomic<int64_t>&                                   tid,
+            std::atomic<int>&                                       reentries,
             TryEnterArguments&&...                                  arguments)
         {
             int n = ++reentries;
@@ -75,15 +75,11 @@ namespace ppp
                     return false;
                 }
 
-                Thread::MemoryBarrier();
-                *tid = current_tid;
-                Thread::MemoryBarrier();
+                tid.store(current_tid, std::memory_order_release);
             }
             else
             {
-                Thread::MemoryBarrier();
-                int lockTaken_tid = *tid;
-                Thread::MemoryBarrier();
+                int64_t lockTaken_tid = tid.load(std::memory_order_acquire);
 
                 if (lockTaken_tid != current_tid)
                 {
@@ -141,12 +137,12 @@ namespace ppp
 
         bool RecursiveSpinLock::TryEnter() noexcept
         {
-            return RecursiveLock_TryEnter(*this, lockobj_, &tid_, reentries_);
+            return RecursiveLock_TryEnter(*this, lockobj_, tid_, reentries_);
         }
 
         bool RecursiveSpinLock::TryEnter(int loop, int timeout) noexcept
         {
-            return RecursiveLock_TryEnter(*this, lockobj_, &tid_, reentries_, loop, timeout);
+            return RecursiveLock_TryEnter(*this, lockobj_, tid_, reentries_, loop, timeout);
         }
 
         void RecursiveSpinLock::Leave() 

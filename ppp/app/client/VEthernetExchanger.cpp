@@ -67,8 +67,6 @@ namespace ppp {
                 buffer_                   = Executors::GetCachedBuffer(context);
                 server_url_.port          = 0;
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
-
-                port_mapping_manager_ = make_shared_object<PortMappingManager>(this, configuration, context);
             }
 
             VEthernetExchanger::~VEthernetExchanger() noexcept {
@@ -349,6 +347,11 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 auto allocator = configuration->GetBufferAllocator();
+
+                if (!port_mapping_manager_) {
+                    auto exchanger = std::static_pointer_cast<VEthernetExchanger>(shared_from_this());
+                    port_mapping_manager_ = make_shared_object<PortMappingManager>(exchanger, configuration, context);
+                }
 
                 return YieldContext::Spawn(allocator.get(), *context,
                     [self, this, context](YieldContext& y) noexcept {

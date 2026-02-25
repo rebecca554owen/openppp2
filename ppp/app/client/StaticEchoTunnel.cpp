@@ -53,7 +53,7 @@ namespace ppp {
             }
 
             StaticEchoTunnel::~StaticEchoTunnel() noexcept {
-                disposed_ = true;
+                disposed_.store(true, std::memory_order_relaxed);
                 Clean();
             }
 
@@ -66,17 +66,17 @@ namespace ppp {
                     Socket::Closesocket(socket);
                 }
 
-                static_echo_input_ = false;
-                static_echo_timeout_ = UINT64_MAX;
-                static_echo_session_id_ = 0;
-                static_echo_remote_port_ = IPEndPoint::MinPort;
+                static_echo_input_.store(false, std::memory_order_relaxed);
+                static_echo_timeout_.store(UINT64_MAX, std::memory_order_relaxed);
+                static_echo_session_id_.store(0, std::memory_order_relaxed);
+                static_echo_remote_port_.store(IPEndPoint::MinPort, std::memory_order_relaxed);
 
                 static_echo_protocol_ = NULLPTR;
                 static_echo_transport_ = NULLPTR;
             }
 
             bool StaticEchoTunnel::Allocated() noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -85,11 +85,14 @@ namespace ppp {
                     return false;
                 }
 
-                return socket->is_open() && static_echo_timeout_ != 0 && static_echo_session_id_ != 0 && static_echo_remote_port_ != 0;
+                return socket->is_open() &&
+                       static_echo_timeout_.load(std::memory_order_relaxed) != 0 &&
+                       static_echo_session_id_.load(std::memory_order_relaxed) != 0 &&
+                       static_echo_remote_port_.load(std::memory_order_relaxed) != 0;
             }
 
             bool StaticEchoTunnel::SwapAsynchronousSocket() noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -98,14 +101,15 @@ namespace ppp {
                     return false;
                 }
 
-                if (static_echo_timeout_ != UINT64_MAX && switcher->StaticMode(NULLPTR)) {
+                uint64_t timeout_value = static_echo_timeout_.load(std::memory_order_relaxed);
+                if (timeout_value != UINT64_MAX && switcher->StaticMode(NULLPTR)) {
                     UInt64 now = Executors::GetTickCount();
-                    if (now >= static_echo_timeout_) {
+                    if (now >= timeout_value) {
                         std::shared_ptr<StaticEchoDatagarmSocket> socket = std::move(static_echo_sockets_[0]);
                         static_echo_sockets_[0] = std::move(static_echo_sockets_[1]);
                         static_echo_sockets_[1] = NULLPTR;
 
-                        static_echo_input_ = false;
+                        static_echo_input_.store(false, std::memory_order_relaxed);
                         if (!NextTimeout()) {
                             return false;
                         }
@@ -114,7 +118,7 @@ namespace ppp {
                         auto notifiy_if_need =
                             [self, this]() noexcept {
                                 // Notifies the VPN server of domestic port changes for smoother dynamic switchover of virtual links.
-                                if (!static_echo_input_ && static_echo_sockets_[0]) {
+                                if (!static_echo_input_.load(std::memory_order_relaxed) && static_echo_sockets_[0]) {
                                     GatewayServer(STATIC_ECHO_KEEP_ALIVED_ID);
                                 }
                             };
@@ -140,7 +144,6 @@ namespace ppp {
                             Socket::Closesocket(socket);
                         }
 
-                        notifiy_if_need();
                         if (NULLPTR == context) {
                             return false;
                         }
@@ -169,7 +172,7 @@ namespace ppp {
             }
 
             bool StaticEchoTunnel::GatewayServer(int ack_id) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -190,7 +193,7 @@ namespace ppp {
 
             bool StaticEchoTunnel::AllocatedToRemoteExchanger(YieldContext& y) noexcept {
                 Clean();
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -237,7 +240,7 @@ namespace ppp {
             }
 
             bool StaticEchoTunnel::NextTimeout() noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -271,11 +274,11 @@ namespace ppp {
                 max = std::max<int>(1, max) * 1000;
 
                 if (min == max) {
-                    static_echo_timeout_ = tick + min;
+                    static_echo_timeout_.store(tick + min, std::memory_order_relaxed);
                 }
                 else {
                     uint64_t next = RandomNext(min, max + 1);
-                    static_echo_timeout_ = tick + next;
+                    static_echo_timeout_.store(tick + next, std::memory_order_relaxed);
                 }
 
                 return true;
@@ -286,7 +289,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -295,7 +298,7 @@ namespace ppp {
                     return false;
                 }
 
-                int session_id = static_echo_session_id_;
+                int session_id = static_echo_session_id_.load(std::memory_order_relaxed);
                 if (session_id < 1) {
                     return false;
                 }
@@ -316,7 +319,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -325,7 +328,7 @@ namespace ppp {
                     return false;
                 }
 
-                int session_id = static_echo_session_id_;
+                int session_id = static_echo_session_id_.load(std::memory_order_relaxed);
                 if (session_id < 1) {
                     return false;
                 }
@@ -358,7 +361,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -402,7 +405,7 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return NULLPTR;
                 }
 
@@ -421,7 +424,7 @@ namespace ppp {
             }
 
             bool StaticEchoTunnel::PacketInput(const VirtualEthernetPacketPtr& packet) noexcept {
-                if (NULLPTR == packet || disposed_) {
+                if (NULLPTR == packet || disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -436,7 +439,7 @@ namespace ppp {
                 }
 
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = configuration->GetBufferAllocator();
-                static_echo_input_ = true;
+                static_echo_input_.store(true, std::memory_order_relaxed);
 
                 if (packet->Protocol == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
                     auto tap = switcher->GetTap();
@@ -505,7 +508,7 @@ namespace ppp {
             }
 
             bool StaticEchoTunnel::LoopbackSocket(const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -583,7 +586,7 @@ namespace ppp {
                     auto tail = static_echo_server_ep_balances_.begin();
                     auto endl = static_echo_server_ep_balances_.end();
                     if (tail == endl) {
-                        destinationEP = boost::asio::ip::udp::endpoint(server_remoteEP_.address(), static_echo_remote_port_);
+                        destinationEP = boost::asio::ip::udp::endpoint(server_remoteEP_.address(), static_echo_remote_port_.load(std::memory_order_relaxed));
                         break;
                     }
 
@@ -604,7 +607,7 @@ namespace ppp {
             }
 
             bool StaticEchoTunnel::OpenAsynchronousSocket(StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_relaxed)) {
                     return false;
                 }
 
@@ -622,7 +625,7 @@ namespace ppp {
                     return false;
                 }
 
-                opened = ppp::coroutines::asio::async_open<boost::asio::ip::udp::socket>(y, socket, boost::asio::ip::udp::v6()) && !disposed_;
+                opened = ppp::coroutines::asio::async_open<boost::asio::ip::udp::socket>(y, socket, boost::asio::ip::udp::v6()) && !disposed_.load(std::memory_order_relaxed);
                 if (!opened) {
                     return false;
                 }

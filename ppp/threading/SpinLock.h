@@ -56,7 +56,7 @@ namespace ppp
 
         private:
             SpinLock                    lockobj_;
-            volatile int64_t            tid_       = 0;
+            std::atomic<int64_t>        tid_       = 0;
             std::atomic<int>            reentries_ = 0;
         };
     }

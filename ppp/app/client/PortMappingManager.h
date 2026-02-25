@@ -29,13 +29,13 @@ namespace ppp {
 
             public:
                 PortMappingManager(
-                    VEthernetExchanger*                                                     exchanger,
+                    const std::shared_ptr<VEthernetExchanger>&                                   exchanger,
                     const AppConfigurationPtr&                                              configuration,
                     const ContextPtr&                                                       context) noexcept;
                 virtual ~PortMappingManager() noexcept;
 
             public:
-                bool                                                                        IsDisposed() noexcept { return disposed_.load(); }
+                bool                                                                        IsDisposed() noexcept { return disposed_.load(std::memory_order_relaxed); }
                 void                                                                        Dispose() noexcept;
                 VirtualEthernetMappingPortPtr                                               GetMappingPort(bool in, bool tcp, int remote_port) noexcept;
                 bool                                                                        RegisterMappingPort(AppConfiguration::MappingConfiguration& mapping) noexcept;
@@ -54,7 +54,7 @@ namespace ppp {
 
             private:
                 std::atomic<bool>                                                           disposed_ = false;
-                VEthernetExchanger*                                                         exchanger_ = NULLPTR;
+                std::weak_ptr<VEthernetExchanger>                                           exchanger_;
                 AppConfigurationPtr                                                         configuration_;
                 ContextPtr                                                                  context_;
                 SynchronizedObject                                                          syncobj_;

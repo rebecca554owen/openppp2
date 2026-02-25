@@ -43,6 +43,7 @@
 
 #include <fcntl.h>
 #include <errno.h>
+#include <future>
 
 #include <ppp/stdafx.h>
 #include <ppp/net/Ipep.h>
@@ -371,10 +372,12 @@ namespace ppp
 
         bool ProtectorNetwork::ProtectJNI(const std::shared_ptr<boost::asio::io_context>& context, int sockfd, YieldContext& y) noexcept
         {
-            bool ok = false;
             auto self = shared_from_this();
+            YieldContext* y_ptr = y.GetPtr();
+            auto promise_result = std::make_shared<std::promise<bool>>();
+
             boost::asio::post(*context,
-                [self, this, context, &ok, &y, sockfd]() noexcept
+                [self, this, context, y_ptr, promise_result, sockfd]() noexcept
                 {
                     JavaVM* jvm = NULLPTR;
                     {
@@ -382,43 +385,42 @@ namespace ppp
                         jvm = jvm_;
                     }
 
-                    if (NULLPTR == jvm)
+                    bool ok = false;
+                    if (NULLPTR != jvm)
                     {
-                        y.R();
-                        return;
-                    }
+                        JNIEnv* env = NULLPTR;
+                        bool need_detach = false;
+                        jint attach_result = jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
 
-                    JNIEnv* env = NULLPTR;
-                    bool need_detach = false;
-                    jint attach_result = jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
-
-                    if (attach_result == JNI_EDETACHED)
-                    {
-                        if (jvm->AttachCurrentThread(&env, NULLPTR) != JNI_OK || NULLPTR == env)
+                        if (attach_result == JNI_EDETACHED)
                         {
-                            y.R();
-                            return;
+                            if (jvm->AttachCurrentThread(&env, NULLPTR) == JNI_OK && NULLPTR != env)
+                            {
+                                need_detach = true;
+                            }
                         }
-                        need_detach = true;
+
+                        if (NULLPTR != env)
+                        {
+                            ok = ProtectorNetwork::ProtectJNI(env, sockfd);
+
+                            if (need_detach)
+                            {
+                                jvm->DetachCurrentThread();
+                            }
+                        }
                     }
-                    else if (attach_result != JNI_OK || NULLPTR == env)
+
+                    promise_result->set_value(ok);
+                    if (NULLPTR != y_ptr)
                     {
-                        y.R();
-                        return;
+                        y_ptr->R();
                     }
-
-                    ok = ProtectorNetwork::ProtectJNI(env, sockfd);
-
-                    if (need_detach)
-                    {
-                        jvm->DetachCurrentThread();
-                    }
-
-                    y.R();
                 });
 
             y.Suspend();
-            return ok;
+            auto future_result = promise_result->get_future();
+            return future_result.get();
         }
 #endif
 
