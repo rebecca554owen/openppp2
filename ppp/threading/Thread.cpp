@@ -39,7 +39,17 @@ namespace ppp
 
         Thread::~Thread() noexcept
         {
-            Detach();
+            auto& t = _thread;
+            if (t.joinable())
+            {
+                try
+                {
+                    t.detach();
+                }
+                catch (...)
+                {
+                }
+            }
         }
 
         bool Thread::Detach() noexcept
@@ -50,13 +60,14 @@ namespace ppp
                 return false;
             }
 
-            try 
+            try
             {
                 t.detach();
                 return true;
             }
-            catch (const std::exception&)
+            catch (const std::exception& e)
             {
+                LOG_ERROR("Thread::Detach failed: %s", e.what());
                 return false;
             }
         }
@@ -92,8 +103,9 @@ namespace ppp
                 t.join();
                 return true;
             }
-            catch (const std::exception&)
+            catch (const std::exception& e)
             {
+                LOG_ERROR("Thread::Join failed: %s", e.what());
                 return false;
             }
         }

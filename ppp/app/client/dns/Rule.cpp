@@ -94,12 +94,12 @@ namespace ppp
                         std::size_t host_size = host.size();
                         bool regexp = host_size >= 7 && memcmp(host.data(), "regexp:", 7) == 0;
                         bool full = false;
-                        if (regexp) 
+                        if (regexp)
                         {
-                            boost::regex pattern;
                             host = host.substr(7);
 
-                            try 
+                            boost::regex pattern;
+                            try
                             {
                                 int err = pattern.set_expression(host.data(), host.data() + host.size(), boost::regex_constants::icase | boost::regex_constants::perl);
                                 if (err != boost::regex_constants::error_ok)
@@ -107,11 +107,11 @@ namespace ppp
                                     continue;
                                 }
                             }
-                            catch (const boost::exception&) 
+                            catch (const boost::exception&)
                             {
                                 continue;
                             }
-                            catch (const std::exception&) 
+                            catch (const std::exception&)
                             {
                                 continue;
                             }
@@ -120,7 +120,7 @@ namespace ppp
                         {
                             host = ToLower<ppp::string>(host.substr(5));
                         }
-                        else 
+                        else
                         {
                             host = ToLower<ppp::string>(host);
                         }
@@ -149,21 +149,37 @@ namespace ppp
                                 }
                             }
                         }
-                    
-                        Ptr rule = make_shared_object<Rule>(Rule{ host, nic, address });
+
+                        Ptr rule = make_shared_object<Rule>();
                         if (NULLPTR == rule)
                         {
                             break;
                         }
-                        elif(regexp)
+                        rule->Host = host;
+                        rule->Nic = nic;
+                        rule->Server = address;
+                        if(regexp)
                         {
-                            regexp_rules[host] = rule;
+                            // Pre-compile regex and cache it in the rule
+                            try
+                            {
+                                rule->Regexp.set_expression(host.data(), host.data() + host.size(), boost::regex_constants::icase | boost::regex_constants::perl);
+                                regexp_rules[host] = rule;
+                            }
+                            catch (const boost::exception&)
+                            {
+                                continue;
+                            }
+                            catch (const std::exception&)
+                            {
+                                continue;
+                            }
                         }
-                        elif(full) 
+                        elif(full)
                         {
                             full_rules[host] = rule;
                         }
-                        else 
+                        else
                         {
                             rules[host] = rule;
                         }
@@ -223,34 +239,20 @@ namespace ppp
 
                 Rule::Ptr Rule::GetWithRegExp(const ppp::string& s, const ppp::unordered_map<ppp::string, Ptr>& rules) noexcept
                 {
-                    using boost_sregex_iterator = boost::regex_iterator<ppp::string::const_iterator>;
-
-                    /* R"(^r+[0-9]+(---|\.)sn-(2x3|ni5|j5o)\w{5}\.googlevideo\.com$)" */
-                    // https://onecompiler.com/cpp/43kcdykv8
-                    // https://regex101.com/r/aOnyJr/1
-
                     for (auto&& [r, rule] : rules)
                     {
-                        boost::regex pattern;
-
-                        try 
+                        try
                         {
-                            int err = pattern.set_expression(r.data(), r.data() + r.size(), boost::regex_constants::icase | boost::regex_constants::perl);
-                            if (err != boost::regex_constants::error_ok)
-                            {
-                                continue;
-                            }
-
-                            if (boost::regex_search(s.begin(), s.end(), pattern)) 
+                            if (boost::regex_search(s.begin(), s.end(), rule->Regexp))
                             {
                                 return rule;
                             }
                         }
-                        catch (const boost::exception&) 
+                        catch (const boost::exception&)
                         {
                             continue;
                         }
-                        catch (const std::exception&) 
+                        catch (const std::exception&)
                         {
                             continue;
                         }

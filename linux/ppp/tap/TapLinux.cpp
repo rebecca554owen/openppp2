@@ -127,7 +127,8 @@ namespace ppp {
 
             // By default, try to enable tun/tap-driver multi-queue mode, if not single-queue mode.
             // https://www.kernel.org/doc/Documentation/networking/tuntap.txt
-            strncpy(ifr.ifr_name, ifrName, IFNAMSIZ);
+            strncpy(ifr.ifr_name, ifrName, IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             bool fails = false;
 #if defined(IFF_MULTI_QUEUE)
@@ -177,7 +178,8 @@ namespace ppp {
 
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
-            strcpy(ifr.ifr_name, ifrName.data());
+            strncpy(ifr.ifr_name, ifrName.data(), IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             struct sockaddr_in* addr = (struct sockaddr_in*)&(ifr.ifr_addr);
             addr->sin_family = AF_INET;
@@ -212,7 +214,8 @@ namespace ppp {
 
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
-            strcpy(ifr.ifr_name, ifrName.data());
+            strncpy(ifr.ifr_name, ifrName.data(), IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             struct sockaddr_in* addr = (struct sockaddr_in*)&(ifr.ifr_addr);
             addr->sin_family = AF_INET;
@@ -223,7 +226,7 @@ namespace ppp {
             }
 
             char ip_buf[UINT8_MAX];
-            strcpy(ip_buf, inet_ntoa(addr->sin_addr));
+            snprintf(ip_buf, sizeof(ip_buf), "%s", inet_ntoa(addr->sin_addr));
             return ip_buf;
         }
 
@@ -239,7 +242,8 @@ namespace ppp {
 
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
-            strcpy(ifr.ifr_name, ifrName.data());
+            strncpy(ifr.ifr_name, ifrName.data(), IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             struct sockaddr_in* addr = (struct sockaddr_in*)&(ifr.ifr_netmask);
             addr->sin_family = AF_INET;
@@ -249,7 +253,7 @@ namespace ppp {
             }
 
             char ip_buf[UINT8_MAX];
-            strcpy(ip_buf, inet_ntoa(addr->sin_addr));
+            snprintf(ip_buf, sizeof(ip_buf), "%s", inet_ntoa(addr->sin_addr));
             return ip_buf;
         }
 
@@ -265,7 +269,8 @@ namespace ppp {
 
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
-            strncpy(ifr.ifr_name, ifrName.data(), ifrName.size());
+            strncpy(ifr.ifr_name, ifrName.data(), IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             if (ioctl(ifc_ctl_sock.sock_v4, SIOCGIFHWADDR, &ifr)) {
                 return "";
@@ -286,7 +291,8 @@ namespace ppp {
 
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
-            strncpy(ifr.ifr_name, ifrName.data(), ifrName.size());
+            strncpy(ifr.ifr_name, ifrName.data(), IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             if (ioctl(ifc_ctl_sock.sock_v4, SIOGIFINDEX, &ifr)) {
                 return -1;
@@ -654,7 +660,8 @@ namespace ppp {
                         }
                     }
 
-                    strcpy(ifrName, interface_name);
+                    strncpy(ifrName, interface_name, IF_NAMESIZE - 1);
+                    ifrName[IF_NAMESIZE - 1] = '\x0';
                     return true;
                 });
         }

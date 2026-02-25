@@ -719,7 +719,7 @@ namespace ppp
                 }
 
                 char mac_str[18];
-                sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+                snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
                     default_byte_arr[0], default_byte_arr[1], default_byte_arr[2],
                     default_byte_arr[3], default_byte_arr[4], default_byte_arr[5]);
                 return mac_str;

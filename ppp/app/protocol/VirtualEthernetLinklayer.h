@@ -84,6 +84,7 @@ namespace ppp {
                 ContextPtr                                                  GetContext() noexcept       { return context_; }
                 AppConfigurationPtr&                                        GetConfiguration() noexcept { return configuration_; }
                 Int128                                                      GetId() noexcept            { return id_; }
+                UInt64                                                      GetLastActivity() noexcept  { return last_; }
 
             public:
                 virtual bool                                                Run(const ITransmissionPtr& transmission, YieldContext& y) noexcept;

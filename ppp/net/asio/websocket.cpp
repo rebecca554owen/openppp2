@@ -6,6 +6,7 @@
 #include <ppp/net/Socket.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/net/asio/websocket/websocket_accept_websocket.h>
+#include <vector>
 
 //0                   1                   2                   3
 //0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -80,6 +81,51 @@ namespace ppp {
 
             namespace templates {
                 namespace websocket {
+                    static ppp::string                                  NormalizePath(const ppp::string& path) noexcept {
+                        if (path.empty()) {
+                            return "/";
+                        }
+
+                        ppp::string result;
+                        result.reserve(path.size());
+
+                        std::vector<ppp::string> components;
+                        size_t start = 0;
+
+                        if (path.size() >= 1 && path[0] == '/') {
+                            start = 1;
+                        }
+
+                        for (size_t i = start; i <= path.size(); ++i) {
+                            if (i == path.size() || path[i] == '/') {
+                                if (i > start) {
+                                    ppp::string component = path.substr(start, i - start);
+                                    if (component == "..") {
+                                        if (!components.empty()) {
+                                            components.pop_back();
+                                        }
+                                    }
+                                    else if (component != "." && !component.empty()) {
+                                        components.push_back(std::move(component));
+                                    }
+                                }
+                                start = i + 1;
+                            }
+                        }
+
+                        if (components.empty()) {
+                            return "/";
+                        }
+
+                        result = "";
+                        for (const auto& comp : components) {
+                            result += "/";
+                            result += comp;
+                        }
+
+                        return result;
+                    }
+
                     bool                                                CheckRequestPath(ppp::string& root, const boost::beast::string_view& sw) noexcept {
                         if (root.size() <= 1) {
                             return true;
@@ -87,7 +133,7 @@ namespace ppp {
 
                         ppp::string path_ = "/";
                         if (sw.size()) {
-                            path_ = ToLower(LTrim(RTrim(ppp::string(sw.data(), sw.size()))));
+                            path_ = LTrim(RTrim(ppp::string(sw.data(), sw.size())));
                             if (path_.empty()) {
                                 return false;
                             }
@@ -102,20 +148,33 @@ namespace ppp {
                             path_ = path_.substr(0, sz_);
                         }
 
-                        if (path_.size() < root.size()) {
+                        path_ = NormalizePath(path_);
+                        if (path_.empty()) {
                             return false;
                         }
 
-                        ppp::string lroot_ = ToLower(root);
-                        if (path_ == lroot_) {
+                        ppp::string normalized_root = NormalizePath(root);
+                        if (normalized_root.empty()) {
+                            return false;
+                        }
+
+                        if (path_.size() < normalized_root.size()) {
+                            return false;
+                        }
+
+                        if (path_.compare(0, normalized_root.size(), normalized_root) != 0) {
+                            return false;
+                        }
+
+                        if (path_ == normalized_root) {
                             return true;
                         }
 
-                        if (path_.size() == lroot_.size()) {
+                        if (path_.size() == normalized_root.size()) {
                             return false;
                         }
 
-                        int ch = path_[lroot_.size()];
+                        int ch = path_[normalized_root.size()];
                         return ch == '/';
                     }
 

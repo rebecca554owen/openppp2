@@ -16,9 +16,9 @@ namespace ppp {
             namespace vdns {
                 static constexpr int                                                            PPP_MAX_HOSTNAME_SIZE_LIMIT = 64;
                 static constexpr int                                                            PPP_IP_DNS_MERGE_WAIT       = 100;
-                // Linux  : systemd-resolved set 50ms               
-                // glibc  : getaddrinfo set 500ms               
-                // MacOS  : 50 ~ 100ms              
+                // Linux  : systemd-resolved set 50ms
+                // glibc  : getaddrinfo set 500ms
+                // MacOS  : 50 ~ 100ms
                 // Windows: 100 ~ 300ms             
 
                 typedef ppp::collections::Dictionary                                            Dictionary;

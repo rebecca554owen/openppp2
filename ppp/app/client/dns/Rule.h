@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/stdafx.h>
+#include <boost/regex.hpp>
 
 namespace ppp
 {
@@ -16,6 +17,7 @@ namespace ppp
                     ppp::string                         Host;
                     bool                                Nic = false;
                     boost::asio::ip::address            Server;
+                    boost::regex                        Regexp;
 
                 public:
                     typedef std::shared_ptr<Rule>       Ptr;

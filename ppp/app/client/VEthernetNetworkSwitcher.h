@@ -37,6 +37,7 @@ namespace ppp {
             private:
                 friend class                                                        VEthernetExchanger;
                 friend class                                                        VEthernetDatagramPort;
+                friend class                                                        StaticEchoTunnel;
 
             private:    
                 typedef struct {    

@@ -62,7 +62,10 @@ namespace ppp
                 }
                 
                 auto self = shared_from_this();
-                memset(memory, 0, sizeof(T));
+
+                if constexpr (std::is_trivially_default_constructible_v<T>) {
+                    memset(memory, 0, sizeof(T));
+                }
 
                 return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
                     [self, this](T* p) noexcept {

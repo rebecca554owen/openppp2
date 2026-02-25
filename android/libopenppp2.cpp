@@ -369,13 +369,37 @@ bool                                                                        libo
     }
 
     std::weak_ptr<ppp::net::ProtectorNetwork> protector_weak = protector;
-    boost::asio::post(*context, 
+    boost::asio::post(*context,
         [context, protector_weak, task]() noexcept {
             std::shared_ptr<ppp::net::ProtectorNetwork> protector = protector_weak.lock();
             if (NULLPTR != protector) {
-                JNIEnv* env = protector->GetEnvironment();
-                if (NULLPTR != env) {
-                    task(env);
+                JavaVM* jvm = protector->GetJavaVM();
+                JNIEnv* env = NULLPTR;
+
+                if (NULLPTR != jvm) {
+                    bool need_detach = false;
+                    jint attach_result = jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+
+                    if (attach_result == JNI_EDETACHED)
+                    {
+                        if (jvm->AttachCurrentThread(&env, NULLPTR) == JNI_OK && NULLPTR != env)
+                        {
+                            need_detach = true;
+                        }
+                    }
+                    else if (attach_result != JNI_OK)
+                    {
+                        return;
+                    }
+
+                    if (NULLPTR != env) {
+                        task(env);
+                    }
+
+                    if (need_detach)
+                    {
+                        jvm->DetachCurrentThread();
+                    }
                 }
             }
         });
@@ -408,16 +432,19 @@ bool                                                                        libo
     }
 
     bool result = false;
+    jstring json_string = NULLPTR;
     if (NULLPTR != method) {
-        jstring json_string = JNIENV_NewStringUTF(env, json);
-        env->CallStaticVoidMethod(clazz, method, json_string);
+        json_string = JNIENV_NewStringUTF(env, json);
+        if (NULLPTR != json_string) {
+            env->CallStaticVoidMethod(clazz, method, json_string);
 
-        if (env->ExceptionCheck()) {
-            env->ExceptionDescribe();
-            env->ExceptionClear();
-        }
-        else {
-            result = true;
+            if (env->ExceptionCheck()) {
+                env->ExceptionDescribe();
+                env->ExceptionClear();
+            }
+            else {
+                result = true;
+            }
         }
 
         if (NULLPTR != json_string) {

@@ -90,13 +90,35 @@ namespace ppp
             if (NULLPTR != stackframe_symbols)
             {
                 ppp::string executable_path = GetFullExecutionFilePath();
+
+                // Validate executable_path to prevent command injection
+                // Only allow safe characters: alphanumeric, ., /, -, _, +
+                bool safe_path = true;
+                for (size_t i = 0; i < executable_path.size() && safe_path; i++)
+                {
+                    char c = executable_path[i];
+                    safe_path = (c >= 'a' && c <= 'z') ||
+                               (c >= 'A' && c <= 'Z') ||
+                               (c >= '0' && c <= '9') ||
+                               c == '.' || c == '/' || c == '-' || c == '_' || c == '+';
+                }
+
                 ppp::string default_line = "\r\n  at ";
                 for (int i = skip; i < stackframe_size; i++)
                 {
                     char buf[8192];
-                    sprintf(buf, "addr2line -e %s %p", executable_path.data(), stackframe_addrs[i]);
 
-                    FILE* f = popen(buf, "r");
+                    // Only execute addr2line if path is safe
+                    if (safe_path)
+                    {
+                        snprintf(buf, sizeof(buf), "addr2line -e %s %p", executable_path.data(), stackframe_addrs[i]);
+                    }
+                    else
+                    {
+                        buf[0] = '\0';
+                    }
+
+                    FILE* f = safe_path && buf[0] != '\0' ? popen(buf, "r") : NULLPTR;
                     if (NULLPTR == f)
                     {
                         continue;
