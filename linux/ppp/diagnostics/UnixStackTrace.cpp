@@ -94,7 +94,7 @@ namespace ppp
                 for (int i = skip; i < stackframe_size; i++)
                 {
                     char buf[8192];
-                    sprintf(buf, "addr2line -e %s %p", executable_path.data(), stackframe_addrs[i]);
+                    snprintf(buf, sizeof(buf), "addr2line -e %s %p", executable_path.data(), stackframe_addrs[i]);
 
                     FILE* f = popen(buf, "r");
                     if (NULLPTR == f)

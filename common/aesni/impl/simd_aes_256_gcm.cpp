@@ -277,6 +277,71 @@ namespace aesni {
         memcpy(icb_ptr + 12, &counter_val, 4);
 
         gctr(ciphertext, plaintext, len, round_key, icb);
+
+        // WARNING: This function does NOT generate an authentication
+        // tag, making it vulnerable to tampering attacks. Use
+        // aes256_gcm_encrypt_with_tag() for proper AEAD security.
+    }
+
+    // AES-256-GCM encryption with authentication tag generation
+    // Outputs 16-byte authentication tag to 'tag' parameter
+    // This is the GCM-compliant version for proper AEAD security
+    void aes256_gcm_encrypt_with_tag(uint8_t* ciphertext, uint8_t* tag, const uint8_t* plaintext, size_t len,
+                                     const uint8_t* iv, size_t iv_len, const __m128i* round_key) noexcept {
+        // Step 1: Compute H = E_k(0^128)
+        __m128i H = aes256_encrypt_block(_mm_setzero_si128(), round_key);
+
+        // Step 2: Generate initial counter block J0
+        __m128i J0;
+        if (iv_len == 12) {
+            uint8_t j0_bytes[16];
+            memcpy(j0_bytes, iv, 12);
+
+            j0_bytes[12] = 0x00;
+            j0_bytes[13] = 0x00;
+            j0_bytes[14] = 0x00;
+            j0_bytes[15] = 0x01;  // Big-endian counter initialization
+            J0 = _mm_loadu_si128(reinterpret_cast<__m128i*>(j0_bytes));
+        }
+        else {
+            J0 = ghash(H, iv, iv_len);
+        }
+
+        // Step 3: Encrypt data using GCTR mode
+        __m128i icb = J0;
+        uint8_t* icb_ptr = reinterpret_cast<uint8_t*>(&icb);
+        uint32_t counter_val;
+        memcpy(&counter_val, icb_ptr + 12, 4);
+
+        counter_val = __builtin_bswap32(counter_val);
+        counter_val++;
+        counter_val = __builtin_bswap32(counter_val);
+        memcpy(icb_ptr + 12, &counter_val, 4);
+
+        gctr(ciphertext, plaintext, len, round_key, icb);
+
+        // Step 4: Generate authentication tag using GHASH
+        // GHASH input: AAD (none) || Ciphertext || len(AAD)||len(C)
+        // Format: len(AAD) in bits (64-bit) || len(C) in bits (64-bit)
+
+        // Calculate GHASH over ciphertext
+        __m128i ghash_state = ghash(H, ciphertext, len);
+
+        // Append lengths: [len(AAD) * 8][len(C) * 8] as 128-bit block
+        uint64_t len_block[2];
+        len_block[0] = 0;  // No AAD, so len(AAD) = 0
+        len_block[1] = __builtin_bswap64(static_cast<uint64_t>(len) * 8);  // len(C) in bits, big-endian
+
+        __m128i len_block_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(len_block));
+        ghash_state = _mm_xor_si128(ghash_state, len_block_vec);
+        ghash_state = ghash_reduce(ghash_state, H);
+
+        // Step 5: Tag = GHASH result XOR E_k(J0)
+        __m128i encrypted_j0 = aes256_encrypt_block(J0, round_key);
+        __m128i tag_vec = _mm_xor_si128(ghash_state, encrypted_j0);
+
+        // Store tag (16 bytes)
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(tag), tag_vec);
     }
 
     // AES-256-GCM decryption
@@ -311,6 +376,78 @@ namespace aesni {
         memcpy(icb_ptr + 12, &counter_val, 4);
 
         gctr(plaintext, ciphertext, len, round_key, icb);
+
+        // WARNING: This function does NOT verify an authentication
+        // tag, making it vulnerable to tampering attacks. Use
+        // aes256_gcm_decrypt_with_tag() for proper AEAD security.
+    }
+
+    // AES-256-GCM decryption with authentication tag verification
+    // Returns: true if tag verification succeeds, false otherwise
+    // This is the GCM-compliant version for proper AEAD security
+    bool aes256_gcm_decrypt_with_tag(uint8_t* plaintext, const uint8_t* tag, const uint8_t* ciphertext, size_t len,
+                                     const uint8_t* iv, size_t iv_len, const __m128i* round_key) noexcept {
+        // Step 1: Compute H = E_k(0^128)
+        __m128i H = aes256_encrypt_block(_mm_setzero_si128(), round_key);
+
+        // Step 2: Generate initial counter block J0
+        __m128i J0;
+        if (iv_len == 12) {
+            uint8_t j0_bytes[16];
+            memcpy(j0_bytes, iv, 12);
+
+            j0_bytes[12] = 0x00;
+            j0_bytes[13] = 0x00;
+            j0_bytes[14] = 0x00;
+            j0_bytes[15] = 0x01;  // Big-endian counter initialization
+            J0 = _mm_loadu_si128(reinterpret_cast<__m128i*>(j0_bytes));
+        }
+        else {
+            J0 = ghash(H, iv, iv_len);
+        }
+
+        // Step 3: Verify authentication tag before decryption (constant-time comparison)
+        // Calculate expected tag
+        __m128i ghash_state = ghash(H, ciphertext, len);
+
+        uint64_t len_block[2];
+        len_block[0] = 0;  // No AAD
+        len_block[1] = __builtin_bswap64(static_cast<uint64_t>(len) * 8);
+
+        __m128i len_block_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(len_block));
+        ghash_state = _mm_xor_si128(ghash_state, len_block_vec);
+        ghash_state = ghash_reduce(ghash_state, H);
+
+        __m128i encrypted_j0 = aes256_encrypt_block(J0, round_key);
+        __m128i expected_tag = _mm_xor_si128(ghash_state, encrypted_j0);
+        __m128i provided_tag = _mm_loadu_si128(reinterpret_cast<const __m128i*>(tag));
+
+        // Constant-time comparison to prevent timing attacks
+        __m128i diff = _mm_xor_si128(expected_tag, provided_tag);
+        // Use SSE2-compatible comparison (doesn't require SSE4.1)
+        // _mm_movemask_epi8 creates a bitmask from the most significant bit of each byte
+        // If diff is all zeros, the result will be 0
+        int comparison = (_mm_movemask_epi8(diff) == 0);
+
+        if (!comparison) {
+            // Tag verification failed
+            return false;
+        }
+
+        // Step 4: Decrypt data using GCTR mode
+        __m128i icb = J0;
+        uint8_t* icb_ptr = reinterpret_cast<uint8_t*>(&icb);
+        uint32_t counter_val;
+        memcpy(&counter_val, icb_ptr + 12, 4);
+
+        counter_val = __builtin_bswap32(counter_val);
+        counter_val++;
+        counter_val = __builtin_bswap32(counter_val);
+        memcpy(icb_ptr + 12, &counter_val, 4);
+
+        gctr(plaintext, ciphertext, len, round_key, icb);
+
+        return true;
     }
 }
 

@@ -73,7 +73,7 @@ namespace ppp
                     {
                         CHAR message[1024];
                         wvsprintfA(message, fmt, va_list(&fmt + 1));
-                        strcat(message, "\r\n");
+                        strncat(message, "\r\n", sizeof(message) - strlen(message) - 1);
 
                         OutputDebugStringA(message);
                     }

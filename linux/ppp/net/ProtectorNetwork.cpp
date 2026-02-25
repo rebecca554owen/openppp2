@@ -65,6 +65,7 @@ namespace ppp
             : dev_(dev)
         {
 #if defined(_ANDROID)
+            jvm_ = NULLPTR;
             env_ = NULLPTR;
             jni_ = NULLPTR;
 #endif
@@ -87,6 +88,7 @@ namespace ppp
             int flags = fcntl(sock, F_GETFL, 0);
             if (flags == -1)
             {
+                Socket::Closesocket(sock);
                 return -1013;
             }
 
@@ -94,6 +96,7 @@ namespace ppp
             {
                 if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0)
                 {
+                    Socket::Closesocket(sock);
                     return -1014;
                 }
             }
@@ -316,12 +319,19 @@ namespace ppp
             {
                 return false;
             }
-            
+
+            JavaVM* jvm = NULLPTR;
+            if (env->GetJavaVM(&jvm) != JNI_OK || NULLPTR == jvm)
+            {
+                return false;
+            }
+
             std::shared_ptr<boost::asio::io_context> jni;
             for (;;)
             {
                 SynchronizedObjectScope scope(syncobj_);
                 jni = std::move(jni_);
+                jvm_ = jvm;
                 env_ = env;
                 jni_ = context;
                 break;
@@ -338,11 +348,14 @@ namespace ppp
         bool ProtectorNetwork::DetachJNI() noexcept
         {
             std::shared_ptr<boost::asio::io_context> jni;
+            JavaVM* jvm = NULLPTR;
             for (;;)
             {
                 SynchronizedObjectScope scope(syncobj_);
                 jni = std::move(jni_);
+                jvm = jvm_;
                 env_ = NULLPTR;
+                jvm_ = NULLPTR;
                 jni_ = NULLPTR;
                 break;
             }
@@ -355,31 +368,52 @@ namespace ppp
             ppp::threading::Executors::Exit(jni);
             return true;
         }
-        
+
         bool ProtectorNetwork::ProtectJNI(const std::shared_ptr<boost::asio::io_context>& context, int sockfd, YieldContext& y) noexcept
         {
             bool ok = false;
             auto self = shared_from_this();
-            boost::asio::post(*context, 
+            boost::asio::post(*context,
                 [self, this, context, &ok, &y, sockfd]() noexcept
                 {
-                    // Reverse-calling the Java class member static function protects the socket without passing through VPNService / Android-Ko.
-                    std::shared_ptr<boost::asio::io_context> jni;
+                    JavaVM* jvm = NULLPTR;
                     {
                         SynchronizedObjectScope scope(syncobj_);
-                        jni = jni_;
-
-                        if (NULLPTR != jni)
-                        {
-                            JNIEnv* env = env_;
-                            if (NULLPTR != env)
-                            {
-                                ok = ProtectorNetwork::ProtectJNI(env, sockfd);
-                            }
-                        }
+                        jvm = jvm_;
                     }
 
-                    // Wake up the coroutine waiting for this protect network socket service to prevent coroutines from getting stuck.
+                    if (NULLPTR == jvm)
+                    {
+                        y.R();
+                        return;
+                    }
+
+                    JNIEnv* env = NULLPTR;
+                    bool need_detach = false;
+                    jint attach_result = jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+
+                    if (attach_result == JNI_EDETACHED)
+                    {
+                        if (jvm->AttachCurrentThread(&env, NULLPTR) != JNI_OK || NULLPTR == env)
+                        {
+                            y.R();
+                            return;
+                        }
+                        need_detach = true;
+                    }
+                    else if (attach_result != JNI_OK || NULLPTR == env)
+                    {
+                        y.R();
+                        return;
+                    }
+
+                    ok = ProtectorNetwork::ProtectJNI(env, sockfd);
+
+                    if (need_detach)
+                    {
+                        jvm->DetachCurrentThread();
+                    }
+
                     y.R();
                 });
 

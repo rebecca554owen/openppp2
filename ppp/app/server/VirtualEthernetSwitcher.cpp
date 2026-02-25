@@ -575,11 +575,11 @@ namespace ppp {
                             std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = configuration_->GetBufferAllocator();
                             VirtualEthernetStaticEchoAllocatedContextPtr allocated_context;
 
-                            std::shared_ptr<VirtualEthernetPacket> packet = 
-                                VirtualEthernetPacket::Unpack(configuration_, allocator, 
+                            std::shared_ptr<VirtualEthernetPacket> packet =
+                                VirtualEthernetPacket::Unpack(configuration_, allocator,
                                     [this, &allocated_context](int session_id) noexcept {
                                         return StaticEchoSelectCiphertext(session_id, true, allocated_context);
-                                    }, 
+                                    },
                                     [this, &allocated_context](int session_id) noexcept {
                                         return StaticEchoSelectCiphertext(session_id, false, allocated_context);
                                     }, static_echo_buffers_.get(), sz);
@@ -587,7 +587,7 @@ namespace ppp {
                                 StaticEchoPacketInput(allocated_context, allocator, packet, sz, static_echo_source_ep_);
                             }
                         }
-                        
+
                         return LoopbackDatagramSocket();
                     });
                 return true;
@@ -697,8 +697,9 @@ namespace ppp {
                     remote_port = bind_port;
                     return allocated_context;
                 }
-                
+
                 for (int i = ppp::net::IPEndPoint::MinPort; i < ppp::net::IPEndPoint::MaxPort; i++) {
+
                     int generate_id = abs(RandomNext());
                     if (generate_id < 1) {
                         continue;
@@ -1147,7 +1148,7 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                // If ip addresses conflict, do not directly conflict like traditional routers, 
+                // If ip addresses conflict, do not directly conflict like traditional routers,
                 // And abandon the mapping between IP and Ethernet electrical ports.
                 auto kv = nats_.emplace(ip, nat);
                 if (kv.second) {
