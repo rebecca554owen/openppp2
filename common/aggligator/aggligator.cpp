@@ -170,6 +170,7 @@ namespace aggligator
             , client_(client)
             , sending_(false)
             , next_(0)
+            , buffer_(ppp::make_shared_alloc<Byte>(UINT16_MAX))
         {
 
         }
@@ -304,10 +305,16 @@ namespace aggligator
             }
 
             auto self = shared_from_this();
-            boost::asio::async_read(*socket, boost::asio::buffer(buffer_, 2),
-                [self, this, socket](boost::system::error_code ec, std::size_t sz) noexcept
+            Byte* buffer_ptr = buffer_.get();
+            if (!buffer_ptr) {
+                close();
+                return false;
+            }
+
+            boost::asio::async_read(*socket, boost::asio::buffer(buffer_ptr, 2),
+                [self, this, socket, buffer_ptr](boost::system::error_code ec, std::size_t sz) noexcept
                 {
-                    do 
+                    do
                     {
                         ptr aggligator = app_;
                         if (!aggligator)
@@ -330,7 +337,7 @@ namespace aggligator
                             break;
                         }
 
-                        std::size_t length = buffer_[0] << 8 | buffer_[1];
+                        std::size_t length = buffer_ptr[0] << 8 | buffer_ptr[1];
                         if (length == 0)
                         {
                             if (!recv())
@@ -347,8 +354,8 @@ namespace aggligator
                             break;
                         }
 
-                        boost::asio::async_read(*socket, boost::asio::buffer(buffer_, length),
-                            [self, this, length](boost::system::error_code ec, std::size_t sz) noexcept
+                        boost::asio::async_read(*socket, boost::asio::buffer(buffer_ptr, length),
+                            [self, this, length, buffer_ptr](boost::system::error_code ec, std::size_t sz) noexcept
                             {
                                 do 
                                 {
@@ -384,7 +391,7 @@ namespace aggligator
                                         aggligator->rx_pps_++;
                                     }
 
-                                    bool ok = convergence->input(buffer_, length) && recv();
+                                    bool ok = convergence->input(buffer_ptr, length) && recv();
                                     if (ok)
                                     {
                                         client->last_ = (uint32_t)(aggligator->now() / 1000);
@@ -549,7 +556,7 @@ namespace aggligator
 #if defined(_WIN32)
         std::shared_ptr<QoSS>                                           qoss_;
 #endif
-        Byte                                                            buffer_[UINT16_MAX]; /* MAX:65507 */
+        std::shared_ptr<Byte>                                           buffer_;
     };
 
     aggligator::aggligator(boost::asio::io_context& context, const std::shared_ptr<Byte>& buffer, int buffer_size, int congestions) noexcept
