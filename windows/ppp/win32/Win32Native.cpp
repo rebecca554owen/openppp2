@@ -198,7 +198,7 @@ namespace ppp
             HRESULT hr = CoInitializeEx(NULLPTR, COINIT_MULTITHREADED);
             if (FAILED(hr))
             {
-                sprintf(messages, "Failed to initialize COM library. Error code = 0x%08x", hr);
+                snprintf(messages, sizeof(messages), "Failed to initialize COM library. Error code = 0x%08x", hr);
                 throw std::runtime_error(messages);
             }
             elif(SUCCEEDED(hr))
@@ -215,7 +215,7 @@ namespace ppp
                     NULLPTR);
                 if (FAILED(hr))
                 {
-                    sprintf(messages, "Failed to initialize security. Error code = 0x%08x", hr);
+                    snprintf(messages, sizeof(messages), "Failed to initialize security. Error code = 0x%08x", hr);
                     throw std::runtime_error(messages);
                 }
             }

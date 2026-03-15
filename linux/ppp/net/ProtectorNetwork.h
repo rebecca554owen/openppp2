@@ -110,11 +110,13 @@ namespace ppp
         public:
             std::shared_ptr<boost::asio::io_context>                GetContext() noexcept     { return jni_; }
             JNIEnv*                                                 GetEnvironment() noexcept { return env_; }
+            JavaVM*                                                 GetJavaVM() noexcept      { return jvm_; }
 #endif
 
-        private:                
+        private:
 #if defined(_ANDROID)
             SynchronizedObject                                      syncobj_;
+            JavaVM*                                                 jvm_ = NULLPTR;
             JNIEnv*                                                 env_ = NULLPTR;
             std::shared_ptr<boost::asio::io_context>                jni_;
 #endif

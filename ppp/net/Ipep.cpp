@@ -150,11 +150,11 @@ namespace ppp {
 
             char sz[0xff];
             if (ep->GetAddressFamily() == AddressFamily::InterNetwork) {
-                sprintf(sz, "%s:%u", address_text.data(), ep->Port);
+                snprintf(sz, sizeof(sz), "%s:%u", address_text.data(), ep->Port);
                 return sz;
             }
             else {
-                sprintf(sz, "[%s]:%u", address_text.data(), ep->Port);
+                snprintf(sz, sizeof(sz), "[%s]:%u", address_text.data(), ep->Port);
                 return sz;
             }
         }

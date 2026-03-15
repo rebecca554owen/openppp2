@@ -5,6 +5,8 @@
 
 namespace ppp {
     namespace ssl {
+        // SSLv2 and SSLv3 are deprecated due to POODLE attack (CVE-2014-3566) and other vulnerabilities.
+        // Minimum TLS version is TLS 1.2. See RFC 7568 for SSLv3 deprecation.
         boost::asio::ssl::context::method SSL::SSL_S_METHOD(int method) noexcept {
             switch (method) {
             case SSL_METHOD::tlsv13:
@@ -17,11 +19,13 @@ namespace ppp {
                 return boost::asio::ssl::context::tls_server;
             case SSL_METHOD::sslv23:
                 return boost::asio::ssl::context::sslv23_server;
-            case SSL_METHOD::sslv3:
-                return boost::asio::ssl::context::sslv3_server;
-            case SSL_METHOD::sslv2:
-                return boost::asio::ssl::context::sslv2_server;
+            // SSLv3 and SSLv2 are disabled for security reasons (POODLE attack, CVE-2014-3566)
+            // case SSL_METHOD::sslv3:
+            //     return boost::asio::ssl::context::sslv3_server;
+            // case SSL_METHOD::sslv2:
+            //     return boost::asio::ssl::context::sslv2_server;
             default:
+                // Default to TLS 1.2 as minimum secure version
                 return boost::asio::ssl::context::tlsv12_server;
             };
         }
@@ -38,11 +42,13 @@ namespace ppp {
                 return boost::asio::ssl::context::tls_client;
             case SSL_METHOD::sslv23:
                 return boost::asio::ssl::context::sslv23_client;
-            case SSL_METHOD::sslv3:
-                return boost::asio::ssl::context::sslv3_client;
-            case SSL_METHOD::sslv2:
-                return boost::asio::ssl::context::sslv2_client;
+            // SSLv3 and SSLv2 are disabled for security reasons (POODLE attack, CVE-2014-3566)
+            // case SSL_METHOD::sslv3:
+            //     return boost::asio::ssl::context::sslv3_client;
+            // case SSL_METHOD::sslv2:
+            //     return boost::asio::ssl::context::sslv2_client;
             default:
+                // Default to TLS 1.2 as minimum secure version
                 return boost::asio::ssl::context::tlsv12_client;
             };
         }
