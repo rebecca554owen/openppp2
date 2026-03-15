@@ -5,12 +5,7 @@
 
 name: PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT CROSS.(X) 1.0.0 VERSION.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -34,7 +29,11 @@ jobs:
 
     steps:
     - name: Checkout openppp2
-      run: git clone https://github.com/liulilittle/openppp2.git openppp2 # uses: actions/checkout@v2
+      uses: actions/checkout@v6
+      with:
+        repository: rebecca554owen/openppp2
+        path: openppp2
+        ref: main
 
     - name: Checkout 3rd
       run: |
