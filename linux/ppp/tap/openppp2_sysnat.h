@@ -20,11 +20,11 @@
 extern "C" {
 #endif
 
-    /* Error codes */
-    #define ERR_IFINDEX       -1   /* Invalid interface name */
+    /* Error codes returned by API functions */
+    #define ERR_IFINDEX       -1   /* Invalid network interface name */
     #define ERR_BPF_OPEN      -2   /* Failed to open BPF object file */
-    #define ERR_BPF_PROG      -3   /* Program not found in object */
-    #define ERR_BPF_LOAD      -4   /* BPF object loading failed */
+    #define ERR_BPF_PROG      -3   /* Program not found in BPF object */
+    #define ERR_BPF_LOAD      -4   /* Failed to load BPF object */
     #define ERR_MAP_PIN       -5   /* Failed to set map pin path */
     #define ERR_TC_CREATE     -6   /* Failed to create TC hook */
     #define ERR_TC_ATTACH     -7   /* Failed to attach TC program */
@@ -34,39 +34,37 @@ extern "C" {
     #define ERR_MAP_DELETE    -11  /* Failed to delete map element */
 
     /*
-     * NAT key structure (matches eBPF map key).
+     * NAT rule key (matches the key used in the eBPF map).
      * All IP addresses and ports are in network byte order.
      */
     struct openppp2_sysnat_key {
         uint32_t src_ip;      /* Source IP address */
         uint32_t dst_ip;      /* Destination IP address */
-        uint16_t src_port;    /* Source port */
-        uint16_t dst_port;    /* Destination port */
-        uint16_t proto;       /* IP protocol (e.g., IPPROTO_TCP, IPPROTO_UDP) */
-        uint16_t pad;         /* Padding to align to 8 bytes */
+        uint16_t src_port;    /* Source port number */
+        uint16_t dst_port;    /* Destination port number */
+        uint32_t proto;       /* IP protocol (e.g., IPPROTO_TCP, IPPROTO_UDP) */
     } __attribute__((packed));
 
     /*
-     * NAT value structure (matches eBPF map value).
+     * NAT rule value (matches the value used in the eBPF map).
      * All IP addresses and ports are in network byte order.
      */
     struct openppp2_sysnat_value {
-        uint32_t new_src_addr;      /* New source IP address */
-        uint16_t new_src_port;      /* New source port */
-        uint32_t new_dst_addr;      /* New destination IP address */
-        uint16_t new_dst_port;      /* New destination port */
-        int32_t  redirect_ifindex;  /* 0 = no redirect, else interface index */
-        uint8_t  pad[4];            /* Padding for alignment */
+        uint32_t new_src_addr;      /* New source IP address after NAT */
+        uint16_t new_src_port;      /* New source port after NAT */
+        uint32_t new_dst_addr;      /* New destination IP address after NAT */
+        uint16_t new_dst_port;      /* New destination port after NAT */
+        int32_t  redirect_ifindex;  /* 0 = no redirection, else interface index for redirect */
     } __attribute__((packed));
 
     /*
-     * Mount the BPF filesystem if not already mounted.
+     * Mount the BPF filesystem if it is not already mounted.
      * This function is automatically called by attach(), but may be called
      * explicitly to ensure the BPF filesystem is available early.
      *
      * Returns:
      *   0 on success
-     *   -1 on failure (errno set)
+     *   -1 on failure (errno is set)
      */
     int openppp2_sysnat_mount(void);
 
@@ -83,7 +81,7 @@ extern "C" {
      *   0 on success
      *   one of the ERR_xxx codes on failure
      */
-    int openppp2_sysnat_attach(const char* ifname, const char* bpf_obj_path);
+    int openppp2_sysnat_attach(const char* ifname);
 
     /*
      * Detach the eBPF TC egress NAT program from the network interface.
@@ -110,7 +108,7 @@ extern "C" {
     int openppp2_sysnat_is_attached(void);
 
     /*
-     * Add a NAT rule to the map.
+     * Add a NAT rule to the pinned map.
      *
      * The map must be already pinned (i.e., the program attached).
      *
@@ -122,7 +120,7 @@ extern "C" {
     int openppp2_sysnat_add_rule(const struct openppp2_sysnat_key* key, const struct openppp2_sysnat_value* val);
 
     /*
-     * Delete a NAT rule from the map.
+     * Delete a NAT rule from the pinned map.
      *
      * Returns:
      *   0 on success

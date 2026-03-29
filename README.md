@@ -458,6 +458,9 @@ Use jemalloc memory allocator instead of default
 BUDDY_ALLOC_IMPLEMENTATION  
 Use buddy allocator for virtual memory management
 
+SYSNAT
+Enable kernel NAT / TC Network Driver (TC Hairpin NATs)
+
 __MUSL__  
 Statically link musl-libc C++ standard library (detached from GNU/Linux libc)
 

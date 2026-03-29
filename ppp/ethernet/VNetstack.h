@@ -25,10 +25,6 @@ namespace ppp {
         public:
             class                                                           TapTcpClient;
 
-#ifdef SYSNAT
-            static std::shared_ptr<ppp::string>                             SysnatDriverFile;
-#endif
-
         private:
             struct TapTcpLink {
             public:

@@ -37,10 +37,8 @@ namespace ppp {
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_SYN_SENT  = 1;
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_SYN_RECVD = 2;
 
-    namespace ethernet {        
+    namespace ethernet {
 #ifdef SYSNAT
-        std::shared_ptr<ppp::string> VNetstack::SysnatDriverFile;
-
         static VNetstack::SynchronizedObject& openppp2_sysnat_syncobj() noexcept {
             static VNetstack::SynchronizedObject lock_obj;
             return lock_obj;
@@ -203,29 +201,8 @@ namespace ppp {
             }
 
             if (attach_or_detach) {
-                ppp::string sysnat_driver_file;
-                std::shared_ptr<ppp::string> file_path = VNetstack::SysnatDriverFile;
-                if (NULL == file_path || file_path->empty()) {
-                    return false;
-                }
-
-                sysnat_driver_file = LTrim(RTrim(*file_path));
-                if (sysnat_driver_file.empty()) {
-                    return false;
-                }
-
-                sysnat_driver_file = ppp::io::File::GetFullPath(sysnat_driver_file.data());
-                if (sysnat_driver_file.empty()) {
-                    return false;
-                }
-
-                if (!ppp::io::File::Exists(sysnat_driver_file.data())) {
-                    return false;
-                }
-
-                int rc = openppp2_sysnat_attach(interface_name.data(), sysnat_driver_file.data());
+                int rc = openppp2_sysnat_attach(interface_name.data());
                 if (rc) {
-                    openppp2_sysnat_detach(interface_name.data());
                     return false;
                 }
 
@@ -248,9 +225,6 @@ namespace ppp {
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
                 return false;
-            }
-            else {
-                Release();
             }
 
             std::shared_ptr<SocketAcceptor> acceptor = SocketAcceptor::New();
@@ -1052,7 +1026,6 @@ namespace ppp {
                 forward_key_.dst_ip   = outer_dst;
                 forward_key_.dst_port = (outer_dport);
                 forward_key_.proto    = IPPROTO_TCP;
-                forward_key_.pad      = 0;
 
                 struct openppp2_sysnat_value forward_val;
                 forward_val.new_src_addr     = nat_ip;
@@ -1060,14 +1033,12 @@ namespace ppp {
                 forward_val.new_dst_addr     = local_ip;
                 forward_val.new_dst_port     = listen_port;
                 forward_val.redirect_ifindex = 0;
-                memset(forward_val.pad, 0, sizeof(forward_val.pad));
-
+  
                 backward_key_.src_ip   = local_ip;
                 backward_key_.src_port = listen_port;
                 backward_key_.dst_ip   = nat_ip;
                 backward_key_.dst_port = nat_port;
                 backward_key_.proto    = IPPROTO_TCP;
-                backward_key_.pad      = 0;
 
                 struct openppp2_sysnat_value backward_val;
                 backward_val.new_src_addr     = outer_dst;
@@ -1075,7 +1046,6 @@ namespace ppp {
                 backward_val.new_dst_addr     = inner_src;
                 backward_val.new_dst_port     = inner_sport;
                 backward_val.redirect_ifindex = 0;
-                memset(backward_val.pad, 0, sizeof(backward_val.pad));
 
                 SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
                 if (openppp2_sysnat_add_rule(&forward_key_, &forward_val) == 0) {

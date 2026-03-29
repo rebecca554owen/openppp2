@@ -352,7 +352,6 @@ static constexpr int                                                        PPP_
 #define                                                                     PPP_PREFERRED_DNS_SERVER_2      "8.8.4.4"
 static constexpr const char*                                                PPP_DEFAULT_KEY_PROTOCOL        = "aes-128-cfb";
 static constexpr const char*                                                PPP_DEFAULT_KEY_TRANSPORT       = "aes-256-cfb";
-static constexpr const char*                                                PPP_SYSNAT_DRIVER_FILE          = "driver.ko";
 static constexpr int                                                        PPP_DEFAULT_HTTP_PROXY_PORT     = 8080;
 static constexpr int                                                        PPP_DEFAULT_SOCKS_PROXY_PORT    = 1080;
 static constexpr const char*                                                PPP_PUBLIC_DNS_SERVER_LIST[]    = {

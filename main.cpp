@@ -1434,15 +1434,6 @@ void PppApplication::PrintHelpInformation() noexcept
         col_description_width, "DESCRIPTION", 
         col_default_width, "DEFAULT");
     printf("├──────────────────────────────────────────┼──────────────────────────────────────────────────┼─────────────────────────┤\n");
-    
-#ifdef SYSNAT
-    printf("│ %-*s │ %-*s │ %-*s │\n", 
-        col_option_width, "--tc=[./driver.ko]", 
-        col_description_width, "TC network driver",
-        col_default_width, 
-        "./driver.ko"
-    );
-#endif
 
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--lwip=[yes|no]", 
@@ -1782,26 +1773,6 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv, "y").data());
 #else
         ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv).data());
-#endif
-
-#ifdef SYSNAT
-        // TC network driver​ takes effect only when using the PPP PRIVATE NETWORK™ 2​ standard network protocol stack ctcp.
-        while (!ni->Lwip && ppp::HasCommandArgument("--tc", argc, argv))
-        {
-            ppp::string sysnat_driver_file = ppp::GetCommandArgument("--tc", argc, argv);
-            if (!sysnat_driver_file.empty())
-            {
-                sysnat_driver_file = ppp::LTrim(ppp::RTrim(sysnat_driver_file));
-            }
-
-            if (sysnat_driver_file.empty() || !File::Exists(sysnat_driver_file.data()))
-            {
-                sysnat_driver_file = PPP_SYSNAT_DRIVER_FILE;
-            }
-
-            ppp::ethernet::VNetstack::SysnatDriverFile = ppp::make_shared_object<ppp::string>(std::move(sysnat_driver_file));
-            break;
-        }
 #endif
 
         ni->Nic = ppp::RTrim(ppp::LTrim(ppp::GetCommandArgument("--nic", argc, argv)));

@@ -458,6 +458,9 @@ JEMALLOC
 BUDDY_ALLOC_IMPLEMENTATION  
 使用 buddy allocator 管理虚拟内存分配
 
+SYSNAT
+启用内核NAT / TC Network Driver (TC Hairpin NATs)
+
 __MUSL__  
 静态链接 musl-libc C++ 标准库（脱离 GNU/LIBC）
 
