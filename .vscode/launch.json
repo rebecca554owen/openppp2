@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/ppp",
-            "args": [ "--mode=client --tun-promisc=yes --tun-ssmt=4/st --tun-static=no --tun-mux=8 --auto-restart=86400" ],
+            "args": [ "--mode=client --tun-promisc=yes --tun-ssmt=4/st --tun-static=no --auto-restart=86400" ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
             "environment": [],

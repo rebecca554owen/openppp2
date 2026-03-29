@@ -12,6 +12,7 @@ SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-mis
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)
 # ADD_DEFINITIONS(-DCURLINC_CURL)
 # ADD_DEFINITIONS(-DTRANSMISSION_O1)
+# ADD_DEFINITIONS(-DSYSNAT)
 ADD_DEFINITIONS(-DJEMALLOC)
 ADD_DEFINITIONS(-DFUNCTION)
 ADD_DEFINITIONS(-DBUDDY_ALLOC_IMPLEMENTATION)
@@ -220,6 +221,10 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
         libjemalloc.a
         # liburing.a
 
+        # libbpf.a
+        # libelf.a
+        # libz.a
+
         atomic
         dl
         pthread
@@ -237,6 +242,10 @@ ELSE()
         libcrypto.a 
         libjemalloc.a
         # liburing.a
+
+        # libbpf.a
+        # libelf.a
+        # libz.a
 
         atomic
         dl

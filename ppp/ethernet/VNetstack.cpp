@@ -9,12 +9,17 @@
 
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/io/File.h>
 
 #include <ppp/collections/Dictionary.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/coroutines/asio/asio.h>
 
 #include <libtcpip/netstack.h>
+
+#ifdef SYSNAT
+#include <linux/ppp/tap/TapLinux.h>
+#endif
 
 typedef ppp::net::AddressFamily                                 AddressFamily;
 typedef ppp::net::Socket                                        Socket;
@@ -32,7 +37,16 @@ namespace ppp {
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_SYN_SENT  = 1;
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_SYN_RECVD = 2;
 
-    namespace ethernet {
+    namespace ethernet {        
+#ifdef SYSNAT
+        std::shared_ptr<ppp::string> VNetstack::SysnatDriverFile;
+
+        static VNetstack::SynchronizedObject& openppp2_sysnat_syncobj() noexcept {
+            static VNetstack::SynchronizedObject lock_obj;
+            return lock_obj;
+        }
+#endif
+
         static Int128 LAN2WAN_KEY(uint32_t src_ip, uint16_t src_port, uint16_t dst_ip, uint16_t dst_port) noexcept {
             uint64_t src_ep = MAKE_QWORD(src_ip, src_port);
             uint64_t dst_ep = MAKE_QWORD(dst_ip, dst_port);
@@ -166,6 +180,66 @@ namespace ppp {
             ReleaseAllResources();
         }
 
+#ifdef SYSNAT
+        static bool SysnatAttachOrDetachDriver(const std::shared_ptr<ITap>& tap, bool attach_or_detach) noexcept {
+            if (NULLPTR == tap) {
+                return false;
+            }
+
+            VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+            if (openppp2_sysnat_mount()) {
+                return false;
+            }
+
+            ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
+            if (NULLPTR == linux_tap) {
+                return false;
+            }
+
+            ppp::string interface_name;
+            int64_t h = reinterpret_cast<int64_t>(linux_tap->GetHandle());
+            if (!linux_tap->GetInterfaceName(static_cast<int>(h), interface_name)) {
+                return false;
+            }
+
+            if (attach_or_detach) {
+                ppp::string sysnat_driver_file;
+                std::shared_ptr<ppp::string> file_path = VNetstack::SysnatDriverFile;
+                if (NULL == file_path || file_path->empty()) {
+                    return false;
+                }
+
+                sysnat_driver_file = LTrim(RTrim(*file_path));
+                if (sysnat_driver_file.empty()) {
+                    return false;
+                }
+
+                sysnat_driver_file = ppp::io::File::GetFullPath(sysnat_driver_file.data());
+                if (sysnat_driver_file.empty()) {
+                    return false;
+                }
+
+                if (!ppp::io::File::Exists(sysnat_driver_file.data())) {
+                    return false;
+                }
+
+                int rc = openppp2_sysnat_attach(interface_name.data(), sysnat_driver_file.data());
+                if (rc) {
+                    openppp2_sysnat_detach(interface_name.data());
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (!openppp2_sysnat_is_attached()) {
+                return false;
+            }
+
+            return openppp2_sysnat_detach(interface_name.data()) == 0;
+        }
+#endif
+
         bool VNetstack::Open(bool lwip, const int& localPort) noexcept {
             if (localPort < IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort) {
                 return false;
@@ -210,6 +284,9 @@ namespace ppp {
             acceptor_ = acceptor;
 
             lwip::netstack::Localhost = localPort;
+#ifdef SYSNAT
+            sysnat_ = SysnatAttachOrDetachDriver(tap, true);
+#endif
             return true;
         }
 
@@ -242,8 +319,15 @@ namespace ppp {
             Dictionary::ReleaseAllObjects(lan2wan);
 
             listenEP_ = IPEndPoint();
-            lwip_ = IPEndPoint::MinPort;
-            ap_ = RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort);
+            lwip_     = IPEndPoint::MinPort;
+            ap_       = RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort);
+
+#ifdef SYSNAT
+            std::shared_ptr<ITap> tap = this->Tap;
+            if (NULLPTR != tap) {
+                SysnatAttachOrDetachDriver(tap, false);
+            }
+#endif
         }
 
         bool VNetstack::Input(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept {
@@ -267,6 +351,7 @@ namespace ppp {
                     link->Update();
                     lan2wan = false;
                     rst = false;
+                    
                     ip->src = link->dstAddr;
                     tcp->src = link->dstPort;
                     ip->dest = link->srcAddr;
@@ -277,6 +362,7 @@ namespace ppp {
                 if ((link = this->FindTcpLink(LAN2WAN_KEY(ip->src, tcp->src, ip->dest, tcp->dest)))) {
                     link->Update();
                     rst = false;
+
                     ip->src = tap->GatewayServer;
                     tcp->src = link->natPort;
                     ip->dest = tap->IPAddress;
@@ -305,6 +391,14 @@ namespace ppp {
                     }
 
                     c->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_SYN_SENT;
+#ifdef SYSNAT
+                    for (SynchronizedObjectScope _(c->sysnat_synbobj_);;) {
+                        c->listenPort_ = this->listenEP_.Port;
+                        c->sysnat_status_ = this->sysnat_ ? 0 : -1;
+                        break;
+                    }
+#endif
+
                     if (!c->BeginAccept()) {
                         break;
                     }
@@ -312,6 +406,7 @@ namespace ppp {
                     rst = false;
                     c->link_ = link;
                     link->socket = c;
+
                     ip->src = tap->GatewayServer;
                     tcp->src = link->natPort;
                     ip->dest = tap->IPAddress;
@@ -404,8 +499,21 @@ namespace ppp {
                                 releases.emplace_back(link);
                             }
                         }
+
+                        continue;
                     }
-                    elif(link->state == TcpState::TCP_STATE_ESTABLISHED) {
+#ifdef SYSNAT   
+                    else {
+                        socket = link->socket; 
+                        if (NULL != socket) {
+                            SynchronizedObjectScope _(socket->sysnat_synbobj_);
+                            if (socket->sysnat_status_ > 0) {
+                                continue;
+                            }
+                        }
+                    }
+#endif
+                    if (link->state == TcpState::TCP_STATE_ESTABLISHED) {
                         goto TCP_STATE_INACTIVE;
                     }
                     elif(link->state == TcpState::TCP_STATE_CLOSED) {
@@ -452,8 +560,8 @@ namespace ppp {
             uint16_t dstPort = tcp->dest;
             uint32_t srcAddr = iphdr->src;
             uint16_t srcPort = tcp->src;
-            uint32_t seqNo = tcp->seqno;
-            uint32_t ackNo = tcp->ackno;
+            uint32_t seqNo   = tcp->seqno;
+            uint32_t ackNo   = tcp->ackno;
 
             uint32_t hdrlen_bytes = tcp_hdr::TCPH_HDRLEN_BYTES(tcp);
             uint32_t tcplen = tcp_len - hdrlen_bytes;
@@ -462,16 +570,16 @@ namespace ppp {
                 tcplen++;
             }
 
-            tcp_len = tcp_hdr::TCP_HLEN;
-            iphdr->src = dstAddr;
-            tcp->src = dstPort;
-            iphdr->dest = srcAddr;
-            tcp->dest = srcPort;
-            tcp->ackno = seqNo + tcplen;
-            tcp->seqno = ackNo;
-            tcp->urgp = 0;
-            tcp->wnd = 0;
-            tcp->hdrlen_rsvd_flags = 0;
+            tcp_len                 = tcp_hdr::TCP_HLEN;
+            iphdr->src              = dstAddr;
+            tcp->src                = dstPort;
+            iphdr->dest             = srcAddr;
+            tcp->dest               = srcPort;
+            tcp->ackno              = seqNo + tcplen;
+            tcp->seqno              = ackNo;
+            tcp->urgp               = 0;
+            tcp->wnd                = 0;
+            tcp->hdrlen_rsvd_flags  = 0;
 
             tcp_hdr::TCPH_HDRLEN_BYTES_SET(tcp, tcp_len);
             tcp_hdr::TCPH_FLAGS_SET(tcp, TcpFlags::TCP_RST);
@@ -718,6 +826,14 @@ namespace ppp {
             socket->lwip_ = key;
             socket->link_ = link;
 
+#ifdef SYSNAT
+            for (SynchronizedObjectScope _(socket->sysnat_synbobj_);;) {
+                socket->listenPort_ = this->listenEP_.Port;
+                socket->sysnat_status_ = this->sysnat_ ? 0 : -1;
+                break;
+            }
+#endif
+
             bool bok = socket->BeginAccept();
             if (!bok) {
                 this->CloseTcpLink(link);
@@ -812,6 +928,24 @@ namespace ppp {
                     link->Closing();
                 }
             }
+
+#ifdef SYSNAT  
+            for (SynchronizedObjectScope scope(sysnat_synbobj_);;) {
+                int _ = 1;
+                if (sysnat_status_.compare_exchange_strong(_, -1)) {
+                    SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+                    openppp2_sysnat_del_rule(&forward_key_);
+                    openppp2_sysnat_del_rule(&backward_key_);
+                }
+
+                Update();
+                if (NULL != link) {
+                    link->Update();
+                }
+
+                break;
+            }
+#endif
         }
 
         bool VNetstack::TapTcpClient::Update() noexcept {
@@ -820,12 +954,13 @@ namespace ppp {
             }
 
             std::shared_ptr<TapTcpLink> link = link_;
-            if (NULLPTR == link) {
+            if (NULLPTR != link) {
+                link->Update();
+                return true;
+            }
+            else {
                 return false;
             }
-
-            link->Update();
-            return true;
         }
 
         bool VNetstack::TapTcpClient::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
@@ -885,17 +1020,78 @@ namespace ppp {
                 link->state = TcpState::TCP_STATE_SYN_RECEIVED;
                 return lwip::netstack::input(packet.get(), packet_length);
             }
-            else {
-                if (NULLPTR == tap) {
-                    return false;
-                }
 
-                if (NULLPTR == packet) {
-                    return false;
-                }
-
-                return tap->Output(packet, packet_length);
+            if (NULLPTR == tap || NULLPTR == packet) {
+                return false;
             }
+
+#ifdef SYSNAT
+            for (int _ = 0;;) {
+                std::shared_ptr<TapTcpLink> link = this->link_;
+                if (NULLPTR == link) {
+                    break;
+                }
+
+                SynchronizedObjectScope scope(sysnat_synbobj_);
+                if (!sysnat_status_.compare_exchange_strong(_, 1)) {
+                    break;
+                }
+
+                uint32_t inner_src   = link->srcAddr;   
+                uint16_t inner_sport = link->srcPort;   
+                uint32_t outer_dst   = link->dstAddr;   
+                uint16_t outer_dport = link->dstPort;   
+
+                uint32_t nat_ip      = tap->GatewayServer;   
+                uint16_t nat_port    = link->natPort;       
+                uint32_t local_ip    = tap->IPAddress;       
+                uint16_t listen_port = htons(listenPort_);       
+
+                forward_key_.src_ip   = inner_src;
+                forward_key_.src_port = (inner_sport);
+                forward_key_.dst_ip   = outer_dst;
+                forward_key_.dst_port = (outer_dport);
+                forward_key_.proto    = IPPROTO_TCP;
+                forward_key_.pad      = 0;
+
+                struct openppp2_sysnat_value forward_val;
+                forward_val.new_src_addr     = nat_ip;
+                forward_val.new_src_port     = nat_port;
+                forward_val.new_dst_addr     = local_ip;
+                forward_val.new_dst_port     = listen_port;
+                forward_val.redirect_ifindex = 0;
+                memset(forward_val.pad, 0, sizeof(forward_val.pad));
+
+                backward_key_.src_ip   = local_ip;
+                backward_key_.src_port = listen_port;
+                backward_key_.dst_ip   = nat_ip;
+                backward_key_.dst_port = nat_port;
+                backward_key_.proto    = IPPROTO_TCP;
+                backward_key_.pad      = 0;
+
+                struct openppp2_sysnat_value backward_val;
+                backward_val.new_src_addr     = outer_dst;
+                backward_val.new_src_port     = outer_dport;
+                backward_val.new_dst_addr     = inner_src;
+                backward_val.new_dst_port     = inner_sport;
+                backward_val.redirect_ifindex = 0;
+                memset(backward_val.pad, 0, sizeof(backward_val.pad));
+
+                SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+                if (openppp2_sysnat_add_rule(&forward_key_, &forward_val) == 0) {
+                    if (openppp2_sysnat_add_rule(&backward_key_, &backward_val) != 0) {
+                        openppp2_sysnat_del_rule(&forward_key_);
+
+                        _ = 1;
+                        sysnat_status_.compare_exchange_strong(_, -1);
+                    }
+                }
+
+                break;
+            }
+#endif
+
+            return tap->Output(packet, packet_length);
         }
     }
 }

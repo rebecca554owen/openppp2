@@ -314,7 +314,7 @@ Next-generation security network access technology, providing high-performance V
 #### Routing Settings
 | Command | Function | Format | Default Value |
 |---------|----------|--------|--------------|
-| `--bypass` | Bypass list | `<file>` | `./ip.txt` |
+| `--bypass` | Bypass list | `<file1\|file2>` | `./ip.txt` |
 | `--bypass-nic` | Specify interface for bypass list | `<network interface>` | |
 | `--bypass-ngw` | Specify gateway for bypass list | `<IP>` | `0.0.0.0` |
 | `--virr` | Auto-update and take effect | `[file]/[country]` | `./ip.txt/CN` |

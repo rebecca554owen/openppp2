@@ -290,7 +290,7 @@ namespace ppp
                 return false;
             }
 
-            if (!tap->IsReady())
+            if (!tap->IsOpen())
             {
                 return false;
             }
@@ -471,17 +471,15 @@ namespace ppp
             tap->PacketInput       = TAP_PACKET_INPUT_EVENT;
             fragment->PacketInput  = FRAGMENT_PACKET_INPUT_EVENT;
             fragment->PacketOutput = FRAGEMENT_PACKET_OUTPUT_EVENT;
-            
-            // If the TAP virtual NIC object is unopened, open the TAP virtual NIC object otherwise.
-            bool ok = tap->IsOpen() || tap->Open();
+
 #if !defined(_WIN32)
-            ok = ok && ForkAllSsmt();
-#endif
-            if (ok)
+            if (!ForkAllSsmt())
             {
-                NextTimeout();
+                return false;
             }
-            return ok;
+#endif  
+            NextTimeout();
+            return true;
         }
 
 #if !defined(_WIN32)
@@ -725,6 +723,18 @@ namespace ppp
                 });
             return true;
         }
+
+#ifdef SYSNAT
+        bool VEthernet::IsSysnat()                             noexcept
+        {   
+            std::shared_ptr<VNetstack> stack = netstack_;
+            if (stack)
+            {
+                return stack->sysnat_;
+            }
+            return false;
+        }
+#endif
 
         std::shared_ptr<VEthernet::IPFragment> VEthernet::NewFragment() noexcept
         {

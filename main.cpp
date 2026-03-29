@@ -89,61 +89,74 @@ static constexpr int PPP_VBGP_UPDATE_INTERVAL = 3600;   // Hourly vBGP update in
 // Network interface configuration structure
 struct NetworkInterface final
 {
+    typedef ppp::unordered_set<ppp::string>             BypassSet;
+
 #if defined(_WIN32)
-    uint32_t                                        LeaseTimeInSeconds = 0;  // DHCP lease time
-    bool                                            SetHttpProxy       = false; // Enable HTTP proxy
-#else
-    bool                                            Promisc            = false; // Promiscuous mode
-    int                                             Ssmt               = 0;     // SSMT thread count
+    uint32_t                                            LeaseTimeInSeconds = 0;  // DHCP lease time
+    bool                                                SetHttpProxy       = false; // Enable HTTP proxy
+#else   
+    bool                                                Promisc            = false; // Promiscuous mode
+    int                                                 Ssmt               = 0;     // SSMT thread count
+#if defined(_LINUX) 
+    bool                                                SsmtMQ             = false; // SSMT message queue mode
+    bool                                                ProtectNetwork     = false; // Protect network routes
+#endif  
+#endif  
+
+    bool                                                StaticMode         = false; // Static tunnel mode
+    bool                                                Lwip               = false; // Use LWIP stack
+    bool                                                VNet               = false; // Subnet forwarding
+    bool                                                HostedNetwork      = false; // Prefer host network
+    bool                                                BlockQUIC          = false; // Block QUIC protocol
+
+    uint16_t                                            Mux                = 0;     // MUX connection count
+    uint8_t                                             MuxAcceleration    = 0;     // MUX acceleration mode
+
+    const std::shared_ptr<BypassSet>                    Bypass;                     // IP bypass list file path
 #if defined(_LINUX)
-    bool                                            SsmtMQ             = false; // SSMT message queue mode
-    bool                                            ProtectNetwork     = false; // Protect network routes
-#endif
-#endif
+    ppp::string                                         BypassNic;                  // Network interface for bypass
+#endif  
+    boost::asio::ip::address                            BypassNgw;                  // Gateway for bypass routes
 
-    bool                                            StaticMode         = false; // Static tunnel mode
-    bool                                            Lwip               = false; // Use LWIP stack
-    bool                                            VNet               = false; // Subnet forwarding
-    bool                                            HostedNetwork      = false; // Prefer host network
-    bool                                            BlockQUIC          = false; // Block QUIC protocol
+    ppp::string                                         ComponentId;                // TAP device identifier
+#if defined(_WIN32) 
+    ppp::string                                         Wintun;                     // TAP device name
+#endif  
 
-    uint16_t                                        Mux                = 0;     // MUX connection count
-    uint8_t                                         MuxAcceleration    = 0;     // MUX acceleration mode
+    ppp::string                                         FirewallRules;              // Firewall rules file path
+    ppp::string                                         DNSRules;                   // DNS rules file path
+    ppp::string                                         Nic;                        // Physical network interface
 
-    ppp::string                                     Bypass;                     // IP bypass list file path
-#if defined(_LINUX)
-    ppp::string                                     BypassNic;                  // Network interface for bypass
-#endif
-    boost::asio::ip::address                        BypassNgw;                  // Gateway for bypass routes
+    ppp::vector<boost::asio::ip::address>               DnsAddresses;               // DNS server addresses
 
-    ppp::string                                     ComponentId;                // TAP device identifier
-    ppp::string                                     FirewallRules;              // Firewall rules file path
-    ppp::string                                     DNSRules;                   // DNS rules file path
-    ppp::string                                     Nic;                        // Physical network interface
+    boost::asio::ip::address                            Ngw;                        // Preferred gateway
+    boost::asio::ip::address                            IPAddress;                  // Virtual adapter IP
+    boost::asio::ip::address                            GatewayServer;              // Virtual adapter gateway
+    boost::asio::ip::address                            SubmaskAddress;             // Subnet mask
 
-    ppp::vector<boost::asio::ip::address>           DnsAddresses;               // DNS server addresses
+    static ppp::string                                  GetDefaultTun() noexcept;   // Default tun-name
 
-    boost::asio::ip::address                        Ngw;                        // Preferred gateway
-    boost::asio::ip::address                        IPAddress;                  // Virtual adapter IP
-    boost::asio::ip::address                        GatewayServer;              // Virtual adapter gateway
-    boost::asio::ip::address                        SubmaskAddress;             // Subnet mask
+    int                                                 BypassLoadList(const ppp::string& s) noexcept;
+
+    NetworkInterface() noexcept 
+        : Bypass(ppp::make_shared_object<BypassSet>()) { }
 };
 
 // Console window dimensions structure
 struct ConsoleForegroundWindowSize final
 {
-    int                                             x   = -1;   // Width in characters
-    int                                             y   = -1;   // Height in characters
-    bool                                            tty = true; // Is a terminal device
-};
+    int                                                 x   = -1;   // Width in characters
+    int                                                 y   = -1;   // Height in characters
+    bool                                                tty = true; // Is a terminal device
+};  
 
-// Console printing helper class with line counting
-class PrintToConsoleForegroundWindow final 
-{
-public:
-    ConsoleForegroundWindowSize*                    console_window_size    = NULLPTR;    // Console dimensions
-    ppp::string*                                    console_window_content = NULLPTR;    // Output buffer
-    int*                                            console_window_heights = NULLPTR;    // Line counter
+// Console printing helper class with line counting 
+class PrintToConsoleForegroundWindow final  
+{   
+public: 
+    ConsoleForegroundWindowSize*                        console_window_size    = NULLPTR;    // Console dimensions
+    ppp::string*                                        console_window_content = NULLPTR;    // Output buffer
+    int*                                                console_window_heights = NULLPTR;    // Line counter
 
 public:
     // Print formatted text with line counting and truncation
@@ -273,24 +286,26 @@ private:
     bool                                            GetTransmissionStatistics(uint64_t& incoming_traffic, uint64_t& outgoing_traffic, std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept;
 
 private:
-    ConsoleForegroundWindowSize                     console_window_size_last_;       // Previous console size
-    std::size_t                                     console_window_buff_size_   = 0; // Console buffer size
+    ConsoleForegroundWindowSize                     console_window_size_last_;           // Previous console size
+    std::size_t                                     console_window_buff_size_   = 0;     // Console buffer size
     bool                                            client_mode_                = false; // Current mode flag
     bool                                            quic_                       = false; // Original QUIC setting (Windows)
-    std::shared_ptr<AppConfiguration>               configuration_;                    // Application configuration
-    std::shared_ptr<VirtualEthernetSwitcher>        server_;                          // Server switcher
-    std::shared_ptr<VEthernetNetworkSwitcher>       client_;                          // Client switcher
-    ppp::string                                     configuration_path_;               // Configuration file path
-    std::shared_ptr<NetworkInterface>               network_interface_;                // Network interface config
-    std::shared_ptr<Timer>                          timeout_                    = 0;   // Periodic timer
-    Stopwatch                                       stopwatch_;                        // Application uptime
-    PreventReturn                                   prevent_rerun_;                    // Prevent multiple instances
-    ppp::transmissions::ITransmissionStatistics     transmission_statistics_;          // Traffic statistics
+    std::shared_ptr<AppConfiguration>               configuration_;                      // Application configuration
+    std::shared_ptr<VirtualEthernetSwitcher>        server_;                             // Server switcher
+    std::shared_ptr<VEthernetNetworkSwitcher>       client_;                             // Client switcher
+    ppp::string                                     configuration_path_;                 // Configuration file path
+    std::shared_ptr<NetworkInterface>               network_interface_;                  // Network interface config
+    std::shared_ptr<Timer>                          timeout_                    = 0;     // Periodic timer
+    Stopwatch                                       stopwatch_;                          // Application uptime
+    PreventReturn                                   prevent_rerun_;                      // Prevent multiple instances
+    ppp::transmissions::ITransmissionStatistics     transmission_statistics_;            // Traffic statistics
 };
 
 // Global variables
-static std::shared_ptr<PppApplication>              DEFAULT_;                         // Application instance
+static std::shared_ptr<PppApplication>              DEFAULT_;                            // Application instance
 static struct {
+    using BypassSet = NetworkInterface::BypassSet;
+
     bool                                            restart                     = false; // Restart flag
     bool                                            vbgp                        = false; // vBGP enabled
     uint64_t                                        vbgp_last                   = 0;     // Last vBGP update
@@ -300,10 +315,10 @@ static struct {
 
     bool                                            virr                        = false; // Auto-IP update enabled
     uint64_t                                        virr_next                   = 0;     // Next IP update time
-    ppp::string                                     virr_argument;                      // IP update argument
+    ppp::string                                     virr_argument;                       // IP update argument
 
-    ppp::string                                     bypass;                             // Bypass file path
-}                                                   GLOBAL_;                         // Global application state
+    std::shared_ptr<BypassSet>                      bypass;                              // Bypass file path
+}                                                   GLOBAL_;                             // Global application state
 
 // Constructor
 PppApplication::PppApplication() noexcept
@@ -351,6 +366,90 @@ void PppApplication::Release() noexcept
 
     // Release prevention lock
     prevent_rerun_.Close();
+}
+
+// Default tun-name
+ppp::string NetworkInterface::GetDefaultTun() noexcept
+{
+    const char* default_tun_name = NULLPTR;
+#if defined(_WIN32)
+    default_tun_name = "PPP";
+#elif defined(_MACOS)
+    default_tun_name = "utun0";
+#else
+    default_tun_name = "ppp";
+#endif
+    return default_tun_name;
+}
+
+// NetworkInterface::BypassLoadList
+// 
+// Parses a pipe-separated list of file paths, converts each to an absolute path,
+// and inserts them into the bypass set. If the input string contains a single
+// entry, it is added directly without tokenization.
+//
+// Parameters:
+//   s - A string containing one or more file paths separated by '|'
+// Returns:
+//   Number of successfully added entries (0 if none or input empty)
+int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept
+{
+    // Get reference to the underlying bypass set (shared_ptr is always valid)
+    BypassSet& set = *Bypass;
+    set.clear();  // Clear any previous entries
+
+    // Nothing to do if input is empty
+    if (s.empty())
+    {
+        return 0;
+    }
+
+    // Split the input string by '|' into segments
+    ppp::vector<ppp::string> segments;
+    ppp::Tokenize<ppp::string>(s, segments, "|");
+
+    // Optimization: if there's only one segment, add it directly without trimming
+    if (segments.size() == 1)
+    {
+        set.emplace(std::move(segments[0]));
+        return 1;
+    }
+
+    int events = 0;
+    // Process each segment
+    for (const ppp::string& i : segments)
+    {
+        // Skip empty segments
+        if (i.empty())
+        {
+            continue;
+        }
+        
+        // Trim whitespace from both ends
+        ppp::string t = ppp::LTrim(ppp::RTrim(i));
+        if (t.empty())
+        {
+            continue;
+        }
+
+        // Convert to absolute path, handling any path rewriting (e.g., environment variables)
+        t = File::GetFullPath(File::RewritePath(t.data()).data());
+        if (t.empty())
+        {
+            continue;
+        }
+
+        // Insert the absolute path into the bypass set
+        // The move avoids an extra copy of the string
+        auto r = set.emplace(std::move(t));
+        if (r.second)  // insertion succeeded (path was not already present)
+        {
+            events++;
+        }
+    }
+
+    // Return the count of newly added entries
+    return events;
 }
 
 // Asynchronous IP list download
@@ -465,7 +564,8 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept
                         }
                     
                         // Only save file if path differs from current bypass
-                        if (GLOBAL_.bypass != path)
+                        auto bypass = GLOBAL_.bypass;
+                        if (NULL == bypass || bypass->find(path) == bypass->end())
                         {
                             chnroutes2_saveiplist(path, ips);
                             return 0;
@@ -815,7 +915,13 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
                         break;
                     }
 
-                    printfn("TCP/IP CC             : %s", client->IsLwip() ? "lwip" : "ctcp");
+                    printfn("TCP/IP CC             : %s", client->IsLwip() ? 
+                        "lwip" : 
+#ifdef SYSNAT
+                        client->IsSysnat() ? "tc" : 
+#endif
+                        "ctcp"
+                    );
                     printfn("Block QUIC            : %s", client->IsBlockQUIC() ? "blocked" : "unblocked");
 
                     if (std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger(); NULLPTR != exchanger)
@@ -1020,9 +1126,15 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 
             // Load bypass IP lists
 #if defined(_LINUX)
-            ethernet->AddLoadIPList(network_interface->Bypass, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
+            for (auto&& bypass_path : *network_interface->Bypass) 
+            {
+                ethernet->AddLoadIPList(bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
+            }
 #else
-            ethernet->AddLoadIPList(network_interface->Bypass, network_interface->BypassNgw, ppp::string());
+            for (auto&& bypass_path : *network_interface->Bypass) 
+            {
+                ethernet->AddLoadIPList(bypass_path, network_interface->BypassNgw, ppp::string());
+            }
 #endif
             for (auto&& route : configuration->client.routes)
             {
@@ -1323,6 +1435,15 @@ void PppApplication::PrintHelpInformation() noexcept
         col_default_width, "DEFAULT");
     printf("├──────────────────────────────────────────┼──────────────────────────────────────────────────┼─────────────────────────┤\n");
     
+#ifdef SYSNAT
+    printf("│ %-*s │ %-*s │ %-*s │\n", 
+        col_option_width, "--tc=[./driver.ko]", 
+        col_description_width, "TC network driver",
+        col_default_width, 
+        "./driver.ko"
+    );
+#endif
+
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--lwip=[yes|no]", 
         col_description_width, "Network protocol stack selection",
@@ -1348,20 +1469,11 @@ void PppApplication::PrintHelpInformation() noexcept
         col_option_width, "--ngw=<ip>", 
         col_description_width, "Force gateway address", 
         col_default_width, "auto-detect");
-    
-    ppp::string default_tun_name;
-#if defined(_WIN32)
-    default_tun_name = "PPP";
-#elif defined(_MACOS)
-    default_tun_name = "utun0";
-#else
-    default_tun_name = "ppp";
-#endif
-    
+        
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--tun=<name>", 
         col_description_width, "Virtual adapter name", 
-        col_default_width, default_tun_name.c_str());
+        col_default_width, NetworkInterface::GetDefaultTun().c_str());
     
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--tun-ip=<ip>", 
@@ -1451,12 +1563,12 @@ void PppApplication::PrintHelpInformation() noexcept
         col_description_width, "DESCRIPTION", 
         col_default_width, "DEFAULT");
     printf("├──────────────────────────────────────────┼──────────────────────────────────────────────────┼─────────────────────────┤\n");
-    
+
     printf("│ %-*s │ %-*s │ %-*s │\n", 
-        col_option_width, "--bypass=<file>", 
+        col_option_width, "--bypass=<file1|file2>", 
         col_description_width, "Bypass IP list file", 
         col_default_width, "./ip.txt");
-    
+
 #if defined(_LINUX)
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--bypass-nic=<interface>", 
@@ -1672,6 +1784,26 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv).data());
 #endif
 
+#ifdef SYSNAT
+        // TC network driver​ takes effect only when using the PPP PRIVATE NETWORK™ 2​ standard network protocol stack ctcp.
+        while (!ni->Lwip && ppp::HasCommandArgument("--tc", argc, argv))
+        {
+            ppp::string sysnat_driver_file = ppp::GetCommandArgument("--tc", argc, argv);
+            if (!sysnat_driver_file.empty())
+            {
+                sysnat_driver_file = ppp::LTrim(ppp::RTrim(sysnat_driver_file));
+            }
+
+            if (sysnat_driver_file.empty() || !File::Exists(sysnat_driver_file.data()))
+            {
+                sysnat_driver_file = PPP_SYSNAT_DRIVER_FILE;
+            }
+
+            ppp::ethernet::VNetstack::SysnatDriverFile = ppp::make_shared_object<ppp::string>(std::move(sysnat_driver_file));
+            break;
+        }
+#endif
+
         ni->Nic = ppp::RTrim(ppp::LTrim(ppp::GetCommandArgument("--nic", argc, argv)));
         ni->BlockQUIC = ppp::ToBoolean(ppp::GetCommandArgument("--block-quic", argc, argv).data());
 
@@ -1713,7 +1845,7 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         ni->BypassNic = ppp::RTrim(ppp::LTrim(ppp::GetCommandArgument("--bypass-nic", argc, argv)));
 #endif
         ni->BypassNgw = GetNetworkAddress("--bypass-ngw", 0, 32, "0.0.0.0", argc, argv);
-        ni->Bypass = File::GetFullPath(File::RewritePath(ppp::LTrim(ppp::RTrim(ppp::GetCommandArgument("--bypass", argc, argv, "./ip.txt"))).data()).data());
+        ni->BypassLoadList(File::GetFullPath(File::RewritePath(ppp::LTrim(ppp::RTrim(ppp::GetCommandArgument("--bypass", argc, argv, "./ip.txt"))).data()).data()));
 
         // Parse configuration files
         ni->DNSRules = ppp::GetCommandArgument("--dns-rules", argc, argv, "./dns-rules.txt");
@@ -1729,9 +1861,10 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
 
 #if defined(_WIN32)
         ni->SetHttpProxy = ppp::ToBoolean(ppp::GetCommandArgument("--set-http-proxy", argc, argv).data());
-        ni->ComponentId = ppp::tap::TapWindows::FindComponentId(ppp::GetCommandArgument("--tun", argc, argv));
+        ni->Wintun = ppp::GetCommandArgument("--tun", argc, argv, NetworkInterface::GetDefaultTun());
+        ni->ComponentId = ppp::tap::TapWindows::FindComponentId(ni->Wintun);
 #else
-        ni->ComponentId = ppp::GetCommandArgument("--tun", argc, argv);
+        ni->ComponentId = ppp::GetCommandArgument("--tun", argc, argv, NetworkInterface::GetDefaultTun());
 
 #if defined(_LINUX)
         // Enable route compatibility mode if requested
@@ -1773,12 +1906,6 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         // Clean up component ID
         ni->ComponentId = ppp::LTrim<ppp::string>(ni->ComponentId);
         ni->ComponentId = ppp::RTrim<ppp::string>(ni->ComponentId);
-
-        // Find default TAP device if not specified
-        if (ni->ComponentId.empty()) 
-        {
-            ni->ComponentId = ppp::tap::ITap::FindAnyDevice();
-        }
     }
     return ni;
 }
@@ -2211,9 +2338,14 @@ static bool Windows_PreparedEthernetEnvironment(const std::shared_ptr<NetworkInt
 
         // Install the TAP-Windows vNIC in the Windows operating system.
         ppp::string driverPath = File::GetFullPath((ppp::GetApplicationStartupPath() + "\\Driver\\").data());
-        if (ppp::tap::TapWindows::InstallDriver(driverPath.data(), ppp::ToUpper<ppp::string>(BOOST_BEAST_VERSION_STRING)))
+        if (ppp::tap::TapWindows::InstallDriver(driverPath.data(), NetworkInterface::GetDefaultTun())) // ppp::ToUpper<ppp::string>(BOOST_BEAST_VERSION_STRING)
         {
-            network_interface->ComponentId = ppp::tap::ITap::FindAnyDevice();
+            // Find default TAP device if not specified
+            network_interface->ComponentId = ppp::tap::TapWindows::FindComponentId(network_interface->Wintun);
+            if (network_interface->ComponentId.empty())
+            {
+                network_interface->ComponentId = ppp::tap::ITap::FindAnyDevice();
+            }
         }
 
         // The virtual Ethernet card device was not successfully deployed on your computer.

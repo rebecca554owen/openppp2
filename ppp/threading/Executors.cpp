@@ -382,9 +382,6 @@ namespace ppp
             }
             else
             {
-#if defined(_WIN32)
-                ppp::win32::SYSTEM_WINDOWS_COM_INITIALIZED __SYSTEM_WINDOWS_COM_INITIALIZED__;
-#endif
                 boost::asio::post(*context, 
                     [context, &return_code, &start, argc, argv]() noexcept
                     {

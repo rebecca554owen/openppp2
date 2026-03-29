@@ -12,6 +12,10 @@
 #include <ppp/net/SocketAcceptor.h>
 #include <ppp/net/asio/IAsynchronousWriteIoQueue.h>
 
+#ifdef SYSNAT
+#include <linux/ppp/tap/openppp2_sysnat.h>
+#endif
+
 namespace ppp {
     namespace ethernet {
         class VNetstack : public std::enable_shared_from_this<VNetstack> {
@@ -20,6 +24,10 @@ namespace ppp {
 
         public:
             class                                                           TapTcpClient;
+
+#ifdef SYSNAT
+            static std::shared_ptr<ppp::string>                             SysnatDriverFile;
+#endif
 
         private:
             struct TapTcpLink {
@@ -117,6 +125,15 @@ namespace ppp {
                 boost::asio::ip::tcp::endpoint                              natEP_;
                 boost::asio::ip::tcp::endpoint                              localEP_;
                 boost::asio::ip::tcp::endpoint                              remoteEP_;
+
+#ifdef SYSNAT
+                SynchronizedObject                                          sysnat_synbobj_;
+                int                                                         listenPort_          = 0;
+                std::atomic<int>                                            sysnat_status_       = 0;
+
+                struct openppp2_sysnat_key                                  forward_key_;
+                struct openppp2_sysnat_key                                  backward_key_;
+#endif
             };
 
         public:
@@ -168,8 +185,11 @@ namespace ppp {
 
         private:
             SynchronizedObject                                              syncobj_;
-            int                                                             ap_   = 0;
-            bool                                                            lwip_ = false;
+            int                                                             ap_     = 0;
+            bool                                                            lwip_   = false;
+#ifdef SYSNAT
+            bool                                                            sysnat_ = false;
+#endif
             IPEndPoint                                                      listenEP_;
             WAN2LANTABLE                                                    wan2lan_;
             LAN2WANTABLE                                                    lan2wan_;

@@ -512,6 +512,9 @@ namespace ppp
             ppp::string driverPath = path + "OemVista.inf";
             ppp::string argumentsText = "install \"" + driverPath + "\" tap0901";
 
+            ppp::unordered_set<ppp::string> olds;
+            TapWindows::FindAllComponentIds(olds);
+
             int dwExitCode = INFINITE;
             if (!ppp::win32::Win32Native::Execute(false, installPath.data(), argumentsText.data(), &dwExitCode))
             {
@@ -523,14 +526,26 @@ namespace ppp
                 return false;
             }
 
-            ppp::string componentId = FindComponentId();
-            if (componentId.empty())
+            ppp::unordered_set<ppp::string> news;
+            TapWindows::FindAllComponentIds(news);
+
+            for (ppp::string key : olds)
+            {
+                auto tail = news.find(key);
+                auto endl = news.end();
+                if (tail != endl)
+                {
+                    news.erase(tail);
+                }
+            }
+
+            if (news.empty())
             {
                 return false;
             }
 
             ppp::win32::network::NetworkInterfacePtr network_interface;
-            TapWindows_FindComponentId(componentId, network_interface);
+            TapWindows_FindComponentId(*news.begin(), network_interface);
 
             if (NULLPTR == network_interface)
             {

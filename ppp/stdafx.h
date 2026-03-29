@@ -220,7 +220,7 @@
 #endif
 
 #ifndef PPP_APPLICATION_VERSION
-#define PPP_APPLICATION_VERSION ("1.0.0.26117") /* 1.0.0.20260315 */
+#define PPP_APPLICATION_VERSION ("1.0.0.26136") /* 1.0.0.20260328 */
 #endif
 
 #ifndef PPP_APPLICATION_NAME
@@ -250,6 +250,7 @@
 #include <string>
 #include <list>
 #include <map>
+#include <queue>
 #include <set>
 #include <regex>
 #include <vector>
@@ -351,6 +352,7 @@ static constexpr int                                                        PPP_
 #define                                                                     PPP_PREFERRED_DNS_SERVER_2      "8.8.4.4"
 static constexpr const char*                                                PPP_DEFAULT_KEY_PROTOCOL        = "aes-128-cfb";
 static constexpr const char*                                                PPP_DEFAULT_KEY_TRANSPORT       = "aes-256-cfb";
+static constexpr const char*                                                PPP_SYSNAT_DRIVER_FILE          = "driver.ko";
 static constexpr int                                                        PPP_DEFAULT_HTTP_PROXY_PORT     = 8080;
 static constexpr int                                                        PPP_DEFAULT_SOCKS_PROXY_PORT    = 1080;
 static constexpr const char*                                                PPP_PUBLIC_DNS_SERVER_LIST[]    = {
@@ -1183,7 +1185,17 @@ namespace ppp {
 }
 
 namespace ppp {
-    inline bool                                                             isspace(char ch) noexcept { return ::isspace(ch) || ch == '\x0'; }
+    inline bool                                                             isspace(char ch) noexcept {
+        if (ch == '\x0') {
+            return true;
+        }
+
+        if (ch > -1 && ch < 128) {
+            return ::isspace(ch);
+        }
+
+        return false;
+    }
 
     template <typename _Ty>
     int                                                                     Tokenize(const _Ty& str, ppp::vector<_Ty>& tokens, const _Ty& delimiters) noexcept {

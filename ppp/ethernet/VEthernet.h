@@ -20,7 +20,7 @@ namespace ppp
         class VEthernet : public std::enable_shared_from_this<VEthernet>
         {
             friend class                                                    VETHERNET_INTERNAL;
-
+            
         public:
             typedef ppp::tap::ITap                                          ITap;
             typedef ppp::net::packet::IPFragment                            IPFragment;
@@ -51,6 +51,9 @@ namespace ppp
             virtual void                                                    Dispose()                              noexcept;
             bool                                                            IsLwip()                               noexcept { return lwip_; }
             bool                                                            IsVNet()                               noexcept { return vnet_; }
+#ifdef SYSNAT
+            bool                                                            IsSysnat()                             noexcept;
+#endif
             virtual bool                                                    IsDisposed()                           noexcept;
 
         public:

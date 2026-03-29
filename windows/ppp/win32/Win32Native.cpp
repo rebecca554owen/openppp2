@@ -249,6 +249,10 @@ namespace ppp
             CoUninitialize();
         }
 
+#if defined(_WIN32)
+        static ppp::win32::SYSTEM_WINDOWS_COM_INITIALIZED __SYSTEM_WINDOWS_COM_INITIALIZED__;
+#endif
+
         LONG Win32Native::DumpApplicationAndExit(EXCEPTION_POINTERS* e) noexcept
         {
             return Seh_UnhandledExceptionFilter(e);
