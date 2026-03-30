@@ -21,17 +21,19 @@ extern "C" {
 #endif
 
     /* Error codes returned by API functions */
-    #define ERR_IFINDEX       -1   /* Invalid network interface name */
-    #define ERR_BPF_OPEN      -2   /* Failed to open BPF object file */
-    #define ERR_BPF_PROG      -3   /* Program not found in BPF object */
-    #define ERR_BPF_LOAD      -4   /* Failed to load BPF object */
-    #define ERR_MAP_PIN       -5   /* Failed to set map pin path */
-    #define ERR_TC_CREATE     -6   /* Failed to create TC hook */
-    #define ERR_TC_ATTACH     -7   /* Failed to attach TC program */
-    #define ERR_TC_DETACH     -8   /* Failed to detach TC program */
-    #define ERR_MAP_OPEN      -9   /* Failed to open pinned map */
-    #define ERR_MAP_UPDATE    -10  /* Failed to update map element */
-    #define ERR_MAP_DELETE    -11  /* Failed to delete map element */
+    #define ERR_IFINDEX             -1  /* Invalid network interface name */
+    #define ERR_BPF_OPEN            -2  /* Failed to open BPF object file */
+    #define ERR_BPF_PROG            -3  /* Program not found in BPF object */
+    #define ERR_BPF_LOAD            -4  /* Failed to load BPF object */
+    #define ERR_MAP_PIN             -5  /* Failed to set map pin path */
+    #define ERR_TC_CREATE           -6  /* Failed to create TC hook */
+    #define ERR_TC_ATTACH           -7  /* Failed to attach TC program */
+    #define ERR_TC_DETACH           -8  /* Failed to detach TC program */
+    #define ERR_MAP_OPEN            -9  /* Failed to open pinned map */
+    #define ERR_MAP_UPDATE          -10 /* Failed to update map element */
+    #define ERR_MAP_DELETE          -11 /* Failed to delete map element */
+    #define ERR_ALREADY_ATTACHED    -12 /* Program already attached */
+    #define ERR_NOT_ATTACHED        -13 /* Program not attached */
 
     /*
      * NAT rule key (matches the key used in the eBPF map).
@@ -71,11 +73,12 @@ extern "C" {
     /*
      * Attach the eBPF TC egress NAT program to the given network interface.
      *
-     * The BPF object file at `bpf_obj_path` must contain a program named
-     * "tc_egress" and a map named "openppp2_sysnat_rules".
+     * The BPF object file must contain a program named "tc_egress" and a map
+     * named "openppp2_sysnat_rules". The map is pinned at
+     * /sys/fs/bpf/openppp2_sysnat_rules_<ifname>.
      *
-     * If the map is already pinned at MAP_PIN_PATH, this function assumes the
-     * program is already attached and returns success without reloading.
+     * If the program is already attached (i.e., the global state indicates
+     * attachment), this function returns ERR_ALREADY_ATTACHED.
      *
      * Returns:
      *   0 on success
@@ -87,7 +90,8 @@ extern "C" {
      * Detach the eBPF TC egress NAT program from the network interface.
      *
      * This function removes the TC program, unpins the map, and cleans up the
-     * TC hook. If the map is not present, it returns success.
+     * global state. If the program is not attached, it returns ERR_NOT_ATTACHED.
+     * The TC hook itself is left intact to allow reuse by future attaches.
      *
      * Returns:
      *   0 on success
@@ -98,11 +102,8 @@ extern "C" {
     /*
      * Check whether the NAT program is currently attached.
      *
-     * This function checks the existence of the pinned map file.
-     * It does not verify the actual TC attachment state.
-     *
      * Returns:
-     *   1 if attached (map exists)
+     *   1 if attached
      *   0 if not attached
      */
     int openppp2_sysnat_is_attached(void);

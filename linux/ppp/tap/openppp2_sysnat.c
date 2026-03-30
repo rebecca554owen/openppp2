@@ -6,6 +6,19 @@
  *
  * The implementation is intended for single-process use and does not include
  * cross-process locking or reference counting.
+ *
+ * Design notes:
+ *   - Each process attaches to exactly one interface and owns a separate BPF map
+ *     pinned at /sys/fs/bpf/openppp2_sysnat_rules_<ifname>.
+ *   - TC hooks are not destroyed during detach; they are left intact to allow
+ *     subsequent attaches (including by the same process after restart) to
+ *     reuse the hook. The hook is simply a kernel object that can hold zero or
+ *     more programs. Destroying it could affect other programs that may be
+ *     attached to the same hook (though unlikely in our use case, but we avoid
+ *     unnecessary kernel operations). The BPF_TC_F_REPLACE flag ensures that
+ *     our program replaces any previous program at the same handle/priority.
+ *   - The global skeleton and map fd are cached for fast rule operations.
+ *   - Attach/detach operations are idempotent with proper error checking.
  */
 
 #ifdef SYSNAT
@@ -25,11 +38,12 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
-/* Fixed path where the NAT rule map is pinned (also serves as an attach flag) */
-#define MAP_PIN_PATH "/sys/fs/bpf/openppp2_sysnat_rules"
-
 /* Global skeleton instance, used for cleanup during detach */
-static struct openppp2_driver_ko* g_skel = NULL;
+static struct driver_ko* g_skel = NULL;
+
+/* Per-process map file descriptor and pin path */
+static int  g_map_fd = -1;                 /* map fd, -1 means not attached or invalid */
+static char g_pin_path[256] = { 0 };       /* pin path of the map for current process */
 
 /*
  * Check if a filesystem of a given type is mounted at a specific path.
@@ -82,6 +96,24 @@ static int ensure_dir(const char* path) {
     return -1;
 }
 
+/* libbpf print callback that silences all logging output.
+ * This function is registered via libbpf_set_print() and returns 0
+ * to prevent any debug, info, warning, or error messages from being
+ * printed to stderr or the default output.
+ *
+ * Parameters:
+ *   level   - The log level (ignored).
+ *   format  - The format string (ignored).
+ *   args    - Variable argument list (ignored).
+ *
+ * Returns:
+ *   0 always, indicating that no output was generated.
+ */
+static int openppp2_sysnat_print(enum libbpf_print_level level, const char *format, va_list args) {
+    (void)level; (void)format; (void)args;  /* suppress unused parameter warnings */
+    return 0;
+}
+
 /*
  * Mount the BPF filesystem if it is not already mounted.
  *
@@ -91,6 +123,8 @@ static int ensure_dir(const char* path) {
  */
 int openppp2_sysnat_mount(void) {
     const char* bpf_path = "/sys/fs/bpf";
+
+    libbpf_set_print(openppp2_sysnat_print);
 
     if (ensure_dir(bpf_path) != 0) {
         return -1;
@@ -107,16 +141,16 @@ int openppp2_sysnat_mount(void) {
 }
 
 /*
- * Check whether the pinned map file exists.
- * This indicates that the program is likely attached.
+ * Check whether a pinned map exists at the given path.
  *
  * Returns:
  *   1 if the pinned map exists
  *   0 otherwise
  */
-static int map_pinned_exists(void) {
-    int fd = bpf_obj_get(MAP_PIN_PATH);
-    if (fd >= 0) {
+static int map_pinned_exists(const char* pin_path) {
+    if (!pin_path) return 0;
+    int fd = bpf_obj_get(pin_path);
+    if (fd != -1) {
         close(fd);
         return 1;
     }
@@ -124,8 +158,10 @@ static int map_pinned_exists(void) {
 }
 
 /* Delete the pinned map file from the BPF filesystem. */
-static void delete_map_pin(void) {
-    unlink(MAP_PIN_PATH);
+static void delete_map_pin(const char* pin_path) {
+    if (pin_path) {
+        unlink(pin_path);
+    }
 }
 
 /*
@@ -156,6 +192,11 @@ int openppp2_sysnat_attach(const char* ifname) {
     int err = 0;
     int prog_fd = 0;
 
+    /* Prevent double attach (single-process assumption) */
+    if (g_skel != NULL) {
+        return ERR_ALREADY_ATTACHED;
+    }
+
     if (openppp2_sysnat_mount() != 0) {
         return ERR_BPF_OPEN;
     }
@@ -165,36 +206,49 @@ int openppp2_sysnat_attach(const char* ifname) {
         return ERR_IFINDEX;
     }
 
+    /* Build a unique pin path based on the interface name */
+    snprintf(g_pin_path, sizeof(g_pin_path), "/sys/fs/bpf/openppp2_sysnat_rules_%s", ifname);
+
     /* Remove any stale map file left from a previous crash or unclean exit */
-    delete_map_pin();
+    delete_map_pin(g_pin_path);
 
     /* Open and load the BPF skeleton */
-    g_skel = openppp2_driver_ko_open();
+    g_skel = driver_ko__open();
     if (!g_skel) {
         err = ERR_BPF_OPEN;
         goto cleanup;
     }
 
     /* Set the pin path for the map before loading the BPF object */
-    if (bpf_map__set_pin_path(g_skel->maps.openppp2_sysnat_rules, MAP_PIN_PATH) != 0) {
+    if (bpf_map__set_pin_path(g_skel->maps.openppp2_sysnat_rules, g_pin_path) != 0) {
         err = ERR_MAP_PIN;
         goto cleanup;
     }
 
     /* Load the BPF object into the kernel */
-    if (openppp2_driver_ko_load(g_skel) != 0) {
+    if (driver_ko__load(g_skel) != 0) {
         err = ERR_BPF_LOAD;
+        goto cleanup;
+    }
+
+    bpf_program__set_type(g_skel->progs.tc_egress, BPF_PROG_TYPE_SCHED_CLS);
+    bpf_program__set_expected_attach_type(g_skel->progs.tc_egress, 0);
+
+    /* Obtain the file descriptor of the map and store it globally */
+    g_map_fd = bpf_map__fd(g_skel->maps.openppp2_sysnat_rules);
+    if (g_map_fd == -1) {
+        err = ERR_MAP_OPEN;
         goto cleanup;
     }
 
     /* Obtain the file descriptor of the TC egress program */
     prog_fd = bpf_program__fd(g_skel->progs.tc_egress);
-    if (prog_fd < 0) {
+    if (prog_fd == -1) {
         err = ERR_BPF_PROG;
         goto cleanup;
     }
 
-    /* Create the TC hook on the interface */
+    /* Create the TC hook on the interface (if not already present) */
     hook.ifindex = ifindex;
     hook.attach_point = BPF_TC_EGRESS;
 
@@ -204,7 +258,10 @@ int openppp2_sysnat_attach(const char* ifname) {
         goto cleanup;
     }
 
-    /* Attach the program to the hook */
+    /* Attach the program to the hook.
+     * Using BPF_TC_F_REPLACE ensures that if a program already exists at the
+     * same (handle, priority) it is replaced. This makes attach idempotent.
+     */
     opts.prog_fd = prog_fd;
     opts.handle = 1;
     opts.priority = 1;
@@ -219,16 +276,26 @@ int openppp2_sysnat_attach(const char* ifname) {
 
 cleanup:
     if (err != 0) {
-        struct openppp2_driver_ko* skel = g_skel;
+        /* On failure, destroy the skeleton to release kernel resources */
         if (g_skel) {
+            driver_ko__destroy(g_skel);
             g_skel = NULL;
-            openppp2_driver_ko_destroy(skel);
         }
 
-        delete_map_pin();
-        if (ifindex) {
-            delete_tc_hook(ifindex);
-        }
+        /* Delete the pin file (if created) to avoid stale entries */
+        delete_map_pin(g_pin_path);
+
+        g_map_fd = -1;
+        memset(g_pin_path, 0, sizeof(g_pin_path));
+
+        /* We do NOT delete the TC hook here.
+         * Reason: The hook may already exist (e.g., from previous attach attempts)
+         * or may be used by other programs. Deleting it could affect other
+         * processes or require re-creation later. Since we haven't successfully
+         * attached our program, we leave the hook untouched. If it was created
+         * by us, it will remain empty; that is harmless and will be reused on
+         * a later successful attach.
+         */
     }
 
     return err;
@@ -236,6 +303,7 @@ cleanup:
 
 /*
  * Detach the eBPF TC egress program from the specified network interface.
+ * Only allowed if the interface matches the one this process attached to.
  *
  * Returns:
  *   0 on success
@@ -245,17 +313,27 @@ int openppp2_sysnat_detach(const char* ifname) {
     struct bpf_tc_hook hook = { .sz = sizeof(hook) };
     struct bpf_tc_opts opts = { .sz = sizeof(opts) };
     unsigned int ifindex;
+    char pin_path[256];
+
+    if (g_skel == NULL) {
+        /* Not attached at all */
+        return ERR_NOT_ATTACHED;
+    }
 
     ifindex = if_nametoindex(ifname);
     if (ifindex == 0) {
         return ERR_IFINDEX;
     }
 
-    if (!map_pinned_exists()) {
-        /* Already detached or never attached */
-        return 0;
+    /* Build the expected pin path for this interface */
+    snprintf(pin_path, sizeof(pin_path), "/sys/fs/bpf/openppp2_sysnat_rules_%s", ifname);
+
+    /* Verify that we are detaching the correct interface */
+    if (strcmp(g_pin_path, pin_path) != 0) {
+        return ERR_NOT_ATTACHED;
     }
 
+    /* Detach the program from TC hook */
     hook.ifindex = ifindex;
     hook.attach_point = BPF_TC_EGRESS;
     opts.prog_fd = 0;
@@ -267,68 +345,75 @@ int openppp2_sysnat_detach(const char* ifname) {
         return ERR_TC_DETACH;
     }
 
-    /* Clean up the TC hook and remove the pinned map */
-    delete_tc_hook(ifindex);
-    delete_map_pin();
+    /* Clean up resources */
+    driver_ko__destroy(g_skel);
+    g_skel = NULL;
+    g_map_fd = -1;
 
-    /* Destroy the skeleton if it was loaded */
-    struct openppp2_driver_ko* skel = g_skel;
-    if (skel) {
-        g_skel = NULL;
-        openppp2_driver_ko_destroy(skel);
-    }
+    /* Delete the pinned map file if it still exists */
+    delete_map_pin(g_pin_path);
+    memset(g_pin_path, 0, sizeof(g_pin_path));
+
+    /* We do NOT delete the TC hook itself.
+     * Reason:
+     *   - The hook may still be needed by other processes or by the same
+     *     process after restart. Leaving it intact allows future attaches
+     *     to reuse it without extra kernel calls.
+     *   - Deleting a hook that might have other programs attached (though
+     *     not in our design) could disrupt them.
+     *   - Even if the hook becomes empty, it consumes negligible resources.
+     *     The kernel cleans up empty hooks eventually when the interface is
+     *     removed.
+     * Therefore, we only detach our program and leave the hook in place.
+     */
 
     return 0;
 }
 
 /*
- * Check whether the NAT program is attached by verifying the existence of the pinned map.
+ * Check whether the NAT program is attached.
  *
  * Returns:
- *   1 if attached (map exists)
- *   0 if not attached
+ *   1 if attached
+ *   0 otherwise
  */
 int openppp2_sysnat_is_attached(void) {
-    return map_pinned_exists() ? 1 : 0;
+    return (g_map_fd != -1) ? 1 : 0;
 }
 
 /*
  * Add a NAT rule to the pinned map.
+ * Must be called after successful attach.
  *
  * Returns:
  *   0 on success
- *   ERR_MAP_OPEN if the map is not found
+ *   ERR_MAP_OPEN if not attached or map not found
  *   ERR_MAP_UPDATE if the update operation fails
  */
 int openppp2_sysnat_add_rule(const struct openppp2_sysnat_key* key, const struct openppp2_sysnat_value* val) {
-    int map_fd = bpf_obj_get(MAP_PIN_PATH);
-    if (map_fd < 0) {
+    if (g_map_fd == -1) {
         return ERR_MAP_OPEN;
     }
 
-    int ret = bpf_map_update_elem(map_fd, key, val, BPF_ANY);
-    close(map_fd);
-
+    int ret = bpf_map_update_elem(g_map_fd, key, val, BPF_ANY);
     return (ret == 0) ? 0 : ERR_MAP_UPDATE;
 }
 
 /*
  * Delete a NAT rule from the pinned map.
+ * Must be called after successful attach.
  *
  * Returns:
  *   0 on success
- *   ERR_MAP_OPEN if the map is not found
+ *   ERR_MAP_OPEN if not attached or map not found
  *   ERR_MAP_DELETE if the deletion operation fails
  */
 int openppp2_sysnat_del_rule(const struct openppp2_sysnat_key* key) {
-    int map_fd = bpf_obj_get(MAP_PIN_PATH);
-    if (map_fd < 0) {
+    if (g_map_fd == -1) {
         return ERR_MAP_OPEN;
     }
 
-    int ret = bpf_map_delete_elem(map_fd, key);
-    close(map_fd);
-
+    int ret = bpf_map_delete_elem(g_map_fd, key);
     return (ret == 0) ? 0 : ERR_MAP_DELETE;
 }
 #endif

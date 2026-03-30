@@ -179,7 +179,7 @@ namespace ppp {
         }
 
 #ifdef SYSNAT
-        static bool SysnatAttachOrDetachDriver(const std::shared_ptr<ITap>& tap, bool attach_or_detach) noexcept {
+        static bool SysnatAttachDriver(const std::shared_ptr<ITap>& tap, ppp::string& interface_name) noexcept {
             if (NULLPTR == tap) {
                 return false;
             }
@@ -194,26 +194,12 @@ namespace ppp {
                 return false;
             }
 
-            ppp::string interface_name;
             int64_t h = reinterpret_cast<int64_t>(linux_tap->GetHandle());
             if (!linux_tap->GetInterfaceName(static_cast<int>(h), interface_name)) {
                 return false;
             }
 
-            if (attach_or_detach) {
-                int rc = openppp2_sysnat_attach(interface_name.data());
-                if (rc) {
-                    return false;
-                }
-
-                return true;
-            }
-
-            if (!openppp2_sysnat_is_attached()) {
-                return false;
-            }
-
-            return openppp2_sysnat_detach(interface_name.data()) == 0;
+            return openppp2_sysnat_attach(interface_name.data()) == 0;
         }
 #endif
 
@@ -259,7 +245,7 @@ namespace ppp {
 
             lwip::netstack::Localhost = localPort;
 #ifdef SYSNAT
-            sysnat_ = SysnatAttachOrDetachDriver(tap, true);
+            sysnat_ = SysnatAttachDriver(tap, sysnat_interface_name_);
 #endif
             return true;
         }
@@ -297,9 +283,9 @@ namespace ppp {
             ap_       = RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort);
 
 #ifdef SYSNAT
-            std::shared_ptr<ITap> tap = this->Tap;
-            if (NULLPTR != tap) {
-                SysnatAttachOrDetachDriver(tap, false);
+            if (!sysnat_interface_name_.empty()) {
+                VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+                openppp2_sysnat_detach(sysnat_interface_name_.data());
             }
 #endif
         }

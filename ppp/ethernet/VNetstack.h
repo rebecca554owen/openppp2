@@ -185,6 +185,7 @@ namespace ppp {
             bool                                                            lwip_   = false;
 #ifdef SYSNAT
             bool                                                            sysnat_ = false;
+            ppp::string                                                     sysnat_interface_name_;
 #endif
             IPEndPoint                                                      listenEP_;
             WAN2LANTABLE                                                    wan2lan_;
