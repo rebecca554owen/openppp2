@@ -406,7 +406,16 @@ int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept
 
     // Split the input string by '|' into segments
     ppp::vector<ppp::string> segments;
-    ppp::Tokenize<ppp::string>(s, segments, "|");
+    ppp::string work = s;
+    for (char& ch : work)
+    {
+        // Replace any of : * ? < > with '|'
+        if (ch == ':' || ch == '*' || ch == '?' || ch == '<' || ch == '>')
+        {
+            ch = '|';
+        }
+    }
+    ppp::Tokenize<ppp::string>(work, segments, "|");
 
     // Optimization: if there's only one segment, add it directly without trimming
     if (segments.size() == 1)
