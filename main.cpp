@@ -389,7 +389,7 @@ ppp::string NetworkInterface::GetDefaultTun() noexcept
 // entry, it is added directly without tokenization.
 //
 // Parameters:
-//   s - A string containing one or more file paths separated by '|'
+//   s - A string containing one or more file paths separated by '|:*?<>'
 // Returns:
 //   Number of successfully added entries (0 if none or input empty)
 int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept

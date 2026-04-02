@@ -6,6 +6,9 @@
 #include <ppp/io/File.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/text/Encoding.h>
+
+#include <windows/ppp/tap/WintunAdapter.h>
 
 #include <iostream>
 #include <Windows.h>
@@ -121,6 +124,85 @@ namespace ppp
             return ppp::win32::network::GetAllComponentIds(componentIds);
         }
 
+        static bool SetAdapterInterface(int interface_index, uint32_t ip, uint32_t gw, uint32_t mask, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept
+        {
+            ppp::vector<ppp::string> dns_addresses_stloc;
+            Ipep::ToAddresses(dns_addresses, dns_addresses_stloc);
+
+            ppp::vector<ppp::string> ips_stloc;
+            Ipep::ToAddresses({ ip }, ips_stloc);
+
+            ppp::vector<ppp::string> gw_stloc;
+            Ipep::ToAddresses({ gw }, gw_stloc);
+
+            ppp::vector<ppp::string> mask_stloc;
+            Ipep::ToAddresses({ mask }, mask_stloc);
+
+            bool ok = true;
+            if (hosted_network)
+            {
+                ok = ok && TapWindows::SetAddresses(interface_index, ip, mask, gw);
+            }
+            else
+            {
+                ok = ok && TapWindows::SetAddresses(interface_index, ip, mask, IPEndPoint::NoneAddress);
+            }
+
+            ok = ok && TapWindows::SetDnsAddresses(interface_index, dns_addresses_stloc);
+            return ok;
+        }
+
+        struct WintunAdapterDriver final
+        {
+        public:
+            static std::shared_ptr<ITap> CreateWintunAdapter(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& nic, uint32_t ip, uint32_t gw, uint32_t mask, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept
+            {
+                GUID* NULL_GUID = NULLPTR;
+                std::shared_ptr<WintunAdapter> wintun = make_shared_object<WintunAdapter>(
+                    ppp::text::Encoding::ascii_to_wstring(stl::transform<std::string>(nic)), L"PPP PRIVATE NETWORK 2", NULL_GUID, WintunAdapter::MAX_RING_BUFFER_SIZE);
+                if (NULL == wintun)
+                {
+                    return NULLPTR;
+                }
+
+                if (!wintun->Open())
+                {
+                    wintun->Stop();
+                    return NULLPTR;
+                }
+
+                int interface_index = TapWindows::GetNetworkInterfaceIndex(nic);
+                if (interface_index < -1)
+                {
+                    wintun->Stop();
+                    return NULLPTR;
+                }
+
+                if (!SetAdapterInterface(interface_index, ip, gw, mask, hosted_network, dns_addresses))
+                {
+                    wintun->Stop();
+                    return NULLPTR;
+                }
+
+                if (!wintun->Start())
+                {
+                    wintun->Stop();
+                    return NULLPTR;
+                }
+
+                std::shared_ptr<TapWindows> tap = make_shared_object<TapWindows>(context, nic, wintun.get(), ip, gw, mask, hosted_network);
+                if (NULL == tap)
+                {
+                    wintun->Stop();
+                    return NULLPTR;
+                }
+
+                tap->wintun_ = wrap_shared_pointer<void>(wintun.get(), tap);
+                tap->GetInterfaceIndex() = interface_index;
+                return tap;
+            }
+        };
+
         std::shared_ptr<ITap> TapWindows::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& componentId, uint32_t ip, uint32_t gw, uint32_t mask, uint32_t lease_time_in_seconds, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses)
         {
             if (NULLPTR == context)
@@ -154,6 +236,11 @@ namespace ppp
             if (lease_time_in_seconds < 1)
             {
                 lease_time_in_seconds = 86400;
+            }
+
+            if (WintunAdapter::Ready())
+            {
+                return WintunAdapterDriver::CreateWintunAdapter(context, componentId, ip, gw, mask, hosted_network, dns_addresses);
             }
 
             int interface_index = GetNetworkInterfaceIndex(componentId);
@@ -191,35 +278,14 @@ namespace ppp
                 tap->GetInterfaceIndex() = interface_index;
             }
             
-            ppp::vector<ppp::string> dns_addresses_stloc;
-            Ipep::ToAddresses(dns_addresses, dns_addresses_stloc);
-
-            ppp::vector<ppp::string> ips_stloc;
-            Ipep::ToAddresses({ ip }, ips_stloc);
-
-            ppp::vector<ppp::string> gw_stloc;
-            Ipep::ToAddresses({ gw }, gw_stloc);
-
-            ppp::vector<ppp::string> mask_stloc;
-            Ipep::ToAddresses({ mask }, mask_stloc);
-
-            if (hosted_network)
+            ok = SetAdapterInterface(interface_index, ip, gw, mask, hosted_network, dns_addresses);
+            if (ok)
             {
-                ok = ok && SetAddresses(interface_index, ip, mask, gw);
-            }
-            else
-            {
-                ok = ok && SetAddresses(interface_index, ip, mask, IPEndPoint::NoneAddress);
+                return tap;
             }
 
-            ok = ok && SetDnsAddresses(interface_index, dns_addresses_stloc);
-            if (!ok)
-            {
-                tap->Dispose();
-                tap.reset();
-            }
-
-            return tap;
+            tap->Dispose();
+            return NULLPTR;
         }
 
         void* TapWindows::OpenDriver(const ppp::string& componentId) noexcept
@@ -249,6 +315,11 @@ namespace ppp
         {
             using NetworkInterface = ppp::win32::network::AdapterInterfacePtr;
 
+            if (WintunAdapter::Ready())
+            {
+                return ppp::win32::network::GetIfIndexByFriendlyName(ppp::text::Encoding::ascii_to_wstring(stl::transform<std::string>(componentId)));
+            }
+
             if (componentId.empty())
             {
                 return -1;
@@ -269,7 +340,84 @@ namespace ppp
                     return ni->IfIndex;
                 }
             }
+
             return -1;
+        }
+
+        bool TapWindows::Output(const void* packet, int packet_size) noexcept
+        {
+            if (WintunAdapter::Ready())
+            {
+                if (NULLPTR == packet || packet_size < 1)
+                {
+                    return true;
+                }
+
+                WintunAdapter* wintun = static_cast<WintunAdapter*>(GetHandle());
+                if (!wintun->IsOpen())
+                {
+                    return false;
+                }
+
+                return wintun->SendPacket((uint8_t*)packet, packet_size);
+            }
+
+            return ITap::Output(packet, packet_size);
+        }
+
+        bool TapWindows::Output(const std::shared_ptr<Byte>& packet, int packet_size) noexcept
+        {
+            if (WintunAdapter::Ready())
+            {
+                if (NULLPTR == packet || packet_size < 1)
+                {
+                    return true;
+                }
+
+                WintunAdapter* wintun = static_cast<WintunAdapter*>(GetHandle());
+                if (!wintun->IsOpen())
+                {
+                    return false;
+                }
+
+                return wintun->SendPacket((uint8_t*)packet.get(), packet_size);
+            }
+
+            return ITap::Output(packet, packet_size);
+        }
+
+        bool TapWindows::AsynchronousReadPacketLoops() noexcept
+        {
+            if (WintunAdapter::Ready())
+            {
+                WintunAdapter* wintun = static_cast<WintunAdapter*>(GetHandle());
+                if (!wintun->IsOpen())
+                {
+                    return false;
+                }
+
+                auto packet_input = make_shared_object<WintunAdapter::PacketHandler>();
+                if (NULLPTR == packet_input)
+                {
+                    return false;
+                }
+
+                auto self = shared_from_this();
+                *packet_input =
+                    [self, this](const uint8_t* data, uint32_t len) noexcept
+                    {
+                        int packet_length = std::max<int>(len, -1);
+                        if (packet_length > 0)
+                        {
+                            PacketInputEventArgs e{ (char*)data, packet_length };
+                            OnInput(e);
+                        }
+                    };
+                wintun->PacketInput = packet_input;
+                return true;
+            }
+            
+            return ITap::AsynchronousReadPacketLoops();
         }
 
         bool TapWindows::ConfigureDriver_SetNetifUp(const void* handle, bool up) noexcept
@@ -492,6 +640,11 @@ namespace ppp
 
         ppp::string TapWindows::FindComponentId(const ppp::string& key) noexcept
         {
+            if (WintunAdapter::Ready())
+            {
+                return key;
+            }
+
             ppp::win32::network::NetworkInterfacePtr ni;
             return TapWindows_FindComponentId(key, ni);
         }
@@ -586,6 +739,23 @@ namespace ppp
             }
 
             return ppp::win32::network::SetInterfaceMtuIpSubInterface(interface_index, mtu);
+        }
+
+        void TapWindows::Dispose() noexcept
+        {
+            if (WintunAdapter::Ready())
+            {
+                void* handle = GetHandle();
+                if (NULLPTR != handle)
+                {
+                    WintunAdapter* wintun = static_cast<WintunAdapter*>(handle);
+                    wintun->Stop();
+                }
+
+                wintun_.reset();
+            }
+
+            ITap::Dispose();
         }
     }
 }

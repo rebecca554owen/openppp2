@@ -519,6 +519,9 @@
     <ClCompile Include="ppp\hash\hash_bytes.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="windows\ppp\tap\WintunAdapter.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ppp\stdafx.h">
@@ -1494,6 +1497,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\hash\hash_bytes.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="windows\ppp\tap\WintunAdapter.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

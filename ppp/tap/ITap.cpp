@@ -9,6 +9,7 @@
 
 #if defined(_WIN32)
 #include <windows/ppp/tap/TapWindows.h>
+#include <windows/ppp/tap/WintunAdapter.h>
 #elif defined(_MACOS)
 #include <darwin/ppp/tap/TapDarwin.h>
 #else
@@ -105,7 +106,14 @@ namespace ppp
                 constantof(SubmaskAddress) = mask;
             }
 
+#if defined(_WIN32)
+            if (!WintunAdapter::Ready())
+            {
+                _stream = NewStreamFromHandle(*_context, tun);
+            }
+#else
             _stream = NewStreamFromHandle(*_context, tun);
+#endif
         }
 
         ITap::~ITap() noexcept
@@ -115,7 +123,23 @@ namespace ppp
 
         bool ITap::IsReady() noexcept
         {
+#if defined(_WIN32)
+            bool b = NULLPTR != _context;
+            if (b)
+            {
+                if (WintunAdapter::Ready())
+                {
+                    WintunAdapter* wintun = static_cast<WintunAdapter*>(_handle);
+                    b = wintun->IsOpen();
+                }
+                else
+                {
+                    b = NULLPTR != _stream;
+                }
+            }
+#else
             bool b = NULLPTR != _context && NULLPTR != _stream;
+#endif
             if (b)
             {
                 void* h = _handle;

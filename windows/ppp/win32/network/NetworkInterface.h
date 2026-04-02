@@ -86,6 +86,7 @@ namespace ppp
             NetworkInterfacePtr                                 GetNetworkInterfaceByIndex(int index) noexcept;
             NetworkInterfacePtr                                 GetNetworkInterfaceByInterfaceIndex(int interface_index) noexcept;
             AdapterInterfacePtr                                 GetNetworkInterfaceByIndex2(int interface_index) noexcept;
+            int                                                 GetIfIndexByFriendlyName(const std::wstring& adapter_name) noexcept;
             bool                                                GetAllNetworkInterfaces(ppp::vector<NetworkInterfacePtr>& interfaces) noexcept;
             bool                                                GetAllAdapterInterfaces(ppp::vector<AdapterInterfacePtr>& interfaces) noexcept;
             bool                                                GetAllAdapterInterfaces2(ppp::vector<AdapterInterfacePtr>& interfaces) noexcept;

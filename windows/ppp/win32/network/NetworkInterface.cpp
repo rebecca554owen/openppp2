@@ -919,6 +919,58 @@ namespace ppp
                 return OperationalStatus_Unknown;
             }
 
+            int GetIfIndexByFriendlyName(const std::wstring& adapter_name) noexcept
+            {
+                if (adapter_name.empty())
+                {
+                    return -1;
+                }
+
+                DWORD dwSize = 0;
+                DWORD dwRetVal = 0;
+                PIP_ADAPTER_ADDRESSES pAddresses = NULL;
+                PIP_ADAPTER_ADDRESSES pCurrAddresses = NULL;
+
+                dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &dwSize);
+                if (dwRetVal != ERROR_BUFFER_OVERFLOW)
+                {
+                    printf("GetAdaptersAddresses (first) failed with error: %d\n", dwRetVal);
+                    return -1;
+                }
+
+                pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(dwSize);
+                if (pAddresses == NULL)
+                {
+                    printf("Memory allocation failed\n");
+                    return -1;
+                }
+
+                dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, pAddresses, &dwSize);
+                if (dwRetVal != NO_ERROR)
+                {
+                    printf("GetAdaptersAddresses (second) failed with error: %d\n", dwRetVal);
+                    free(pAddresses);
+                    return -1;
+                }
+
+                DWORD ifIndex = -1;
+                pCurrAddresses = pAddresses;
+
+                while (pCurrAddresses)
+                {
+                    if (pCurrAddresses->FriendlyName && adapter_name == pCurrAddresses->FriendlyName)
+                    {
+                        ifIndex = pCurrAddresses->IfIndex;
+                        break;
+                    }
+
+                    pCurrAddresses = pCurrAddresses->Next;
+                }
+
+                free(pAddresses);
+                return ifIndex;
+            }
+
             bool GetAllAdapterInterfaces(ppp::vector<AdapterInterfacePtr>& interfaces) noexcept
             {
                 ULONG structSize = sizeof(IP_ADAPTER_INFO);

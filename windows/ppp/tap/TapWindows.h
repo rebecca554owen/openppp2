@@ -9,12 +9,15 @@ namespace ppp
     {
         class TapWindows final : public ppp::tap::ITap
         {
+            friend struct                           WintunAdapterDriver;
+
         public:
             TapWindows(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& id, void* tun, uint32_t address, uint32_t gw, uint32_t mask, bool hosted_network);
             virtual ~TapWindows() noexcept = default;
 
         public:
             virtual bool                            SetInterfaceMtu(int mtu) noexcept override;
+            virtual void                            Dispose() noexcept override;
 
         public:
             static bool                             DnsFlushResolverCache() noexcept;
@@ -31,12 +34,20 @@ namespace ppp
             static bool                             FindAllComponentIds(ppp::unordered_set<ppp::string>& componentIds) noexcept;
             static int                              GetNetworkInterfaceIndex(const ppp::string& componentId) noexcept;
             
+        protected:
+            virtual bool                            Output(const void* packet, int packet_size) noexcept override;
+            virtual bool                            Output(const std::shared_ptr<Byte>& packet, int packet_size) noexcept override;
+            virtual bool                            AsynchronousReadPacketLoops() noexcept override;
+
         private:
             static void*                            OpenDriver(const ppp::string& componentId) noexcept;
             static bool                             ConfigureDriver_SetDhcpMASQ(const void* handle, uint32_t ip, uint32_t gw, uint32_t mask, uint32_t lease_time_in_seconds) noexcept;
             static bool                             ConfigureDriver_SetTunModeWithAddress(const void* handle, uint32_t ip, uint32_t gw, uint32_t mask) noexcept;
             static bool                             ConfigureDriver_SetNetifUp(const void* handle, bool up) noexcept;
             static bool                             ConfigureDriver_SetDhcpOptionData(const void* handle, uint32_t ip, uint32_t gw, uint32_t mask, uint32_t dhcp, const ppp::vector<uint32_t>& dns_addresses) noexcept;
+
+        private:
+            std::shared_ptr<void>                   wintun_;
         };
     }
 }

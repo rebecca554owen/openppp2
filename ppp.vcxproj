@@ -377,6 +377,7 @@
     <ClCompile Include="ppp\net\Socket.cpp" />
     <ClCompile Include="ppp\stdafx.cpp" />
     <ClCompile Include="ppp\tap\ITap.cpp" />
+    <ClCompile Include="windows\ppp\tap\WintunAdapter.cpp" />
     <ClCompile Include="windows\ppp\win32\network\NetworkInterface.cpp" />
     <ClCompile Include="windows\ppp\win32\network\Win32Firewall.cpp" />
     <ClCompile Include="windows\ppp\win32\network\Win32NetworkRouter.cpp" />
@@ -702,6 +703,7 @@
     <ClInclude Include="windows\ppp\win32\Win32RegistryKey.h" />
     <ClInclude Include="windows\ppp\win32\Win32Native.h" />
     <ClInclude Include="windows\ppp\win32\Win32Variant.h" />
+    <ClInclude Include="windows\ppp\tap\WintunAdapter.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ppp\io\BinaryReader.h" />
