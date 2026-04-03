@@ -11,6 +11,10 @@
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "iphlpapi.lib")
 
+static constexpr int WINTUN_RUNING_STATE_STOP       = 0;
+static constexpr int WINTUN_RUNING_STATE_OPEN       = 1;
+static constexpr int WINTUN_RUNING_STATE_RUNNING    = 2;
+
 // -------------------- Wintun API function pointers --------------------
 typedef WINTUN_ADAPTER_HANDLE(WINAPI*       WintunCreateAdapterFunc)(LPCWSTR, LPCWSTR, const GUID*);
 typedef WINTUN_ADAPTER_HANDLE(WINAPI*       WintunOpenAdapterFunc)(LPCWSTR);
@@ -92,8 +96,8 @@ WintunAdapter::~WintunAdapter() noexcept {
 }
 
 bool WintunAdapter::Open() noexcept {
-    bool expected = false;
-    if (!running_flag_.compare_exchange_strong(expected, true)) {
+    int expected = WINTUN_RUNING_STATE_STOP;
+    if (!running_flag_.compare_exchange_strong(expected, WINTUN_RUNING_STATE_OPEN)) {
         return true;   // Already opened
     }
 
@@ -104,7 +108,7 @@ bool WintunAdapter::Open() noexcept {
             adapter_desc_.c_str(),
             adapter_guid_ptr_);
         if (!adapter_handle_) {
-            running_flag_.store(false);
+            running_flag_.store(WINTUN_RUNING_STATE_STOP);
             return false;
         }
     }
@@ -115,7 +119,7 @@ bool WintunAdapter::Open() noexcept {
         if (adapter_handle_) WintunCloseAdapter(adapter_handle_);
         adapter_handle_ = NULL;
 
-        running_flag_.store(false);
+        running_flag_.store(WINTUN_RUNING_STATE_STOP);
         return false;
     }
 
@@ -128,7 +132,7 @@ bool WintunAdapter::Open() noexcept {
         if (adapter_handle_) WintunCloseAdapter(adapter_handle_);
         adapter_handle_ = NULL;
 
-        running_flag_.store(false);
+        running_flag_.store(WINTUN_RUNING_STATE_STOP);
         return false;
     }
 
@@ -141,6 +145,11 @@ bool WintunAdapter::Start() noexcept {
 
     std::shared_ptr<Awaitable> awaitable = ppp::make_shared_object<Awaitable>();
     if (!awaitable) return false;
+
+    int expected = WINTUN_RUNING_STATE_OPEN;
+    if (!running_flag_.compare_exchange_strong(expected, WINTUN_RUNING_STATE_RUNNING, std::memory_order_acquire)) {
+        return true;   // Already started
+    }
 
     std::shared_ptr<WintunAdapter> self = shared_from_this();
     std::weak_ptr<Awaitable> awaitable_weak = awaitable;
@@ -172,7 +181,7 @@ void WintunAdapter::Finalize() noexcept {
     if (quit_event_) SetEvent(quit_event_);
 
     // 2. Wait for the receive thread to exit
-    while (running_flag_.load(std::memory_order_acquire)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    while (running_flag_.load(std::memory_order_acquire) >= WINTUN_RUNING_STATE_RUNNING) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
     // 3. Nullify the callback to prevent further calls
     PacketInput.reset();
@@ -219,7 +228,7 @@ void WintunAdapter::Stop() noexcept {
     }
 
     // Tell the receive loop to exit (if it is still running)
-    running_flag_.store(false, std::memory_order_release);
+    running_flag_.store(WINTUN_RUNING_STATE_STOP, std::memory_order_release);
 }
 
 bool WintunAdapter::SendPacket(const uint8_t* data, uint32_t len) noexcept {
@@ -283,7 +292,7 @@ void WintunAdapter::ReceiveLoop() noexcept {
 
         if (err == ERROR_HANDLE_EOF) {
             // Adapter was removed – exit
-            running_flag_.store(false, std::memory_order_release);
+            running_flag_.store(WINTUN_RUNING_STATE_STOP, std::memory_order_release);
             break;
         }
 
@@ -291,19 +300,19 @@ void WintunAdapter::ReceiveLoop() noexcept {
             // No packets available – wait for either data or stop event
             DWORD wait = WaitForMultipleObjects(2, events, FALSE, INFINITE);
             if (wait == WAIT_OBJECT_0 + 1) {      // quit_event_ signalled
-                running_flag_.store(false, std::memory_order_release);
+                running_flag_.store(WINTUN_RUNING_STATE_STOP, std::memory_order_release);
                 break;
             }
 
             if (wait != WAIT_OBJECT_0) {           // Unexpected error
-                running_flag_.store(false, std::memory_order_release);
+                running_flag_.store(WINTUN_RUNING_STATE_STOP, std::memory_order_release);
                 break;
             }
             continue;
         }
 
         // Any other error – exit
-        running_flag_.store(false, std::memory_order_release);
+        running_flag_.store(WINTUN_RUNING_STATE_STOP, std::memory_order_release);
         break;
     }
 }
@@ -316,7 +325,7 @@ WintunAdapter::WintunAdapter(const std::wstring& adapter_name, const std::wstrin
     , adapter_handle_(NULL)
     , session_handle_(NULL)
     , quit_event_(NULL)
-    , running_flag_(false)
+    , running_flag_(WINTUN_RUNING_STATE_STOP)
     , state_(0)
 {
     if (adapter_guid) {

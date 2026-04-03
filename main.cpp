@@ -92,7 +92,7 @@ struct NetworkInterface final
     typedef ppp::unordered_set<ppp::string>             BypassSet;
 
 #if defined(_WIN32)
-    uint32_t                                            LeaseTimeInSeconds = 0;  // DHCP lease time
+    uint32_t                                            LeaseTimeInSeconds = 0;     // DHCP lease time
     bool                                                SetHttpProxy       = false; // Enable HTTP proxy
 #else   
     bool                                                Promisc            = false; // Promiscuous mode
@@ -389,7 +389,7 @@ ppp::string NetworkInterface::GetDefaultTun() noexcept
 // entry, it is added directly without tokenization.
 //
 // Parameters:
-//   s - A string containing one or more file paths separated by '|:*?<>'
+//   s - A string containing one or more file paths separated by '|*?<>'
 // Returns:
 //   Number of successfully added entries (0 if none or input empty)
 int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept
@@ -409,8 +409,8 @@ int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept
     ppp::string work = s;
     for (char& ch : work)
     {
-        // Replace any of : * ? < > with '|'
-        if (ch == ':' || ch == '*' || ch == '?' || ch == '<' || ch == '>')
+        // Replace any of * ? < > with '|'
+        if (ch == '*' || ch == '?' || ch == '<' || ch == '>')
         {
             ch = '|';
         }
@@ -1444,12 +1444,12 @@ void PppApplication::PrintHelpInformation() noexcept
         col_default_width, "DEFAULT");
     printf("├──────────────────────────────────────────┼──────────────────────────────────────────────────┼─────────────────────────┤\n");
 
-    printf("│ %-*s │ %-*s │ %-*s │\n", 
-        col_option_width, "--lwip=[yes|no]", 
+    printf("│ %-*s │ %-*s │ %-*s │\n",
+        col_option_width, "--lwip=[yes|no]",
         col_description_width, "Network protocol stack selection",
-        col_default_width, 
+        col_default_width,
 #if defined(_WIN32)
-        "yes"
+        ppp::tap::TapWindows::IsWintun() ? "no" : "yes"
 #else
         "no"
 #endif
@@ -1779,7 +1779,7 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
     if (NULLPTR != ni)
     {
 #if defined(_WIN32)
-        ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv, "y").data());
+        ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv, ppp::tap::TapWindows::IsWintun() ? ppp::string() : "y").data());
 #else
         ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv).data());
 #endif

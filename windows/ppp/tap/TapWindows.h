@@ -29,6 +29,7 @@ namespace ppp
             static bool                             UninstallDriver(const ppp::string& path) noexcept;
 
         public:
+            static bool                             IsWintun() noexcept;
             static ppp::string                      FindComponentId() noexcept;
             static ppp::string                      FindComponentId(const ppp::string& key) noexcept;
             static bool                             FindAllComponentIds(ppp::unordered_set<ppp::string>& componentIds) noexcept;

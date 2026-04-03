@@ -562,6 +562,11 @@ namespace ppp
             return ppp::win32::Win32Native::DeviceIoControl(handle, TAP_WIN_IOCTL_CONFIG_DHCP_SET_OPT, dhcpOptionData.data(), (int)dhcpOptionData.size());
         }
 
+        bool TapWindows::IsWintun() noexcept
+        {
+            return WintunAdapter::Ready();
+        }
+
         ppp::string TapWindows::FindComponentId() noexcept
         {
             ppp::unordered_set<ppp::string> componentIds;

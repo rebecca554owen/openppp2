@@ -88,7 +88,7 @@ private:
     WINTUN_SESSION_HANDLE               session_handle_;
     HANDLE                              quit_event_;                            // Used to wake the receive thread
 
-    std::atomic<bool>                   running_flag_;                          // Controls receive loop
+    std::atomic<int >                   running_flag_{ 0 };                     // Controls receive loop
     std::atomic<int>                    finalized_{ 0 };                        // Ensures Finalize() runs once
     std::atomic<uint32_t>               state_{ 0 };                            // Combined stop flag + in‑flight count
 };
