@@ -50,15 +50,25 @@ struct ReadyWintunAdapter
 
     bool                                    LoadWintun() noexcept {
         if (DLL_HANDLE) return true;
-#ifdef _WIN64
-        LPCWSTR wzDllPath = L"Driver\\x64\\wintun.dll";
-#else
-        LPCWSTR wzDllPath = L"Driver\\x86\\wintun.dll";
-#endif
-        DLL_HANDLE = LoadLibraryExW(wzDllPath, NULL,
-            LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!DLL_HANDLE) return false;
 
+        // Search for wintun.dll from multiple local or system directories; 
+        // if this driver exists, use Wintun, otherwise fall back to TAP-Windows as originally designed, ensuring deployment flexibility.
+        DLL_HANDLE = LoadLibraryW(L"wintun.dll");
+        if (!DLL_HANDLE) {
+            DLL_HANDLE = LoadLibraryW(L"Driver\\wintun.dll");
+            if (!DLL_HANDLE) {
+#ifdef _WIN64
+                LPCWSTR wzDllPath = L"Driver\\x64\\wintun.dll";
+#else
+                LPCWSTR wzDllPath = L"Driver\\x86\\wintun.dll";
+#endif
+                DLL_HANDLE = LoadLibraryW(wzDllPath);
+                if (!DLL_HANDLE) {
+                    return false; // LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32
+                }
+            }
+        }
+        
 #define GET_PROC(name) \
     name = (decltype(name))GetProcAddress(DLL_HANDLE, #name); \
     if (!name) { FreeLibrary(DLL_HANDLE); DLL_HANDLE = NULL; return false; }
