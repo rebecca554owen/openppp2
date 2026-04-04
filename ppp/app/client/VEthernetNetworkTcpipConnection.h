@@ -135,7 +135,8 @@ namespace ppp {
                             if (NULLPTR == pmux_connection) {
                                 return -1;
                             }
-                            elif(!mux->connect_yield(
+
+                            if (!mux->connect_yield(
                                 y, 
                                 reference->GetContext(),
                                 reference->GetStrand(),
@@ -154,6 +155,10 @@ namespace ppp {
                                 return -1;
                             }
 
+                            mux_connection->disposed_event = 
+                                [reference](vmux::vmux_skt*) noexcept {
+                                    reference->Dispose();
+                                };
                             mux_connection->active_event = 
                                 [reference](vmux::vmux_skt*, bool success) noexcept {
                                     if (success) {

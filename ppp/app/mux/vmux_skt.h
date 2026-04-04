@@ -20,9 +20,11 @@ namespace vmux {
         typedef ppp::function<void(vmux_skt*, bool)>    ConnectAsynchronousCallback;
         typedef ConnectAsynchronousCallback             ActiveEventHandler;
         typedef ConnectAsynchronousCallback             SendAsynchronousCallback;
+        typedef ppp::function<void(vmux_skt*)>          DisposedEventHandler;
 
     public:
         ActiveEventHandler                              active_event;
+        DisposedEventHandler                            disposed_event;
 
     public:
         vmux_skt(const std::shared_ptr<vmux_net>& mux, uint32_t connection_id) noexcept;

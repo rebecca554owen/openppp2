@@ -45,9 +45,12 @@ namespace vmux {
 #endif
 
         rx_queue_.clear();
-
-        active_event = NULLPTR;
         tx_socket = std::move(tx_socket_);
+
+        if (ActiveEventHandler event = std::move(active_event); event) {
+            active_event = NULLPTR;
+            event(this, false);
+        }
 
         mux_->release_connection(connection_id_, this);
         if (fin) {
@@ -65,6 +68,10 @@ namespace vmux {
         }
 
         on_connected(false);
+        if (DisposedEventHandler event = std::move(disposed_event); event) {
+            disposed_event = NULLPTR;
+            event(this);
+        }
     }
 
     void vmux_skt::close() noexcept {
