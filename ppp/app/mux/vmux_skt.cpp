@@ -477,7 +477,7 @@ namespace vmux {
             // If IPV4 is not a loop IP address, it needs to be linked to a physical network adapter. 
             // IPV6 does not need to be linked, because VPN is IPV4, 
             // And IPV6 does not affect the physical layer network communication of the VPN.
-            if (remote_ip.is_v4() && !remote_ip.is_loopback()) {
+            if (!remote_ip.is_loopback()) {
                 auto protector_network = mux_->ProtectorNetwork;
                 if (NULLPTR != protector_network) {
                     if (!protector_network->Protect(tx_socket->native_handle(), y)) {

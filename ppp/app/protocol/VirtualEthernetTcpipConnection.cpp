@@ -324,7 +324,7 @@ namespace ppp {
                     // If IPV4 is not a loop IP address, it needs to be linked to a physical network adapter. 
                     // IPV6 does not need to be linked, because VPN is IPV4, 
                     // And IPV6 does not affect the physical layer network communication of the VPN.
-                    if (destinationIP.is_v4() && !destinationIP.is_loopback()) {
+                    if (!destinationIP.is_loopback()) {
                         auto protector_network = ProtectorNetwork;
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(socket_->native_handle(), y)) {
