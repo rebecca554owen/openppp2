@@ -152,7 +152,7 @@ LINK_DIRECTORIES(
     ${THIRD_PARTY_LIBRARY_DIR}/openssl
 
     # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src
-    ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
+    # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
 )
 
 # Set the compiled source file search directorys.

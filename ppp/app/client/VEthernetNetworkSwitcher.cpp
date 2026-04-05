@@ -2029,7 +2029,9 @@ namespace ppp {
                     return false;
                 }
                 else {
-                    server_ru_ = hostname;
+                    server_ru_ = "[";
+                    server_ru_ += hostname;
+                    server_ru_ += "]";
                     server_ru_ += ":";
                     server_ru_ += stl::to_string<ppp::string>(NULLPTR != forwarding ? forwarding->GetRemotePort() : port);
                     server_ru_ += "/";
@@ -2071,24 +2073,29 @@ namespace ppp {
                 if (IPEndPoint::IsInvalid(serverEP)) {
                     return false;
                 }
-                elif(!remoteIP.is_v4()) {
-                    return remoteIP.is_v6();
-                }
 
                 // Add IPV4 route table settings.
                 auto fib_add_route_ipv4 =
                     [&rib, &gw](const boost::asio::ip::address& remoteIP) noexcept {
-                        if (NULLPTR != rib) {
-                            if (gw.is_v4()) {
-                                // First convert the IP addresses of both.
-                                uint32_t ip = htonl(remoteIP.to_v4().to_uint());
-                                uint32_t nx = htonl(gw.to_v4().to_uint());
-
-                                // Add route information to rib!
-                                return rib->AddRoute(ip, 32, nx);
-                            }
+                        if (remoteIP.is_v6()) {
+                            return true;
                         }
-                        return false;
+
+                        if (NULLPTR == rib) {
+                            return false;
+                        }
+                        
+                        bool processed = gw.is_v4() && remoteIP.is_v4();
+                        if (!processed) {
+                            return false;
+                        }
+
+                        // First convert the IP addresses of both.
+                        uint32_t ip = htonl(remoteIP.to_v4().to_uint());
+                        uint32_t nx = htonl(gw.to_v4().to_uint());
+
+                        // Add route information to rib!
+                        return rib->AddRoute(ip, 32, nx);
                     };
 
                 // Check whether the static tunnel specifies an IP address endpoint (required for transit).
@@ -2102,29 +2109,38 @@ namespace ppp {
                         ppp::string host_string;
                         int port;
 
-                        if (ppp::net::Ipep::ParseEndPoint(server_string, host_string, port) && (port > IPEndPoint::MinPort && port <= IPEndPoint::MaxPort)) {
-                            if (IPEndPoint serverEP = ppp::net::Ipep::GetEndPoint(host_string, port); !IPEndPoint::IsInvalid(serverEP)) {
-                                boost::asio::ip::udp::endpoint ep =
-                                    IPEndPoint::ToEndPoint<boost::asio::ip::udp>(serverEP);
-                                if (!serverEP.IsLoopback()) {
-                                    fib_add_route_ipv4(ep.address());
-                                }
-
-                                if (aggligator_) {
-                                    auto r = servers.emplace(
-                                        IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(serverEP));
-                                    return r.second;
-                                }
-                                else {
-                                    return exchanger->StaticEchoAddRemoteEndPoint(ep);
-                                }
-                            }
+                        if (!ppp::net::Ipep::ParseEndPoint(server_string, host_string, port)) {
+                            return false;
                         }
-                        return false;
+
+                        if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
+                            return false;
+                        }
+
+                        IPEndPoint remoteEP = ppp::net::Ipep::GetEndPoint(host_string, port);
+                        if (IPEndPoint::IsInvalid(remoteEP)) {
+                            return false;
+                        }
+
+                        boost::asio::ip::udp::endpoint ep =
+                            IPEndPoint::ToEndPoint<boost::asio::ip::udp>(remoteEP);
+                        if (!remoteEP.IsLoopback() && !fib_add_route_ipv4(ep.address())) {
+                            return false;
+                        }
+
+                        if (aggligator_) {
+                            auto r = servers.emplace(
+                                IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(remoteEP));
+                            return r.second;
+                        }
+                       
+                        return exchanger->StaticEchoAddRemoteEndPoint(ep);
                     };
 
                 for (const ppp::string& server_string : configuration_->udp.static_.servers) {
-                    StaticEchoAddRemoteEndPoint(server_string);
+                    if (!StaticEchoAddRemoteEndPoint(server_string)) {
+                        return false;
+                    }
                 }
 
                 // Open the beast network bandwidth aggregator.
@@ -2139,7 +2155,11 @@ namespace ppp {
                 }
 
                 // The gateway address must be IPV4 or it is considered a failure because there is no V6 gateway serving the V4 address.
-                return serverEP.IsLoopback() ? true : fib_add_route_ipv4(remoteIP);
+                if (serverEP.IsLoopback()) {
+                    return true;
+                }
+
+                return fib_add_route_ipv4(remoteIP);
             }
 
             bool VEthernetNetworkSwitcher::RedirectDnsServer(

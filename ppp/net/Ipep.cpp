@@ -47,19 +47,19 @@ namespace ppp {
                 return false;
             }
 
-            size_t index = address.find('[');
-            if (index != ppp::string::npos) {
-                size_t right = address.find(']', index);
-                if (right == ppp::string::npos) {
-                    return false;
+            size_t leftBracket = address.find('[');
+            if (leftBracket != ppp::string::npos) {
+                size_t rightBracket = address.find(']', leftBracket);
+                if (rightBracket == ppp::string::npos) {
+                    return false;  
                 }
 
-                size_t LENT = right - index - 1;
-                if (LENT == 0) {
-                    return false;
+                size_t hostLen = rightBracket - leftBracket - 1;
+                if (hostLen == 0) {
+                    return false; 
                 }
 
-                ppp::string host = address.substr(index + 1, LENT);
+                ppp::string host = address.substr(leftBracket + 1, hostLen);
                 if (host.empty()) {
                     return false;
                 }
@@ -68,19 +68,19 @@ namespace ppp {
                     return false;
                 }
 
-                index = address.rfind(':');
-                if (index == ppp::string::npos) {
-                    destinationAddress = host;
+                size_t portPos = address.find(':', rightBracket);
+                if (portPos == ppp::string::npos) {
+                    destinationAddress = std::move(host);
                 }
                 else {
-                    ppp::string port = address.substr(index + 1);
+                    ppp::string portStr = address.substr(portPos + 1);
                     destinationAddress = std::move(host);
-                    destinationPort = atoi(port.data());
+                    destinationPort = atoi(portStr.c_str()); 
                 }
             }
             else {
-                index = address.rfind(':');
-                if (index == ppp::string::npos) {
+                size_t colonPos = address.rfind(':');
+                if (colonPos == ppp::string::npos) {
                     if (!IsDomainAddress(address)) {
                         return false;
                     }
@@ -88,16 +88,17 @@ namespace ppp {
                     destinationAddress = address;
                 }
                 else {
-                    ppp::string host = address.substr(0, index);
+                    ppp::string host = address.substr(0, colonPos);
                     if (!IsDomainAddress(host)) {
                         return false;
                     }
 
-                    ppp::string port = address.substr(index + 1);
+                    ppp::string portStr = address.substr(colonPos + 1);
                     destinationAddress = std::move(host);
-                    destinationPort = atoi(port.data());
+                    destinationPort = atoi(portStr.c_str());
                 }
             }
+
             return true;
         }
 
@@ -179,7 +180,7 @@ namespace ppp {
                 return IPEndPoint(IPEndPoint::AnyAddress, port);
             }
 
-            AddrinfoPtr hints(hints_raw); 
+            AddrinfoPtr hints(hints_raw);
             for (struct addrinfo* p = hints.get(); p != nullptr; p = p->ai_next) {
                 if (p->ai_family == AF_INET) {
                     auto* ipv4 = reinterpret_cast<struct sockaddr_in*>(p->ai_addr);
@@ -512,16 +513,16 @@ namespace ppp {
                 if (addresses_size >= arraysizeof(DEFAULT_DNS_ADDRESSES)) {
                     break;
                 }
-            
+
                 boost::asio::ip::address dns_address = Ipep::ToAddress(dns_addresss_string, false);
                 if (std::find(addresses.begin(), addresses.end(), dns_address) == addresses.end()) {
                     addresses.emplace_back(dns_address);
                 }
             }
-            
+
             std::size_t last = out.size();
             for (boost::asio::ip::address& ip : addresses) {
-                out.emplace_back(ip); 
+                out.emplace_back(ip);
             }
 
             return static_cast<int>(out.size() - last);
@@ -881,9 +882,9 @@ namespace ppp {
                 return true;
             }
             elif(ppp::net::asio::vdns::enabled) {
-                auto dns_servers = ppp::net::asio::vdns::servers; 
+                auto dns_servers = ppp::net::asio::vdns::servers;
                 if (NULLPTR != dns_servers && !dns_servers->empty()) {
-                    return ppp::net::asio::vdns::ResolveAsync(context, hostname.data(), PPP_RESOLVE_DNS_TIMEOUT, *dns_servers, 
+                    return ppp::net::asio::vdns::ResolveAsync(context, hostname.data(), PPP_RESOLVE_DNS_TIMEOUT, *dns_servers,
                         [dns_servers, port, callback](const boost::asio::ip::address& ip) noexcept {
                             boost::asio::ip::tcp::endpoint endpoint(ip, port);
                             if (IPEndPoint ip = IPEndPoint::ToEndPoint(endpoint); IPEndPoint::IsInvalid(ip)) {

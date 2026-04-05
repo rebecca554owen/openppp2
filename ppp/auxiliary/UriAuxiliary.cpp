@@ -109,14 +109,15 @@ namespace ppp {
             YieldContext&                                                   y,
             bool                                                            resolver) noexcept {
 
-            typedef ppp::net::IPEndPoint IPEndPoint;
-            typedef ppp::net::Ipep       Ipep;
+            using ppp::net::IPEndPoint;
+            using ppp::net::Ipep;
 
             port = IPEndPoint::MinPort;
-            hostname = "";
-            path = "";
-            address = "";
+            hostname.clear();
+            path.clear();
+            address.clear();
             protocol = ProtocolType_PPP;
+
             if (url.empty()) {
                 return "";
             }
@@ -126,107 +127,94 @@ namespace ppp {
                 return "";
             }
 
-            std::size_t index_offset = 3;
-            std::size_t index = url_string.find("://");
-            if (index == ppp::string::npos) {
-                index = url_string.find(":/");
-                if (index == ppp::string::npos) {
-                    return "";
-                }
-                else {
-                    index_offset = 2;
-                }
+            std::size_t scheme_sep = url_string.find("://");
+            if (scheme_sep == ppp::string::npos) {
+                return ""; 
             }
 
-            std::size_t n = index + index_offset;
-            if (n >= url_string.size()) {
-                return "";
-            }
-
-            int port_number = 0;
-            ppp::string host_and_path = url_string.substr(n);
-            ppp::string proto_string = url_string.substr(0, index);
-            ppp::string host_string;
-            ppp::string address_string;
-            ppp::string path_string;
+            ppp::string proto_string = url_string.substr(0, scheme_sep);
+            ppp::string rest = url_string.substr(scheme_sep + 3); 
 
             ProtocolType protocol_type = ProtocolType_PPP;
-            if (proto_string == "tcp") {
+            if (proto_string == "tcp" || proto_string == BOOST_BEAST_VERSION_STRING) {
                 protocol_type = ProtocolType_PPP;
             }
-            elif(proto_string == BOOST_BEAST_VERSION_STRING) {
-                protocol_type = ProtocolType_PPP;
-            }
-            elif(proto_string == "wss") {
-                protocol_type = ProtocolType_WebSocketSSL;
-            }
-            elif(proto_string == "ws") {
+            else if (proto_string == "ws") {
                 protocol_type = ProtocolType_WebSocket;
             }
-            elif(proto_string == "https") {
-                protocol_type = ProtocolType_HttpSSL;
+            else if (proto_string == "wss") {
+                protocol_type = ProtocolType_WebSocketSSL;
             }
-            elif(proto_string == "http") {
+            else if (proto_string == "http") {
                 protocol_type = ProtocolType_Http;
             }
-            elif(proto_string == "socks") {
+            else if (proto_string == "https") {
+                protocol_type = ProtocolType_HttpSSL;
+            }
+            else if (proto_string == "socks") {
                 protocol_type = ProtocolType_Socks;
             }
             else {
-                return "";
+                return ""; 
             }
 
-            index = host_and_path.find_first_of('/');
-            if (index != ppp::string::npos) {
-                n = index + 1;
-                if (url_string.size() > n) {
-                    path_string = "/" + host_and_path.substr(n);
-                }
-
-                host_string = host_and_path.substr(0, index);
+            ppp::string host_string;
+            ppp::string path_string;
+            std::size_t path_pos = rest.find('/');
+            if (path_pos != ppp::string::npos) {
+                host_string = rest.substr(0, path_pos);
+                path_string = rest.substr(path_pos);
             }
             else {
+                host_string = rest;
                 path_string = "/";
-                host_string = host_and_path;
             }
 
-            index = host_string.find_first_of('[');
-            if (index != ppp::string::npos) {
-                n = host_string.find_last_of(']');
-                if (n == ppp::string::npos || index > n) {
+            int port_number = 0;
+            std::size_t port_sep = host_string.rfind(':');
+            if (port_sep != ppp::string::npos) {
+                std::size_t right_bracket = host_string.rfind(']');
+                if (right_bracket == ppp::string::npos || port_sep > right_bracket) {
+                    ppp::string port_str = host_string.substr(port_sep + 1);
+                    port_str = LTrim(RTrim(port_str));
+
+                    if (!port_str.empty()) {
+                        char* end = NULLPTR;
+                        long val = strtol(port_str.c_str(), &end, 10);
+
+                        if (end == port_str.c_str() || *end != '\0' || val <= IPEndPoint::MinPort || val > IPEndPoint::MaxPort) {
+                            return ""; 
+                        }
+
+                        port_number = static_cast<int>(val);
+                        host_string = host_string.substr(0, port_sep); 
+                    }
+                }
+            }
+
+            ppp::string address_string;
+            std::size_t left_bracket = host_string.find('[');
+            if (left_bracket != ppp::string::npos) {
+                std::size_t right_bracket = host_string.find(']', left_bracket);
+                if (right_bracket == ppp::string::npos || left_bracket > right_bracket) {
                     return "";
                 }
 
-                std::size_t pos = index + 1;
-                address_string = host_string.substr(pos, n - pos);
-                host_string = host_string.substr(0, index) + host_string.substr(n + 1);
-            }
-
-            index = host_string.rfind(':');
-            if (index != ppp::string::npos) {
-                n = index + 1;
-                if (n >= host_string.size()) {
-                    return "";
-                }
-
-                ppp::string sz_ = host_string.substr(n);
-                sz_ = LTrim(sz_);
-                sz_ = RTrim(sz_);
-                port_number = atoi(sz_.data());
-                host_string = host_string.substr(0, index);
+                address_string = host_string.substr(left_bracket + 1, right_bracket - left_bracket - 1);
+                host_string = host_string.substr(0, left_bracket) + host_string.substr(right_bracket + 1);
+                host_string = LTrim(RTrim(host_string));
             }
 
             host_string = LTrim(RTrim(host_string));
-            path_string = LTrim(RTrim(path_string));
             if (port_number <= IPEndPoint::MinPort || port_number > IPEndPoint::MaxPort) {
                 if (protocol_type == ProtocolType_Http || protocol_type == ProtocolType_WebSocket) {
                     port_number = PPP_HTTP_SYS_PORT;
                 }
-                elif(protocol_type == ProtocolType_HttpSSL || protocol_type == ProtocolType_WebSocketSSL) {
+                else if (protocol_type == ProtocolType_HttpSSL || protocol_type == ProtocolType_WebSocketSSL) {
                     port_number = PPP_HTTPS_SYS_PORT;
                 }
                 else {
-                    return "";
+                    return ""; 
                 }
             }
 
@@ -235,29 +223,46 @@ namespace ppp {
                 address_string = remoteEP.ToAddressString();
             }
 
+            if (host_string.empty()) {
+                host_string = address_string;
+            }
+
             hostname = host_string;
             address = address_string;
             path = path_string;
             port = port_number;
             protocol = protocol_type;
 
-            url_string = proto_string + "://" + hostname;
+            ppp::string normalized = proto_string + "://";
+            bool is_ipv6 = (address_string.find(':') != ppp::string::npos);  
+            if (is_ipv6 && !address_string.empty()) {
+                normalized += "[" + address_string + "]";
+            }
+            else if (!hostname.empty()) {
+                normalized += hostname;
+            }
+            else {
+                normalized += address_string;
+            }
+
+            normalized += ":" + stl::to_string<ppp::string>(port) + path_string;
             if (NULLPTR != abs) {
-                ppp::string abs_string = url_string;
-                if (!address_string.empty()) {
-                    abs_string += "[";
+                ppp::string abs_string = proto_string + "://";
+                if (is_ipv6 && !address_string.empty()) {
+                    abs_string += "[" + address_string + "]";
+                }
+                else if (!hostname.empty()) {
+                    abs_string += hostname;
+                }
+                else {
                     abs_string += address_string;
-                    abs_string += "]";
                 }
 
-                abs_string += ":";
-                abs_string += stl::to_string<ppp::string>(port);
-                abs_string += path;
+                abs_string += ":" + stl::to_string<ppp::string>(port) + path_string;
                 *abs = abs_string;
             }
 
-            url_string += ":" + stl::to_string<ppp::string>(port) + path;
-            return url_string;
+            return normalized;
         }
 
         ppp::string UriAuxiliary::Encode(const ppp::string& input) noexcept {
