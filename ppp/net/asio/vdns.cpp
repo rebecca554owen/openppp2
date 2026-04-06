@@ -9,206 +9,73 @@
 #include <ppp/net/native/ip.h>
 
 #include <common/dnslib/message.h>
+#include <cctype>   // for tolower
+#include <new>      // for std::bad_alloc
 
 namespace ppp {
     namespace net {
         namespace asio {
             namespace vdns {
-                static constexpr int                                                            PPP_MAX_HOSTNAME_SIZE_LIMIT = 64;
-                static constexpr int                                                            PPP_IP_DNS_MERGE_WAIT       = 100;
+
+                // -----------------------------------------------------------------------------
+                // Constants (defined in stdafx.h, referenced here for clarity)
+                // -----------------------------------------------------------------------------
+                static constexpr int                                                                PPP_MAX_HOSTNAME_SIZE_LIMIT        = 64;
+                static constexpr int                                                                PPP_IP_DNS_MERGE_WAIT              = 100;
                 // Linux  : systemd-resolved set 50ms               
                 // glibc  : getaddrinfo set 500ms               
                 // MacOS  : 50 ~ 100ms              
-                // Windows: 100 ~ 300ms             
+                // Windows: 100 ~ 300ms        
+                static constexpr int                                                                PPP_MAX_DNS_PACKET_BUFFER_SIZE     = 512;   // Must match stdafx definition
 
-                typedef ppp::collections::Dictionary                                            Dictionary;
-                typedef std::mutex                                                              SynchronizedObject;
-                typedef std::lock_guard<SynchronizedObject>                                     SynchronizedObjectScope;
-                typedef ppp::function<void(bool,                                    
-                        ppp::unordered_set<                                 
-                            boost::asio::ip::address>&)>                                        DNSRequestAsynchronousCallback;
-                typedef ppp::net::Socket                                                        Socket;
-                typedef ppp::threading::Timer                                                   Timer;
-                typedef ppp::threading::Executors                                               Executors;
+                // -----------------------------------------------------------------------------
+                // Type aliases for internal use
+                // -----------------------------------------------------------------------------
+                typedef ppp::collections::Dictionary                                                Dictionary;
+                typedef std::mutex                                                                  SynchronizedObject;
+                typedef std::lock_guard<SynchronizedObject>                                         SynchronizedObjectScope;
+                typedef ppp::function<void(bool, ppp::unordered_set<boost::asio::ip::address>&)>    DNSRequestAsynchronousCallback;
+                typedef ppp::net::Socket                                                            Socket;
+                typedef ppp::threading::Timer                                                       Timer;
+                typedef ppp::threading::Executors                                                   Executors;
 
-                struct DNS_RequestContext final {                                   
-                    boost::asio::ip::udp::endpoint                                              source;
-                    boost::asio::io_context&                                                    executor;
-                    std::shared_ptr<boost::asio::ip::udp::socket>                               socket;
-                    boost::asio::deadline_timer                                                 timeout;
-                    std::shared_ptr<boost::asio::deadline_timer>                                merge_wait;
+                // Forward declaration for DNS_RequestContext
+                struct DNS_RequestContext;
 
-                    struct {
-                        bool                                                                    in4 = false;
-                        bool                                                                    in6 = false;
-
-                        uint16_t                                                                in4_id = 0;
-                        uint16_t                                                                in6_id = 0;
-                    };
-
-                    ppp::unordered_set<boost::asio::ip::address>                                addresses;
-                    DNSRequestAsynchronousCallback                                              cb;
-                    ppp::string                                                                 hostname;
-
-                    Byte                                                                        packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE];
-
-                    DNS_RequestContext(boost::asio::io_context& context) noexcept
-                        : executor(context)
-                        , timeout(context)
-                        , in4(false)
-                        , in6(false)
-                        , in4_id(0)
-                        , in6_id(0) {
-                        socket = make_shared_object<boost::asio::ip::udp::socket>(context);
-                    }
-                    ~DNS_RequestContext() noexcept;
-                    
-                    bool                                                                        Cache() noexcept;
-                    void                                                                        Event(bool timeout) noexcept;
-
-                    static bool                                                                 ReceiveFrom(std::shared_ptr<DNS_RequestContext> request_context) noexcept;
-                };              
-
-                IPEndPointVectorPtr                                                             servers;
-                bool                                                                            enabled = false;
-                int                                                                             ttl     = PPP_DEFAULT_DNS_TTL;
-
-                struct NamespaceRecord {
-                    struct {
-                        bool                                                                    ipv6 : 1;
-                        bool                                                                    ipv4 : 7;
-                    };
-
-                    uint64_t                                                                    expired_time = 0; 
-                    SynchronizedObject                                                          lockobj;
-                    ppp::string                                                                 hostname;
-                    ppp::unordered_set<boost::asio::ip::address>                                addresses;
-
-                    NamespaceRecord() noexcept 
-                        : ipv6(false)
-                        , ipv4(false)
-                        , expired_time(0) {
-
-                    }
-
-                    bool                                                                        Emplace(const boost::asio::ip::address& ip) noexcept;
-                };
-                typedef ppp::collections::LinkedListNode<NamespaceRecord>                       NamespaceRecordNode;
-                typedef std::shared_ptr<NamespaceRecordNode>                                    NamespaceRecordNodePtr;
-
-                struct internal final {
-                    SynchronizedObject                                                          lockobj;
-                    std::atomic<uint16_t>                                                       identification = RandomNext(1, UINT16_MAX);
-                    ppp::unordered_map<ppp::string, NamespaceRecordNodePtr>                     nr_hmap;
-                    ppp::collections::LinkedList<NamespaceRecord>                               nr_list;
-
-                    static internal& c() noexcept {
-                        static internal i;
-                        return i;
-                    }
-                };
-
-                void vdns_ctor() noexcept {
-                    boost::system::error_code ec;
-                    vdns::ttl = PPP_DEFAULT_DNS_TTL;
-
-                    auto dns_servers = make_shared_object<IPEndPointVector>();
-                    vdns::servers = dns_servers;
-
-                    dns_servers->emplace_back(boost::asio::ip::udp::endpoint(StringToAddress(PPP_PREFERRED_DNS_SERVER_1, ec), PPP_DNS_SYS_PORT));
-                    dns_servers->emplace_back(boost::asio::ip::udp::endpoint(StringToAddress(PPP_PREFERRED_DNS_SERVER_2, ec), PPP_DNS_SYS_PORT));
-                }
-                        
-                static bool                                                                     DNS_SendToARequestAsync(boost::asio::io_context& context, const ppp::string& hostname, int timeout, const ppp::vector<boost::asio::ip::udp::endpoint>& destinations, const DNSRequestAsynchronousCallback& cb) noexcept {
-                    if (hostname.empty()) {
+                // -----------------------------------------------------------------------------
+                // Helper: case-insensitive string comparison for DNS domain names.
+                // Returns true if strings are equal ignoring ASCII case.
+                // -----------------------------------------------------------------------------
+                template <typename TStringA, typename TStringB>
+                static bool CaseInsensitiveEqual(const TStringA& a, const TStringB& b) noexcept {
+                    if (a.size() != b.size()) {
                         return false;
                     }
 
-                    std::shared_ptr<DNS_RequestContext> request_context = make_shared_object<DNS_RequestContext>(context);
-                    if (NULLPTR == request_context) {
-                        return false;
-                    }
-
-                    std::shared_ptr<boost::asio::ip::udp::socket> socket = request_context->socket;
-                    if (NULLPTR == socket) {
-                        return false;
-                    }
-
-                    boost::system::error_code ec;
-                    socket->open(boost::asio::ip::udp::v6(), ec);
-                    if (ec) {
-                        return false;
-                    }
-                    
-                    int handle = socket->native_handle();
-                    request_context->cb = cb;
-                    request_context->hostname = hostname;
-                    
-                    Socket::AdjustDefaultSocketOptional(handle, true);
-                    Socket::SetTypeOfService(handle);
-                    Socket::SetSignalPipeline(handle, false);
-                    Socket::ReuseSocketAddress(handle, true);
-
-                    struct {
-                        uint16_t* id;
-                        bool* in;
-                        ::dns::RecordType rt;
-                    } srs[2] = {{&request_context->in4_id, &request_context->in4, ::dns::RecordType::kA}, {&request_context->in6_id, &request_context->in6, ::dns::RecordType::kAAAA}};
-
-                    bool any = false;
-                    internal& c = internal::c();
-
-                    for (int i = 0, j = -1; i < arraysizeof(srs); i++, j++) {
-                        auto& sr = srs[i];
-                        while ((*sr.id = ++c.identification) == 0 || (i > 0 && *sr.id == *srs[j].id));
-
-                        ::dns::Message m;
-                        m.mRD = 1;
-                        m.mId = *sr.id;
-                        m.questions.emplace_back(::dns::QuestionSection(hostname.data(), sr.rt, ::dns::RecordClass::kIN));
-                        
-                        size_t messages_size = 0;
-                        if (m.encode(request_context->packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE, messages_size) != ::dns::BufferResult::NoError) {
-                            continue;
-                        }
-
-                        for (const boost::asio::ip::udp::endpoint& ep : destinations) {
-                            socket->send_to(
-                                boost::asio::buffer(request_context->packet, messages_size), 
-                                ppp::net::Ipep::V4ToV6(ep), 
-                                boost::asio::ip::udp::socket::message_end_of_record, ec);
-                            if (ec == boost::system::errc::success) {
-                                any = true;
-                            }
+                    for (size_t i = 0; i < a.size(); ++i) {
+                        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                            std::tolower(static_cast<unsigned char>(b[i]))) {
+                            return false;
                         }
                     }
-
-                    if (!any) {
-                        return false;
-                    }
-
-                    if (timeout < 1) {
-                        timeout = PPP_RESOLVE_DNS_TIMEOUT;
-                    }
-                    
-                    std::weak_ptr<DNS_RequestContext> rc_weak_ptr = request_context;
-                    request_context->timeout.expires_from_now(Timer::DurationTime(timeout));
-                    request_context->timeout.async_wait(
-                        [rc_weak_ptr](const boost::system::error_code& ec) noexcept {
-                            if (ec == boost::system::errc::operation_canceled) {
-                                return;
-                            }
-
-                            std::shared_ptr<DNS_RequestContext> request_context = rc_weak_ptr.lock();
-                            if (NULLPTR != request_context) {
-                                request_context->Event(true);
-                            }
-                        });
-
-                    return DNS_RequestContext::ReceiveFrom(request_context);
+                    return true;
                 }
 
-                static bool                                                                     DNS_ProcessAResponseAddresses(Byte* packet, int packet_size, ppp::unordered_set<boost::asio::ip::address>& addresses, uint16_t& ack, ppp::string* hostname_string = NULLPTR, bool* ipv4_or_ipv6 = NULLPTR) noexcept {
+                // -----------------------------------------------------------------------------
+                // Helper: parse a DNS response, extract A/AAAA records, and fill the address set.
+                // Returns true on success and writes the transaction ID into 'ack'.
+                // If 'expected_hostname' is provided, the response's question section must match it
+                // (case-insensitive). If 'out_hostname' is provided, the normalized (lowercase)
+                // hostname is written.
+                // -----------------------------------------------------------------------------
+                static bool DNS_ProcessAResponseAddresses(Byte*     packet,
+                    int                                             packet_size,
+                    ppp::unordered_set<boost::asio::ip::address>&   addresses,
+                    uint16_t&                                       ack,
+                    const char*                                     expected_hostname = NULLPTR,
+                    ppp::string*                                    out_hostname = NULLPTR,
+                    bool*                                           out_ipv4_or_ipv6 = NULLPTR) noexcept {
+
                     using IPEndPoint = ppp::net::IPEndPoint;
                     using AddressFamily = ppp::net::AddressFamily;
 
@@ -218,344 +85,686 @@ namespace ppp {
                     }
 
                     ::dns::Message m;
-                    if (m.decode(packet, packet_size) != ::dns::BufferResult::NoError) {
+                    if (::dns::BufferResult::NoError != m.decode(packet, packet_size)) {
                         return false;
                     }
 
-                    ::dns::QuestionSection* qs = NULLPTR;
-                    if (NULLPTR != hostname_string && !m.questions.empty()) {
-                        qs = m.questions.data();
-                        
-                        if (IsReverseQuery(qs->mName.data())) {
+                    // Verify the question section matches the expected hostname (if provided)
+                    if (NULLPTR != expected_hostname) {
+                        if (m.questions.empty()) {
+                            return false; // No question section to match
+                        }
+
+                        const ::dns::QuestionSection& q = m.questions[0];
+                        if (IsReverseQuery(q.mName.data())) {
                             return false;
+                        }
+
+                        // Case-insensitive comparison per DNS specification
+                        if (!CaseInsensitiveEqual(q.mName, ppp::string(expected_hostname))) {
+                            return false; // Domain mismatch – ignore this response
+                        }
+
+                        if (NULLPTR != out_hostname) {
+                            *out_hostname = q.mName;
+                            
+                            // Convert to lowercase for internal consistency
+                            for (char& ch : *out_hostname) {
+                                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                            }
+                        }
+
+                        if (NULLPTR != out_ipv4_or_ipv6) {
+                            *out_ipv4_or_ipv6 = (::dns::RecordType::kA == q.mType);
+                        }
+                    }
+                    else {
+                        // No expected hostname: just extract hostname from the question if requested
+                        if (NULLPTR != out_hostname && !m.questions.empty()) {
+                            const ::dns::QuestionSection& q = m.questions[0];
+                            if (!IsReverseQuery(q.mName.data())) {
+                                *out_hostname = q.mName;
+
+                                // Convert to lowercase
+                                for (char& ch : *out_hostname) {
+                                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                                }
+
+                                if (NULLPTR != out_ipv4_or_ipv6) {
+                                    *out_ipv4_or_ipv6 = (::dns::RecordType::kA == q.mType);
+                                }
+                            }
                         }
                     }
 
+                    // Iterate over answer records (non-const because getRData returns shared_ptr)
                     for (::dns::ResourceRecord& rr : m.answers) {
-                        if (rr.mClass != ::dns::RecordClass::kIN) {
+                        if (::dns::RecordClass::kIN != rr.mClass) {
                             continue;
                         }
 
                         IPEndPoint ep;
-                        if (rr.mType == ::dns::RecordType::kA) {
-                            auto in = rr.getRData<::dns::RDataA>();
-                            if (NULLPTR != in) {
-                                ep = IPEndPoint(AddressFamily::InterNetwork, in->getAddress(), 4, IPEndPoint::MinPort);
-                                addresses.emplace(IPEndPoint::ToEndPoint<boost::asio::ip::udp>(ep).address());
+                        if (::dns::RecordType::kA == rr.mType) {
+                            auto rdata = rr.getRData<::dns::RDataA>();
+                            if (NULLPTR != rdata) {
+                                ep = IPEndPoint(AddressFamily::InterNetwork,
+                                    rdata->getAddress(), 4, IPEndPoint::MinPort);
+
+                                // emplace may throw bad_alloc; catch and ignore this address.
+                                try {
+                                    addresses.emplace(IPEndPoint::ToEndPoint<boost::asio::ip::udp>(ep).address());
+                                }
+                                catch (const std::bad_alloc&) {
+                                    // Ignore memory allocation failure for this address
+                                }
                             }
                         }
-                        elif(rr.mType == ::dns::RecordType::kAAAA) {
-                            auto in = rr.getRData<::dns::RDataAAAA>();
-                            if (NULLPTR != in) {
-                                ep = IPEndPoint(AddressFamily::InterNetworkV6, in->getAddress(), 16, IPEndPoint::MinPort);
-                                addresses.emplace(IPEndPoint::ToEndPoint<boost::asio::ip::udp>(ep).address());
+                        else if (::dns::RecordType::kAAAA == rr.mType) {
+                            auto rdata = rr.getRData<::dns::RDataAAAA>();
+                            if (NULLPTR != rdata) {
+                                ep = IPEndPoint(AddressFamily::InterNetworkV6,
+                                    rdata->getAddress(), 16, IPEndPoint::MinPort);
+
+                                try {
+                                    addresses.emplace(IPEndPoint::ToEndPoint<boost::asio::ip::udp>(ep).address());
+                                }
+                                catch (const std::bad_alloc&) {
+                                    // Ignore memory allocation failure for this address
+                                }
                             }
                         }
                     }
 
-                    if (NULLPTR != hostname_string && !m.questions.empty()) {
-                        if (NULLPTR != ipv4_or_ipv6) {
-                            *ipv4_or_ipv6 = qs->mType == ::dns::RecordType::kA;
-                        }
-
-                        *hostname_string = qs->mName;
-                    }
-                    
                     ack = m.mId;
                     return true;
                 }
 
-                DNS_RequestContext::~DNS_RequestContext() noexcept {
-                    DNS_RequestContext* const rc = this;
-                    rc->Event(true);
-                }
+                // -----------------------------------------------------------------------------
+                // Cache record: stores a set of IP addresses, their expiry, and which families exist.
+                // All public methods are thread-safe.
+                // -----------------------------------------------------------------------------
+                struct NamespaceRecord {
+                    bool                                            ipv4 : 1;       // True if at least one IPv4 address is present
+                    bool                                            ipv6 : 7;       // True if at least one IPv6 address is present
+                    uint64_t                                        expired_time;   // Absolute tick count when this entry expires
+                    mutable SynchronizedObject                      lockobj;        // Protects 'addresses' and the flags (mutable for const methods)
+                    ppp::string                                     hostname;
+                    ppp::unordered_set<boost::asio::ip::address>    addresses;
 
-                void DNS_RequestContext::Event(bool timeout) noexcept {
-                    DNS_RequestContext* const rc = this;
-                    DNSRequestAsynchronousCallback f = std::move(rc->cb);
-                    if (f) {
-                        rc->cb = NULLPTR;
-                        f(rc->in4 || rc->in6, addresses);
+                    NamespaceRecord() noexcept : ipv4(false), ipv6(false), expired_time(0) {}
+
+                    // Thread-safe insertion of a new address (returns true if inserted)
+                    bool Emplace(const boost::asio::ip::address& ip) noexcept {
+                        SynchronizedObjectScope lock(lockobj);
+                        try {
+                            return addresses.emplace(ip).second;
+                        }
+                        catch (const std::bad_alloc&) {
+                            return false;
+                        }
                     }
 
-                    if (timeout || (rc->in4 && rc->in6)) {
-                        std::shared_ptr<boost::asio::deadline_timer> t = std::move(rc->merge_wait); 
-                        if (NULLPTR != t) {
-                            Socket::Cancel(*t);
+                    // Thread-safe check for emptiness
+                    bool Empty() const noexcept {
+                        SynchronizedObjectScope lock(lockobj);
+                        return addresses.empty();
+                    }
+
+                    // Thread-safe copy of all addresses
+                    void CopyAddresses(ppp::unordered_set<boost::asio::ip::address>& out) const noexcept {
+                        SynchronizedObjectScope lock(lockobj);
+                        try {
+                            out = addresses;
                         }
-                        
-                        std::shared_ptr<boost::asio::ip::udp::socket> socket = std::move(rc->socket);
+                        catch (const std::bad_alloc&) {
+                            // Leave out empty on allocation failure
+                        }
+                    }
+                };
+                typedef ppp::collections::LinkedListNode<NamespaceRecord>                       NamespaceRecordNode;
+                typedef std::shared_ptr<NamespaceRecordNode>                                    NamespaceRecordNodePtr;
+
+                // -----------------------------------------------------------------------------
+                // Global cache container – uses a hash map for fast lookup and a linked list
+                // for expiration ordering (LRU). All operations are protected by lockobj.
+                // -----------------------------------------------------------------------------
+                struct internal final {
+                    SynchronizedObject                                      lockobj;                                    // Guards all members
+                    std::atomic<uint16_t>                                   identification = RandomNext(1, UINT16_MAX); // DNS transaction ID generator
+                    ppp::unordered_map<ppp::string, NamespaceRecordNodePtr> nr_hmap;                                    // Hostname → cache node
+                    ppp::collections::LinkedList<NamespaceRecord>           nr_list;                                    // List for expiration
+
+                    static internal&                                        c() noexcept {
+                        static internal i;
+                        return i;
+                    }
+                };
+
+                // -----------------------------------------------------------------------------
+                // DNS_RequestContext – manages a single asynchronous resolution.
+                // All operations are thread-safe relative to the owning io_context.
+                // -----------------------------------------------------------------------------
+                struct DNS_RequestContext final : public std::enable_shared_from_this<DNS_RequestContext> {
+                    boost::asio::ip::udp::endpoint                                              source;
+                    boost::asio::io_context&                                                    executor;
+                    std::shared_ptr<boost::asio::ip::udp::socket>                               socket;
+                    boost::asio::deadline_timer                                                 timeout_timer;
+                    std::shared_ptr<boost::asio::deadline_timer>                                merge_timer;
+                    SynchronizedObject                                                          merge_timer_mutex; // Protects merge_timer creation/destruction
+
+                    // Per-address-family state
+                    struct {
+                        bool                                                                    received = false;
+                        uint16_t                                                                id = 0;
+                    } a_state, aaaa_state;
+
+                    ppp::unordered_set<boost::asio::ip::address>                                addresses;   // Collected IPs
+                    DNSRequestAsynchronousCallback                                              callback;    // User callback
+                    ppp::string                                                                 hostname;    // Normalised hostname (lowercase)
+
+                    Byte                                                                        packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE]; // Temporary buffer
+
+                    std::atomic<bool>                                                           completed{ false }; // Prevents double completion
+
+                    // -------------------------------------------------------------------------
+                    // Constructor – creates an independent UDP socket (dual-stack).
+                    // -------------------------------------------------------------------------
+                    explicit DNS_RequestContext(boost::asio::io_context& context) noexcept
+                        : executor(context)
+                        , timeout_timer(context) {
+                        socket = make_shared_object<boost::asio::ip::udp::socket>(context);
                         if (NULLPTR != socket) {
-                            Socket::Closesocket(socket);
-                        }
-
-                        Socket::Cancel(rc->timeout);
-                    }
-
-                    rc->Cache();
-                }
-
-                bool DNS_RequestContext::Cache() noexcept {
-                    DNS_RequestContext* const rc = this;
-                    if (!rc->in4 && !rc->in6) {
-                        return false;
-                    }
-
-                    if (IsReverseQuery(rc->hostname.data())) {
-                        return false;
-                    }
-
-                    int TTL = vdns::ttl;
-                    if (TTL < 1) {
-                        TTL = PPP_DEFAULT_DNS_TTL;
-                    }
-
-                    internal& c = internal::c();
-                    TTL *= 1000;
-
-                    NamespaceRecordNodePtr node;
-                    for (SynchronizedObjectScope syncobj(c.lockobj);;) {
-                        if (Dictionary::TryRemove(c.nr_hmap, rc->hostname, node)) {
-                            NamespaceRecord& nr = node->Value;
-                            c.nr_list.Remove(node);
-
-                            for (const boost::asio::ip::address& ip : nr.addresses) {
-                                rc->addresses.emplace(ip);
-                            }
-                        }
-
-                        node = make_shared_object<NamespaceRecordNode>();
-                        if (NULLPTR == node) {
-                            return false;
-                        }
-
-                        NamespaceRecord& record = node->Value;
-                        record.hostname         = rc->hostname;
-                        record.addresses        = rc->addresses;
-                        record.expired_time     = Executors::GetTickCount() + TTL;
-                        record.ipv4             = in4;
-                        record.ipv6             = in6;
-
-                        if (!Dictionary::TryAdd(c.nr_hmap, rc->hostname, node)) {
-                            return false;
-                        }
-
-                        if (c.nr_list.AddLast(node)) {
-                            break;
-                        }
-
-                        Dictionary::TryRemove(c.nr_hmap, rc->hostname, node);
-                        return false;
-                    }
-
-                    return true;
-                }
-
-                bool DNS_RequestContext::ReceiveFrom(std::shared_ptr<DNS_RequestContext> request_context) noexcept {
-                    std::shared_ptr<boost::asio::ip::udp::socket> socket = request_context->socket;
-                    if (NULLPTR == socket) {
-                        request_context->Event(true);
-                        return false;
-                    }
-
-                    auto processing =
-                        [socket, request_context](boost::system::error_code ec, std::size_t sz) noexcept {
-                            
-                            uint16_t ack = 0;
-                            int bytes_transferred = std::max<int>(ec ? -1 : sz, -1);
-
-                            if (DNS_ProcessAResponseAddresses(request_context->packet, bytes_transferred, request_context->addresses, ack)) {
-                                if (ack == request_context->in4_id) {
-                                    request_context->in4 = true;
-                                }
-                                elif(ack == request_context->in6_id) {
-                                    request_context->in6 = true;
-                                }
-                            }
-
-                            if (request_context->in4 && request_context->in6) {
-                                request_context->Event(false);
+                            boost::system::error_code ec;
+                            socket->open(boost::asio::ip::udp::v6(), ec);
+                            if (ec) {
+                                socket.reset();
                             }
                             else {
-                                while (request_context->in4 || request_context->in6) {
-                                    std::shared_ptr<boost::asio::deadline_timer> t = request_context->merge_wait;
-                                    if (NULLPTR != t) {
-                                        break;
-                                    }
-
-                                    t = make_shared_object<boost::asio::deadline_timer>(request_context->executor);
-                                    if (NULLPTR == t) {
-                                        break;
-                                    }
-                                    
-                                    std::weak_ptr<DNS_RequestContext> rc_weak_ptr = request_context;
-                                    request_context->merge_wait = t;
-
-                                    t->expires_from_now(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
-                                    t->async_wait(
-                                        [rc_weak_ptr](const boost::system::error_code& ec) noexcept {
-                                            std::shared_ptr<DNS_RequestContext> request_context = rc_weak_ptr.lock();
-                                            if (NULLPTR == request_context) {
-                                                return false;
-                                            }
-
-                                            std::shared_ptr<boost::asio::deadline_timer> t = request_context->merge_wait;
-                                            if (NULLPTR != t) {
-                                                Socket::Cancel(*t);
-                                            }
-
-                                            request_context->Event(false);
-                                            return true;
-                                        });
-                                    break;
-                                }
-
-                                DNS_RequestContext::ReceiveFrom(request_context);
+                                // Set socket options for better performance.
+                                int handle = socket->native_handle();
+                                Socket::AdjustDefaultSocketOptional(handle, true);
+                                Socket::SetTypeOfService(handle);
+                                Socket::SetSignalPipeline(handle, false);
+                                Socket::ReuseSocketAddress(handle, true);
                             }
-                        };
+                        }
+                    }
 
-                    socket->async_receive_from(boost::asio::buffer(request_context->packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE), request_context->source, processing);
-                    return true;
-                }
+                    // -------------------------------------------------------------------------
+                    // Destructor – cancels all pending operations without invoking the callback.
+                    // -------------------------------------------------------------------------
+                    ~DNS_RequestContext() noexcept {
+                        cancel();
+                    }
 
-                static void                                                                     DNS_ResolveEventCallback(
-                    const ppp::unordered_set<boost::asio::ip::address>&                             addresses, 
-                    const ppp::function<void(const boost::asio::ip::address&)>&                     one_cb,
-                    const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>& all_cb) noexcept {
+                    // -------------------------------------------------------------------------
+                    // Cancel all timers and close the socket. The callback is never called.
+                    // -------------------------------------------------------------------------
+                    void cancel() noexcept {
+                        bool expected = false;
+                        if (!completed.compare_exchange_strong(expected, true)) {
+                            return; // Already finished or cancelled
+                        }
+                        else {
+                            SynchronizedObjectScope lock(merge_timer_mutex);
+                            if (NULLPTR != merge_timer) {
+                                Socket::Cancel(*merge_timer);
+                                merge_timer.reset();
+                            }
+                        }
 
-                    if (one_cb) {
-                        if (addresses.empty()) {
-                            one_cb(boost::asio::ip::address_v4::any());
+                        // Cancel timeout timer – it will not fire after this point.
+                        (void)timeout_timer.expires_from_now(boost::posix_time::seconds(0));
+
+                        Socket::Cancel(timeout_timer);
+                        if (NULLPTR != socket) {
+                            Socket::Closesocket(socket);
+                            socket.reset();
+                        }
+                        
+                        callback = NULLPTR; // Release callback to avoid any accidental invocation
+                    }
+
+                    // -------------------------------------------------------------------------
+                    // Finish the request – either because all responses arrived or a timeout occurred.
+                    // Invokes the user callback exactly once and stores the result in the cache.
+                    // -------------------------------------------------------------------------
+                    void finish(bool is_timeout) noexcept {
+                        bool expected = false;
+                        if (!completed.compare_exchange_strong(expected, true)) {
+                            return;
+                        }
+                        else {
+                            // Stop the merge timer if it is still pending.
+                            SynchronizedObjectScope lock(merge_timer_mutex);
+                            if (NULLPTR != merge_timer) {
+                                Socket::Cancel(*merge_timer);
+                                merge_timer.reset();
+                            }
+                        }
+
+                        // Invoke the user callback (if any) with the collected addresses.
+                        if (NULLPTR != callback) {
+                            callback(a_state.received || aaaa_state.received, addresses);
+                            callback = NULLPTR;
+                        }
+
+                        // Cache the result only if we have at least one address and this is not a reverse query.
+                        if (!is_timeout && (a_state.received || aaaa_state.received) && !IsReverseQuery(hostname.data())) {
+                            cache();
+                        }
+
+                        // Close the socket.
+                        if (NULLPTR != socket) {
+                            Socket::Closesocket(socket);
+                            socket.reset();
+                        }
+
+                        // Ensure the timeout timer is also cancelled.
+                        Socket::Cancel(timeout_timer);
+                    }
+
+                    // -------------------------------------------------------------------------
+                    // Called when a DNS response is received.
+                    // Updates the address set and checks whether the request is complete.
+                    // This method may be called from multiple threads if io_context runs with >1 thread.
+                    // -------------------------------------------------------------------------
+                    void on_response(const Byte* data, size_t len) noexcept {
+                        if (completed.load()) {
                             return;
                         }
 
-                        for (const boost::asio::ip::address& i : addresses) {
-                            if (i.is_v4()) {
-                                one_cb(i);
+                        uint16_t ack = 0;
+                        ppp::unordered_set<boost::asio::ip::address> new_addrs;
+
+                        // Verify that the response matches the expected hostname (case-insensitive)
+                        if (DNS_ProcessAResponseAddresses(const_cast<Byte*>(data), static_cast<int>(len), new_addrs, ack, hostname.data())) {
+                            // Merge the newly received addresses.
+                            for (const auto& addr : new_addrs) {
+                                try {
+                                    addresses.emplace(addr);
+                                }
+                                catch (const std::bad_alloc&) {
+                                    // Ignore memory allocation failure for this address
+                                }
+                            }
+
+                            if (ack == a_state.id) {
+                                a_state.received = true;
+                            }
+                            else if (ack == aaaa_state.id) {
+                                aaaa_state.received = true;
+                            }
+                        }
+
+                        // Determine whether both expected responses have been received.
+                        bool need_a = (0 != a_state.id);
+                        bool need_aaaa = (0 != aaaa_state.id);
+                        if ((!need_a || a_state.received) && (!need_aaaa || aaaa_state.received)) {
+                            finish(false); // All answers received
+                            return;
+                        }
+                        else {
+                            // Not all answers yet – start the merge timer only once (thread-safe).
+                            SynchronizedObjectScope lock(merge_timer_mutex);
+                            if (NULLPTR == merge_timer) {
+                                std::weak_ptr<DNS_RequestContext> weak_self = weak_from_this();
+                                merge_timer = make_shared_object<boost::asio::deadline_timer>(executor);
+                                if (NULLPTR != merge_timer) {
+                                    merge_timer->expires_from_now(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
+                                    merge_timer->async_wait(
+                                        [weak_self](const boost::system::error_code& ec) noexcept {
+                                            std::shared_ptr<DNS_RequestContext> self = weak_self.lock();
+                                            if (NULLPTR != self && ec != boost::asio::error::operation_aborted && !self->completed.load()) {
+                                                self->finish(false);
+                                            }
+                                        });
+                                }
+                            }
+                        }
+                    }
+
+                    // -------------------------------------------------------------------------
+                    // Store the collected IP addresses into the global cache.
+                    // This function is called only after the request has successfully finished.
+                    // -------------------------------------------------------------------------
+                    void cache() noexcept {
+                        int TTL = vdns::ttl;
+                        if (TTL < 1) {
+                            TTL = PPP_DEFAULT_DNS_TTL;
+                        }
+
+                        uint64_t expire_time = Executors::GetTickCount() + static_cast<uint64_t>(TTL) * 1000;
+
+                        internal& c = internal::c();
+                        SynchronizedObjectScope lock(c.lockobj); // Protect global cache structures
+
+                        NamespaceRecordNodePtr node;
+                        if (Dictionary::TryGetValue(c.nr_hmap, hostname, node) && NULLPTR != node) {
+                            // Existing cache entry – merge new addresses and update expiry.
+                            NamespaceRecord& nr = node->Value;
+                            {
+                                SynchronizedObjectScope nr_lock(nr.lockobj);
+                                for (const auto& addr : addresses) {
+                                    try {
+                                        nr.addresses.emplace(addr);
+                                    }
+                                    catch (const std::bad_alloc&) {
+                                        // Ignore memory allocation failure for this address
+                                    }
+                                }
+
+                                nr.expired_time = expire_time;
+                                nr.ipv4 = nr.ipv4 || a_state.received;
+                                nr.ipv6 = nr.ipv6 || aaaa_state.received;
+                            }
+
+                            // Move the node to the tail of the LRU list (most recent).
+                            c.nr_list.Remove(node);
+                            c.nr_list.AddLast(node);
+                        }
+                        else {
+                            // Create a new cache entry.
+                            node = make_shared_object<NamespaceRecordNode>();
+                            if (NULLPTR == node) {
+                                return;
+                            }
+
+                            NamespaceRecord& nr = node->Value;
+                            nr.hostname = hostname;
+
+                            try {
+                                nr.addresses = addresses;      // Copy the set (addresses is local, no lock needed)
+                            }
+                            catch (const std::bad_alloc&) {
+                                return; // Cannot allocate cache entry
+                            }
+
+                            nr.expired_time = expire_time;
+                            nr.ipv4 = a_state.received;
+                            nr.ipv6 = aaaa_state.received;
+                            if (!Dictionary::TryAdd(c.nr_hmap, hostname, node)) {
+                                return;
+                            }
+
+                            c.nr_list.AddLast(node);
+                        }
+                    }
+
+                    // -------------------------------------------------------------------------
+                    // Build and send A and AAAA requests to all configured DNS servers.
+                    // Returns true if at least one request was sent successfully.
+                    // -------------------------------------------------------------------------
+                    bool send_requests(const ppp::vector<boost::asio::ip::udp::endpoint>& destinations, int timeout_ms) noexcept {
+                        if (NULLPTR == socket) {
+                            return false;
+                        }
+
+                        internal& c = internal::c();
+                        bool any_sent = false;
+
+                        // Two queries: A (IPv4) and AAAA (IPv6)
+                        struct QueryInfo {
+                            uint16_t*           id_ptr;
+                            bool*               received_ptr;
+                            ::dns::RecordType   rt;
+                        } queries[2] = {
+                            {&a_state.id, &a_state.received, ::dns::RecordType::kA},
+                            {&aaaa_state.id, &aaaa_state.received, ::dns::RecordType::kAAAA}
+                        };
+
+                        for (int i = 0; i < 2; ++i) {
+                            QueryInfo& q = queries[i];
+
+                            // Generate a unique transaction ID (avoid conflict with the other query).
+                            uint16_t new_id;
+                            do {
+                                new_id = ++c.identification;
+                                if (0 == new_id) {
+                                    new_id = ++c.identification;
+                                }
+                            } while (i == 1 && new_id == a_state.id); // Ensure A and AAAA IDs differ
+                            *q.id_ptr = new_id;
+
+                            ::dns::Message msg;
+                            msg.mRD = 1;  // Recursion desired
+                            msg.mId = *q.id_ptr;
+                            msg.questions.emplace_back(::dns::QuestionSection(stl::transform<std::string>(hostname), q.rt, ::dns::RecordClass::kIN));
+
+                            size_t msg_len = 0;
+                            if (::dns::BufferResult::NoError != msg.encode(packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE, msg_len)) {
+                                continue;
+                            }
+
+                            // Send the same query to every destination server.
+                            for (const boost::asio::ip::udp::endpoint& ep : destinations) {
+                                boost::system::error_code ec;
+                                socket->send_to(boost::asio::buffer(packet, msg_len),
+                                    ppp::net::Ipep::V4ToV6(ep),
+                                    boost::asio::ip::udp::socket::message_end_of_record,
+                                    ec);
+                                if (!ec) {
+                                    any_sent = true;
+                                }
+                            }
+                        }
+
+                        if (!any_sent) {
+                            return false;
+                        }
+
+                        // Set the overall timeout for this request.
+                        std::weak_ptr<DNS_RequestContext> weak_self = weak_from_this();
+                        timeout_timer.expires_from_now(Timer::DurationTime(timeout_ms));
+                        timeout_timer.async_wait(
+                            [weak_self](const boost::system::error_code& ec) noexcept {
+                                std::shared_ptr<DNS_RequestContext> self = weak_self.lock();
+                                if (NULLPTR != self && ec != boost::asio::error::operation_aborted && !self->completed.load()) {
+                                    self->finish(true);
+                                }
+                            });
+
+                        // Start the asynchronous receive loop.
+                        start_receive_loop();
+                        return true;
+                    }
+
+                private:
+                    // -------------------------------------------------------------------------
+                    // Asynchronous receive loop – posts a new async_receive_from after each
+                    // successful receive, until the request is completed.
+                    // -------------------------------------------------------------------------
+                    void start_receive_loop() noexcept {
+                        if (NULLPTR == socket || completed.load()) {
+                            return;
+                        }
+
+                        auto self = shared_from_this();
+                        socket->async_receive_from(
+                            boost::asio::buffer(packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE), source,
+                            [self](boost::system::error_code ec, size_t len) noexcept {
+                                if (ec || self->completed.load()) {
+                                    return;
+                                }
+
+                                if (len > 0) {
+                                    self->on_response(self->packet, len);
+                                }
+
+                                // Continue the loop only if the request is still alive and the socket is open.
+                                if (!self->completed.load() && NULLPTR != self->socket && self->socket->is_open()) {
+                                    self->start_receive_loop();
+                                }
+                            });
+                    }
+                };
+
+                // -----------------------------------------------------------------------------
+                // Global configuration variables
+                // -----------------------------------------------------------------------------
+                IPEndPointVectorPtr                                                         servers;
+                bool                                                                        enabled = false;
+                int                                                                         ttl = PPP_DEFAULT_DNS_TTL;
+
+                // -----------------------------------------------------------------------------
+                // Initialisation function – must be called early in main().
+                // -----------------------------------------------------------------------------
+                void vdns_ctor() noexcept {
+                    boost::system::error_code ec;
+                    ttl = PPP_DEFAULT_DNS_TTL;
+
+                    auto dns_servers = make_shared_object<IPEndPointVector>();
+                    servers = dns_servers;
+
+                    dns_servers->emplace_back(boost::asio::ip::udp::endpoint(StringToAddress(PPP_PREFERRED_DNS_SERVER_1, ec), PPP_DNS_SYS_PORT));
+                    dns_servers->emplace_back(boost::asio::ip::udp::endpoint(StringToAddress(PPP_PREFERRED_DNS_SERVER_2, ec), PPP_DNS_SYS_PORT));
+                }
+
+                // -----------------------------------------------------------------------------
+                // Internal helper: normalise hostname and try to look it up in the cache.
+                // Returns true if the hostname is valid; out_node may be null or point to a cache node.
+                // -----------------------------------------------------------------------------
+                static bool DNS_ResolveFromCache(const char*    hostname,
+                    ppp::string&                                out_hostname,
+                    NamespaceRecordNodePtr&                     out_node) noexcept {
+                    if (NULLPTR == hostname || '\x0' == *hostname) {
+                        return false;
+                    }
+
+                    size_t len = strnlen(hostname, PPP_MAX_HOSTNAME_SIZE_LIMIT + 1);
+                    if (len >= PPP_MAX_HOSTNAME_SIZE_LIMIT) {
+                        return false;
+                    }
+
+                    out_hostname = ATrim(ppp::string(hostname, len));
+                    if (out_hostname.empty()) {
+                        return false;
+                    }
+
+                    out_hostname = ToLower(out_hostname);
+
+                    internal& c = internal::c();
+                    SynchronizedObjectScope lock(c.lockobj);
+                    if (Dictionary::TryGetValue(c.nr_hmap, out_hostname, out_node) && NULLPTR == out_node) {
+                        Dictionary::TryRemove(c.nr_hmap, out_hostname); // Clean up null entry
+                        out_node.reset();
+                    }
+                    return true;
+                }
+
+                // -----------------------------------------------------------------------------
+                // Internal callback dispatcher – respects IPv4 preference and returns either
+                // a single address or the whole set.
+                // -----------------------------------------------------------------------------
+                static void DNS_ResolveEventCallback(const ppp::unordered_set<boost::asio::ip::address>&    addresses,
+                    const ppp::function<void(const boost::asio::ip::address&)>&                             one_cb,
+                    const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>&         all_cb) noexcept {
+                    if (NULLPTR != one_cb) {
+                        if (addresses.empty()) {
+                            one_cb(boost::asio::ip::address_v4::any()); // No address -> return any address (0.0.0.0)
+                            return;
+                        }
+
+                        // Prefer IPv4 addresses.
+                        for (const boost::asio::ip::address& ip : addresses) {
+                            if (ip.is_v4()) {
+                                one_cb(ip);
                                 return;
                             }
                         }
-                        
-                        for (const boost::asio::ip::address& i : addresses) {
-                            if (i.is_v6()) {
-                                one_cb(i);
+
+                        // Fallback to IPv6.
+                        for (const boost::asio::ip::address& ip : addresses) {
+                            if (ip.is_v6()) {
+                                one_cb(ip);
                                 return;
                             }
                         }
                     }
-                    else {
+                    else if (NULLPTR != all_cb) {
                         all_cb(addresses);
                     }
                 }
 
-                static bool                                                                     DNS_ResolveFromCache(
-                    const char*                                                                     hostname, 
-                    ppp::string&                                                                    hostname_string) noexcept {
+                // -----------------------------------------------------------------------------
+                // Core asynchronous sending routine – creates a request context and starts transmission.
+                // -----------------------------------------------------------------------------
+                static bool DNS_SendToARequestAsync(boost::asio::io_context&    context,
+                    const ppp::string&                                          hostname,
+                    int                                                         timeout_ms,
+                    const ppp::vector<boost::asio::ip::udp::endpoint>&          destinations,
+                    const DNSRequestAsynchronousCallback&                       cb) noexcept {
 
-                    if (NULLPTR == hostname || *hostname == '\x0') {
+                    if (hostname.empty() || destinations.empty()) {
                         return false;
                     }
 
-                    std::size_t hostname_string_size = strnlen(hostname, PPP_MAX_HOSTNAME_SIZE_LIMIT + 1);
-                    if (hostname_string_size >= PPP_MAX_HOSTNAME_SIZE_LIMIT) {
+                    auto ctx = std::make_shared<DNS_RequestContext>(context);
+                    if (NULLPTR == ctx || NULLPTR == ctx->socket) {
                         return false;
                     }
 
-                    hostname_string = ATrim(ppp::string(hostname, hostname_string_size));
-                    if (hostname_string.empty()) {
-                        return false;
-                    }
-
-                    hostname_string = ATrim(hostname_string);
-                    if (hostname_string.empty()) {
-                        return false;
-                    }
-
-                    hostname_string = ToLower(hostname_string);
-                    return true;
+                    ctx->callback = cb;
+                    ctx->hostname = hostname;
+                    return ctx->send_requests(destinations, timeout_ms);
                 }
 
-                static bool                                                                     DNS_ResolveFromCache(
-                    const char*                                                                     hostname, 
-                    ppp::string&                                                                    hostname_string,
-                    NamespaceRecordNodePtr&                                                         node) noexcept {
-                    
-                    if (!DNS_ResolveFromCache(hostname, hostname_string)) {
-                        return false;
-                    }
-
-                    internal& c = internal::c();
-                    SynchronizedObjectScope syncobj(c.lockobj);
-
-                    if (Dictionary::TryGetValue(c.nr_hmap, hostname, node)) {
-                        if (NULLPTR == node) {
-                            Dictionary::TryRemove(c.nr_hmap, hostname);
-                        }
-                    }
-
-                    return true;
-                }
-
-                static bool                                                                     DNS_ResolveAsync(
-                    boost::asio::io_context&                                                        context, 
-                    const char*                                                                     hostname, 
-                    int                                                                             timeout, 
-                    const ppp::vector<boost::asio::ip::udp::endpoint>&                              destinations, 
-                    const ppp::function<void(const boost::asio::ip::address&)>&                     one_cb,
-                    const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>& all_cb) noexcept {
-
-                    ppp::string hostname_string;
-                    NamespaceRecordNodePtr node;
-                    if (!DNS_ResolveFromCache(hostname, hostname_string, node)) {
-                        return false;
-                    }
-
-                    if (NULLPTR != node) {
-                        boost::asio::post(context, 
-                            [node, one_cb, all_cb]() noexcept {
-                                ppp::unordered_set<boost::asio::ip::address>& addresses = node->Value.addresses;
-                                DNS_ResolveEventCallback(addresses, one_cb, all_cb);
-                            });
-                        return true;
-                    }
-
-                    boost::system::error_code ec;
-                    boost::asio::ip::address hostname_address = StringToAddress(hostname_string, ec);
-                    if (ec == boost::system::errc::success) {
-                        boost::asio::post(context, 
-                            [hostname_address, one_cb, all_cb]() noexcept {
-                                ppp::unordered_set<boost::asio::ip::address> addresses;
-                                addresses.emplace(hostname_address);
-
-                                DNS_ResolveEventCallback(addresses, one_cb, all_cb);
-                            });
-                        return true;
-                    }
-
-                    return DNS_SendToARequestAsync(context, hostname_string, timeout, destinations, 
-                        [one_cb, all_cb](bool successed, ppp::unordered_set<boost::asio::ip::address>& addresses) noexcept {
-                            DNS_ResolveEventCallback(addresses, one_cb, all_cb);
-                        });
-                }
-
-                bool                                                                            ResolveAsync(
-                    boost::asio::io_context&                                                        context, 
-                    const char*                                                                     hostname, 
-                    int                                                                             timeout, 
-                    const ppp::vector<boost::asio::ip::udp::endpoint>&                              destinations,
-                    const ppp::function<void(const boost::asio::ip::address&)>&                     cb) noexcept {
+                // -----------------------------------------------------------------------------
+                // Public API: ResolveAsync – returns the first IP address (IPv4 preferred).
+                // -----------------------------------------------------------------------------
+                bool ResolveAsync(boost::asio::io_context&                      context,
+                    const char*                                                 hostname,
+                    int                                                         timeout,
+                    const ppp::vector<boost::asio::ip::udp::endpoint>&          destinations,
+                    const ppp::function<void(const boost::asio::ip::address&)>& cb) noexcept {
 
                     if (NULLPTR == cb) {
                         return false;
                     }
 
-                    return DNS_ResolveAsync(context, hostname, timeout, destinations, cb, NULLPTR);
+                    ppp::string hostname_str;
+                    NamespaceRecordNodePtr node;
+                    if (!DNS_ResolveFromCache(hostname, hostname_str, node)) {
+                        return false;
+                    }
+
+                    if (NULLPTR != node) {
+                        // Cache hit – return immediately via post.
+                        boost::asio::post(context,
+                            [node, cb]() noexcept {
+                                ppp::unordered_set<boost::asio::ip::address> addrs;
+                                node->Value.CopyAddresses(addrs);
+                                DNS_ResolveEventCallback(addrs, cb, NULLPTR);
+                            });
+                        return true;
+                    }
+
+                    // Check whether the input is already a literal IP address.
+                    boost::system::error_code ec;
+                    boost::asio::ip::address addr = StringToAddress(hostname_str, ec);
+                    if (!ec) {
+                        boost::asio::post(context,
+                            [addr, cb]() noexcept {
+                                ppp::unordered_set<boost::asio::ip::address> addrs = { addr };
+                                DNS_ResolveEventCallback(addrs, cb, NULLPTR);
+                            });
+                        return true;
+                    }
+
+                    // Perform network resolution.
+                    int timeout_ms = (timeout > 0) ? timeout : PPP_RESOLVE_DNS_TIMEOUT;
+                    return DNS_SendToARequestAsync(context, hostname_str, timeout_ms, destinations,
+                        [cb](bool, ppp::unordered_set<boost::asio::ip::address>& addrs) noexcept {
+                            DNS_ResolveEventCallback(addrs, cb, NULLPTR);
+                        });
                 }
 
-                bool                                                                            ResolveAsync2(
-                    boost::asio::io_context&                                                        context, 
-                    const char*                                                                     hostname, 
-                    int                                                                             timeout, 
+                // -----------------------------------------------------------------------------
+                // Public API: ResolveAsync2 – returns all IP addresses.
+                // -----------------------------------------------------------------------------
+                bool ResolveAsync2(boost::asio::io_context&                                         context,
+                    const char*                                                                     hostname,
+                    int                                                                             timeout,
                     const ppp::vector<boost::asio::ip::udp::endpoint>&                              destinations,
                     const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>& cb) noexcept {
 
@@ -563,131 +772,169 @@ namespace ppp {
                         return false;
                     }
 
-                    return DNS_ResolveAsync(context, hostname, timeout, destinations, NULLPTR, cb);
+                    ppp::string hostname_str;
+                    NamespaceRecordNodePtr node;
+                    if (!DNS_ResolveFromCache(hostname, hostname_str, node)) {
+                        return false;
+                    }
+                    
+                    if (NULLPTR != node) {
+                        boost::asio::post(context, 
+                            [node, cb]() noexcept {
+                                ppp::unordered_set<boost::asio::ip::address> addrs;
+                                node->Value.CopyAddresses(addrs);
+                                DNS_ResolveEventCallback(addrs, NULLPTR, cb);
+                            });
+                        return true;
+                    }
+
+                    boost::system::error_code ec;
+                    boost::asio::ip::address addr = StringToAddress(hostname_str, ec);
+                    if (!ec) {
+                        boost::asio::post(context, 
+                            [addr, cb]() noexcept {
+                                ppp::unordered_set<boost::asio::ip::address> addrs = { addr };
+                                DNS_ResolveEventCallback(addrs, NULLPTR, cb);
+                            });
+                        return true;
+                    }
+
+                    int timeout_ms = (timeout > 0) ? timeout : PPP_RESOLVE_DNS_TIMEOUT;
+                    return DNS_SendToARequestAsync(context, hostname_str, timeout_ms, destinations,
+                        [cb](bool, ppp::unordered_set<boost::asio::ip::address>& addrs) noexcept {
+                            DNS_ResolveEventCallback(addrs, NULLPTR, cb);
+                        });
                 }
 
-                bool                                                                            QueryCache(const char* hostname, boost::asio::ip::address& address) noexcept {
-                    ppp::string hostname_string;
-                    address = boost::asio::ip::address_v4::any();
-
+                // -----------------------------------------------------------------------------
+                // Public API: QueryCache – retrieve a single cached IP address (IPv4 preferred).
+                // -----------------------------------------------------------------------------
+                bool QueryCache(const char* hostname, boost::asio::ip::address& address) noexcept {
+                    ppp::string hostname_str;
                     NamespaceRecordNodePtr node;
-                    if (!DNS_ResolveFromCache(hostname, hostname_string, node)) {
-                        return false; 
+                    if (!DNS_ResolveFromCache(hostname, hostname_str, node) || NULLPTR == node) {
+                        return false;
                     }
 
-                    if (NULLPTR == node) {
-                        return false; 
-                    }
+                    ppp::unordered_set<boost::asio::ip::address> addrs;
+                    node->Value.CopyAddresses(addrs);
 
-                    DNS_ResolveEventCallback(node->Value.addresses, 
-                        [&address](const boost::asio::ip::address& i) noexcept {
-                            address = i;
-                        }, NULLPTR);
-
+                    DNS_ResolveEventCallback(addrs,
+                        [&address](const boost::asio::ip::address& ip) noexcept { 
+                            address = ip; 
+                        },
+                        NULLPTR);
                     return !IPEndPoint::IsInvalid(address);
                 }
 
-                ppp::string                                                                     QueryCache2(const char* hostname, ::dns::Message& messsage, AddressFamily af) noexcept {
-                    bool in4 = af == AddressFamily::kA;
-                    bool in6 = af == AddressFamily::kAAAA;
-                    if (!in4 && !in6) {
-                        return ppp::string(); 
+                // -----------------------------------------------------------------------------
+                // Public API: QueryCache2 – build a DNS response message from cached records.
+                // -----------------------------------------------------------------------------
+                ppp::string QueryCache2(const char* hostname, ::dns::Message& message, AddressFamily af) noexcept {
+                    bool want_v4 = (AddressFamily::kA == af);
+                    bool want_v6 = (AddressFamily::kAAAA == af);
+                    if (!want_v4 && !want_v6) {
+                        return ppp::string();
                     }
 
-                    ppp::string hostname_string;
+                    ppp::string hostname_str;
                     NamespaceRecordNodePtr node;
-                    if (!DNS_ResolveFromCache(hostname, hostname_string, node)) {
-                        return ppp::string(); 
-                    }
-
-                    if (NULLPTR == node) {
-                        return ppp::string(); 
+                    if (!DNS_ResolveFromCache(hostname, hostname_str, node) || NULLPTR == node) {
+                        return ppp::string();
                     }
 
                     NamespaceRecord& record = node->Value;
-                    if (in4 && !record.ipv4) {
-                        return ppp::string();  
-                    }
-
-                    if (in6 && !record.ipv6) {
-                        return ppp::string();  
-                    }
-
                     bool any = false;
-                    ppp::unordered_set<boost::asio::ip::address>& addresses = record.addresses;
-
-                    for (boost::asio::ip::address ip : addresses) {
-                        if (in4 && ip.is_v4()) {
-                            std::shared_ptr<::dns::RDataA> rd_a = make_shared_object<::dns::RDataA>();
-                            if (NULLPTR == rd_a) {
-                                break;
-                            }
-                            else {
-                                rd_a->setAddress((uint8_t*)ip.to_v4().to_bytes().data());
-                            }
-
-                            ::dns::ResourceRecord rr;
-                            rr.mName = hostname_string;
-                            rr.mClass = ::dns::RecordClass::kIN;
-                            rr.mType = ::dns::RecordType::kA;
-                            rr.setRData(rd_a);
-
-                            any = true;
-                            messsage.answers.emplace_back(rr);
+                    {
+                        SynchronizedObjectScope lock(record.lockobj);
+                        // Quick check inside lock to avoid reading stale flags
+                        if ((want_v4 && !record.ipv4) || (want_v6 && !record.ipv6)) {
+                            return ppp::string();
                         }
-                        elif(in6 && ip.is_v6()) {
-                            std::shared_ptr<::dns::RDataAAAA> rd_aaaa = make_shared_object<::dns::RDataAAAA>();
-                            if (NULLPTR == rd_aaaa) {
-                                break;
-                            }
-                            else {
-                                rd_aaaa->setAddress((uint8_t*)ip.to_v6().to_bytes().data());
-                            }
 
-                            ::dns::ResourceRecord rr;
-                            rr.mName = hostname_string;
-                            rr.mClass = ::dns::RecordClass::kIN;
-                            rr.mType = ::dns::RecordType::kAAAA;
-                            rr.setRData(rd_aaaa);
+                        for (const boost::asio::ip::address& ip : record.addresses) {
+                            if (want_v4 && ip.is_v4()) {
+                                auto rd_a = make_shared_object<::dns::RDataA>();
+                                if (NULLPTR == rd_a) {
+                                    break;
+                                }
 
-                            any = true;
-                            messsage.answers.emplace_back(rr);
+                                rd_a->setAddress(const_cast<uint8_t*>(ip.to_v4().to_bytes().data()));
+
+                                ::dns::ResourceRecord rr;
+                                rr.mName = hostname_str;
+                                rr.mClass = ::dns::RecordClass::kIN;
+                                rr.mType = ::dns::RecordType::kA;
+                                rr.setRData(rd_a);
+
+                                try {
+                                    message.answers.emplace_back(rr);
+                                }
+                                catch (const std::bad_alloc&) {
+                                    break;
+                                }
+
+                                any = true;
+                            }
+                            else if (want_v6 && ip.is_v6()) {
+                                auto rd_aaaa = make_shared_object<::dns::RDataAAAA>();
+                                if (NULLPTR == rd_aaaa) {
+                                    break;
+                                }
+
+                                rd_aaaa->setAddress(const_cast<uint8_t*>(ip.to_v6().to_bytes().data()));
+
+                                ::dns::ResourceRecord rr;
+                                rr.mName = hostname_str;
+                                rr.mClass = ::dns::RecordClass::kIN;
+                                rr.mType = ::dns::RecordType::kAAAA;
+                                rr.setRData(rd_aaaa);
+
+                                try {
+                                    message.answers.emplace_back(rr);
+                                }
+                                catch (const std::bad_alloc&) {
+                                    break;
+                                }
+
+                                any = true;
+                            }
                         }
                     }
 
-                    messsage.mQr = 1;
-                    messsage.mRA = 1;
-                    messsage.mRCode = (uint16_t)(any ? ::dns::ResponseCode::kNOERROR : ::dns::ResponseCode::kNXDOMAIN); /* No such name. */
-                    return hostname_string;
+                    message.mQr = 1;
+                    message.mRA = 1;
+                    message.mRCode = any ? static_cast<uint16_t>(::dns::ResponseCode::kNOERROR)
+                        : static_cast<uint16_t>(::dns::ResponseCode::kNXDOMAIN);
+                    return hostname_str;
                 }
 
-                void                                                                            UpdateAsync() noexcept {
+                // -----------------------------------------------------------------------------
+                // Public API: UpdateAsync – remove expired cache entries.
+                // Called periodically (e.g., every minute) from a maintenance thread.
+                // -----------------------------------------------------------------------------
+                void UpdateAsync() noexcept {
+                    uint64_t now = Executors::GetTickCount();
                     internal& c = internal::c();
+                    
+                    SynchronizedObjectScope lock(c.lockobj);
+                    NamespaceRecordNodePtr node = c.nr_list.First();
 
-                    NamespaceRecordNodePtr node;
-                    SynchronizedObjectScope scope(c.lockobj);
-
-                    node = c.nr_list.First();
-                    if (NULLPTR != node) {
-                        uint64_t now = Executors::GetTickCount();
-                        do {
-                            NamespaceRecord& record = node->Value;
-                            if (now < record.expired_time) {
-                                break;
-                            }
-
-                            if (!Dictionary::TryRemove(c.nr_hmap, record.hostname)) {
-                                break;
-                            }
-
-                            NamespaceRecordNodePtr next = node->Next;
+                    while (NULLPTR != node) {
+                        NamespaceRecordNodePtr next = node->Next;
+                        if (now >= node->Value.expired_time) {
+                            Dictionary::TryRemove(c.nr_hmap, node->Value.hostname);
                             c.nr_list.Remove(node);
-                            node = next;
-                        } while (NULLPTR != node);
+                        }
+
+                        node = next;
                     }
                 }
-            
-                bool                                                                            AddCache(const Byte* packet, int packet_size) noexcept {
+
+                // -----------------------------------------------------------------------------
+                // Public API: AddCache – manually insert a DNS response packet into the cache.
+                // -----------------------------------------------------------------------------
+                bool AddCache(const Byte* packet, int packet_size) noexcept {
                     if (NULLPTR == packet || packet_size < 1) {
                         return false;
                     }
@@ -697,118 +944,116 @@ namespace ppp {
                     bool ipv4_or_ipv6 = false;
                     ppp::unordered_set<boost::asio::ip::address> addresses;
 
-                    if (!DNS_ProcessAResponseAddresses((Byte*)packet, packet_size, addresses, ack, &hostname, &ipv4_or_ipv6)) {
+                    // No expected hostname verification for manual cache addition – trust the packet.
+                    if (!DNS_ProcessAResponseAddresses(const_cast<Byte*>(packet), packet_size,
+                        addresses, ack, NULLPTR, &hostname, &ipv4_or_ipv6)) {
                         return false;
                     }
 
-                    if (hostname.empty()) {
+                    if (hostname.empty() || IsReverseQuery(hostname.data())) {
                         return false;
                     }
 
-                    NamespaceRecordNodePtr node;
-                    if (!DNS_ResolveFromCache(hostname.data(), hostname)) {
-                        return false;
-                    }
-                    
                     int TTL = vdns::ttl;
                     if (TTL < 1) {
                         TTL = PPP_DEFAULT_DNS_TTL;
                     }
 
+                    uint64_t expire_time = Executors::GetTickCount() + static_cast<uint64_t>(TTL) * 1000;
+
                     internal& c = internal::c();
-                    TTL *= 1000;    
+                    SynchronizedObjectScope lock(c.lockobj);
 
-                    SynchronizedObjectScope syncobj(c.lockobj);
-                    if (Dictionary::TryGetValue(c.nr_hmap, hostname, node)) {
-                        if (NULLPTR == node) {
-                            Dictionary::TryRemove(c.nr_hmap, hostname);
-                        }
-                        else {
-                            NamespaceRecord& nr = node->Value;
+                    NamespaceRecordNodePtr node;
+                    if (Dictionary::TryGetValue(c.nr_hmap, hostname, node) && NULLPTR != node) {
+                        // Existing entry – merge new addresses and refresh expiry.
+                        NamespaceRecord& nr = node->Value;
+                        {
+                            SynchronizedObjectScope nr_lock(nr.lockobj);
                             for (const boost::asio::ip::address& ip : addresses) {
-                                nr.Emplace(ip);
-                            }
-
-                            c.nr_list.Remove(node);
-                            Dictionary::TryRemove(c.nr_hmap, hostname);
-
-                            nr.expired_time = Executors::GetTickCount() + TTL;
-                            if (Dictionary::TryAdd(c.nr_hmap, hostname, node)) {
-                                if (c.nr_list.AddLast(node)) {
-                                    if (ipv4_or_ipv6) 
-                                        nr.ipv4 = true;
-                                    else 
-                                        nr.ipv6 = true;
-                                    return true;
+                                try {
+                                    nr.addresses.emplace(ip);
                                 }
+                                catch (const std::bad_alloc&) {
+                                    // Ignore memory allocation failure for this address
+                                }
+                            }
 
-                                Dictionary::TryRemove(c.nr_hmap, hostname);
+                            nr.expired_time = expire_time;
+                            if (ipv4_or_ipv6) {
+                                nr.ipv4 = true;
+                            }
+                            else {
+                                nr.ipv6 = true;
                             }
                         }
+
+                        // Move to the tail of the LRU list.
+                        c.nr_list.Remove(node);
+                        c.nr_list.AddLast(node);
+                        return true;
                     }
-
-                    node = make_shared_object<NamespaceRecordNode>();
-                    if (NULLPTR == node) {
-                        return false;
-                    }
-
-                    NamespaceRecord& record = node->Value;
-                    record.hostname         = hostname;
-                    record.addresses        = std::move(addresses);
-                    record.expired_time     = Executors::GetTickCount() + TTL;
-
-                    if (ipv4_or_ipv6) 
-                        record.ipv4 = true;
-                    else 
-                        record.ipv6 = true;
-
-                    if (Dictionary::TryAdd(c.nr_hmap, hostname, node)) {
-                        if (c.nr_list.AddLast(node)) {
-                            return true;
+                    else {
+                        // Create a new entry.
+                        node = make_shared_object<NamespaceRecordNode>();
+                        if (NULLPTR == node) {
+                            return false;
                         }
 
-                        Dictionary::TryRemove(c.nr_hmap, hostname);
-                    }
+                        NamespaceRecord& nr = node->Value;
+                        nr.hostname = hostname;
+                        try {
+                            nr.addresses = std::move(addresses);
+                        }
+                        catch (const std::bad_alloc&) {
+                            return false;
+                        }
 
-                    return false;
+                        nr.expired_time = expire_time;
+                        nr.ipv4 = ipv4_or_ipv6;
+                        nr.ipv6 = !ipv4_or_ipv6;
+                        if (!Dictionary::TryAdd(c.nr_hmap, hostname, node)) {
+                            return false;
+                        }
+
+                        c.nr_list.AddLast(node);
+                        return true;
+                    }
                 }
-            
-                bool                                                                            IsReverseQuery(const char* hostname) noexcept {
+
+                // -----------------------------------------------------------------------------
+                // Public API: IsReverseQuery – detect PTR queries for .arpa domains.
+                // -----------------------------------------------------------------------------
+                bool IsReverseQuery(const char* hostname) noexcept {
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV6[] = ".ip6.arpa";
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV4[] = ".in-addr.arpa";
-
-                    if (NULLPTR == hostname || *hostname == '\x0') {
+                    if (NULLPTR == hostname || '\x0' == *hostname) {
                         return false;
                     }
 
-                    std::size_t hostname_string_size = strnlen(hostname, PPP_MAX_HOSTNAME_SIZE_LIMIT + 1);
-                    if (hostname_string_size >= PPP_MAX_HOSTNAME_SIZE_LIMIT) {
+                    size_t len = strnlen(hostname, PPP_MAX_HOSTNAME_SIZE_LIMIT + 1);
+                    if (len >= PPP_MAX_HOSTNAME_SIZE_LIMIT) {
                         return false;
                     }
 
-                    if (hostname_string_size >= sizeof(PPP_DNS_ARPA_QEURY_IPV6)) {
-                        const char* p = hostname + ((hostname_string_size - sizeof(PPP_DNS_ARPA_QEURY_IPV6)) + 1);
-                        if (strcmp(p, PPP_DNS_ARPA_QEURY_IPV6) == 0) {
-                            return true; 
+                    if (len >= sizeof(PPP_DNS_ARPA_QEURY_IPV6)) {
+                        const char* p = hostname + (len - sizeof(PPP_DNS_ARPA_QEURY_IPV6) + 1);
+                        if (0 == strcmp(p, PPP_DNS_ARPA_QEURY_IPV6)) {
+                            return true;
                         }
                     }
 
-                    if (hostname_string_size >= sizeof(PPP_DNS_ARPA_QEURY_IPV4)) {
-                        const char* p = hostname + ((hostname_string_size - sizeof(PPP_DNS_ARPA_QEURY_IPV4)) + 1);
-                        if (strcmp(p, PPP_DNS_ARPA_QEURY_IPV4) == 0) {
-                            return true; 
+                    if (len >= sizeof(PPP_DNS_ARPA_QEURY_IPV4)) {
+                        const char* p = hostname + (len - sizeof(PPP_DNS_ARPA_QEURY_IPV4) + 1);
+                        if (0 == strcmp(p, PPP_DNS_ARPA_QEURY_IPV4)) {
+                            return true;
                         }
                     }
 
                     return false;
                 }
 
-                bool NamespaceRecord::Emplace(const boost::asio::ip::address& ip) noexcept {
-                    SynchronizedObjectScope scope(lockobj);
-                    auto r = addresses.emplace(ip);
-                    return r.second;
-                }
-            }
-        }
-    }
-}
+            } // namespace vdns
+        } // namespace asio
+    } // namespace net
+} // namespace ppp

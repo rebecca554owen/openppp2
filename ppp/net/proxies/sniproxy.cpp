@@ -1,9 +1,33 @@
+/**
+ * @file sniproxy.cpp
+ * @brief Implementation of SNI proxy.
+ */
+
 #include <ppp/net/proxies/sniproxy.h>
 #include <ppp/net/asio/asio.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
+
+#ifdef _LINUX
+# include <netinet/tcp.h>
+#endif
+
+// TCP_FASTOPEN value (Linux 23, Windows 15 but we force 23 for consistency)
+#ifndef TCP_FASTOPEN
+# define TCP_FASTOPEN 23
+#endif
+
+// The following macros are expected to be defined in the precompiled header:
+// PPP_HTTP_SYS_PORT  (default 80)
+// PPP_HTTPS_SYS_PORT (default 443)
+#ifndef PPP_HTTP_SYS_PORT
+# define PPP_HTTP_SYS_PORT 80
+#endif
+#ifndef PPP_HTTPS_SYS_PORT
+# define PPP_HTTPS_SYS_PORT 443
+#endif
 
 using ppp::net::Socket;
 using ppp::threading::Timer;
@@ -12,36 +36,50 @@ using ppp::threading::Executors;
 namespace ppp {
     namespace net {
         namespace proxies {
-            sniproxy::sniproxy(int cdn, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept
+
+            // -----------------------------------------------------------------------------
+            // Constructor / Destructor
+            // -----------------------------------------------------------------------------
+
+            sniproxy::sniproxy(int                                              cdn,
+                const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
+                const std::shared_ptr<boost::asio::io_context>&                 context,
+                const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket) noexcept
                 : cdn_(cdn)
                 , configuration_(configuration)
                 , context_(context)
                 , local_socket_(socket)
                 , remote_socket_(*context)
                 , last_(Executors::GetTickCount()) {
-
+                // Tune client socket
                 Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo);
-                Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration_->tcp.cwnd, configuration_->tcp.rwnd);
+                Socket::SetWindowSizeIfNotZero(socket->native_handle(),
+                    configuration_->tcp.cwnd,
+                    configuration_->tcp.rwnd);
             }
 
             sniproxy::~sniproxy() noexcept {
                 close();
             }
 
+            // -----------------------------------------------------------------------------
+            // Static helpers
+            // -----------------------------------------------------------------------------
+
             bool sniproxy::be_http(const void* p) noexcept {
-                char* data = (char*)p;
-                if (!data) {
+                const char* data = static_cast<const char*>(p);
+                if (NULLPTR == data) {
                     return false;
                 }
-                return
-                    strncasecmp(data, "GET ", 4) == 0 ||
-                    strncasecmp(data, "HEAD ", 5) == 0 ||
-                    strncasecmp(data, "POST ", 5) == 0 ||
-                    strncasecmp(data, "PUT ", 4) == 0 ||
-                    strncasecmp(data, "DELETE ", 7) == 0 ||
-                    strncasecmp(data, "CONNECT ", 8) == 0 ||
-                    strncasecmp(data, "TRACE ", 6) == 0 ||
-                    strncasecmp(data, "PATCH ", 6) == 0;
+                
+                return (0 == strncasecmp(data, "GET ", 4)) ||
+                    (0 == strncasecmp(data, "HEAD ", 5)) ||
+                    (0 == strncasecmp(data, "POST ", 5)) ||
+                    (0 == strncasecmp(data, "PUT ", 4)) ||
+                    (0 == strncasecmp(data, "DELETE ", 7)) ||
+                    (0 == strncasecmp(data, "CONNECT ", 8)) ||
+                    (0 == strncasecmp(data, "TRACE ", 6)) ||
+                    (0 == strncasecmp(data, "PATCH ", 6));
             }
 
             bool sniproxy::be_host(ppp::string host, ppp::string domain) noexcept {
@@ -49,84 +87,285 @@ namespace ppp {
                     return false;
                 }
 
+                // Normalize to lower case for case-insensitive comparison
                 domain = ToLower(domain);
                 host = ToLower(host);
-
-                // Direct hit
-                if (strcmp(domain.data(), host.data()) == 0) {
+                
+                // Exact match
+                if (host == domain) {
                     return true;
                 }
 
-                // Segment hit
-                ppp::vector<ppp::string> lables;
-                if (Tokenize<ppp::string>(domain, lables, ".") < 3) {
-                    return false;
-                }
-
-                size_t lables_count = lables.size();
-                for (size_t i = 0; i < lables_count; i++) {
-                    const ppp::string& label = lables[i];
-                    if (label.empty()) {
-                        return false;
-                    }
-                }
-
-                for (size_t i = 1, l = lables_count - 1; i < l; i++) {
-                    ppp::string next;
-                    for (size_t j = i; j < lables_count; j++) {
-                        if (next.empty()) {
-                            next += lables[j];
-                        }
-                        else {
-                            next += "." + lables[j];
-                        }
-                    }
-
-                    if (strcmp(next.data(), host.data()) == 0) {
+                // Subdomain match: host must end with ".domain"
+                // Example: "sub.example.com" matches "example.com"
+                if (host.length() > domain.length()) {
+                    // Check if the host ends with '.' + domain
+                    size_t offset = host.length() - domain.length();
+                    if (host[offset - 1] == '.' && host.compare(offset, domain.length(), domain) == 0) {
                         return true;
                     }
                 }
                 return false;
             }
 
+            // -----------------------------------------------------------------------------
+            // TLS record helpers
+            // -----------------------------------------------------------------------------
+
+            UInt16 sniproxy::fetch_uint16(Byte*& data) noexcept {
+                UInt16 r = (static_cast<UInt16>(data[0]) << 8) | static_cast<UInt16>(data[1]);
+                data += 2;
+                return r;
+            }
+
+            int sniproxy::fetch_length(Byte*& data) noexcept {
+                int r = (static_cast<int>(data[0]) << 16) |
+                    (static_cast<int>(data[1]) << 8) |
+                    static_cast<int>(data[2]);
+                data += 3;
+                return r;
+            }
+
+            ppp::string sniproxy::fetch_sniaddr(size_t tls_payload) noexcept {
+                Byte* data = reinterpret_cast<Byte*>(local_socket_buf_);
+                Byte* end = data + tls_payload;
+
+                // Ensure at least one byte for handshake type
+                if (data >= end) {
+                    return "";
+                }
+
+                // Handshake type must be Client Hello (0x01)
+                if (0x01 != *data++) {
+                    return "";
+                }
+
+                // Handshake length (3 bytes)
+                if ((data + 3) > end) {
+                    return "";
+                }
+
+                int handshake_len = fetch_length(data);
+                if ((data + handshake_len) > end) {
+                    return "";
+                }
+
+                // Skip Version (2 bytes)
+                if ((data + 2) > end) {
+                    return "";
+                }
+                data += 2;
+
+                // Skip Random (32 bytes)
+                if ((data + 32) > end) {
+                    return "";
+                }
+                data += 32;
+
+                // Session ID length and data
+                if (data >= end) {
+                    return "";
+                }
+
+                Byte session_id_len = *data++;
+                if ((data + session_id_len) > end) {
+                    return "";
+                }
+                data += session_id_len;
+
+                // Cipher Suites
+                if ((data + 2) > end) {
+                    return "";
+                }
+
+                int cipher_len = fetch_uint16(data);
+                if ((data + cipher_len) > end) {
+                    return "";
+                }
+                data += cipher_len;
+
+                // Compression Methods
+                if (data >= end) {
+                    return "";
+                }
+
+                int comp_len = *data++;
+                if ((data + comp_len) > end) {
+                    return "";
+                }
+                data += comp_len;
+
+                // Extensions
+                if ((data + 2) > end) {
+                    return "";
+                }
+
+                int extensions_len = fetch_uint16(data);
+                if ((data + extensions_len) > end) {
+                    return "";
+                }
+
+                Byte* extensions_end = data + extensions_len;
+                while (data < extensions_end) {
+                    // Extension type and length
+                    if ((data + 4) > extensions_end) {
+                        break;
+                    }
+
+                    int ext_type = fetch_uint16(data);
+                    int ext_len = fetch_uint16(data);
+                    if ((data + ext_len) > extensions_end) {
+                        break;
+                    }
+
+                    if (0x0000 == ext_type) { // Server Name Indication
+                        if ((data + 2) > extensions_end) {
+                            break;
+                        }
+
+                        int server_list_len = fetch_uint16(data);
+                        Byte* list_end = data + server_list_len;
+                        if (list_end > extensions_end) {
+                            break;
+                        }
+
+                        while (data < list_end) {
+                            // Name type (0 = host_name)
+                            if (data >= list_end) {
+                                break;
+                            }
+
+                            int name_type = *data++;
+                            if (0x00 != name_type) {
+                                // Not host_name: skip name length + name data
+                                if ((data + 2) > list_end) {
+                                    break;
+                                }
+
+                                int name_len = fetch_uint16(data);
+                                if ((data + name_len) > list_end) {
+                                    break;
+                                }
+
+                                data += name_len;
+                                continue;
+                            }
+
+                            // host_name entry
+                            if ((data + 2) > list_end) {
+                                break;
+                            }
+
+                            int name_len = fetch_uint16(data);
+                            if ((data + name_len) > list_end) {
+                                break;
+                            }
+
+                            return ppp::string(reinterpret_cast<char*>(data), 0, name_len);
+                        }
+                        break; // SNI extension processed
+                    }
+                    else {
+                        // Unknown extension: skip
+                        data += ext_len;
+                    }
+                }
+                return "";
+            }
+
+            // -----------------------------------------------------------------------------
+            // TLS handshake
+            // -----------------------------------------------------------------------------
+
             bool sniproxy::do_tlsvd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
-                struct tls_hdr* hdr = (struct tls_hdr*)local_socket_buf_;
-                if (hdr->Content_Type != 0x16) { // Handshake
-                    return false;
+                tls_hdr* hdr = reinterpret_cast<tls_hdr*>(local_socket_buf_);
+                if (0x16 != hdr->Content_Type) {
+                    return false; // Not a handshake record
                 }
 
                 size_t tls_payload = ntohs(hdr->Length);
-                if (!tls_payload) {
+                if ((0 == tls_payload) || (tls_payload > (FORWARD_MSS - sizeof(tls_hdr)))) {
                     return false;
                 }
 
-                if (!ppp::coroutines::asio::async_read(*local_socket_, boost::asio::buffer(local_socket_buf_, tls_payload), y)) {
+                // Read the TLS payload (Client Hello)
+                if (!ppp::coroutines::asio::async_read(*local_socket_,
+                    boost::asio::buffer(local_socket_buf_, tls_payload), y)) {
                     return false;
                 }
-                else {
-                    messages_.Write(local_socket_buf_, 0, (int)tls_payload);
+
+                // Store the payload for later forwarding
+                if (!messages_.Write(local_socket_buf_, 0, static_cast<int>(tls_payload))) {
+                    return false; // Memory allocation failure
                 }
 
-                ppp::string hostname_ = fetch_sniaddr(tls_payload);
-                return do_connect_and_forward_to_host(y, hostname_, configuration_->websocket.listen.wss, PPP_HTTPS_SYS_PORT, messages_);
+                ppp::string hostname = fetch_sniaddr(tls_payload);
+                if (hostname.empty()) {
+                    return false;
+                }
+
+                return do_connect_and_forward_to_host(y, hostname,
+                    configuration_->websocket.listen.wss,
+                    PPP_HTTPS_SYS_PORT,
+                    messages_);
             }
 
+            // -----------------------------------------------------------------------------
+            // HTTP handshake
+            // -----------------------------------------------------------------------------
+
             bool sniproxy::do_httpd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
-                if (!do_read_http_request_headers(y, messages_)) {
+                auto response = std::make_shared<boost::asio::streambuf>();
+                if (NULLPTR == response) {
                     return false;
                 }
 
-                int port_;
-                ppp::string hostname_;
-                if (!do_httpd_handshake_host_trim(messages_, hostname_, port_)) {
+                // Copy any already-read data (first 5 bytes) into the streambuf
+                int existing = messages_.GetPosition();
+                if (existing > 0) {
+                    std::ostream os(response.get());
+                    os.write(reinterpret_cast<const char*>(messages_.GetBuffer().get()), existing);
+                }
+
+                // Read until "\r\n\r\n" (end of HTTP headers)
+                boost::system::error_code ec;
+                std::size_t length = 0;
+                boost::asio::async_read_until(*local_socket_, *response, "\r\n\r\n",
+                    [&y, &ec, &length](const boost::system::error_code& e, std::size_t sz) noexcept {
+                        ec = e;
+                        length = sz;
+                        y.R();
+                    });
+                y.Suspend();
+                
+                if (ec || (0 == length)) {
                     return false;
                 }
 
-                return do_connect_and_forward_to_host(y, hostname_, do_forward_websocket_port(), port_, messages_);
+                // Store all data read so far (headers + possibly partial body) into messages_
+                boost::asio::const_buffers_1 buf = response->data();
+                if (NULLPTR == buf.data()) {
+                    return false;
+                }
+
+                if (!messages_.Write(buf.data(), 0, static_cast<int>(buf.size()))) {
+                    return false; // Memory allocation failure
+                }
+
+                int port = 0;
+                ppp::string hostname;
+                if (!do_httpd_handshake_host_trim(messages_, hostname, port)) {
+                    return false;
+                }
+
+                return do_connect_and_forward_to_host(y, hostname,
+                    do_forward_websocket_port(),
+                    port,
+                    messages_);
             }
 
             bool sniproxy::do_httpd_handshake_host_trim(MemoryStream& messages_, ppp::string& host, int& port) noexcept {
-                port = PPP_HTTP_SYS_PORT;
+                port = PPP_HTTP_SYS_PORT; // default HTTP port
                 host = do_httpd_handshake_host(messages_);
                 if (host.empty()) {
                     return false;
@@ -137,18 +376,39 @@ namespace ppp {
                     return false;
                 }
 
-                std::size_t index = host.find(":");
-                if (index == ppp::string::npos) {
+                // Support IPv6 address format [::1]:8080
+                if ('[' == host.front()) {
+                    size_t closing = host.find(']');
+                    if (ppp::string::npos == closing) {
+                        return false;
+                    }
+
+                    if ((closing + 1) < host.size() && (':' == host[closing + 1])) {
+                        ppp::string port_str = host.substr(closing + 2);
+                        if (!port_str.empty()) {
+                            port = atoi(port_str.data());
+                            if ((port <= IPEndPoint::MinPort) || (port > IPEndPoint::MaxPort)) {
+                                return false;
+                            }
+                        }
+
+                        host = host.substr(1, closing - 1);
+                        return true;
+                    }
+
+                    host = host.substr(1, closing - 1);
                     return true;
                 }
 
-                ppp::string hoststr = host.substr(0, index);
-                if (hoststr.empty()) {
-                    return false;
+                // IPv4 / domain name
+                size_t idx = host.find(':');
+                if (ppp::string::npos == idx) {
+                    return true; // no port specified
                 }
 
-                ppp::string portstr = host.substr(index + 1);
-                if (portstr.empty()) {
+                ppp::string hoststr = host.substr(0, idx);
+                ppp::string portstr = host.substr(idx + 1);
+                if (hoststr.empty() || portstr.empty()) {
                     return false;
                 }
 
@@ -158,7 +418,7 @@ namespace ppp {
                 }
 
                 port = atoi(portstr.data());
-                if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
+                if ((port <= IPEndPoint::MinPort) || (port > IPEndPoint::MaxPort)) {
                     return false;
                 }
 
@@ -167,416 +427,395 @@ namespace ppp {
             }
 
             ppp::string sniproxy::do_httpd_handshake_host(MemoryStream& messages_) noexcept {
-                int headers_size = messages_.GetPosition();
-                if (headers_size < 4) {
+                int size = messages_.GetPosition();
+                if (size < 4) {
                     return "";
                 }
 
+                // Locate the end of headers: "\r\n\r\n"
+                const char* data = reinterpret_cast<const char*>(messages_.GetBuffer().get());
+                const char* end = data + size;
+                const char* headers_end = nullptr;
+                
+                // Find the first occurrence of "\r\n\r\n"
+                for (const char* p = data; p + 3 < end; ++p) {
+                    if (p[0] == '\r' && p[1] == '\n' && p[2] == '\r' && p[3] == '\n') {
+                        headers_end = p + 4; // point to the start of body (or end)
+                        break;
+                    }
+                }
+                
+                if (!headers_end) {
+                    return ""; // Incomplete headers
+                }
+                
+                // Extract only the headers part (up to headers_end)
+                size_t headers_len = headers_end - data;
+                ppp::string headers_data(data, headers_len);
+                
+                // Split headers by CRLF
                 ppp::vector<ppp::string> headers;
-                if (Tokenize<ppp::string>(ppp::string((char*)messages_.GetBuffer().get(), headers_size), headers, "\r\n") < 1) {
+                if (Tokenize<ppp::string>(headers_data, headers, "\r\n") < 1) {
                     return "";
                 }
 
-                // GET / HTTP/1.1
+                // Parse request line: method url protocol
                 ppp::vector<ppp::string> protocols;
                 if (Tokenize<ppp::string>(headers[0], protocols, " ") < 3) {
                     return "";
                 }
-                else {
-                    ppp::string protocol = ToUpper(protocols[2]);
-                    if (protocol != "HTTP/1.0" &&
-                        protocol != "HTTP/1.1" &&
-                        protocol != "HTTP/2.0") {
-                        return "";
-                    }
 
-                    const ppp::string& url_or_path = protocols[1];
-                    if (url_or_path.empty()) {
-                        return "";
-                    }
+                ppp::string protocol = ToUpper(protocols[2]);
+                if ((protocol != "HTTP/1.0") && (protocol != "HTTP/1.1") && (protocol != "HTTP/2.0")) {
+                    return "";
+                }
 
-                    if (url_or_path[0] != '/') {
-                        ppp::string url = ToLower(url_or_path);
-                        do {
-                            std::size_t leftIndex = url.find("://");
-                            if (leftIndex == ppp::string::npos) {
-                                break;
-                            }
+                const ppp::string& url = protocols[1];
+                if (url.empty()) {
+                    return "";
+                }
 
-                            ppp::string schema = url.substr(0, leftIndex);
-                            if (schema != "http") {
-                                break;
-                            }
-                            else {
-                                leftIndex += 3;
-                            }
+                // Absolute URL? e.g., http://example.com/path
+                if ('/' != url[0]) {
+                    ppp::string lower_url = ToLower(url);
+                    size_t left = lower_url.find("://");
+                    if (ppp::string::npos != left) {
+                        left += 3;
 
-                            std::size_t nextIndex = url.find("/", leftIndex);
-                            if (nextIndex == ppp::string::npos) {
-                                return "";
-                            }
-
-                            std::size_t hostCount = nextIndex - leftIndex;
-                            if (!hostCount) {
-                                return "";
-                            }
-
-                            return protocols[1].substr(leftIndex, hostCount);
-                        } while (false);
+                        size_t next = lower_url.find("/", left);
+                        if ((ppp::string::npos != next) && (next > left)) {
+                            return url.substr(left, next - left);
+                        }
                     }
                 }
 
-                for (size_t i = 1, header_count = headers.size(); i < header_count; i++) {
+                // Look for Host header among headers (skip request line)
+                for (size_t i = 1, header_count = headers.size(); i < header_count; ++i) {
                     const ppp::string& header = headers[i];
-                    if (header.empty()) {
-                        return "";
+                    size_t colon = header.find(": ");
+                    if ((ppp::string::npos == colon) || (0 == colon)) {
+                        continue;
                     }
 
-                    std::size_t leftIndex = header.find(": ");
-                    if (!leftIndex || leftIndex == ppp::string::npos) {
-                        return "";
-                    }
-
-                    std::size_t rightIndex = leftIndex + 2;
-                    if (rightIndex > header.size()) {
-                        return "";
-                    }
-
-                    ppp::string key = ToUpper(header.substr(0, leftIndex));
-                    if (key == "HOST") {
-                        return header.substr(rightIndex);
+                    ppp::string key = ToUpper(header.substr(0, colon));
+                    if ("HOST" == key) {
+                        return header.substr(colon + 2);
                     }
                 }
-
+                
                 return "";
             }
 
-            bool sniproxy::do_read_http_request_headers(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
-                boost::system::error_code ec_;
-                std::size_t length_;
-                std::shared_ptr<boost::asio::streambuf> response_ = make_shared_object<boost::asio::streambuf>();
-                if (NULLPTR == response_) {
-                    return false;
-                }
+            // -----------------------------------------------------------------------------
+            // Connection and forwarding
+            // -----------------------------------------------------------------------------
 
-                boost::asio::async_read_until(*local_socket_, *response_, "\r\n\r\n",
-                    [&y, &ec_, &length_, response_](boost::system::error_code ec, std::size_t sz) noexcept {
-                        ec_ = ec;
-                        length_ = sz;
-                        y.R();
-                    });
+            bool sniproxy::do_connect_and_forward_to_host(
+                ppp::coroutines::YieldContext&          y,
+                const ppp::string                       hostname_,
+                int                                     self_websocket_port,
+                int                                     forward_connect_port,
+                MemoryStream&                           messages_) noexcept {
 
-                y.Suspend();
-                if (ec_) {
-                    return false;
-                }
-
-                if (!length_) {
-                    return false;
-                }
-
-                boost::asio::const_buffers_1 buffers_ = response_->data();
-                return messages_.Write(buffers_.data(), 0, (int)length_);
-            }
-
-            bool sniproxy::do_connect_and_forward_to_host(ppp::coroutines::YieldContext& y, const ppp::string hostname_, int self_websocket_port, int forward_connect_port, MemoryStream& messages_) noexcept {
                 if (hostname_.empty() ||
-                    forward_connect_port <= IPEndPoint::MinPort ||
-                    forward_connect_port > IPEndPoint::MaxPort) {
+                    (forward_connect_port <= IPEndPoint::MinPort) ||
+                    (forward_connect_port > IPEndPoint::MaxPort)) {
                     return false;
                 }
 
-                boost::system::error_code ec_;
-                boost::asio::ip::address address_;
-                boost::asio::ip::tcp::endpoint remoteEP_;
+                boost::system::error_code ec;
+                boost::asio::ip::address addr;
+                boost::asio::ip::tcp::endpoint remote_ep;
 
+                // Check if target is our own WebSocket endpoint (loopback)
                 if (be_host(configuration_->websocket.host, hostname_)) {
-                    if (self_websocket_port <= IPEndPoint::MinPort ||
-                        self_websocket_port > IPEndPoint::MaxPort) {
+                    if ((self_websocket_port <= IPEndPoint::MinPort) || (self_websocket_port > IPEndPoint::MaxPort)) {
                         return false;
                     }
 
-                    address_ = boost::asio::ip::address_v6::loopback();
-                    remoteEP_ = boost::asio::ip::tcp::endpoint(address_, self_websocket_port);
+                    // Choose loopback address family based on local socket
+                    boost::system::error_code ignore_ec;
+                    if (local_socket_->local_endpoint(ignore_ec).address().is_v6()) {
+                        addr = boost::asio::ip::address_v6::loopback();
+                    }
+                    else {
+                        addr = boost::asio::ip::address_v4::loopback();
+                    }
+
+                    remote_ep = boost::asio::ip::tcp::endpoint(addr, self_websocket_port);
                 }
                 else {
-                    address_ = StringToAddress(hostname_.data(), ec_);
-                    if (ec_) {
-                        address_ = ppp::coroutines::asio::GetAddressByHostName<boost::asio::ip::tcp>(hostname_.data(), IPEndPoint::MinPort, y).address();
+                    // Resolve hostname to IP
+                    addr = StringToAddress(hostname_.data(), ec);
+                    if (ec) {
+                        addr = ppp::coroutines::asio::GetAddressByHostName<boost::asio::ip::tcp>(
+                            hostname_.data(), IPEndPoint::MinPort, y).address();
                     }
 
-                    if (IPEndPoint::IsInvalid(address_) || address_.is_loopback()) {
+                    if (IPEndPoint::IsInvalid(addr) || addr.is_loopback()) {
                         return false;
                     }
 
-                    if (configuration_->cdn[0] == forward_connect_port || configuration_->cdn[1] == forward_connect_port) {
-                        boost::asio::ip::address interfaceIP_ = StringToAddress(configuration_->ip.interface_.data(), ec_);
-                        boost::asio::ip::address publicIP_ = StringToAddress(configuration_->ip.public_.data(), ec_);
-                        if (address_ == publicIP_ || address_ == interfaceIP_) {
+                    // Avoid CDN loop: if target port matches CDN port and IP equals public/interface IP
+                    if ((configuration_->cdn[0] == forward_connect_port) || (configuration_->cdn[1] == forward_connect_port)) {
+                        boost::system::error_code ignore;
+                        boost::asio::ip::address iface = StringToAddress(configuration_->ip.interface_.data(), ignore);
+                        boost::asio::ip::address pub = StringToAddress(configuration_->ip.public_.data(), ignore);
+                        if ((addr == pub) || (addr == iface)) {
                             return false;
                         }
                     }
-                    
-                    remoteEP_ = boost::asio::ip::tcp::endpoint(address_, forward_connect_port);
+
+                    remote_ep = boost::asio::ip::tcp::endpoint(addr, forward_connect_port);
                 }
 
-                if (address_.is_v4()) {
-                    remote_socket_.open(boost::asio::ip::tcp::v4(), ec_);
+                // Open remote socket with appropriate protocol family
+                if (addr.is_v4()) {
+                    remote_socket_.open(boost::asio::ip::tcp::v4(), ec);
                 }
-                elif(address_.is_v6()) {
-                    remote_socket_.open(boost::asio::ip::tcp::v6(), ec_);
+                else if (addr.is_v6()) {
+                    remote_socket_.open(boost::asio::ip::tcp::v6(), ec);
                 }
                 else {
                     return false;
                 }
-
-                if (ec_) {
+                if (ec) {
                     return false;
                 }
 
-                remote_socket_.set_option(boost::asio::ip::tcp::no_delay(configuration_->tcp.turbo), ec_);
+                // Set socket options
+                remote_socket_.set_option(boost::asio::ip::tcp::no_delay(configuration_->tcp.turbo), ec);
+
                 if (configuration_->tcp.fast_open) {
-                    remote_socket_.set_option(boost::asio::detail::socket_option::boolean<IPPROTO_TCP, TCP_FASTOPEN>(true), ec_);
+                    int opt = TCP_FASTOPEN;
+                    if (0 != setsockopt(remote_socket_.native_handle(), IPPROTO_TCP, opt, &opt, sizeof(opt))) {
+                        // Non-critical, ignore error
+                        remote_socket_.set_option(boost::asio::detail::socket_option::boolean<IPPROTO_TCP, TCP_FASTOPEN>(true), ec);
+                    }
                 }
 
-                int handle_ = remote_socket_.native_handle();
-                ppp::net::Socket::AdjustDefaultSocketOptional(handle_, remoteEP_.protocol() == boost::asio::ip::tcp::v4());
-                ppp::net::Socket::SetTypeOfService(handle_);
-                ppp::net::Socket::SetSignalPipeline(handle_, false);
-                ppp::net::Socket::ReuseSocketAddress(handle_, true);
-                Socket::SetWindowSizeIfNotZero(handle_, configuration_->tcp.cwnd, configuration_->tcp.rwnd);
+                int handle = remote_socket_.native_handle();
+                Socket::AdjustDefaultSocketOptional(handle, remote_ep.protocol() == boost::asio::ip::tcp::v4());
+                Socket::SetTypeOfService(handle);
+                Socket::SetSignalPipeline(handle, false);
+                Socket::ReuseSocketAddress(handle, true);
+                Socket::SetWindowSizeIfNotZero(handle, configuration_->tcp.cwnd, configuration_->tcp.rwnd);
 
-                // [CONNECT]SSL VPN
-                if (ppp::coroutines::asio::async_connect(remote_socket_, remoteEP_, y)) {
+                // Connect to remote (async_connect returns false on success)
+                if (ppp::coroutines::asio::async_connect(remote_socket_, remote_ep, y)) {
                     return false;
                 }
 
-                std::shared_ptr<Byte> buff_ = messages_.GetBuffer();
-                if (!ppp::coroutines::asio::async_write(remote_socket_, boost::asio::buffer(buff_.get(), messages_.GetPosition()), y)) {
+                // Forward already-read handshake data (TLS Client Hello or HTTP headers)
+                std::shared_ptr<Byte> buf = messages_.GetBuffer();
+                if (NULLPTR == buf) {
                     return false;
                 }
 
+                if (!ppp::coroutines::asio::async_write(remote_socket_,
+                    boost::asio::buffer(buf.get(), messages_.GetPosition()), y)) {
+                    return false;
+                }
+
+                // Handshake succeeded: cancel handshake timeout and start inactivity timer
                 clear_timeout();
-                return local_to_remote() && remote_to_local();
+                reset_inactivity_timer();
+
+                // Start bidirectional forwarding
+                if (!local_to_remote()) {
+                    close();
+                    return false;
+                }
+
+                if (!remote_to_local()) {
+                    close();
+                    return false;
+                }
+
+                return true;
             }
 
-            int sniproxy::do_forward_websocket_port() noexcept {
+            int sniproxy::do_forward_websocket_port() const noexcept {
                 return configuration_->websocket.listen.ws;
             }
 
+            // -----------------------------------------------------------------------------
+            // Timeout management
+            // -----------------------------------------------------------------------------
+
             void sniproxy::clear_timeout() noexcept {
-                std::shared_ptr<Timer> timeout = std::move(timeout_);
-                if (timeout) {
-                    timeout->Dispose();
+                if (timeout_) {
+                    timeout_->Dispose();
+                    timeout_.reset();
                 }
             }
 
-            UInt16 sniproxy::fetch_uint16(Byte*& data) noexcept {
-                int r_ = data[0] << 8 | data[1];
-                data += 2;
-                return r_;
+            void sniproxy::reset_inactivity_timer() noexcept {
+                cancel_inactivity_timer();
+
+                uint64_t timeout_sec = configuration_->tcp.inactive.timeout;
+                if (0 == timeout_sec) {
+                    return; // disabled
+                }
+
+                auto self = shared_from_this();
+                inactivity_timer_ = Timer::Timeout(timeout_sec * 1000,
+                    [this, self](Timer*) noexcept {
+                        // Timer expired: no activity for the configured period, close connection.
+                        close();
+                    });
             }
 
-            int sniproxy::fetch_length(Byte*& data) noexcept {
-                int r_ = data[0] << 16 | data[1] << 8 | data[2];
-                data += 3;
-                return r_;
-            }
-
-            ppp::string sniproxy::fetch_sniaddr(size_t tls_payload) noexcept {
-                Byte* data = (Byte*)local_socket_buf_;
-                if (*data++ != 0x01) { // Handshake Type: Client Hello (1)
-                    return "";
-                }
-
-                int Length = std::max<int>(0, fetch_length(data));
-                if ((Length + 4) != tls_payload) {
-                    return "";
-                }
-
-                // Skip Version
-                data += 2;
-
-                // Skip Random
-                data += 32;
-
-                // Skip Session ID
-                Byte Session_ID_Length = std::max<int>((Byte)0, *data++);
-                data += Session_ID_Length;
-
-                // Skip Cipher Suites
-                int Cipher_Suites_Length = std::max<int>(0, fetch_uint16(data));
-                data += Cipher_Suites_Length;
-
-                // Skip Compression Methods Length
-                int Compression_Methods_Length = *data++;
-                data += Compression_Methods_Length;
-
-                // Extensions Length
-                int Extensions_Length = std::max<int>(0, fetch_uint16(data));
-                Byte* Extensions_End = data + Extensions_Length;
-                while (data < Extensions_End) {
-                    int Extension_Type = fetch_uint16(data);
-                    int Extension_Length = std::max<int>(0, fetch_uint16(data));
-                    if (Extension_Type == 0x0000) { // RFC4366/6066(Server Name Indication extension)
-                        int Server_Name_list_length = std::max<int>(0, fetch_uint16(data));
-                        if ((data + Server_Name_list_length) >= Extensions_End) {
-                            break;
-                        }
-
-                        int Server_Name_Type = *data++;
-                        if (Server_Name_Type != 0x00) { // RFC6066 NameType::host_name(0)
-                            data += 2;
-                            continue;
-                        }
-
-                        int Server_Name_length = std::max<int>(0, fetch_uint16(data));
-                        if ((data + Server_Name_length) > Extensions_End) {
-                            break;
-                        }
-                        return ppp::string((char*)data, 0, Server_Name_length);
-                    }
-                    else {
-                        data += Extension_Length;
-                    }
-                }
-                return "";
-            }
-
-            bool sniproxy::do_handshake(ppp::coroutines::YieldContext& y) noexcept {
-                const int header_size_ = sizeof(struct tls_hdr);
-                if (!ppp::coroutines::asio::async_read(*local_socket_, boost::asio::buffer(local_socket_buf_, header_size_), y)) {
-                    return false;
-                }
-
-                MemoryStream messages_;
-                messages_.Write(local_socket_buf_, 0, header_size_);
-
-                if (do_tlsvd_handshake(y, messages_)) {
-                    return true;
-                }
-
-                if (!ppp::coroutines::asio::async_read(*local_socket_, boost::asio::buffer(local_socket_buf_ + header_size_, 3), y)) {
-                    return false;
-                }
-
-                messages_.Write(local_socket_buf_, header_size_, 3);
-                if (!be_http(local_socket_buf_)) {
-                    return false;
-                }
-
-                return do_httpd_handshake(y, messages_);
-            }
-
-            bool sniproxy::socket_is_open() noexcept {
-                if (!local_socket_ || !local_socket_->is_open()) {
-                    return false;
-                }
-                else {
-                    return remote_socket_.is_open();
+            void sniproxy::cancel_inactivity_timer() noexcept {
+                if (inactivity_timer_) {
+                    inactivity_timer_->Dispose();
+                    inactivity_timer_.reset();
                 }
             }
+
+            // -----------------------------------------------------------------------------
+            // Data forwarding (bidirectional)
+            // -----------------------------------------------------------------------------
 
             bool sniproxy::local_to_remote() noexcept {
-                bool available_ = socket_is_open();
-                if (!available_) {
+                if (!socket_is_open()) {
                     return false;
                 }
 
-                std::shared_ptr<sniproxy> self = shared_from_this();
+                auto self = shared_from_this();
                 local_socket_->async_read_some(boost::asio::buffer(local_socket_buf_, FORWARD_MSS),
                     [self, this](const boost::system::error_code& ec, uint32_t sz) noexcept {
-                        int by = std::max<int>(-1, ec ? -1 : sz);
+                        int by = (ec || (0 == sz)) ? -1 : static_cast<int>(sz);
                         if (by < 1) {
                             close();
                             return;
                         }
 
-                        boost::asio::async_write(remote_socket_, boost::asio::buffer(local_socket_buf_, (size_t)by),
-                            [self, this](const boost::system::error_code& ec, uint32_t sz) noexcept {
-                                if (ec || !local_to_remote()) {
+                        last_ = Executors::GetTickCount(); // update activity timestamp
+                        reset_inactivity_timer();          // reset timer on read activity
+                        
+                        boost::asio::async_write(remote_socket_, boost::asio::buffer(local_socket_buf_, by),
+                            [self, this](const boost::system::error_code& ec, uint32_t) noexcept {
+                                if (ec) {
                                     close();
                                     return;
                                 }
 
-                                last_ = Executors::GetTickCount();
+                                last_ = Executors::GetTickCount(); // update on write success
+                                reset_inactivity_timer();          // reset timer on write activity
+                                local_to_remote();                 // continue reading
                             });
-                        last_ = Executors::GetTickCount();
                     });
                 return true;
             }
 
             bool sniproxy::remote_to_local() noexcept {
-                bool available_ = socket_is_open();
-                if (!available_) {
+                if (!socket_is_open()) {
                     return false;
                 }
 
-                std::shared_ptr<sniproxy> self = shared_from_this();
+                auto self = shared_from_this();
                 remote_socket_.async_read_some(boost::asio::buffer(remote_socket_buf_, FORWARD_MSS),
                     [self, this](const boost::system::error_code& ec, uint32_t sz) noexcept {
-                        int by = std::max<int>(-1, ec ? -1 : sz);
+                        int by = (ec || (0 == sz)) ? -1 : static_cast<int>(sz);
                         if (by < 1) {
                             close();
                             return;
                         }
 
-                        boost::asio::async_write(*local_socket_.get(), boost::asio::buffer(remote_socket_buf_, by),
-                            [self, this](const boost::system::error_code& ec, uint32_t sz) noexcept {
-                                if (ec || !remote_to_local()) {
+                        last_ = Executors::GetTickCount(); // update activity timestamp
+                        reset_inactivity_timer();          // reset timer on read activity
+                        
+                        boost::asio::async_write(*local_socket_, boost::asio::buffer(remote_socket_buf_, by),
+                            [self, this](const boost::system::error_code& ec, uint32_t) noexcept {
+                                if (ec) {
                                     close();
                                     return;
                                 }
 
-                                last_ = Executors::GetTickCount();
+                                last_ = Executors::GetTickCount(); // update on write success
+                                reset_inactivity_timer();          // reset timer on write activity
+                                remote_to_local();                 // continue reading
                             });
-                        last_ = Executors::GetTickCount();
                     });
                 return true;
             }
 
-            void sniproxy::close() noexcept {
-                boost::system::error_code ec_;
-                std::shared_ptr<boost::asio::ip::tcp::socket> local_socket = local_socket_;
+            bool sniproxy::socket_is_open() const noexcept {
+                return local_socket_ && local_socket_->is_open() && remote_socket_.is_open();
+            }
 
-                Socket::Closesocket(remote_socket_);
-                if (local_socket) {
-                    Socket::Closesocket(*local_socket);
+            void sniproxy::close() noexcept {
+                boost::system::error_code ec;
+                if (local_socket_) {
+                    Socket::Closesocket(*local_socket_);
+                    local_socket_.reset();
                 }
 
+                Socket::Closesocket(remote_socket_);
                 clear_timeout();
+                cancel_inactivity_timer();
                 last_ = Executors::GetTickCount();
             }
 
-            bool sniproxy::handshake() noexcept {
-                const std::shared_ptr<boost::asio::ip::tcp::socket> socket = local_socket_;
-                if (!socket || !context_) {
+            // -----------------------------------------------------------------------------
+            // Handshake entry point
+            // -----------------------------------------------------------------------------
+
+            bool sniproxy::do_handshake(ppp::coroutines::YieldContext& y) noexcept {
+                const int hdr_sz = sizeof(tls_hdr); // 5 bytes
+                if (!ppp::coroutines::asio::async_read(*local_socket_,
+                    boost::asio::buffer(local_socket_buf_, hdr_sz), y)) {
                     return false;
                 }
 
-                const std::shared_ptr<sniproxy> self = shared_from_this();
-                timeout_ = Timer::Timeout((uint64_t)configuration_->tcp.connect.timeout * 1000, 
+                MemoryStream ms;
+                if (!ms.Write(local_socket_buf_, 0, hdr_sz)) {
+                    return false;
+                }
+
+                tls_hdr* hdr = reinterpret_cast<tls_hdr*>(local_socket_buf_);
+                if (0x16 == hdr->Content_Type) {
+                    if (do_tlsvd_handshake(y, ms)) {
+                        return true;
+                    }
+
+                    // TLS handshake failed – do not fall through to HTTP because we already consumed 5 bytes.
+                    return false;
+                }
+
+                // Not TLS: check if it's HTTP
+                if (!be_http(local_socket_buf_)) {
+                    return false;
+                }
+
+                return do_httpd_handshake(y, ms);
+            }
+
+            bool sniproxy::handshake() noexcept {
+                if ((NULLPTR == local_socket_) || (NULLPTR == context_)) {
+                    return false;
+                }
+
+                auto self = shared_from_this();
+                timeout_ = Timer::Timeout(static_cast<uint64_t>(configuration_->tcp.connect.timeout) * 1000,
                     [this, self](Timer*) noexcept {
                         close();
                     });
-                if (!timeout_) {
+                if (NULLPTR == timeout_) {
                     return false;
                 }
-                
-                auto context = context_;
-                auto f = 
-                    [self, this, context](ppp::coroutines::YieldContext& y) noexcept {
-                        bool success_ = do_handshake(y);
-                        if (!success_) {
+
+                auto ctx = context_;
+                return ppp::coroutines::YieldContext::Spawn(*ctx,
+                    [this, self](ppp::coroutines::YieldContext& y) noexcept {
+                        bool ok = do_handshake(y);
+                        if (!ok) {
                             close();
                         }
-                        else {
-                            clear_timeout();
-                        }
-                    };
-
-                return ppp::coroutines::YieldContext::Spawn(*context, f);
+                    });
             }
-        }
-    }
-}
+
+        } // namespace proxies
+    } // namespace net
+} // namespace ppp
