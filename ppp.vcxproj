@@ -311,6 +311,7 @@
     <ClCompile Include="ppp\net\asio\websocket\websocket_ssl_write_websocket.cpp" />
     <ClCompile Include="ppp\net\asio\websocket\websocket_write_websocket.cpp" />
     <ClCompile Include="ppp\net\http\HttpClient.cpp" />
+    <ClCompile Include="ppp\net\native\dnsx.cpp" />
     <ClCompile Include="ppp\net\rinetd\RinetdConnection.cpp" />
     <ClCompile Include="ppp\app\client\VEthernetDatagramPort.cpp" />
     <ClCompile Include="ppp\app\client\VEthernetExchanger.cpp" />

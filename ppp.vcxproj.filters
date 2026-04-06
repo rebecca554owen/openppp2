@@ -522,6 +522,9 @@
     <ClCompile Include="windows\ppp\tap\WintunAdapter.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\net\native\dnsx.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ppp\stdafx.h">

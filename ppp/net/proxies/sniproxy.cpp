@@ -587,8 +587,8 @@ namespace ppp {
                 remote_socket_.set_option(boost::asio::ip::tcp::no_delay(configuration_->tcp.turbo), ec);
 
                 if (configuration_->tcp.fast_open) {
-                    int opt = TCP_FASTOPEN;
-                    if (0 != setsockopt(remote_socket_.native_handle(), IPPROTO_TCP, opt, &opt, sizeof(opt))) {
+                    int enable = 1;
+                    if (0 != setsockopt(remote_socket_.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, (char*)&enable, sizeof(enable))) {
                         // Non-critical, ignore error
                         remote_socket_.set_option(boost::asio::detail::socket_option::boolean<IPPROTO_TCP, TCP_FASTOPEN>(true), ec);
                     }
