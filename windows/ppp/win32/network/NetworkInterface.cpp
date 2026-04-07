@@ -1248,6 +1248,116 @@ namespace ppp
                 return dwExitCode == ERROR_SUCCESS;
             }
 
+            static bool ExecuteNetshCommand(const ppp::string& command_line) noexcept {
+                if (command_line.empty()) {
+                    return false;
+                }
+
+                PROCESS_INFORMATION pi;
+                ZeroMemory(&pi, sizeof(pi));
+
+                STARTUPINFOA si;
+                ZeroMemory(&si, sizeof(si));
+                si.cb = sizeof(si);
+
+                char command[1200];
+                strncpy(command, command_line.data(), sizeof(command) - 1);
+                command[sizeof(command) - 1] = '\0';
+
+                if (!CreateProcessA(NULLPTR, command, NULLPTR, NULLPTR, FALSE, CREATE_NO_WINDOW, NULLPTR, NULLPTR, &si, &pi)) {
+                    return false;
+                }
+
+                DWORD dwExitCode = INFINITE;
+                if (WaitForSingleObject(pi.hProcess, INFINITE) == WAIT_OBJECT_0) {
+                    if (!GetExitCodeProcess(pi.hProcess, &dwExitCode)) {
+                        dwExitCode = INFINITE;
+                    }
+                }
+
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                return dwExitCode == ERROR_SUCCESS;
+            }
+
+            bool SetIPv6Address(int interface_index, const ppp::string& ip, int prefix_length) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty() || ip.empty()) {
+                    return false;
+                }
+
+                char command[1200];
+                snprintf(command, sizeof(command), "netsh interface ipv6 set address interface=\"%s\" address=%s/%d", interface_name.data(), ip.data(), prefix_length);
+                return ExecuteNetshCommand(command);
+            }
+
+            bool DeleteIPv6Address(int interface_index, const ppp::string& ip) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty() || ip.empty()) {
+                    return false;
+                }
+
+                char command[1200];
+                snprintf(command, sizeof(command), "netsh interface ipv6 delete address interface=\"%s\" address=%s", interface_name.data(), ip.data());
+                return ExecuteNetshCommand(command);
+            }
+
+            bool SetIPv6DefaultGateway(int interface_index, const ppp::string& gateway, int metric) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty() || gateway.empty()) {
+                    return false;
+                }
+
+                char command[1200];
+                snprintf(command, sizeof(command), "netsh interface ipv6 add route ::/0 interface=\"%s\" nexthop=%s metric=%d store=active", interface_name.data(), gateway.data(), std::max<int>(1, metric));
+                return ExecuteNetshCommand(command);
+            }
+
+            bool DeleteIPv6DefaultGateway(int interface_index) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty()) {
+                    return false;
+                }
+
+                char command[1200];
+                snprintf(command, sizeof(command), "netsh interface ipv6 delete route ::/0 interface=\"%s\" store=active", interface_name.data());
+                return ExecuteNetshCommand(command);
+            }
+
+            bool SetDnsAddressesV6(int interface_index, const ppp::vector<ppp::string>& servers) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty()) {
+                    return false;
+                }
+
+                if (servers.empty()) {
+                    char command[1200];
+                    snprintf(command, sizeof(command), "netsh interface ipv6 delete dnsservers name=\"%s\" all validate=no", interface_name.data());
+                    return ExecuteNetshCommand(command);
+                }
+
+                bool any = false;
+                int index = 1;
+                for (const ppp::string& server : servers) {
+                    if (server.empty()) {
+                        continue;
+                    }
+
+                    char command[1200];
+                    if (index == 1) {
+                        snprintf(command, sizeof(command), "netsh interface ipv6 set dnsservers name=\"%s\" static %s primary validate=no", interface_name.data(), server.data());
+                    }
+                    else {
+                        snprintf(command, sizeof(command), "netsh interface ipv6 add dnsservers name=\"%s\" %s index=%d validate=no", interface_name.data(), server.data(), index);
+                    }
+
+                    any |= ExecuteNetshCommand(command);
+                    index++;
+                }
+
+                return any;
+            }
+
             static bool FixGatewayServerAddress(const ppp::win32::network::AdapterInterfacePtr& ai) noexcept
             {
                 boost::system::error_code ec;

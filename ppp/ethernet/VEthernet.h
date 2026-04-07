@@ -66,10 +66,11 @@ namespace ppp
             virtual std::shared_ptr<VNetstack>                              NewNetstack() noexcept = 0;
 
         protected:
-            virtual bool                                                    OnTick(uint64_t now) noexcept;
-            virtual bool                                                    OnUpdate(uint64_t now) noexcept;
-            virtual bool                                                    OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept;
-            virtual bool                                                    OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept;
+                virtual bool                                                    OnTick(uint64_t now) noexcept;
+                virtual bool                                                    OnUpdate(uint64_t now) noexcept;
+                virtual bool                                                    OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept;
+                virtual bool                                                    OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept;
+                virtual bool                                                    OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept;
 
         private:
             void                                                            Finalize() noexcept;

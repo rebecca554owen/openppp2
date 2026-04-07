@@ -58,6 +58,30 @@ namespace ppp {
             return SetDnsAddresses(dns_servers);
         }
 
+        bool UnixAfx::MergeDnsAddresses(const ppp::vector<boost::asio::ip::address>& preferred, const ppp::vector<boost::asio::ip::address>& append) noexcept {
+            ppp::vector<boost::asio::ip::address> merged;
+            auto append_unique = [&merged](const boost::asio::ip::address& address) noexcept {
+                if (IPEndPoint::IsInvalid(address) || address.is_multicast()) {
+                    return;
+                }
+                for (const auto& current : merged) {
+                    if (current == address) {
+                        return;
+                    }
+                }
+                merged.emplace_back(address);
+            };
+
+            for (const auto& address : preferred) {
+                append_unique(address);
+            }
+            for (const auto& address : append) {
+                append_unique(address);
+            }
+
+            return SetDnsAddresses(merged);
+        }
+
         bool UnixAfx::SetDnsAddresses(const ppp::vector<ppp::string>& addresses) noexcept {
             ppp::string content;
             for (size_t i = 0, l = addresses.size(); i < l; i++) {

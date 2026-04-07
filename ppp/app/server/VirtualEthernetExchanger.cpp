@@ -5,6 +5,7 @@
 #include <ppp/app/server/VirtualInternetControlMessageProtocol.h>
 #include <ppp/app/server/VirtualInternetControlMessageProtocolStatic.h>
 #include <ppp/app/server/VirtualEthernetDatagramPortStatic.h>
+#include <ppp/app/server/VirtualEthernetIPv6.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
@@ -32,6 +33,50 @@ typedef ppp::net::packet::IPFrame                                   IPFrame;
 typedef ppp::net::packet::IcmpFrame                                 IcmpFrame;
 typedef ppp::threading::Executors                                   Executors;
 typedef ppp::collections::Dictionary                                Dictionary;
+
+namespace {
+    static bool HandleIPv6GatewayEchoReply(ppp::Byte* packet, int packet_length, const boost::asio::ip::address_v6& gateway) noexcept {
+        if (NULLPTR == packet || packet_length < 48) {
+            return false;
+        }
+
+        ppp::app::server::VirtualEthernetIPv6MinimalHeader* header = reinterpret_cast<ppp::app::server::VirtualEthernetIPv6MinimalHeader*>(packet);
+        if ((header->VersionTrafficClass >> 4) != 6 || header->NextHeader != IPPROTO_ICMPV6) {
+            return false;
+        }
+
+        boost::asio::ip::address_v6 source;
+        boost::asio::ip::address_v6 destination;
+        if (!ppp::app::server::ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+            return false;
+        }
+
+        if (destination != gateway) {
+            return false;
+        }
+
+        icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(packet + 40);
+        int icmp_length = packet_length - 40;
+        if (icmp_length < static_cast<int>(sizeof(icmp_hdr))) {
+            return false;
+        }
+
+        if (icmp->icmp_type != 128 || icmp->icmp_code != 0) {
+            return false;
+        }
+
+        boost::asio::ip::address_v6::bytes_type source_bytes = source.to_bytes();
+        boost::asio::ip::address_v6::bytes_type gateway_bytes = gateway.to_bytes();
+        memcpy(header->Source, gateway_bytes.data(), gateway_bytes.size());
+        memcpy(header->Destination, source_bytes.data(), source_bytes.size());
+        header->HopLimit = 64;
+
+        icmp->icmp_type = 129;
+        icmp->icmp_chksum = 0;
+        icmp->icmp_chksum = ppp::app::server::VirtualEthernetIPv6PseudoChecksum(reinterpret_cast<unsigned char*>(icmp), icmp_length, gateway, source, IPPROTO_ICMPV6);
+        return true;
+    }
+}
 
 namespace ppp {
     namespace app {
@@ -132,6 +177,12 @@ namespace ppp {
                 Dictionary::ReleaseAllObjects(static_echo_datagram_ports);
 
                 static_allocated_context_.reset();
+                if (switcher_) {
+                    VirtualEthernetInformationExtensions extensions;
+                    if (switcher_->BuildInformationIPv6Extensions(GetId(), extensions)) {
+                        switcher_->DeleteIPv6Exchanger(GetId(), extensions.AssignedIPv6Address);
+                    }
+                }
                 switcher_->DeleteExchanger(this);
                 switcher_->DeleteNatInformation(this, address_);
                 switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
@@ -173,6 +224,10 @@ namespace ppp {
             }
 
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
+                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
+            }
+
+            bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
@@ -251,11 +306,54 @@ namespace ppp {
 
             bool VirtualEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
+                bool forwarded = false;
                 if (configuration->server.subnet) {
-                    ForwardNatPacketToDestination(packet, packet_length, y);
+                    forwarded = ForwardNatPacketToDestination(packet, packet_length, y);
+                }
+
+                if (!forwarded) {
+                    ForwardIPv6PacketToDestination(packet, packet_length, y);
                 }
 
                 return true;
+            }
+
+            bool VirtualEthernetExchanger::ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
+                if (disposed_) {
+                    return false;
+                }
+
+                boost::asio::ip::address_v6 source;
+                boost::asio::ip::address_v6 destination;
+                if (!ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+                    return false;
+                }
+
+                const auto& ipv6 = GetConfiguration()->server.ipv6;
+                boost::system::error_code ec;
+                boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
+                if (!ec && gateway.is_v6()) {
+                    if (HandleIPv6GatewayEchoReply(packet, packet_length, gateway.to_v6())) {
+                        return DoNat(transmission_, packet, packet_length, y);
+                    }
+                }
+
+                VirtualEthernetSwitcher::VirtualEthernetExchangerPtr exchanger = switcher_->FindIPv6Exchanger(destination);
+                if (NULLPTR == exchanger) {
+                    return switcher_->SendIPv6TransitPacket(packet, packet_length);
+                }
+
+                ITransmissionPtr transmission = exchanger->GetTransmission();
+                if (NULLPTR == transmission) {
+                    return false;
+                }
+
+                if (exchanger->DoNat(transmission, packet, packet_length, y)) {
+                    return true;
+                }
+
+                transmission->Dispose();
+                return false;
             }
 
             bool VirtualEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {

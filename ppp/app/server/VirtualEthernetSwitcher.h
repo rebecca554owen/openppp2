@@ -11,7 +11,9 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
+#include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
+#include <ppp/tap/ITap.h>
 
 namespace ppp {
     namespace app {
@@ -36,16 +38,20 @@ namespace ppp {
                 }                                                       NatInformation;
                 typedef std::shared_ptr<NatInformation>                 NatInformationPtr;
                 typedef std::unordered_map<uint32_t, NatInformationPtr> NatInformationTable;
+                typedef std::unordered_map<ppp::string, std::shared_ptr<class VirtualEthernetExchanger>> IPv6ExchangerTable;
                 typedef ppp::cryptography::Ciphertext                   Ciphertext;
                 typedef std::shared_ptr<Ciphertext>                     CiphertextPtr;
 
             public:
                 typedef ppp::app::protocol::VirtualEthernetInformation  VirtualEthernetInformation;
+                typedef ppp::app::protocol::VirtualEthernetInformationExtensions VirtualEthernetInformationExtensions;
+                typedef ppp::app::protocol::VirtualEthernetLinklayer::InformationEnvelope InformationEnvelope;
                 typedef std::shared_ptr<VirtualEthernetInformation>     VirtualEthernetInformationPtr;
                 typedef std::shared_ptr<VirtualEthernetExchanger>       VirtualEthernetExchangerPtr;
                 typedef ppp::unordered_map<Int128,
                     VirtualEthernetExchangerPtr>                        VirtualEthernetExchangerTable;
                 typedef std::shared_ptr<VirtualEthernetManagedServer>   VirtualEthernetManagedServerPtr;
+                typedef std::shared_ptr<ppp::tap::ITap>                 ITapPtr;
                 typedef ppp::app::protocol::VirtualEthernetLogger       VirtualEthernetLogger;
                 typedef std::shared_ptr<VirtualEthernetLogger>          VirtualEthernetLoggerPtr;
                 typedef ppp::configurations::AppConfiguration           AppConfiguration;
@@ -151,6 +157,7 @@ namespace ppp {
                 void                                                    TickAllExchangers(UInt64 now) noexcept;
                 void                                                    TickAllConnections(UInt64 now) noexcept;
                 bool                                                    OpenManagedServerIfNeed() noexcept;
+                bool                                                    OpenIPv6TransitIfNeed() noexcept;
 
             private:
                 VirtualEthernetStaticEchoAllocatedContextPtr            StaticEchoUnallocated(int allocated_id) noexcept;
@@ -170,10 +177,23 @@ namespace ppp {
                 bool                                                    LoopbackDatagramSocket() noexcept;
                 bool                                                    OpenLogger() noexcept;
                 bool                                                    FlowerArrangement(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
+                InformationEnvelope                                     BuildInformationEnvelope(const Int128& session_id, const VirtualEthernetInformation& info) noexcept;
+                bool                                                    BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept;
+                bool                                                    AddIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
+                bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
+                VirtualEthernetExchangerPtr                             FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept;
+                bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
+                bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
+                bool                                                    DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
+                bool                                                    SyncNdppdNeighborProxy() noexcept;
+                bool                                                    AddIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;
+                bool                                                    DeleteIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;
+                bool                                                    SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
+                bool                                                    ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
+                bool                                                    SendIPv6PacketToClient(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
                 bool                                                    DeleteNatInformation(VirtualEthernetExchanger* key, uint32_t ip) noexcept;
                 NatInformationPtr                                       FindNatInformation(uint32_t ip) noexcept;
                 NatInformationPtr                                       AddNatInformation(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, uint32_t ip, uint32_t mask) noexcept;
-                
             private:
                 template <typename TTransmission>
                 typename std::enable_if<std::is_base_of<ITransmission, TTransmission>::value, std::shared_ptr<TTransmission>/**/>::type
@@ -200,6 +220,7 @@ namespace ppp {
 
                 VirtualEthernetLoggerPtr                                logger_;
                 NatInformationTable                                     nats_;
+                IPv6ExchangerTable                                      ipv6s_;
                 FirewallPtr                                             firewall_;
                 VirtualEthernetExchangerTable                           exchangers_;
                 TimerPtr                                                timeout_;
@@ -207,11 +228,12 @@ namespace ppp {
                 ContextPtr                                              context_;
                 boost::asio::ip::udp::endpoint                          dnsserverEP_;
                 boost::asio::ip::address                                interfaceIP_;
+                ppp::string                                             ipv6_neighbor_proxy_ifname_;
+                ITapPtr                                                 ipv6_transit_tap_;
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;
                 ITransmissionStatisticsPtr                              statistics_;
                 VirtualEthernetManagedServerPtr                         managed_server_;
                 VirtualEthernetNamespaceCachePtr                        namespace_cache_;
-
                 boost::asio::ip::udp::socket                            static_echo_socket_;
                 int                                                     static_echo_bind_port_ = 0;
                 std::shared_ptr<Byte>                                   static_echo_buffers_;

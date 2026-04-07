@@ -200,6 +200,127 @@ namespace ppp {
             return ioctl(ifc_ctl_sock.sock_v4, SIOCSIFNETMASK, &ifr) == 0;
         }
 
+        static bool ExecuteIpCommand(const ppp::string& command) noexcept {
+            if (command.empty()) {
+                return false;
+            }
+
+            int status = system(command.data());
+            return status == 0;
+        }
+
+        bool TapLinux::SetIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
+            if (ifrName.empty() || addressIP.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "ip -6 addr replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::SetMtu(const ppp::string& ifrName, int mtu) noexcept {
+            if (ifrName.empty()) {
+                return false;
+            }
+
+            mtu = std::max<int>(1280, std::min<int>(9000, mtu));
+
+            char command[1200];
+            snprintf(command, sizeof(command), "ip link set dev %s mtu %d > /dev/null 2>&1", ifrName.data(), mtu);
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::DeleteIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
+            if (ifrName.empty() || addressIP.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "ip -6 addr del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::AddRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
+            if (ifrName.empty() || addressIP.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            if (gw.empty()) {
+                if (addressIP == "::" && prefix_length == 0) {
+                    snprintf(command, sizeof(command), "ip -6 route replace default dev %s metric 1 > /dev/null 2>&1", ifrName.data());
+                }
+                else {
+                    snprintf(command, sizeof(command), "ip -6 route replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+                }
+            }
+            else {
+                if (addressIP == "::" && prefix_length == 0) {
+                    snprintf(command, sizeof(command), "ip -6 route replace default via %s dev %s onlink > /dev/null 2>&1", gw.data(), ifrName.data());
+                }
+                else {
+                    snprintf(command, sizeof(command), "ip -6 route replace %s/%d via %s dev %s onlink > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data(), ifrName.data());
+                }
+            }
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::DeleteRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
+            if (ifrName.empty() || addressIP.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            if (gw.empty()) {
+                if (addressIP == "::" && prefix_length == 0) {
+                    snprintf(command, sizeof(command), "ip -6 route del default dev %s > /dev/null 2>&1", ifrName.data());
+                }
+                else {
+                    snprintf(command, sizeof(command), "ip -6 route del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+                }
+            }
+            else {
+                if (addressIP == "::" && prefix_length == 0) {
+                    snprintf(command, sizeof(command), "ip -6 route del default via %s dev %s > /dev/null 2>&1", gw.data(), ifrName.data());
+                }
+                else {
+                    snprintf(command, sizeof(command), "ip -6 route del %s/%d via %s dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data(), ifrName.data());
+                }
+            }
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::EnableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
+            if (ifrName.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "sysctl -w net.ipv6.conf.%s.proxy_ndp=1 > /dev/null 2>&1", ifrName.data());
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
+            if (ifrName.empty() || addressIP.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "ip -6 neigh replace proxy %s dev %s > /dev/null 2>&1", addressIP.data(), ifrName.data());
+            return ExecuteIpCommand(command);
+        }
+
+        bool TapLinux::DeleteIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
+            if (ifrName.empty() || addressIP.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "ip -6 neigh del proxy %s dev %s > /dev/null 2>&1", addressIP.data(), ifrName.data());
+            return ExecuteIpCommand(command);
+        }
+
         ppp::string TapLinux::GetIPAddress(const ppp::string& ifrName) noexcept {
             if (ifrName.empty()) {
                 return "";
