@@ -18,6 +18,8 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
+
+extern void DebugLog(const char* format, ...) noexcept;
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 
@@ -822,22 +824,37 @@ namespace ppp {
             }
 
             bool VEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
+                InformationEnvelope envelope;
+                envelope.Base = information;
+                return OnInformation(transmission, envelope, y);
+            }
+
+            bool VEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 if (NULLPTR == context) {
                     return false;
                 }
 
-                auto ei = make_shared_object<VirtualEthernetInformation>(information);
+                auto ei = make_shared_object<VirtualEthernetInformation>(information.Base);
                 if (NULLPTR == ei) {
                     return false;
                 }
                 
                 auto self = shared_from_this();
                 boost::asio::post(*context, 
-                    [self, this, context, ei]() noexcept {
+                    [self, this, context, ei, information]() noexcept {
                         information_ = ei;
                         if (!disposed_) {
-                            switcher_->OnInformation(ei);
+                            DebugLog("client info envelope raw-json=%s", information.ExtendedJson.data());
+                            DebugLog("client info received ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
+                                (unsigned)information.Extensions.AssignedIPv6Mode,
+                                (unsigned)information.Extensions.AssignedIPv6PrefixLength,
+                                (unsigned)information.Extensions.AssignedIPv6Flags,
+                                information.Extensions.AssignedIPv6Address.is_v6() ? information.Extensions.AssignedIPv6Address.to_string().c_str() : "",
+                                information.Extensions.AssignedIPv6Gateway.is_v6() ? information.Extensions.AssignedIPv6Gateway.to_string().c_str() : "",
+                                information.Extensions.AssignedIPv6Dns1.is_v6() ? information.Extensions.AssignedIPv6Dns1.to_string().c_str() : "",
+                                information.Extensions.AssignedIPv6Dns2.is_v6() ? information.Extensions.AssignedIPv6Dns2.to_string().c_str() : "");
+                            switcher_->OnInformation(ei, information.Extensions);
                         }
                     });
                 return true;

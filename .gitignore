@@ -54,6 +54,17 @@
 bin/
 build/
 android/build/
+/build-static/
+/build-system-check/
+/build-vendor-check/
+/build-vendor-release/
+
+/final/
+/forkform/
+/test-config/
+
+debug.md
+**/debug.md
 
 .vscode/*
 !.vscode/settings.json

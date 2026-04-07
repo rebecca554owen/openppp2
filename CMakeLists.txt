@@ -41,6 +41,14 @@ ENDIF()
 SET(PLATFORM_COMPILER_CLANG FALSE)
 SET(PLATFORM_SYSTEM_LINUX FALSE)
 SET(PLATFORM_SYSTEM_DARWIN FALSE)
+SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+SET(USE_SYSTEM_THIRD_PARTY FALSE)
+OPTION(USE_SYSTEM_STATIC_THIRD_PARTY "Use system static libraries on Linux" OFF)
+OPTION(ALLOW_SYSTEM_THIRD_PARTY_FALLBACK "Allow fallback to system shared libraries" OFF)
+
+IF(DEFINED ENV{THIRD_PARTY_LIBRARY_DIR} AND NOT "$ENV{THIRD_PARTY_LIBRARY_DIR}" STREQUAL "")
+    SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})
+ENDIF()
 
 IF(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     SET(PLATFORM_COMPILER_CLANG TRUE)
@@ -50,6 +58,14 @@ IF(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "Darwin")
     SET(PLATFORM_SYSTEM_DARWIN TRUE)
 ELSE()
     SET(PLATFORM_SYSTEM_LINUX TRUE)
+    IF(NOT EXISTS ${THIRD_PARTY_LIBRARY_DIR})
+        IF(ALLOW_SYSTEM_THIRD_PARTY_FALLBACK)
+            SET(USE_SYSTEM_THIRD_PARTY TRUE)
+            MESSAGE(WARNING "Using system shared libraries because THIRD_PARTY_LIBRARY_DIR was not found. This mode is for development only and does not match the original release build flow.")
+        ELSE()
+            MESSAGE(FATAL_ERROR "THIRD_PARTY_LIBRARY_DIR not found: ${THIRD_PARTY_LIBRARY_DIR}. Provide vendor libraries or set -DALLOW_SYSTEM_THIRD_PARTY_FALLBACK=ON for a development-only system build.")
+        ENDIF()
+    ENDIF()
 ENDIF()
 
 # C
@@ -123,11 +139,21 @@ ELSE()
     
     # When the __MUSL__ macro is enabled and compilation errors are encountered, you can add the connector option: -static
     # -rdynamic -Wl,-Bstatic -Wl,-Bdynamic -lstdc++ -lpthread -ldl -lz -lrt
-    SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic") 
+    IF(USE_SYSTEM_THIRD_PARTY)
+        IF(USE_SYSTEM_STATIC_THIRD_PARTY)
+            SET(CMAKE_EXE_LINKER_FLAGS "-static -static-libstdc++ -static-libgcc -rdynamic")
+        ELSE()
+            SET(CMAKE_EXE_LINKER_FLAGS "-rdynamic")
+        ENDIF()
+    ELSE()
+        SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic")
+    ENDIF()
 ENDIF()
 
-# Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+IF(USE_SYSTEM_THIRD_PARTY)
+    FIND_PACKAGE(OpenSSL REQUIRED)
+    FIND_PACKAGE(Boost REQUIRED COMPONENTS system coroutine thread context regex filesystem)
+ENDIF()
 
 # Set the compiled header file search directorys.
 INCLUDE_DIRECTORIES(
@@ -137,23 +163,31 @@ INCLUDE_DIRECTORIES(
     ${PROJECT_SOURCE_DIR}/common/lwip/my
     ${PROJECT_SOURCE_DIR}/common/lwip/include
 
-    ${THIRD_PARTY_LIBRARY_DIR}/boost
-    ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/include
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl/include
-
     # ${THIRD_PARTY_LIBRARY_DIR}/curl/include
     # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src/include
 )
 
-# Set the third library connection directory to searchs.
-LINK_DIRECTORIES(
-    ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
-    ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl
+IF(NOT USE_SYSTEM_THIRD_PARTY)
+    INCLUDE_DIRECTORIES(
+        ${THIRD_PARTY_LIBRARY_DIR}/boost
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/include
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl/include
+    )
+ELSE()
+    INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIRS})
+ENDIF()
 
-    # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src
-    # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
-)
+# Set the third library connection directory to searchs.
+IF(NOT USE_SYSTEM_THIRD_PARTY)
+    LINK_DIRECTORIES(
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl
+
+        # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src
+        # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
+    )
+ENDIF()
 
 # Set the compiled source file search directorys.
 IF(PLATFORM_SYSTEM_DARWIN)
@@ -188,6 +222,8 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/ppp/*.c 
     ${PROJECT_SOURCE_DIR}/ppp/*.cpp)
 
+LIST(FILTER SOURCE_FILES EXCLUDE REGEX ".*/forkform/.*")
+
 # Add the compiled output binary files.
 ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
 
@@ -215,46 +251,120 @@ IF(PLATFORM_SYSTEM_DARWIN)
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
 
-    TARGET_LINK_LIBRARIES(${NAME}
-        libssl.a 
-        libcrypto.a 
-        libjemalloc.a
-        # liburing.a
+    IF(USE_SYSTEM_THIRD_PARTY)
+        IF(USE_SYSTEM_STATIC_THIRD_PARTY)
+            TARGET_LINK_LIBRARIES(${NAME}
+                /usr/lib/x86_64-linux-gnu/libssl.a
+                /usr/lib/x86_64-linux-gnu/libcrypto.a
+                /usr/lib/x86_64-linux-gnu/libjemalloc.a
+                /usr/lib/x86_64-linux-gnu/libboost_system.a
+                /usr/lib/x86_64-linux-gnu/libboost_coroutine.a
+                /usr/lib/x86_64-linux-gnu/libboost_thread.a
+                /usr/lib/x86_64-linux-gnu/libboost_context.a
+                /usr/lib/x86_64-linux-gnu/libboost_regex.a
+                /usr/lib/x86_64-linux-gnu/libboost_filesystem.a
+                /usr/lib/x86_64-linux-gnu/libicui18n.a
+                /usr/lib/x86_64-linux-gnu/libicuuc.a
+                /usr/lib/x86_64-linux-gnu/libicudata.a
+                atomic
+                dl
+                pthread
+                z
+                m)
+        ELSE()
+            TARGET_LINK_LIBRARIES(${NAME}
+                ${OPENSSL_SSL_LIBRARY}
+                ${OPENSSL_CRYPTO_LIBRARY}
+                jemalloc
+                atomic
+                dl
+                pthread
+                Boost::system
+                Boost::coroutine
+                Boost::thread
+                Boost::context
+                Boost::regex
+                Boost::filesystem)
+        ENDIF()
+    ELSE()
+        TARGET_LINK_LIBRARIES(${NAME}
+            libssl.a 
+            libcrypto.a 
+            libjemalloc.a
+            # liburing.a
 
-        # libbpf.a
-        # libelf.a
-        # libz.a
+            # libbpf.a
+            # libelf.a
+            # libz.a
 
-        atomic
-        dl
-        pthread
+            atomic
+            dl
+            pthread
 
-        libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a
-        libboost_regex.a 
-        libboost_filesystem.a) 
+            libboost_system.a
+            libboost_coroutine.a 
+            libboost_thread.a 
+            libboost_context.a
+            libboost_regex.a 
+            libboost_filesystem.a)
+    ENDIF()
 ELSE()
-    TARGET_LINK_LIBRARIES(${NAME} 
-        libc.a
-        libssl.a 
-        libcrypto.a 
-        libjemalloc.a
-        # liburing.a
+    IF(USE_SYSTEM_THIRD_PARTY)
+        IF(USE_SYSTEM_STATIC_THIRD_PARTY)
+            TARGET_LINK_LIBRARIES(${NAME}
+                /usr/lib/x86_64-linux-gnu/libssl.a
+                /usr/lib/x86_64-linux-gnu/libcrypto.a
+                /usr/lib/x86_64-linux-gnu/libjemalloc.a
+                /usr/lib/x86_64-linux-gnu/libboost_system.a
+                /usr/lib/x86_64-linux-gnu/libboost_coroutine.a
+                /usr/lib/x86_64-linux-gnu/libboost_thread.a
+                /usr/lib/x86_64-linux-gnu/libboost_context.a
+                /usr/lib/x86_64-linux-gnu/libboost_regex.a
+                /usr/lib/x86_64-linux-gnu/libboost_filesystem.a
+                /usr/lib/x86_64-linux-gnu/libicui18n.a
+                /usr/lib/x86_64-linux-gnu/libicuuc.a
+                /usr/lib/x86_64-linux-gnu/libicudata.a
+                atomic
+                dl
+                pthread
+                z
+                m)
+        ELSE()
+            TARGET_LINK_LIBRARIES(${NAME}
+                ${OPENSSL_SSL_LIBRARY}
+                ${OPENSSL_CRYPTO_LIBRARY}
+                jemalloc
+                atomic
+                dl
+                pthread
+                Boost::system
+                Boost::coroutine
+                Boost::thread
+                Boost::context
+                Boost::regex
+                Boost::filesystem)
+        ENDIF()
+    ELSE()
+        TARGET_LINK_LIBRARIES(${NAME} 
+            libc.a
+            libssl.a 
+            libcrypto.a 
+            libjemalloc.a
+            # liburing.a
 
-        # libbpf.a
-        # libelf.a
-        # libz.a
+            # libbpf.a
+            # libelf.a
+            # libz.a
 
-        atomic
-        dl
-        pthread
+            atomic
+            dl
+            pthread
 
-        libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a 
-        libboost_regex.a
-        libboost_filesystem.a) 
+            libboost_system.a
+            libboost_coroutine.a 
+            libboost_thread.a 
+            libboost_context.a 
+            libboost_regex.a
+            libboost_filesystem.a)
+    ENDIF()
 ENDIF()

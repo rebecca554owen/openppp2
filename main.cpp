@@ -86,6 +86,106 @@ static constexpr int PPP_VIRR_UPDATE_STRETCH  = 300;    // Retry interval in sec
 static constexpr int PPP_VIRR_UPDATE_INTERVAL = 86400;  // Daily update interval in seconds
 static constexpr int PPP_VBGP_UPDATE_INTERVAL = 3600;   // Hourly vBGP update interval
 
+void DebugLog(const char* format, ...) noexcept;
+
+#if defined(_LINUX)
+static bool LinuxExecuteCommand(const ppp::string& command) noexcept
+{
+    if (command.empty())
+    {
+        return false;
+    }
+
+    int status = system(command.data());
+    return status == 0;
+}
+
+static int LinuxExecuteCommandWithStatus(const ppp::string& command) noexcept
+{
+    if (command.empty())
+    {
+        return -1;
+    }
+
+    return system(command.data());
+}
+
+static bool LinuxPrepareIpv6NatEnvironment(const std::shared_ptr<AppConfiguration>& configuration) noexcept
+{
+    if (NULLPTR == configuration)
+    {
+        return false;
+    }
+
+    const auto& ipv6 = configuration->server.ipv6;
+    if (!ipv6.enabled || ToLower(ipv6.mode) != "nat")
+    {
+        return true;
+    }
+
+    ppp::string prefix = ipv6.prefix;
+    if (prefix.empty())
+    {
+        prefix = "fd42:4242:4242::";
+    }
+
+    int prefix_length = std::max<int>(64, std::min<int>(128, ipv6.prefix_length));
+    char sysctl_command[256];
+    snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1");
+    if (!LinuxExecuteCommand(sysctl_command))
+    {
+        fprintf(stdout, "Linux IPv6 NAT prepare failed: cannot enable ipv6 forwarding.\r\n");
+        return false;
+    }
+    DebugLog("linux ipv6 nat forwarding enabled prefix=%s/%d", prefix.data(), prefix_length);
+
+    char nft_flush_command[256];
+    snprintf(nft_flush_command, sizeof(nft_flush_command), "nft list table ip6 openppp2 >/dev/null 2>&1 && nft flush table ip6 openppp2 >/dev/null 2>&1 || true");
+    LinuxExecuteCommand(nft_flush_command);
+
+    char nft_command[2048];
+    snprintf(nft_command, sizeof(nft_command),
+        "nft add table ip6 openppp2 >/dev/null 2>&1; "
+        "nft 'add chain ip6 openppp2 forward { type filter hook forward priority filter; policy accept; }' >/dev/null 2>&1; "
+        "nft 'add chain ip6 openppp2 postrouting { type nat hook postrouting priority srcnat; policy accept; }' >/dev/null 2>&1; "
+        "nft 'add rule ip6 openppp2 forward ip6 saddr %s/%d accept' >/dev/null 2>&1; "
+        "nft 'add rule ip6 openppp2 forward ip6 daddr %s/%d ct state related,established accept' >/dev/null 2>&1; "
+        "nft 'add rule ip6 openppp2 postrouting ip6 saddr %s/%d masquerade' >/dev/null 2>&1",
+        prefix.data(), prefix_length,
+        prefix.data(), prefix_length,
+        prefix.data(), prefix_length);
+
+    if (LinuxExecuteCommand(nft_command))
+    {
+        DebugLog("linux ipv6 nat prepared with nft prefix=%s/%d", prefix.data(), prefix_length);
+        return true;
+    }
+
+    char ip6tables_command[2048];
+    snprintf(ip6tables_command, sizeof(ip6tables_command),
+        "ip6tables -C FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1 || "
+        "ip6tables -A FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
+        "ip6tables -C FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || "
+        "ip6tables -A FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; "
+        "ip6tables -t nat -C POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1 || "
+        "ip6tables -t nat -A POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1",
+        prefix.data(), prefix_length,
+        prefix.data(), prefix_length,
+        prefix.data(), prefix_length,
+        prefix.data(), prefix_length,
+        prefix.data(), prefix_length, prefix.data(), prefix_length);
+    int ip6tables_status = LinuxExecuteCommandWithStatus(ip6tables_command);
+    if (ip6tables_status == 0)
+    {
+        DebugLog("linux ipv6 nat prepared with ip6tables prefix=%s/%d", prefix.data(), prefix_length);
+        return true;
+    }
+
+    fprintf(stdout, "Linux IPv6 NAT prepare failed: nft and ip6tables rules both failed.\r\n");
+    return false;
+}
+#endif
+
 // Network interface configuration structure
 struct NetworkInterface final
 {
@@ -157,6 +257,7 @@ public:
     ConsoleForegroundWindowSize*                        console_window_size    = NULLPTR;    // Console dimensions
     ppp::string*                                        console_window_content = NULLPTR;    // Output buffer
     int*                                                console_window_heights = NULLPTR;    // Line counter
+    int                                                 reserved_bottom_lines  = 0;          // Keep lines for footer/debug area
 
 public:
     // Print formatted text with line counting and truncation
@@ -165,7 +266,13 @@ public:
     {
         // Control the number of lines that need to be printed to the console window to prevent crowding the visible display area 
         // Of the console window, and when the console window size changes, follow the printed content until it is fully printed.
-        if (console_window_size->y > *console_window_heights) 
+        int available_lines = console_window_size->y - reserved_bottom_lines;
+        if (available_lines < 1)
+        {
+            available_lines = 1;
+        }
+
+        if (available_lines > *console_window_heights) 
         {
             ppp::string st = PrintToString(console_window_size->x, ' ', format, std::forward<A&&>(args)...);
 
@@ -305,6 +412,7 @@ private:
 static std::shared_ptr<PppApplication>              DEFAULT_;                            // Application instance
 static struct {
     using BypassSet = NetworkInterface::BypassSet;
+    using DebugLogBuffer = std::deque<ppp::string>;
 
     bool                                            restart                     = false; // Restart flag
     bool                                            vbgp                        = false; // vBGP enabled
@@ -314,11 +422,36 @@ static struct {
     int                                             auto_restart                = 0;     // Auto restart interval
 
     bool                                            virr                        = false; // Auto-IP update enabled
+    bool                                            debug_log                   = false; // Verbose debug log enabled
     uint64_t                                        virr_next                   = 0;     // Next IP update time
     ppp::string                                     virr_argument;                       // IP update argument
+    DebugLogBuffer                                  debug_logs;                          // In-memory debug log buffer
 
     std::shared_ptr<BypassSet>                      bypass;                              // Bypass file path
 }                                                   GLOBAL_;                             // Global application state
+
+void DebugLog(const char* format, ...) noexcept
+{
+    if (!GLOBAL_.debug_log || NULLPTR == format)
+    {
+        return;
+    }
+
+    char message[4096];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    ppp::string line = "[DEBUG] ";
+    line.append(message);
+    GLOBAL_.debug_logs.emplace_back(std::move(line));
+
+    while (GLOBAL_.debug_logs.size() > 32)
+    {
+        GLOBAL_.debug_logs.pop_front();
+    }
+}
 
 // Constructor
 PppApplication::PppApplication() noexcept
@@ -695,6 +828,10 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
 
     int console_window_heights = 0;
     PrintToConsoleForegroundWindow printfn = { &console_window_size, &console_window_content, &console_window_heights };
+    if (GLOBAL_.debug_log)
+    {
+        printfn.reserved_bottom_lines = 12;
+    }
 
     // Create separator line
     ppp::string section_separator;
@@ -968,6 +1105,29 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
                     printfn("%s", tmp.data());
                 }
 
+                if (sti.tun) {
+                    ppp::app::protocol::VirtualEthernetInformationExtensions ipv6_ext;
+                    if (NULLPTR != client) {
+                        ipv6_ext = client->GetInformationExtensions();
+                    }
+
+                    if (ipv6_ext.AssignedIPv6Address.is_v6()) {
+                        printfn("IPv6 Address          : %s/%d", ipv6_ext.AssignedIPv6Address.to_string().data(), (int)ipv6_ext.AssignedIPv6PrefixLength);
+                    }
+                    if (ipv6_ext.AssignedIPv6Gateway.is_v6()) {
+                        printfn("IPv6 Gateway          : %s", ipv6_ext.AssignedIPv6Gateway.to_string().data());
+                    }
+                    if (ipv6_ext.AssignedIPv6PrefixLength > 0) {
+                        printfn("IPv6 Prefix Length    : %d", (int)ipv6_ext.AssignedIPv6PrefixLength);
+                    }
+                    if (ipv6_ext.AssignedIPv6Dns1.is_v6()) {
+                        printfn("IPv6 DNS 1            : %s", ipv6_ext.AssignedIPv6Dns1.to_string().data());
+                    }
+                    if (ipv6_ext.AssignedIPv6Dns2.is_v6()) {
+                        printfn("IPv6 DNS 2            : %s", ipv6_ext.AssignedIPv6Dns2.to_string().data());
+                    }
+                }
+
                 // To print a blank line as a separator for major categories.
                 printfn("");
             }
@@ -1004,6 +1164,22 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
     {
         printfn("IN                    : %s", ppp::StrFormatByteSize(statistics->IncomingTraffic).data());
         printfn("OUT                   : %s", ppp::StrFormatByteSize(statistics->OutgoingTraffic).data());
+    }
+
+    if (GLOBAL_.debug_log)
+    {
+        int debug_lines = 0;
+        printfn("");
+        printfn("%s", "DEBUG LOG");
+        printfn("%s", section_separator.data());
+
+        int max_debug_lines = std::max<int>(1, console_window_size.y - console_window_heights - 3);
+        int begin = std::max<int>(0, (int)GLOBAL_.debug_logs.size() - max_debug_lines);
+        for (int i = begin, size = (int)GLOBAL_.debug_logs.size(); i < size; i++)
+        {
+            printfn("%s", GLOBAL_.debug_logs[i].data());
+            debug_lines++;
+        }
     }
 
     // Update buffer size for next render
@@ -1204,6 +1380,14 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
         std::shared_ptr<VirtualEthernetSwitcher> ethernet = NULLPTR;
         do
         {
+#if defined(_LINUX)
+            if (!LinuxPrepareIpv6NatEnvironment(configuration))
+            {
+                fprintf(stdout, "%s\r\n", "Failed to prepare Linux IPv6 NAT environment.");
+                break;
+            }
+#endif
+
             // Create server switcher
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration);
             if (NULLPTR == ethernet)
@@ -1391,6 +1575,11 @@ void PppApplication::PrintHelpInformation() noexcept
         col_option_width, "--config=<path>", 
         col_description_width, "Configuration file path", 
         col_default_width, "./appsettings.json");
+
+    printf("│ %-*s │ %-*s │ %-*s │\n", 
+        col_option_width, "--debug-log=[yes|no]", 
+        col_description_width, "Print verbose debug logs", 
+        col_default_width, "no");
     
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--dns=<ip-list>", 
@@ -2577,6 +2766,12 @@ int main(int argc, const char* argv[]) noexcept
 {
     // Configure real-time mode
     ppp::RT = ppp::ToBoolean(ppp::GetCommandArgument("--rt", argc, argv, "y").data());
+    GLOBAL_.debug_log = ppp::ToBoolean(ppp::GetCommandArgument("--debug-log", argc, argv).data()) ||
+        ppp::ToBoolean(ppp::GetCommandArgument("--debug", argc, argv).data());
+    if (GLOBAL_.debug_log)
+    {
+        DebugLog("debug log enabled");
+    }
     
     // Initialize global state
     ppp::global::cctor();

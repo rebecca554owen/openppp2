@@ -132,6 +132,20 @@ namespace ppp {
                 bool                                                        mapping;
                 ppp::string                                                 backend;
                 ppp::string                                                 backend_key;
+                struct {
+                    bool                                                    enabled;
+                    ppp::string                                             mode;
+                    ppp::string                                             prefix;
+                    int                                                     prefix_length;
+                    bool                                                    routed_prefix;
+                    bool                                                    neighbor_proxy;
+                    ppp::string                                             neighbor_proxy_provider;
+                    ppp::string                                             gateway;
+                    ppp::string                                             dns1;
+                    ppp::string                                             dns2;
+                    ppp::string                                             stable_secret;
+                    ppp::string                                             allocation;
+                }                                                           ipv6;
             }                                                               server;
             struct {
                 ppp::string                                                 guid;

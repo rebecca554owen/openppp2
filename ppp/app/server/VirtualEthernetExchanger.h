@@ -30,6 +30,7 @@ namespace ppp {
 
             public:
                 typedef ppp::app::protocol::VirtualEthernetInformation                      VirtualEthernetInformation;
+                typedef ppp::app::protocol::VirtualEthernetInformationExtensions            VirtualEthernetInformationExtensions;
                 typedef std::shared_ptr<VirtualEthernetSwitcher>                            VirtualEthernetSwitcherPtr;
                 typedef std::shared_ptr<VirtualEthernetDatagramPort>                        VirtualEthernetDatagramPortPtr;
                 typedef std::shared_ptr<VirtualEthernetManagedServer>                       VirtualEthernetManagedServerPtr;
@@ -82,6 +83,7 @@ namespace ppp {
                 virtual bool                                                                OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept override;
                 virtual bool                                                                OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept override;
                 virtual bool                                                                OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept override;
+                virtual bool                                                                OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept override;
                 virtual bool                                                                OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept override;
                 virtual bool                                                                OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept override;
                 virtual bool                                                                OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept override;
@@ -131,6 +133,7 @@ namespace ppp {
                 bool                                                                        DoMuxEvents() noexcept;
                 bool                                                                        Arp(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask) noexcept;
                 bool                                                                        ForwardNatPacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept;
+                bool                                                                        ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept;
                 bool                                                                        SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
                 bool                                                                        SendPacketToDestination(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept;
     

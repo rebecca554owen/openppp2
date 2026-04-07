@@ -58,6 +58,7 @@ namespace ppp {
 
             public: 
                 typedef ppp::app::protocol::VirtualEthernetInformation              VirtualEthernetInformation;
+                typedef ppp::app::protocol::VirtualEthernetInformationExtensions    VirtualEthernetInformationExtensions;
                 typedef ppp::app::client::proxys::VEthernetHttpProxySwitcher        VEthernetHttpProxySwitcher;
                 typedef std::shared_ptr<VEthernetHttpProxySwitcher>                 VEthernetHttpProxySwitcherPtr;
                 typedef ppp::app::client::proxys::VEthernetSocksProxySwitcher       VEthernetSocksProxySwitcher;
@@ -124,6 +125,7 @@ namespace ppp {
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS>               GetQoS()                     noexcept { return qos_; }
                 std::shared_ptr<ppp::transmissions::ITransmissionStatistics>        GetStatistics()              noexcept { return statistics_; }
                 std::shared_ptr<VirtualEthernetInformation>                         GetInformation()             noexcept;
+                VirtualEthernetInformationExtensions                                GetInformationExtensions()   noexcept { return information_extensions_; }
                 VEthernetHttpProxySwitcherPtr                                       GetHttpProxy()               noexcept { return http_proxy_; }
                 VEthernetSocksProxySwitcherPtr                                      GetSocksProxy()              noexcept { return socks_proxy_; }
                 RouteInformationTablePtr                                            GetRib()                     noexcept { return rib_; }
@@ -168,10 +170,12 @@ namespace ppp {
 
             protected:  
                 virtual bool                                                        OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept override;
+                virtual bool                                                        OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept override;
                 virtual bool                                                        OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept override;
                 virtual bool                                                        OnTick(uint64_t now) noexcept override;
                 virtual bool                                                        OnUpdate(uint64_t now) noexcept override;
                 virtual bool                                                        OnInformation(const std::shared_ptr<VirtualEthernetInformation>& information) noexcept;
+                virtual bool                                                        OnInformation(const std::shared_ptr<VirtualEthernetInformation>& information, const VirtualEthernetInformationExtensions& extensions) noexcept;
 
             protected:  
                 virtual std::shared_ptr<VEthernetExchanger>                         NewExchanger() noexcept;
@@ -242,6 +246,10 @@ namespace ppp {
                 bool                                                                AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept;
                 
             private:    
+                bool                                                                ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept;
+                void                                                                RestoreAssignedIPv6() noexcept;
+
+            private:    
                 bool                                                                ER(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, int ttl, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept;
                 bool                                                                TE(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, UInt32 source, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept;
                 bool                                                                ERORTE(int ack_id) noexcept;
@@ -275,6 +283,10 @@ namespace ppp {
                 ppp::string                                                         server_ru_;
                 std::shared_ptr<aggligator::aggligator>                             aggligator_;
                 IForwardingPtr                                                      forwarding_;
+                VirtualEthernetInformationExtensions                                information_extensions_;
+                bool                                                                ipv6_applied_ = false;
+                ppp::string                                                         ipv6_original_dns_restore_;
+                ppp::string                                                         ipv6_original_default_route_restore_;
                 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 SynchronizedObject                                                  prdr_;

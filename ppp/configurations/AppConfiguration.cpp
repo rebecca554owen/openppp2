@@ -109,6 +109,18 @@ namespace ppp {
             config.server.mapping = true;
             config.server.backend = "";
             config.server.backend_key = "";
+            config.server.ipv6.enabled = false;
+            config.server.ipv6.mode = "";
+            config.server.ipv6.prefix = "";
+            config.server.ipv6.prefix_length = 64;
+            config.server.ipv6.routed_prefix = true;
+            config.server.ipv6.neighbor_proxy = false;
+            config.server.ipv6.neighbor_proxy_provider = "kernel";
+            config.server.ipv6.gateway = "";
+            config.server.ipv6.dns1 = "";
+            config.server.ipv6.dns2 = "";
+            config.server.ipv6.stable_secret = "";
+            config.server.ipv6.allocation = "guid-hash";
 
             config.client.mappings.clear();
             config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
@@ -146,6 +158,14 @@ namespace ppp {
                     &config.server.backend,
                     &config.server.backend_key,
                     &config.server.log,
+                    &config.server.ipv6.mode,
+                    &config.server.ipv6.prefix,
+                    &config.server.ipv6.gateway,
+                    &config.server.ipv6.dns1,
+                    &config.server.ipv6.dns2,
+                    &config.server.ipv6.stable_secret,
+                    &config.server.ipv6.neighbor_proxy_provider,
+                    &config.server.ipv6.allocation,
                     &config.client.guid,
                     &config.client.server,
                     &config.client.server_proxy,
@@ -276,6 +296,7 @@ namespace ppp {
             }
             
             config.server.node = std::max<int>(0, config.server.node);
+            config.server.ipv6.prefix_length = std::max<int>(0, std::min<int>(128, config.server.ipv6.prefix_length));
             config.udp.dns.ttl = std::max<int>(0, config.udp.dns.ttl);
 
             if (config.udp.dns.timeout < 1) {
@@ -384,6 +405,38 @@ namespace ppp {
                 }
                 else {
                     ip = Ipep::ToAddressString<ppp::string>(address);
+                }
+            }
+
+            ppp::string ipv6_mode = ToLower(config.server.ipv6.mode);
+            config.server.ipv6.mode = ipv6_mode;
+            if (config.server.ipv6.enabled) {
+                bool has_public_ipv6_plan = !config.server.ipv6.prefix.empty();
+                if (ipv6_mode.empty()) {
+                    config.server.ipv6.mode = has_public_ipv6_plan ? "prefix" : "nat";
+                }
+
+                if (config.server.ipv6.mode == "nat") {
+                    config.server.ipv6.routed_prefix = false;
+                    config.server.ipv6.neighbor_proxy = false;
+                    if (config.server.ipv6.prefix.empty()) {
+                        config.server.ipv6.prefix = "fd42:4242:4242::";
+                    }
+                    if (config.server.ipv6.prefix_length < 64) {
+                        config.server.ipv6.prefix_length = 64;
+                    }
+                }
+                elif(config.server.ipv6.mode == "prefix") {
+                    if (config.server.ipv6.prefix.empty()) {
+                        config.server.ipv6.mode = "nat";
+                        config.server.ipv6.routed_prefix = false;
+                        config.server.ipv6.neighbor_proxy = false;
+                        config.server.ipv6.prefix = "fd42:4242:4242::";
+                        config.server.ipv6.prefix_length = 64;
+                    }
+                }
+                else {
+                    config.server.ipv6.mode = has_public_ipv6_plan ? "prefix" : "nat";
                 }
             }
 
@@ -620,6 +673,25 @@ namespace ppp {
             return true;
         }
 
+        template <typename TValue>
+        static bool AssignIfPresent(TValue& destination, const Json::Value& json) noexcept {
+            if (json.isNull()) {
+                return false;
+            }
+
+            destination = JsonAuxiliary::AsValue<TValue>(json);
+            return true;
+        }
+
+        static bool AssignBoolIfPresent(bool& destination, const Json::Value& json) noexcept {
+            if (json.isNull()) {
+                return false;
+            }
+
+            destination = JsonAuxiliary::AsValue<bool>(json);
+            return true;
+        }
+
         static bool ReadJsonToRoute(AppConfiguration::RouteConfiguration& route, const Json::Value& json) noexcept {
             if (json.isNull()) {
                 return false;
@@ -711,13 +783,15 @@ namespace ppp {
             config.udp.listen.port = JsonAuxiliary::AsValue<int>(json["udp"]["listen"]["port"]);
             config.udp.cwnd = std::max<int>(0, JsonAuxiliary::AsValue<int>(json["udp"]["cwnd"]));
             config.udp.rwnd = std::max<int>(0, JsonAuxiliary::AsValue<int>(json["udp"]["rwnd"]));
-            config.udp.static_.dns = JsonAuxiliary::AsValue<bool>(json["udp"]["static"]["dns"]);
-            config.udp.static_.quic = JsonAuxiliary::AsValue<bool>(json["udp"]["static"]["quic"]);
-            config.udp.static_.icmp = JsonAuxiliary::AsValue<bool>(json["udp"]["static"]["icmp"]);
+            AssignBoolIfPresent(config.udp.static_.dns, json["udp"]["static"]["dns"]);
+            AssignBoolIfPresent(config.udp.static_.quic, json["udp"]["static"]["quic"]);
+            AssignBoolIfPresent(config.udp.static_.icmp, json["udp"]["static"]["icmp"]);
             config.udp.static_.aggligator = JsonAuxiliary::AsValue<int>(json["udp"]["static"]["aggligator"]);
             config.udp.static_.keep_alived[0] = JsonAuxiliary::AsValue<int>(json["udp"]["static"]["keep-alived"][0]);
             config.udp.static_.keep_alived[1] = JsonAuxiliary::AsValue<int>(json["udp"]["static"]["keep-alived"][1]);
-            ReadJsonAllAddressStringToSet(json["udp"]["static"]["servers"], config.udp.static_.servers);
+            if (!ReadJsonAllAddressStringToSet(json["udp"]["static"]["servers"], config.udp.static_.servers)) {
+                ReadJsonAllAddressStringToSet(json["udp"]["static"]["server"], config.udp.static_.servers);
+            }
 
             config.tcp.inactive.timeout = JsonAuxiliary::AsValue<int>(json["tcp"]["inactive"]["timeout"]);
             config.tcp.connect.timeout = JsonAuxiliary::AsValue<int>(json["tcp"]["connect"]["timeout"]);
@@ -743,7 +817,9 @@ namespace ppp {
             config.websocket.ssl.certificate_chain_file = JsonAuxiliary::AsValue<std::string>(json["websocket"]["ssl"]["certificate-chain-file"]);
             config.websocket.ssl.certificate_key_password = JsonAuxiliary::AsValue<std::string>(json["websocket"]["ssl"]["certificate-key-password"]);
             config.websocket.ssl.ciphersuites = JsonAuxiliary::AsValue<std::string>(json["websocket"]["ssl"]["ciphersuites"]);
-            config.websocket.ssl.verify_peer = JsonAuxiliary::AsValue<bool>(json["websocket"]["ssl"]["verify-peer"]);
+            if (!AssignBoolIfPresent(config.websocket.ssl.verify_peer, json["websocket"]["ssl"]["verify-peer"])) {
+                AssignBoolIfPresent(config.websocket.ssl.verify_peer, json["websocket"]["verify-peer"]);
+            }
             config.websocket.host = JsonAuxiliary::AsValue<ppp::string>(json["websocket"]["host"]);
             config.websocket.path = JsonAuxiliary::AsValue<ppp::string>(json["websocket"]["path"]);
             config.websocket.http.error = JsonAuxiliary::AsValue<ppp::string>(json["websocket"]["http"]["error"]);
@@ -760,17 +836,29 @@ namespace ppp {
             config.key.protocol_key = JsonAuxiliary::AsValue<ppp::string>(json["key"]["protocol-key"]);
             config.key.transport = JsonAuxiliary::AsValue<ppp::string>(json["key"]["transport"]);
             config.key.transport_key = JsonAuxiliary::AsValue<ppp::string>(json["key"]["transport-key"]);
-            config.key.masked = JsonAuxiliary::AsValue<bool>(json["key"]["masked"]);
-            config.key.plaintext = JsonAuxiliary::AsValue<bool>(json["key"]["plaintext"]);
-            config.key.delta_encode = JsonAuxiliary::AsValue<bool>(json["key"]["delta-encode"]);
-            config.key.shuffle_data = JsonAuxiliary::AsValue<bool>(json["key"]["shuffle-data"]);
+            AssignBoolIfPresent(config.key.masked, json["key"]["masked"]);
+            AssignBoolIfPresent(config.key.plaintext, json["key"]["plaintext"]);
+            AssignBoolIfPresent(config.key.delta_encode, json["key"]["delta-encode"]);
+            AssignBoolIfPresent(config.key.shuffle_data, json["key"]["shuffle-data"]);
 
             config.server.log = JsonAuxiliary::AsValue<ppp::string>(json["server"]["log"]);
             config.server.node = JsonAuxiliary::AsValue<int>(json["server"]["node"]);
-            config.server.subnet = JsonAuxiliary::AsValue<bool>(json["server"]["subnet"]);
-            config.server.mapping = JsonAuxiliary::AsValue<bool>(json["server"]["mapping"]);
+            AssignBoolIfPresent(config.server.subnet, json["server"]["subnet"]);
+            AssignBoolIfPresent(config.server.mapping, json["server"]["mapping"]);
             config.server.backend = JsonAuxiliary::AsValue<ppp::string>(json["server"]["backend"]);
             config.server.backend_key = JsonAuxiliary::AsValue<ppp::string>(json["server"]["backend-key"]);
+            AssignBoolIfPresent(config.server.ipv6.enabled, json["server"]["ipv6"]["enabled"]);
+            AssignIfPresent(config.server.ipv6.mode, json["server"]["ipv6"]["mode"]);
+            AssignIfPresent(config.server.ipv6.prefix, json["server"]["ipv6"]["prefix"]);
+            AssignIfPresent(config.server.ipv6.prefix_length, json["server"]["ipv6"]["prefix-length"]);
+            AssignBoolIfPresent(config.server.ipv6.routed_prefix, json["server"]["ipv6"]["routed-prefix"]);
+            AssignBoolIfPresent(config.server.ipv6.neighbor_proxy, json["server"]["ipv6"]["neighbor-proxy"]);
+            AssignIfPresent(config.server.ipv6.neighbor_proxy_provider, json["server"]["ipv6"]["neighbor-proxy-provider"]);
+            AssignIfPresent(config.server.ipv6.gateway, json["server"]["ipv6"]["gateway"]);
+            AssignIfPresent(config.server.ipv6.dns1, json["server"]["ipv6"]["dns1"]);
+            AssignIfPresent(config.server.ipv6.dns2, json["server"]["ipv6"]["dns2"]);
+            AssignIfPresent(config.server.ipv6.stable_secret, json["server"]["ipv6"]["stable-secret"]);
+            AssignIfPresent(config.server.ipv6.allocation, json["server"]["ipv6"]["allocation"]);
 
             LoadAllMappings(config, json["client"]["mappings"]);
             LoadAllRoutes(config.client.routes, json["client"]["routes"]);
@@ -787,7 +875,7 @@ namespace ppp {
             config.client.socks_proxy.username = JsonAuxiliary::AsValue<ppp::string>(json["client"]["socks-proxy"]["username"]);
             config.client.socks_proxy.password = JsonAuxiliary::AsValue<ppp::string>(json["client"]["socks-proxy"]["password"]);
 #if defined(_WIN32)
-            config.client.paper_airplane.tcp = JsonAuxiliary::AsValue<bool>(json["client"]["paper-airplane"]["tcp"]);
+            AssignBoolIfPresent(config.client.paper_airplane.tcp, json["client"]["paper-airplane"]["tcp"]);
 #endif
             return Loaded();
         }
@@ -851,6 +939,7 @@ namespace ppp {
                 }
             }
 
+            udp["static"]["servers"] = servers;
             udp["static"]["server"] = servers;
             udp["static"]["dns"] = config.udp.static_.dns;
             udp["static"]["quic"] = config.udp.static_.quic;
@@ -895,6 +984,7 @@ namespace ppp {
             websocket["ssl"]["certificate-key-password"] = stl::transform<ppp::string>(config.websocket.ssl.certificate_key_password);
             websocket["ssl"]["ciphersuites"] = stl::transform<ppp::string>(config.websocket.ssl.ciphersuites);
             websocket["ssl"]["verify-peer"] = config.websocket.ssl.verify_peer;
+            websocket["verify-peer"] = config.websocket.ssl.verify_peer;
             websocket["http"]["error"] = stl::transform<ppp::string>(config.websocket.http.error);
 
             // Set websocket structure
@@ -939,6 +1029,18 @@ namespace ppp {
             server["mapping"] = config.server.mapping;
             server["backend"] = config.server.backend; /* ws://192.168.0.24/ppp/webhook */
             server["backend-key"] = config.server.backend_key;
+            server["ipv6"]["enabled"] = config.server.ipv6.enabled;
+            server["ipv6"]["mode"] = config.server.ipv6.mode;
+            server["ipv6"]["prefix"] = config.server.ipv6.prefix;
+            server["ipv6"]["prefix-length"] = config.server.ipv6.prefix_length;
+            server["ipv6"]["routed-prefix"] = config.server.ipv6.routed_prefix;
+            server["ipv6"]["neighbor-proxy"] = config.server.ipv6.neighbor_proxy;
+            server["ipv6"]["neighbor-proxy-provider"] = config.server.ipv6.neighbor_proxy_provider;
+            server["ipv6"]["gateway"] = config.server.ipv6.gateway;
+            server["ipv6"]["dns1"] = config.server.ipv6.dns1;
+            server["ipv6"]["dns2"] = config.server.ipv6.dns2;
+            server["ipv6"]["stable-secret"] = config.server.ipv6.stable_secret;
+            server["ipv6"]["allocation"] = config.server.ipv6.allocation;
             root["server"] = server;
 
             // Set client structure

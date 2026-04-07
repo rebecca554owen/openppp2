@@ -656,14 +656,23 @@ namespace ppp {
                 }
                 else if (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
                     if (packet_length >= static_cast<int>(sizeof(VirtualEthernetInformation))) {
-                        VirtualEthernetInformation info = *reinterpret_cast<VirtualEthernetInformation*>(p);
+                        InformationEnvelope info;
+                        info.Base = *reinterpret_cast<VirtualEthernetInformation*>(p);
 
                         // convert from network byte order to host byte order
-                        info.BandwidthQoS   = ppp::net::Ipep::NetworkToHostOrder(info.BandwidthQoS);
-                        info.ExpiredTime    = ntohl(info.ExpiredTime);
-                        info.IncomingTraffic= ppp::net::Ipep::NetworkToHostOrder(info.IncomingTraffic);
-                        info.OutgoingTraffic= ppp::net::Ipep::NetworkToHostOrder(info.OutgoingTraffic);
-                        return OnInformation(transmission, info, y);
+                        info.Base.BandwidthQoS    = ppp::net::Ipep::NetworkToHostOrder(info.Base.BandwidthQoS);
+                        info.Base.ExpiredTime     = ntohl(info.Base.ExpiredTime);
+                        info.Base.IncomingTraffic = ppp::net::Ipep::NetworkToHostOrder(info.Base.IncomingTraffic);
+                        info.Base.OutgoingTraffic = ppp::net::Ipep::NetworkToHostOrder(info.Base.OutgoingTraffic);
+
+                        p += sizeof(VirtualEthernetInformation);
+                        packet_length -= sizeof(VirtualEthernetInformation);
+                        if (packet_length > 0) {
+                            info.ExtendedJson.assign(reinterpret_cast<char*>(p), packet_length);
+                            VirtualEthernetInformationExtensions::FromJson(info.Extensions, info.ExtendedJson);
+                        }
+
+                        return OnInformation(transmission, static_cast<const InformationEnvelope&>(info), y);
                     } else {
                         return packet_length == 0;
                     }
@@ -816,17 +825,39 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send virtual Ethernet information structure (converted to network byte order).
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept 
-            {
-                VirtualEthernetInformation info;
+            bool VirtualEthernetLinklayer::DoInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
+                InformationEnvelope envelope;
+                envelope.Base = information;
+                return DoInformation(transmission, envelope, y);
+            }
+
+            bool VirtualEthernetLinklayer::DoInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
+                VirtualEthernetInformation info = information.Base;
 
                 // convert host byte order to network byte order for transmission
-                info.BandwidthQoS    = ppp::net::Ipep::HostToNetworkOrder(information.BandwidthQoS);
-                info.ExpiredTime     = htonl(information.ExpiredTime);
-                info.IncomingTraffic = ppp::net::Ipep::HostToNetworkOrder(information.IncomingTraffic);
-                info.OutgoingTraffic = ppp::net::Ipep::HostToNetworkOrder(information.OutgoingTraffic);
-                return global::PACKET_Push(PacketAction_INFO, transmission, 
-                                           reinterpret_cast<Byte*>(&info), sizeof(info), y);
+                info.BandwidthQoS    = ppp::net::Ipep::HostToNetworkOrder(info.BandwidthQoS);
+                info.ExpiredTime     = htonl(info.ExpiredTime);
+                info.IncomingTraffic = ppp::net::Ipep::HostToNetworkOrder(info.IncomingTraffic);
+                info.OutgoingTraffic = ppp::net::Ipep::HostToNetworkOrder(info.OutgoingTraffic);
+
+                MemoryStream ms;
+                if (!ms.Write(&info, 0, sizeof(info))) {
+                    return false;
+                }
+
+                ppp::string extended = information.ExtendedJson;
+                if (extended.empty() && information.Extensions.HasAny()) {
+                    extended = information.Extensions.ToJson();
+                }
+
+                if (!extended.empty()) {
+                    if (!ms.Write(extended.data(), 0, static_cast<int>(extended.size()))) {
+                        return false;
+                    }
+                }
+
+                std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                return global::PACKET_Push(PacketAction_INFO, transmission, buffer.get(), ms.GetPosition(), y);
             }
 
             // ---------------------------------------------------------------------

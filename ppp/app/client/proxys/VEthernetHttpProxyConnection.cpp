@@ -283,15 +283,45 @@ namespace ppp {
                         return NULLPTR;
                     }
 
-                    int port = PPP_HTTP_SYS_PORT; 
-                    if (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
-                        port = atoi(p + 1);
-                        if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
-                            port = PPP_HTTP_SYS_PORT;
+                    int port = PPP_HTTP_SYS_PORT;
+                    if (!host.empty() && host.front() == '[') {
+                        std::size_t right = host.find(']');
+                        if (right == ppp::string::npos || right < 2) {
+                            return NULLPTR;
                         }
 
-                        *p = '\x0';
-                        host = host.data();
+                        ppp::string literal = host.substr(1, right - 1);
+                        if (right + 1 < host.size()) {
+                            if (host[right + 1] != ':') {
+                                return NULLPTR;
+                            }
+
+                            port = atoi(host.substr(right + 2).data());
+                            if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
+                                port = PPP_HTTP_SYS_PORT;
+                            }
+                        }
+
+                        host = literal;
+                    }
+                    else {
+                        std::size_t first_colon = host.find(':');
+                        std::size_t last_colon = host.rfind(':');
+                        if (first_colon != ppp::string::npos && first_colon == last_colon) {
+                            port = atoi(host.substr(first_colon + 1).data());
+                            if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
+                                port = PPP_HTTP_SYS_PORT;
+                            }
+
+                            host = host.substr(0, first_colon);
+                        }
+                        else {
+                            boost::system::error_code ec;
+                            boost::asio::ip::address address = StringToAddress(host, ec);
+                            if (!ec && address.is_v6()) {
+                                // Pure IPv6 literal without brackets and port.
+                            }
+                        }
                     }
 
                     return VEthernetLocalProxyConnection::GetAddressEndPointByProtocol(host, port);
@@ -433,7 +463,12 @@ namespace ppp {
                     }
 
                     const ppp::string& host = protocolRoot->Host;
-                    if (host.rfind(':') == ppp::string::npos) {
+                    if (!host.empty() && host.front() == '[') {
+                        if (host.find(']') == host.size() - 1) {
+                            protocolRoot->Host = host + ":80";
+                        }
+                    }
+                    elif(host.rfind(':') == ppp::string::npos) {
                         protocolRoot->Host = host + ":80";
                     }
 

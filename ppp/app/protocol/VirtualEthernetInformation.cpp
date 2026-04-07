@@ -1,5 +1,7 @@
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 
+#include <cstring>
+
 using ppp::auxiliary::JsonAuxiliary;
 
 namespace ppp {
@@ -67,6 +69,104 @@ namespace ppp {
                 this->BandwidthQoS    = 0;
                 this->IncomingTraffic = 0;
                 this->OutgoingTraffic = 0;
+            }
+
+            void VirtualEthernetInformationExtensions::Clear() noexcept {
+                AssignedIPv6Mode = IPv6Mode_None;
+                AssignedIPv6PrefixLength = 0;
+                AssignedIPv6Flags = 0;
+                AssignedIPv6Address = boost::asio::ip::address();
+                AssignedIPv6Gateway = boost::asio::ip::address();
+                AssignedIPv6Dns1 = boost::asio::ip::address();
+                AssignedIPv6Dns2 = boost::asio::ip::address();
+            }
+
+            bool VirtualEthernetInformationExtensions::HasAny() const noexcept {
+                return AssignedIPv6Mode != IPv6Mode_None ||
+                    AssignedIPv6PrefixLength != 0 ||
+                    AssignedIPv6Flags != 0 ||
+                    AssignedIPv6Address.is_v6() ||
+                    AssignedIPv6Gateway.is_v6() ||
+                    AssignedIPv6Dns1.is_v6() ||
+                    AssignedIPv6Dns2.is_v6();
+            }
+
+            void VirtualEthernetInformationExtensions::ToJson(Json::Value& json) const noexcept {
+                json["AssignedIPv6Mode"] = AssignedIPv6Mode;
+                json["AssignedIPv6PrefixLength"] = AssignedIPv6PrefixLength;
+                json["AssignedIPv6Flags"] = AssignedIPv6Flags;
+
+                if (AssignedIPv6Address.is_v6()) {
+                    std::string value = AssignedIPv6Address.to_string();
+                    json["AssignedIPv6Address"] = Json::Value(value.c_str());
+                }
+
+                if (AssignedIPv6Gateway.is_v6()) {
+                    std::string value = AssignedIPv6Gateway.to_string();
+                    json["AssignedIPv6Gateway"] = Json::Value(value.c_str());
+                }
+
+                if (AssignedIPv6Dns1.is_v6()) {
+                    std::string value = AssignedIPv6Dns1.to_string();
+                    json["AssignedIPv6Dns1"] = Json::Value(value.c_str());
+                }
+
+                if (AssignedIPv6Dns2.is_v6()) {
+                    std::string value = AssignedIPv6Dns2.to_string();
+                    json["AssignedIPv6Dns2"] = Json::Value(value.c_str());
+                }
+            }
+
+            ppp::string VirtualEthernetInformationExtensions::ToJson() const noexcept {
+                Json::Value json;
+                ToJson(json);
+                return JsonAuxiliary::ToString(json);
+            }
+
+            bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const ppp::string& json) noexcept {
+                if (json.empty()) {
+                    value.Clear();
+                    return false;
+                }
+
+                return FromJson(value, JsonAuxiliary::FromString(json));
+            }
+
+            bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const Json::Value& json) noexcept {
+                value.Clear();
+                if (!json.isObject()) {
+                    return false;
+                }
+
+                value.AssignedIPv6Mode = static_cast<Byte>(JsonAuxiliary::AsInt64(json["AssignedIPv6Mode"], 0));
+                value.AssignedIPv6PrefixLength = static_cast<Byte>(JsonAuxiliary::AsInt64(json["AssignedIPv6PrefixLength"], 0));
+                value.AssignedIPv6Flags = static_cast<Byte>(JsonAuxiliary::AsInt64(json["AssignedIPv6Flags"], 0));
+
+                boost::system::error_code ec;
+                boost::asio::ip::address address = StringToAddress(JsonAuxiliary::AsString(json["AssignedIPv6Address"]), ec);
+                if (!ec && address.is_v6()) {
+                    value.AssignedIPv6Address = address;
+                }
+
+                ec.clear();
+                address = StringToAddress(JsonAuxiliary::AsString(json["AssignedIPv6Gateway"]), ec);
+                if (!ec && address.is_v6()) {
+                    value.AssignedIPv6Gateway = address;
+                }
+
+                ec.clear();
+                address = StringToAddress(JsonAuxiliary::AsString(json["AssignedIPv6Dns1"]), ec);
+                if (!ec && address.is_v6()) {
+                    value.AssignedIPv6Dns1 = address;
+                }
+
+                ec.clear();
+                address = StringToAddress(JsonAuxiliary::AsString(json["AssignedIPv6Dns2"]), ec);
+                if (!ec && address.is_v6()) {
+                    value.AssignedIPv6Dns2 = address;
+                }
+
+                return value.HasAny();
             }
         }
     }

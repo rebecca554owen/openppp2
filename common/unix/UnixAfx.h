@@ -22,6 +22,7 @@ namespace ppp
             static bool                                                         SetDnsAddresses(const ppp::vector<uint32_t>& addresses) noexcept;
             static bool                                                         SetDnsAddresses(const ppp::vector<ppp::string>& addresses) noexcept;
             static bool                                                         SetDnsAddresses(const ppp::vector<boost::asio::ip::address>& addresses) noexcept;
+            static bool                                                         MergeDnsAddresses(const ppp::vector<boost::asio::ip::address>& preferred, const ppp::vector<boost::asio::ip::address>& append) noexcept;
 
         public:
             static ppp::string                                                  GetInterfaceName(const ppp::net::IPEndPoint& address) noexcept;

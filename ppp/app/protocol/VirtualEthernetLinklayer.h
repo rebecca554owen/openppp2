@@ -28,6 +28,13 @@ namespace ppp {
             /* Virtual Ethernet Link Layer Protocol Handler */
             class VirtualEthernetLinklayer : public std::enable_shared_from_this<VirtualEthernetLinklayer> {
             public:
+                struct                                                    InformationEnvelope {
+                    VirtualEthernetInformation                            Base;
+                    VirtualEthernetInformationExtensions                  Extensions;
+                    ppp::string                                           ExtendedJson;
+                };
+
+            public:
                 typedef ppp::configurations::AppConfiguration               AppConfiguration;           // Application configuration type
                 typedef std::shared_ptr<AppConfiguration>                   AppConfigurationPtr;        // Shared pointer to configuration
                 typedef ppp::transmissions::ITransmission                   ITransmission;              // Transmission interface type
@@ -101,12 +108,10 @@ namespace ppp {
                 static int                                                  NewId() noexcept;
 
             public:
-                // Send LAN advertisement (IP and mask)
                 virtual bool                                                DoLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept;
-                // Send NAT data packet
                 virtual bool                                                DoNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept;
-                // Send virtual Ethernet information structure
                 virtual bool                                                DoInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept;
+                virtual bool                                                DoInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept;
                 // Send TCP data push on a connection
                 virtual bool                                                DoPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept;
                 // Send TCP connection request using hostname and port
@@ -164,10 +169,10 @@ namespace ppp {
                 virtual bool                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept { return true; }
 
             protected:
-                // Handlers for core VPN actions (override in derived class)
                 virtual bool                                                OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept { return true; }
                 virtual bool                                                OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
                 virtual bool                                                OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept { return true; }
+                virtual bool                                                OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept { return OnInformation(transmission, information.Base, y); }
                 virtual bool                                                OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
                 virtual bool                                                OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept { return true; }
                 virtual bool                                                OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept { return true; }
