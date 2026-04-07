@@ -27,23 +27,23 @@ namespace ppp
 
             typedef struct
             {
-                ppp::string                                     Driver;                 // ����
+                ppp::string                                     Driver;                 // 驱动
                 ppp::string                                     Guid;                   // GUID
-                ppp::string                                     MacAddress;             // MAC��ַ
-                int                                             Index;                  // ����
-                int                                             InterfaceIndex;         // ��������
-                ppp::vector<ppp::string>                        IPSubnet;               // ����    
-                ppp::vector<ppp::string>                        DnsAddresses;           // DNS������
-                ppp::vector<ppp::string>                        IPAddresses;            // IP��ַ
-                ppp::vector<ppp::string>                        DefaultIPGateway;       // Ĭ�����ط�����
-                bool                                            DhcpEnabled;            // ����DHCP
-                int                                             Metric;                 // Ծ��
-                bool                                            IPEnabled;              // IP����
-                ppp::string                                     ConnectionId;           // ����ID
-                ppp::string                                     ScopeId;                // ��ID
-                ppp::string                                     Caption;                // ����
-                ppp::string                                     Description;            // ������Ϣ
-                OperationalStatus                               Status;                 // ����״̬
+                ppp::string                                     MacAddress;             // MAC地址
+                int                                             Index;                  // 索引
+                int                                             InterfaceIndex;         // 接口索引
+                ppp::vector<ppp::string>                        IPSubnet;               // IP子网
+                ppp::vector<ppp::string>                        DnsAddresses;           // DNS服务器
+                ppp::vector<ppp::string>                        IPAddresses;            // IP地址
+                ppp::vector<ppp::string>                        DefaultIPGateway;       // 默认IP网关
+                bool                                            DhcpEnabled;            // 启用DHCP
+                int                                             Metric;                 // 度量值
+                bool                                            IPEnabled;              // IP启用
+                ppp::string                                     ConnectionId;           // 连接ID
+                ppp::string                                     ScopeId;                // 作用域ID
+                ppp::string                                     Caption;                // 标题
+                ppp::string                                     Description;            // 描述信息
+                OperationalStatus                               Status;                 // 运行状态
             } NetworkInterface;
 
             typedef struct

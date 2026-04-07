@@ -4,14 +4,14 @@ namespace ppp
 {
     namespace win32
     {
-        // ��ȡBOOLֵ
+        // 读取 BOOL 值
         bool GetRegistryValueBool(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, bool* bOK) noexcept
         {
             DWORD data = GetRegistryValueDword(hKey, subKey, valueName, bOK);
             return (data != 0);
         }
 
-        // ��ȡ�ַ���ֵ
+        // 读取字符串值
         std::wstring GetRegistryValueString(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, bool* bOK) noexcept
         {
             LONG result;
@@ -47,7 +47,7 @@ namespace ppp
             return std::wstring(buffer, size / sizeof(wchar_t));
         }
 
-        // ��ȡDWORDֵ
+        // 读取 DWORD 值
         DWORD GetRegistryValueDword(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, bool* bOK) noexcept
         {
             LONG result;
@@ -83,7 +83,7 @@ namespace ppp
             return data;
         }
 
-        // ��ȡWORD����ֵ
+        // 读取 WORD 数组值
         ppp::vector<WORD> GetRegistryValueWordArray(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, bool* bOK) noexcept
         {
             LONG result;
@@ -129,14 +129,14 @@ namespace ppp
             return dataArray;
         }
 
-        // д��BOOLֵ
+        // 写入 BOOL 值
         bool SetRegistryValueBool(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, bool valueData) noexcept
         {
             DWORD data = valueData ? 1 : 0;
             return SetRegistryValueDword(hKey, subKey, valueName, data);
         }
 
-        // д���ַ���ֵ
+        // 写入字符串值
         bool SetRegistryValueString(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, const std::wstring& valueData) noexcept
         {
             LONG result;
@@ -155,7 +155,7 @@ namespace ppp
             return (result == ERROR_SUCCESS);
         }
 
-        // д��DWORDֵ
+        // 写入 DWORD 值
         bool SetRegistryValueDword(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, DWORD valueData) noexcept
         {
             LONG result;
@@ -174,7 +174,7 @@ namespace ppp
             return (result == ERROR_SUCCESS);
         }
 
-        // д��WORD����ֵ
+        // 写入 WORD 数组值
         bool SetRegistryValueWordArray(HKEY hKey, const std::wstring& subKey, const std::wstring& valueName, const WORD* valueData, DWORD dataSize) noexcept
         {
             LONG result;

@@ -49,20 +49,20 @@ namespace ppp
                     return false;
                 }
 
-                // �������б��������ʾ������
+                // 设置应用程序名称，供界面显示和识别。
                 BSTR bstrName = SysAllocString(name);
                 pApp->put_Name(bstrName);
                 SysFreeString(bstrName);
 
-                // �����·�����ļ���
+                // 设置应用程序可执行文件路径。
                 BSTR bstrExecutablePath = SysAllocString(executablePath);
                 pApp->put_ProcessImageFileName(bstrExecutablePath);
                 SysFreeString(bstrExecutablePath);
 
-                // �Ƿ����øù���
+                // 启用该规则。
                 pApp->put_Enabled(VARIANT_TRUE);
 
-                // ���뵽����ǽ�Ĺ�������
+                // 获取对应配置文件下的防火墙规则集合。
                 CComPtr<INetFwProfile> pNetFwProfile;
                 hr = pNetFwPolicy->GetProfileByType(netFwType, &pNetFwProfile);
                 if (FAILED(hr))
@@ -89,7 +89,7 @@ namespace ppp
             {
                 HRESULT hr = S_OK;
 
-                // ����NetFwPolicy2����
+                // 创建 NetFwPolicy2 对象。
                 INetFwPolicy2* pPolicy = NULLPTR;
                 hr = CoCreateInstance(__uuidof(NetFwPolicy2), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwPolicy2), (void**)&pPolicy);
                 if (FAILED(hr))
@@ -97,7 +97,7 @@ namespace ppp
                     return false;
                 }
 
-                // ��ȡINetFwRules����
+                // 获取 INetFwRules 集合。
                 INetFwRules* pRules = NULLPTR;
                 hr = pPolicy->get_Rules(&pRules);
                 if (FAILED(hr))
@@ -106,7 +106,7 @@ namespace ppp
                     return false;
                 }
 
-                // �����������
+                // 创建防火墙规则对象。
                 INetFwRule* pRule = NULLPTR;
                 hr = CoCreateInstance(__uuidof(NetFwRule), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwRule), (void**)&pRule);
                 if (FAILED(hr))
@@ -116,7 +116,7 @@ namespace ppp
                     return false;
                 }
 
-                // ���ù�������
+                // 设置规则属性。
                 _bstr_t bstrName(name);
                 _bstr_t bstrExecutablePath(executablePath);
 
@@ -174,7 +174,7 @@ namespace ppp
                     return false;
                 }
 
-                // ����Ƿ��Ѵ���ͬ������
+                // 检查是否已经存在同名且同路径的规则。
                 VARIANT_BOOL bFound = VARIANT_FALSE;
                 IUnknown* pEnumeratorUnk = NULLPTR;
                 hr = pRules->get__NewEnum(&pEnumeratorUnk);
@@ -232,7 +232,7 @@ namespace ppp
                     VariantClear(&var);
                 }
 
-                // ����Ѵ���ͬ���������ͷ���Դ������
+                // 如果已存在相同规则，则释放资源后直接返回。
                 pEnumerator->Release();
                 if (bFound)
                 {
@@ -242,7 +242,7 @@ namespace ppp
                     return true;
                 }
 
-                // ���ӹ���
+                // 添加规则。
                 hr = pRules->Add(pRule);
                 if (FAILED(hr))
                 {
@@ -252,7 +252,7 @@ namespace ppp
                     return false;
                 }
 
-                // �ͷ���Դ
+                // 释放资源。
                 pRule->Release();
                 pRules->Release();
                 pPolicy->Release();
@@ -293,12 +293,12 @@ namespace ppp
 
             bool Fw::NetFirewallAddApplication(const char* name, const char* executablePath, NetFirewallType netFwType) noexcept
             {
-                NET_FW_PROFILE_TYPE netFwProfileType = NET_FW_PROFILE_DOMAIN; // ��������
-                if (netFwType == NetFirewallType_PrivateNetwork)   // ר������
+                NET_FW_PROFILE_TYPE netFwProfileType = NET_FW_PROFILE_DOMAIN; // 域网络
+                if (netFwType == NetFirewallType_PrivateNetwork)   // 专用网络
                 {
                     netFwProfileType = NET_FW_PROFILE_STANDARD;
                 }
-                elif(netFwType == NetFirewallType_PublicNetwork) // ��������
+                elif(netFwType == NetFirewallType_PublicNetwork) // 公用网络
                 {
                     netFwProfileType = NET_FW_PROFILE_CURRENT;
                 }
