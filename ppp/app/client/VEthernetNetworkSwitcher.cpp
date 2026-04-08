@@ -52,6 +52,74 @@ static bool LinuxApplyDefaultIPv6RouteCommand(const ppp::string& route) noexcept
     return system(command) == 0;
 }
 #endif
+
+#if defined(_MACOS)
+static bool MacosSetIPv6Address(const ppp::string& ifr_name, const ppp::string& address, int prefix_length) noexcept {
+    if (ifr_name.empty() || address.empty()) {
+        return false;
+    }
+
+    char command[1200];
+    snprintf(command, sizeof(command), "ifconfig %s inet6 %s prefixlen %d alias > /dev/null 2>&1", ifr_name.data(), address.data(), std::max<int>(0, std::min<int>(128, prefix_length)));
+    return system(command) == 0;
+}
+
+static bool MacosDeleteIPv6Address(const ppp::string& ifr_name, const ppp::string& address) noexcept {
+    if (ifr_name.empty() || address.empty()) {
+        return false;
+    }
+
+    char command[1200];
+    snprintf(command, sizeof(command), "ifconfig %s inet6 %s delete > /dev/null 2>&1", ifr_name.data(), address.data());
+    return system(command) == 0;
+}
+
+static bool MacosSetIPv6Route(const ppp::string& ifr_name, const ppp::string& destination, int prefix_length, const ppp::string& gateway) noexcept {
+    if (ifr_name.empty() || destination.empty()) {
+        return false;
+    }
+
+    char command[1200];
+    if (destination == "::" && prefix_length == 0) {
+        if (gateway.empty()) {
+            snprintf(command, sizeof(command), "route -n add -inet6 default -interface %s > /dev/null 2>&1", ifr_name.data());
+        }
+        else {
+            snprintf(command, sizeof(command), "route -n add -inet6 default %s > /dev/null 2>&1", gateway.data());
+        }
+    }
+    else if (gateway.empty()) {
+        snprintf(command, sizeof(command), "route -n add -inet6 %s/%d -interface %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifr_name.data());
+    }
+    else {
+        snprintf(command, sizeof(command), "route -n add -inet6 %s/%d %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gateway.data());
+    }
+    return system(command) == 0;
+}
+
+static bool MacosDeleteIPv6Route(const ppp::string& ifr_name, const ppp::string& destination, int prefix_length, const ppp::string& gateway) noexcept {
+    if (ifr_name.empty() || destination.empty()) {
+        return false;
+    }
+
+    char command[1200];
+    if (destination == "::" && prefix_length == 0) {
+        if (gateway.empty()) {
+            snprintf(command, sizeof(command), "route -n delete -inet6 default -interface %s > /dev/null 2>&1", ifr_name.data());
+        }
+        else {
+            snprintf(command, sizeof(command), "route -n delete -inet6 default %s > /dev/null 2>&1", gateway.data());
+        }
+    }
+    else if (gateway.empty()) {
+        snprintf(command, sizeof(command), "route -n delete -inet6 %s/%d -interface %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifr_name.data());
+    }
+    else {
+        snprintf(command, sizeof(command), "route -n delete -inet6 %s/%d %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gateway.data());
+    }
+    return system(command) == 0;
+}
+#endif
 #include <ppp/net/asio/vdns.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
@@ -657,7 +725,7 @@ namespace ppp {
                     if (ppp::win32::network::SetIPv6Address(tun_ni->Index, addr_str, prefix)) {
                         applied = true;
                     }
-#elif defined(_LINUX)
+#elif defined(_LINUX) || defined(_ANDROID)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         if (ppp::tap::TapLinux::SetIPv6Address(tun_ni->Name, addr_str, prefix)) {
@@ -673,16 +741,14 @@ namespace ppp {
                         }
                     }
 #else
-                    // macOS: use ifconfig to set IPv6 address
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s prefixlen %d alias", tun_ni->Name.data(), addr_str.data(), prefix);
-                    system(cmd);
-                    applied = true;
+                    if (MacosSetIPv6Address(tun_ni->Name, addr_str, prefix)) {
+                        applied = true;
+                    }
 #endif
                 }
 
                 bool ipv6_default_route_handled = false;
-#if defined(_LINUX)
+#if defined(_LINUX) || defined(_ANDROID)
                 if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !extensions.AssignedIPv6Gateway.is_v6()) {
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
@@ -706,7 +772,7 @@ namespace ppp {
                     if (ppp::win32::network::SetIPv6DefaultGateway(tun_ni->Index, gw_str, 0)) {
                         applied = true;
                     }
-#elif defined(_LINUX)
+#elif defined(_LINUX) || defined(_ANDROID)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         if (ppp::tap::TapLinux::AddRoute6(tun_ni->Name, "::", 0, gw_str)) {
@@ -718,11 +784,20 @@ namespace ppp {
                         }
                     }
 #else
-                    // macOS: use route command to add IPv6 default route
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "route -n add -inet6 default %s", gw_str.data());
-                    system(cmd);
-                    applied = true;
+                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, gw_str)) {
+                        applied = true;
+                    }
+#endif
+                }
+                else if (!ipv6_default_route_handled && extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
+#if defined(_WIN32)
+                    if (ppp::win32::network::SetIPv6DefaultRoute(tun_ni->Index, 0)) {
+                        applied = true;
+                    }
+#elif defined(_MACOS)
+                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, ppp::string())) {
+                        applied = true;
+                    }
 #endif
                 }
 
@@ -797,7 +872,7 @@ namespace ppp {
                 auto& ext = information_extensions_;
 
                 bool ipv6_default_route_cleared = false;
-#if defined(_LINUX)
+#if defined(_LINUX) || defined(_ANDROID)
                 if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !ext.AssignedIPv6Gateway.is_v6()) {
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
@@ -812,16 +887,20 @@ namespace ppp {
                     ppp::string gw_str(gw_std.data(), gw_std.size());
 #if defined(_WIN32)
                     ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index);
-#elif defined(_LINUX)
+#elif defined(_LINUX) || defined(_ANDROID)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, gw_str);
                     }
 #else
-                    // macOS: delete IPv6 default route
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "route -n delete -inet6 default %s", gw_str.data());
-                    system(cmd);
+                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, gw_str);
+#endif
+                }
+                else if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
+#if defined(_WIN32)
+                    ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index);
+#elif defined(_MACOS)
+                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, ppp::string());
 #endif
                 }
 
@@ -831,7 +910,7 @@ namespace ppp {
                     int prefix = std::max<int>(1, std::min<int>(128, (int)ext.AssignedIPv6PrefixLength));
 #if defined(_WIN32)
                     ppp::win32::network::DeleteIPv6Address(tun_ni->Index, addr_str);
-#elif defined(_LINUX)
+#elif defined(_LINUX) || defined(_ANDROID)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix) {
@@ -840,13 +919,11 @@ namespace ppp {
                         ppp::tap::TapLinux::DeleteIPv6Address(tun_ni->Name, addr_str, prefix);
                     }
 #else
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s delete", tun_ni->Name.data(), addr_str.data());
-                    system(cmd);
+                    MacosDeleteIPv6Address(tun_ni->Name, addr_str);
 #endif
                 }
                 else if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_LINUX)
+#if defined(_LINUX) || defined(_ANDROID)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, ppp::string());
@@ -1025,7 +1102,7 @@ namespace ppp {
                 auto [ai, ni] = ppp::win32::network::GetUnderlyingNetowrkInterface2(tap->GetId(), nic);
                 return Windows_GetNetworkInterface(ai, ni);
             }
-#elif !defined(_ANDROID) && !defined(_IPHONE)
+#elif !defined(_IPHONE)
             class UnixNetworkInterface final : public VEthernetNetworkSwitcher::NetworkInterface {
             public:
                 ppp::string DnsResolveConfiguration;
@@ -1315,10 +1392,12 @@ namespace ppp {
             }
 
             bool VEthernetNetworkSwitcher::Open(const std::shared_ptr<ITap>& tap) noexcept {
-#if !defined(_ANDROID) && !defined(_IPHONE)
+#if !defined(_IPHONE)
                 // Get and retrieve the current underlying Ethernet interface information!
 #if defined(_WIN32)
                 underlying_ni_ = Windows_GetUnderlyingNetowrkInterface(tap, preferred_nic_);
+#elif defined(_ANDROID)
+                underlying_ni_.reset();
 #else
                 underlying_ni_ = Unix_GetUnderlyingNetowrkInterface(tap, preferred_nic_);
 #endif
@@ -1330,6 +1409,7 @@ namespace ppp {
                         underlying_ni->GatewayServer = ngw;
                     }
                 }
+#if !defined(_ANDROID)
                 else {
                     return false;
                 }
@@ -1338,12 +1418,13 @@ namespace ppp {
                 // Otherwise there will be no network with all kinds of chain problems!
                 FixUnderlyingNgw();
 #endif
+#endif
                 // Construction of VEtherent virtual Ethernet switcher processing framework.
                 if (!VEthernet::Open(tap)) {
                     return false;
                 }
 
-#if !defined(_ANDROID) && !defined(_IPHONE)
+#if !defined(_IPHONE)
 #if defined(_WIN32)
                 // Get network interface information for TAP-Windows virtual Ethernet devices!
                 tun_ni_ = Windows_GetTapNetworkInterface(tap);
@@ -2249,9 +2330,10 @@ namespace ppp {
                 }
 #endif
 
-#if !defined(_ANDROID) && !defined(_IPHONE)
+#if !defined(_IPHONE)
                 RestoreAssignedIPv6();
 
+#if !defined(_ANDROID)
                 // Delete VPN route table information configured in the operating system!
                 if (exchangeof(route_added_, false)) {
                     // Delete routes entries configured by the VPN program from the operating system. 
@@ -2288,6 +2370,11 @@ namespace ppp {
 
                 // Clear all route tables and forwarding tables held by the current object.
                 LoadAllIPListWithFilePaths(boost::asio::ip::address_v4::any());
+#else
+                tun_ni_.reset();
+                underlying_ni_.reset();
+                route_added_ = false;
+#endif
 #endif
 
 #if defined(_LINUX)

@@ -137,6 +137,7 @@ TARGET_LINK_LIBRARIES(${NAME}
     libssl.a 
     libcrypto.a 
 
+    log
     dl
 
     libboost_system.a

@@ -73,6 +73,7 @@ namespace ppp
             bool                                                SetIPAddresses(const ppp::string& interface_name, const ppp::string& ip, const ppp::string& mask) noexcept;
             bool                                                SetIPv6Address(int interface_index, const ppp::string& ip, int prefix_length) noexcept;
             bool                                                DeleteIPv6Address(int interface_index, const ppp::string& ip) noexcept;
+            bool                                                SetIPv6DefaultRoute(int interface_index, int metric) noexcept;
             bool                                                SetIPv6DefaultGateway(int interface_index, const ppp::string& gateway, int metric) noexcept;
             bool                                                DeleteIPv6DefaultGateway(int interface_index) noexcept;
             bool                                                SetIPAddresses(int interface_index, const ppp::vector<ppp::string>& ips, const ppp::vector<ppp::string>& masks) noexcept;

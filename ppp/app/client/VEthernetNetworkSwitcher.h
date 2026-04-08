@@ -300,9 +300,6 @@ namespace ppp {
                 ProtectorNetworkPtr                                                 protect_network_;
 #endif
 
-#if defined(_ANDROID) || defined(_IPHONE)   
-                ppp::string                                                         bypass_ip_list_;
-#else
                 bool                                                                route_added_   = false;
                 LoadIPListFileVectorPtr                                             ribs_;
 
@@ -320,6 +317,9 @@ namespace ppp {
                 ppp::string                                                         ni_dns_servers_;
                 RouteInformationTablePtr                                            default_routes_;
 #endif
+
+#if defined(_ANDROID) || defined(_IPHONE)
+                ppp::string                                                         bypass_ip_list_;
 #endif
             };
         }

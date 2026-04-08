@@ -66,6 +66,8 @@
 #include <android/log.h>
 #include <jni.h>
 
+#include <stdarg.h>
+
 #include <iostream>
 #include <string>
 #include <memory>
@@ -77,6 +79,17 @@
 #ifndef __LIBOPENPPP2_MAIN__
 #define __LIBOPENPPP2_MAIN__                                                libopenppp2_application::GetDefault();
 #endif
+
+void DebugLog(const char* format, ...) noexcept {
+    if (NULLPTR == format) {
+        return;
+    }
+
+    va_list args;
+    va_start(args, format);
+    __android_log_vprint(ANDROID_LOG_INFO, "openppp2", format, args);
+    va_end(args);
+}
 
 #ifdef _ANDROID_REDEF_STD_IN_OUT_ERR
 #ifdef ANDROID
