@@ -1302,6 +1302,17 @@ namespace ppp
                 return ExecuteNetshCommand(command);
             }
 
+            bool SetIPv6DefaultRoute(int interface_index, int metric) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty()) {
+                    return false;
+                }
+
+                char command[1200];
+                snprintf(command, sizeof(command), "netsh interface ipv6 add route ::/0 interface=\"%s\" metric=%d store=active", interface_name.data(), std::max<int>(1, metric));
+                return ExecuteNetshCommand(command);
+            }
+
             bool SetIPv6DefaultGateway(int interface_index, const ppp::string& gateway, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
                 if (interface_name.empty() || gateway.empty()) {

@@ -718,11 +718,20 @@ namespace ppp {
                         }
                     }
 #else
-                    // macOS: use route command to add IPv6 default route
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "route -n add -inet6 default %s", gw_str.data());
-                    system(cmd);
-                    applied = true;
+                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, gw_str)) {
+                        applied = true;
+                    }
+#endif
+                }
+                else if (!ipv6_default_route_handled && extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
+#if defined(_WIN32)
+                    if (ppp::win32::network::SetIPv6DefaultRoute(tun_ni->Index, 0)) {
+                        applied = true;
+                    }
+#elif defined(_MACOS)
+                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, ppp::string())) {
+                        applied = true;
+                    }
 #endif
                 }
 
@@ -818,10 +827,7 @@ namespace ppp {
                         ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, gw_str);
                     }
 #else
-                    // macOS: delete IPv6 default route
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "route -n delete -inet6 default %s", gw_str.data());
-                    system(cmd);
+                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, gw_str);
 #endif
                 }
 
@@ -846,7 +852,11 @@ namespace ppp {
 #endif
                 }
                 else if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_LINUX)
+#if defined(_WIN32)
+                    ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index);
+#elif defined(_MACOS)
+                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, ppp::string());
+#elif defined(_LINUX)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, ppp::string());
