@@ -87,7 +87,7 @@ namespace ppp {
                 typedef std::shared_ptr<VirtualEthernetNamespaceCache>  VirtualEthernetNamespaceCachePtr;
 
             public:
-                VirtualEthernetSwitcher(const AppConfigurationPtr& configuration) noexcept;
+                VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name = ppp::string()) noexcept;
                 virtual ~VirtualEthernetSwitcher() noexcept;
 
             public:
@@ -185,7 +185,6 @@ namespace ppp {
                 bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
-                bool                                                    SyncNdppdNeighborProxy() noexcept;
                 bool                                                    AddIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
@@ -228,6 +227,7 @@ namespace ppp {
                 ContextPtr                                              context_;
                 boost::asio::ip::udp::endpoint                          dnsserverEP_;
                 boost::asio::ip::address                                interfaceIP_;
+                ppp::string                                             tun_name_;
                 ppp::string                                             ipv6_neighbor_proxy_ifname_;
                 ITapPtr                                                 ipv6_transit_tap_;
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;
