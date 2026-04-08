@@ -402,7 +402,7 @@ namespace ppp
                     struct ip_hdr* iphdr = ip_hdr::Parse(e.Packet, packet_length);
                     if (NULLPTR == iphdr) // INVALID IS (Destination & Mask) != Destination;
                     {
-                        return false;
+                        return OnPacketInput((Byte*)e.Packet, packet_length, vnet_);
                     }
 #if !defined(_WIN32)
                     elif(mta_)
@@ -760,6 +760,11 @@ namespace ppp
         }
 
         bool VEthernet::OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept
+        {
+            return false;
+        }
+
+        bool VEthernet::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept
         {
             return false;
         }

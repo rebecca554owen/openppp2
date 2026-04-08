@@ -16,6 +16,7 @@
 #include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 
@@ -966,6 +967,29 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
                     tmp = ppp::PaddingRight(tmp, 22, ' ');
                     tmp += ": " + ni->DnsAddresses[i].to_string();
                     printfn("%s", tmp.data());
+                }
+
+                if (sti.tun) {
+                    ppp::app::protocol::VirtualEthernetInformationExtensions ipv6_ext;
+                    if (NULLPTR != client) {
+                        ipv6_ext = client->GetInformationExtensions();
+                    }
+
+                    if (ipv6_ext.AssignedIPv6Address.is_v6()) {
+                        printfn("IPv6 Address          : %s/%d", ipv6_ext.AssignedIPv6Address.to_string().data(), (int)ipv6_ext.AssignedIPv6PrefixLength);
+                    }
+                    if (ipv6_ext.AssignedIPv6Gateway.is_v6()) {
+                        printfn("IPv6 Gateway          : %s", ipv6_ext.AssignedIPv6Gateway.to_string().data());
+                    }
+                    if (ipv6_ext.AssignedIPv6PrefixLength > 0) {
+                        printfn("IPv6 Prefix Length    : %d", (int)ipv6_ext.AssignedIPv6PrefixLength);
+                    }
+                    if (ipv6_ext.AssignedIPv6Dns1.is_v6()) {
+                        printfn("IPv6 DNS 1            : %s", ipv6_ext.AssignedIPv6Dns1.to_string().data());
+                    }
+                    if (ipv6_ext.AssignedIPv6Dns2.is_v6()) {
+                        printfn("IPv6 DNS 2            : %s", ipv6_ext.AssignedIPv6Dns2.to_string().data());
+                    }
                 }
 
                 // To print a blank line as a separator for major categories.

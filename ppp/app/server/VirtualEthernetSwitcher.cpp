@@ -5,13 +5,21 @@
 #include <ppp/app/server/VirtualEthernetNamespaceCache.h>
 #include <ppp/IDisposable.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/cryptography/digest.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/proxies/sniproxy.h>
+#include <ppp/io/MemoryStream.h>
+#include <ppp/io/File.h>
+#include <ppp/app/protocol/VirtualEthernetTcpMss.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
+#include <ppp/app/server/VirtualEthernetIPv6.h>
+#if defined(_LINUX)
+#include <linux/ppp/tap/TapLinux.h>
+#endif
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
@@ -25,6 +33,8 @@ using ppp::net::AddressFamily;
 using ppp::threading::Executors;
 using ppp::coroutines::YieldContext;
 using ppp::collections::Dictionary;
+
+static void DebugLog(const char* format, ...) noexcept {}
 
 namespace ppp {
     namespace transmissions {
@@ -56,6 +66,476 @@ namespace ppp {
 
             VirtualEthernetSwitcher::~VirtualEthernetSwitcher() noexcept {
                 Finalize();
+            }
+
+            VirtualEthernetSwitcher::InformationEnvelope VirtualEthernetSwitcher::BuildInformationEnvelope(const Int128& session_id, const VirtualEthernetInformation& info) noexcept {
+                InformationEnvelope envelope;
+                envelope.Base = info;
+                BuildInformationIPv6Extensions(session_id, envelope.Extensions);
+                envelope.ExtendedJson = envelope.Extensions.ToJson();
+                DebugLog("server info envelope session=%s json=%s",
+                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                    envelope.ExtendedJson.data());
+                return envelope;
+            }
+
+            bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
+                extensions.Clear();
+
+                const auto& ipv6 = configuration_->server.ipv6;
+                if (!ipv6.enabled) {
+                    DebugLog("server ipv6 disabled session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                    return false;
+                }
+
+                auto build_stable_ipv6 = [&](boost::asio::ip::address_v6::bytes_type bytes, int prefix_length) noexcept -> bool {
+                    ppp::string seed = ipv6.stable_secret;
+                    if (seed.empty()) {
+                        seed = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
+                    }
+                    else {
+                        seed.append(":");
+                        seed.append(auxiliary::StringAuxiliary::Int128ToGuidString(session_id));
+                    }
+
+                    ppp::string digest = ppp::cryptography::hash_hmac(seed.data(), static_cast<int>(seed.size()), ppp::cryptography::DigestAlgorithmic_sha256, false, false);
+                    if (digest.size() < 8) {
+                        return false;
+                    }
+
+                    int prefix_bytes = std::max<int>(0, std::min<int>(16, prefix_length >> 3));
+                    int iid_bytes = std::min<int>(8, 16 - prefix_bytes);
+                    for (int i = 0; i < iid_bytes; i++) {
+                        bytes[16 - iid_bytes + i] = static_cast<unsigned char>(digest[i]);
+                    }
+
+                    if (prefix_bytes < 16) {
+                        for (int i = prefix_bytes; i < 16 - iid_bytes; i++) {
+                            bytes[i] = 0;
+                        }
+                    }
+
+                    boost::asio::ip::address_v6 candidate = boost::asio::ip::address_v6(bytes);
+
+                    boost::system::error_code gateway_ec;
+                    boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, gateway_ec);
+                    if (!gateway_ec && configured_gateway.is_v6() && candidate == configured_gateway.to_v6()) {
+                        boost::asio::ip::address_v6::bytes_type candidate_bytes = candidate.to_bytes();
+                        candidate_bytes[15] ^= 0x01;
+                        candidate = boost::asio::ip::address_v6(candidate_bytes);
+                    }
+
+                    extensions.AssignedIPv6Address = candidate;
+                    return true;
+                };
+
+                boost::system::error_code ec;
+
+                ppp::string mode = ToLower(ipv6.mode);
+                DebugLog("server ipv6 build session=%s mode=%s prefix=%s/%d gateway=%s dns1=%s dns2=%s",
+                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                    mode.data(),
+                    ipv6.prefix.data(),
+                    ipv6.prefix_length,
+                    ipv6.gateway.data(),
+                    ipv6.dns1.data(),
+                    ipv6.dns2.data());
+                if (mode == "nat") {
+                    extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Nat;
+                    extensions.AssignedIPv6PrefixLength = static_cast<Byte>(std::max<int>(64, std::min<int>(128, ipv6.prefix_length)));
+
+                    boost::asio::ip::address_v6::bytes_type ula_bytes = {};
+                    ec.clear();
+                    boost::asio::ip::address configured_prefix = StringToAddress(ipv6.prefix, ec);
+                    if (!ec && configured_prefix.is_v6()) {
+                        ula_bytes = configured_prefix.to_v6().to_bytes();
+                    }
+                    else {
+                        ula_bytes[0] = 0xfd;
+                    }
+
+                    if (!build_stable_ipv6(ula_bytes, extensions.AssignedIPv6PrefixLength)) {
+                        extensions.Clear();
+                        DebugLog("server ipv6 build failed session=%s reason=stable-address", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                        return false;
+                    }
+
+                    ec.clear();
+                    boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
+                    if (!ec && gateway.is_v6()) {
+                        extensions.AssignedIPv6Gateway = gateway;
+                    }
+
+                    // NAT mode still carries an explicit virtual gateway so clients can prefer
+                    // `default via <gateway> dev tun0` over direct-device routing.
+
+                    ec.clear();
+                    boost::asio::ip::address dns1 = StringToAddress(ipv6.dns1, ec);
+                    if (!ec && dns1.is_v6()) {
+                        extensions.AssignedIPv6Dns1 = dns1;
+                    }
+
+                    ec.clear();
+                    boost::asio::ip::address dns2 = StringToAddress(ipv6.dns2, ec);
+                    if (!ec && dns2.is_v6()) {
+                        extensions.AssignedIPv6Dns2 = dns2;
+                    }
+
+                    DebugLog("server ipv6 build result session=%s address=%s gateway=%s dns1=%s dns2=%s flags=%u",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                        extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
+                        extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
+                        extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
+                        extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "",
+                        (unsigned)extensions.AssignedIPv6Flags);
+                    return extensions.HasAny();
+                }
+                elif(mode == "prefix") {
+                    extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Prefix;
+                    if (ipv6.routed_prefix) {
+                        extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_RoutedPrefix;
+                    }
+                    if (ipv6.neighbor_proxy) {
+                        extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
+                    }
+                }
+                else {
+                    DebugLog("server ipv6 build failed session=%s reason=invalid-mode mode=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(), mode.data());
+                    return false;
+                }
+
+                int assigned_prefix_length = ipv6.routed_prefix ? 128 : ipv6.prefix_length;
+                extensions.AssignedIPv6PrefixLength = static_cast<Byte>(std::max<int>(0, std::min<int>(128, assigned_prefix_length)));
+
+                boost::asio::ip::address prefix = StringToAddress(ipv6.prefix, ec);
+                if (ec || !prefix.is_v6()) {
+                    extensions.Clear();
+                    DebugLog("server ipv6 build failed session=%s reason=invalid-prefix prefix=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(), ipv6.prefix.data());
+                    return false;
+                }
+
+                boost::asio::ip::address_v6::bytes_type bytes = prefix.to_v6().to_bytes();
+                if (!build_stable_ipv6(bytes, extensions.AssignedIPv6PrefixLength)) {
+                    extensions.Clear();
+                    DebugLog("server ipv6 build failed session=%s reason=stable-prefix-address", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                    return false;
+                }
+
+                ec.clear();
+                boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
+                if (!ec && gateway.is_v6()) {
+                    extensions.AssignedIPv6Gateway = gateway;
+                }
+
+                ec.clear();
+                boost::asio::ip::address dns1 = StringToAddress(ipv6.dns1, ec);
+                if (!ec && dns1.is_v6()) {
+                    extensions.AssignedIPv6Dns1 = dns1;
+                }
+
+                ec.clear();
+                boost::asio::ip::address dns2 = StringToAddress(ipv6.dns2, ec);
+                if (!ec && dns2.is_v6()) {
+                    extensions.AssignedIPv6Dns2 = dns2;
+                }
+
+                DebugLog("server ipv6 build result session=%s address=%s gateway=%s dns1=%s dns2=%s flags=%u",
+                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                    extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
+                    extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
+                    extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
+                    extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "",
+                    (unsigned)extensions.AssignedIPv6Flags);
+
+                if (mode == "prefix") {
+                    DebugLog("server ipv6 prefix semantics session=%s routed-prefix=%s neighbor-proxy=%s provider=%s assigned-prefix-length=%u",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                        ipv6.routed_prefix ? "yes" : "no",
+                        ipv6.neighbor_proxy ? "yes" : "no",
+                        ipv6.neighbor_proxy_provider.empty() ? "kernel" : ipv6.neighbor_proxy_provider.data(),
+                        (unsigned)extensions.AssignedIPv6PrefixLength);
+                }
+
+                return extensions.HasAny();
+            }
+
+            bool VirtualEthernetSwitcher::AddIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept {
+                if (!ip.is_v6()) {
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_key(ip_std.data(), ip_std.size());
+
+                VirtualEthernetExchangerPtr exchanger = GetExchanger(session_id);
+                if (NULLPTR == exchanger) {
+                    return false;
+                }
+
+                bool need_ndppd_sync = false;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
+                        VirtualEthernetExchangerPtr current = tail->second;
+                        if (current && current->GetId() == session_id && tail->first != ip_key) {
+                            tail = ipv6s_.erase(tail);
+                        }
+                        else {
+                            ++tail;
+                        }
+                    }
+                    ipv6s_[ip_key] = exchanger;
+                    AddIPv6TransitRoute(ip);
+                    AddIPv6NeighborProxy(ip);
+                    need_ndppd_sync = false;
+                }
+                if (need_ndppd_sync) {
+                    SyncNdppdNeighborProxy();
+                }
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept {
+                if (!ip.is_v6()) {
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_key(ip_std.data(), ip_std.size());
+
+                bool need_ndppd_sync = false;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    auto tail = ipv6s_.find(ip_key);
+                    if (tail == ipv6s_.end()) {
+                        return false;
+                    }
+
+                    if (tail->second && tail->second->GetId() != session_id) {
+                        return false;
+                    }
+
+                    DeleteIPv6TransitRoute(ip);
+                    DeleteIPv6NeighborProxy(ip);
+                    ipv6s_.erase(tail);
+                    need_ndppd_sync = false;
+                }
+                if (need_ndppd_sync) {
+                    SyncNdppdNeighborProxy();
+                }
+                return true;
+            }
+
+            VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept {
+                if (!ip.is_v6()) {
+                    return NULLPTR;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_key(ip_std.data(), ip_std.size());
+
+                SynchronizedObjectScope scope(syncobj_);
+                auto tail = ipv6s_.find(ip_key);
+                return tail == ipv6s_.end() ? NULLPTR : tail->second;
+            }
+
+            bool VirtualEthernetSwitcher::OpenIPv6NeighborProxyIfNeed() noexcept {
+#if defined(_LINUX)
+                const auto& ipv6 = configuration_->server.ipv6;
+                if (!ipv6.enabled || ToLower(ipv6.mode) != "prefix" || !ipv6.neighbor_proxy) {
+                    return true;
+                }
+
+                ppp::string provider = ToLower(ipv6.neighbor_proxy_provider);
+                if (provider.empty()) {
+                    provider = "kernel";
+                }
+
+                DebugLog("server ipv6 neighbor proxy provider=%s", provider.data());
+                if (provider == "ndppd") {
+                    DebugLog("server ipv6 ndppd provider is externally managed; skip in-process config generation");
+                    return true;
+                }
+
+                if (provider == "manual" || provider == "external") {
+                    DebugLog("server ipv6 neighbor proxy provider=%s externally managed; skip in-process setup", provider.data());
+                    return true;
+                }
+
+                if (provider != "kernel") {
+                    DebugLog("server ipv6 neighbor proxy provider=%s not yet implemented in-process", provider.data());
+                    return true;
+                }
+
+                ppp::string uplink_name;
+                UInt32 address = 0;
+                UInt32 mask = 0;
+                UInt32 gw = 0;
+                if (!ppp::tap::TapLinux::GetPreferredNetworkInterface(uplink_name, address, mask, gw, ppp::string())) {
+                    return false;
+                }
+
+                if (!ppp::tap::TapLinux::EnableIPv6NeighborProxy(uplink_name)) {
+                    return false;
+                }
+
+                ipv6_neighbor_proxy_ifname_ = uplink_name;
+                DebugLog("server ipv6 neighbor proxy enabled if=%s", uplink_name.data());
+#endif
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::SyncNdppdNeighborProxy() noexcept {
+#if defined(_LINUX)
+                const auto& ipv6 = configuration_->server.ipv6;
+                if (!ipv6.enabled || ToLower(ipv6.mode) != "prefix" || !ipv6.neighbor_proxy) {
+                    return true;
+                }
+
+                ppp::string uplink_name;
+                UInt32 address = 0;
+                UInt32 mask = 0;
+                UInt32 gw = 0;
+                if (!ppp::tap::TapLinux::GetPreferredNetworkInterface(uplink_name, address, mask, gw, ppp::string())) {
+                    return false;
+                }
+
+                ppp::string config_path = "/tmp/openppp2-ndppd.conf";
+                ppp::string config_text = "proxy ";
+                config_text += uplink_name;
+                config_text += " {\n";
+
+                int rules = 0;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (const auto& [ip_key, exchanger] : ipv6s_) {
+                        if (NULLPTR == exchanger) {
+                            continue;
+                        }
+
+                        config_text += "  rule ";
+                        config_text += ip_key;
+                        config_text += "/128 {\n";
+                        config_text += "    static\n";
+                        config_text += "  }\n";
+                        rules++;
+                    }
+                }
+
+                if (rules < 1) {
+                    config_text += "  rule ";
+                    config_text += ipv6.prefix;
+                    config_text += "/";
+                    config_text += stl::to_string<ppp::string>(ipv6.prefix_length);
+                    config_text += " {\n";
+                    config_text += "    static\n";
+                    config_text += "  }\n";
+                }
+
+                config_text += "}\n";
+
+                if (!ppp::io::File::WriteAllBytes(config_path.data(), config_text.data(), static_cast<int>(config_text.size()))) {
+                    return false;
+                }
+
+                DebugLog("server ipv6 ndppd config synced path=%s uplink=%s rules=%d", config_path.data(), uplink_name.data(), rules);
+                DebugLog("server ipv6 ndppd reload required path=%s", config_path.data());
+#endif
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::AddIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept {
+#if defined(_LINUX)
+                if (!ip.is_v6()) {
+                    return false;
+                }
+
+                const auto& ipv6 = configuration_->server.ipv6;
+                if (!ipv6.enabled) {
+                    return false;
+                }
+
+                ppp::string mode = ToLower(ipv6.mode);
+                if (!(mode == "nat" || mode == "prefix")) {
+                    return false;
+                }
+
+                ITapPtr tap = ipv6_transit_tap_;
+                if (NULLPTR == tap) {
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_str(ip_std.data(), ip_std.size());
+                bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, 128, ppp::string());
+                DebugLog("server ipv6 transit host-route %s name=%s ip=%s/128", ok ? "add-ok" : "add-fail", tap->GetId().data(), ip_str.data());
+                return ok;
+#else
+                return false;
+#endif
+            }
+
+            bool VirtualEthernetSwitcher::DeleteIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept {
+#if defined(_LINUX)
+                if (!ip.is_v6()) {
+                    return false;
+                }
+
+                const auto& ipv6 = configuration_->server.ipv6;
+                if (!ipv6.enabled) {
+                    return false;
+                }
+
+                ppp::string mode = ToLower(ipv6.mode);
+                if (!(mode == "nat" || mode == "prefix")) {
+                    return false;
+                }
+
+                ITapPtr tap = ipv6_transit_tap_;
+                if (NULLPTR == tap) {
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_str(ip_std.data(), ip_std.size());
+                bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, 128, ppp::string());
+                DebugLog("server ipv6 transit host-route %s name=%s ip=%s/128", ok ? "del-ok" : "del-fail", tap->GetId().data(), ip_str.data());
+                return ok;
+#else
+                return false;
+#endif
+            }
+
+            bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept {
+#if defined(_LINUX)
+                if (!ip.is_v6() || ipv6_neighbor_proxy_ifname_.empty()) {
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_str(ip_std.data(), ip_std.size());
+                bool ok = ppp::tap::TapLinux::AddIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
+                DebugLog("server ipv6 neighbor proxy %s if=%s ip=%s", ok ? "add-ok" : "add-fail", ipv6_neighbor_proxy_ifname_.data(), ip_str.data());
+                return ok;
+#else
+                return false;
+#endif
+            }
+
+            bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept {
+#if defined(_LINUX)
+                if (!ip.is_v6() || ipv6_neighbor_proxy_ifname_.empty()) {
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_str(ip_std.data(), ip_std.size());
+                bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
+                DebugLog("server ipv6 neighbor proxy %s if=%s ip=%s", ok ? "del-ok" : "del-fail", ipv6_neighbor_proxy_ifname_.data(), ip_str.data());
+                return ok;
+#else
+                return false;
+#endif
             }
 
             bool VirtualEthernetSwitcher::Run() noexcept {
@@ -253,11 +733,30 @@ namespace ppp {
                     return false;
                 }
 
+                VirtualEthernetInformation fallback_information;
+                const VirtualEthernetInformation* established_information = i.get();
+                if (NULLPTR == established_information && configuration_->server.ipv6.enabled) {
+                    fallback_information.Clear();
+                    fallback_information.BandwidthQoS = 0;
+                    fallback_information.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                    fallback_information.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                    fallback_information.ExpiredTime = std::numeric_limits<UInt32>::max();
+                    established_information = &fallback_information;
+                    const char* reason = configuration_->server.backend.empty() ? "no-managed-backend" : "managed-info-empty";
+                    DebugLog("server establish using local bootstrap info session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                    DebugLog("server establish info source=local-bootstrap reason=%s session=%s", reason, auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                }
+
                 bool run = true;
-                if (NULLPTR != i) {
-                    run = channel->DoInformation(transmission, *i, y);
+                if (NULLPTR != established_information) {
+                    InformationEnvelope envelope = BuildInformationEnvelope(session_id, *established_information);
+                    DebugLog("server info send establish session=%s json=%s",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                        envelope.ExtendedJson.data());
+                    AddIPv6Exchanger(session_id, envelope.Extensions.AssignedIPv6Address);
+                    run = channel->DoInformation(transmission, envelope, y);
                     if (run) {
-                        run = i->Valid();
+                        run = VirtualEthernetInformation::Valid(const_cast<VirtualEthernetInformation*>(established_information), (UInt32)(GetTickCount() / 1000));
                     }
                 }
 
@@ -486,8 +985,10 @@ namespace ppp {
                     CreateAlwaysTimeout() &&
                     CreateFirewall(firewall_rules) &&
                     OpenManagedServerIfNeed() &&
+                    OpenIPv6TransitIfNeed() &&
                     OpenNamespaceCacheIfNeed() &&
-                    OpenDatagramSocket();
+                    OpenDatagramSocket() &&
+                    OpenIPv6NeighborProxyIfNeed();
                 if (ok) {
                     OpenLogger();
                 }
@@ -506,6 +1007,143 @@ namespace ppp {
                     namespace_cache_ = std::move(cache);
                 }
 
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
+                ITapPtr tap = ipv6_transit_tap_;
+                if (NULLPTR == tap || NULLPTR == packet || packet_length < 40) {
+                    return false;
+                }
+
+                return tap->Output(packet, packet_length);
+            }
+
+            bool VirtualEthernetSwitcher::SendIPv6PacketToClient(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept {
+                if (NULLPTR == transmission || NULLPTR == packet || packet_length < 1) {
+                    return false;
+                }
+
+                ppp::io::MemoryStream ms;
+                if (!ms.WriteByte((Byte)app::protocol::VirtualEthernetLinklayer::PacketAction_NAT)) {
+                    return false;
+                }
+
+                if (!ms.Write(packet, 0, packet_length)) {
+                    return false;
+                }
+
+                std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                return transmission->Write(buffer.get(), ms.GetPosition(),
+                    [transmission](bool ok) noexcept {
+                        if (!ok) {
+                            transmission->Dispose();
+                        }
+                    });
+            }
+
+            bool VirtualEthernetSwitcher::ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
+                if (NULLPTR == packet || packet_length < 40) {
+                    return false;
+                }
+
+                boost::asio::ip::address_v6 source;
+                boost::asio::ip::address_v6 destination;
+                if (!ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+                    return false;
+                }
+
+                VirtualEthernetExchangerPtr exchanger = FindIPv6Exchanger(destination);
+                if (NULLPTR == exchanger) {
+                    return false;
+                }
+
+                ITransmissionPtr transmission = exchanger->GetTransmission();
+                if (NULLPTR == transmission) {
+                    return false;
+                }
+
+                app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, 80));
+
+                return SendIPv6PacketToClient(transmission, packet, packet_length);
+            }
+
+            bool VirtualEthernetSwitcher::OpenIPv6TransitIfNeed() noexcept {
+#if defined(_LINUX)
+                const auto& ipv6 = configuration_->server.ipv6;
+                ppp::string mode = ToLower(ipv6.mode);
+                bool enable_transit = ipv6.enabled && (mode == "nat" || mode == "prefix");
+                if (!enable_transit) {
+                    return true;
+                }
+
+                boost::system::error_code ec;
+                boost::asio::ip::address prefix = StringToAddress(ipv6.prefix, ec);
+                if (ec || !prefix.is_v6()) {
+                    return false;
+                }
+
+                boost::asio::ip::address_v6 transit = prefix.to_v6();
+                if (transit.is_unspecified()) {
+                    boost::asio::ip::address_v6::bytes_type bytes = {};
+                    bytes[0] = 0xfd;
+                    bytes[1] = 0x42;
+                    bytes[2] = 0x42;
+                    bytes[3] = 0x42;
+                    bytes[4] = 0x42;
+                    bytes[15] = 1;
+                    transit = boost::asio::ip::address_v6(bytes);
+                }
+
+                if (!ipv6.gateway.empty()) {
+                    ec.clear();
+                    boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, ec);
+                    if (!ec && configured_gateway.is_v6()) {
+                        transit = configured_gateway.to_v6();
+                    }
+                }
+                else {
+                    boost::asio::ip::address_v6::bytes_type bytes = transit.to_bytes();
+                    bytes[15] = 1;
+                    transit = boost::asio::ip::address_v6(bytes);
+                }
+
+                std::string transit_std = transit.to_string();
+                ppp::string transit_ip(transit_std.data(), transit_std.size());
+                int prefix_length = std::max<int>(64, std::min<int>(128, ipv6.prefix_length));
+
+                ppp::vector<ppp::string> no_dns;
+                ITapPtr tap = ppp::tap::ITap::Create(context_, "openppp2v6", "169.254.254.1", "169.254.254.2", "255.255.255.252", false, false, no_dns);
+                if (NULLPTR == tap || !tap->Open()) {
+                    return false;
+                }
+
+                bool address_ok = ppp::tap::TapLinux::SetIPv6Address(tap->GetId(), transit_ip, prefix_length);
+                DebugLog("server ipv6 transit address %s name=%s address=%s/%d", address_ok ? "ok" : "fail", tap->GetId().data(), transit_ip.data(), prefix_length);
+                if (!address_ok) {
+                    tap->Dispose();
+                    return false;
+                }
+
+                DebugLog("server ipv6 transit connected route managed by kernel name=%s prefix=%s/%d", tap->GetId().data(), ipv6.prefix.data(), prefix_length);
+
+                tap->PacketInput =
+                    [self = shared_from_this()](ppp::tap::ITap* sender, ppp::tap::ITap::PacketInputEventArgs& e) noexcept -> bool {
+                        if (NULLPTR == sender || NULLPTR == e.Packet || e.PacketLength < 40) {
+                            return false;
+                        }
+
+                        auto switcher = std::dynamic_pointer_cast<VirtualEthernetSwitcher>(self);
+                        if (NULLPTR == switcher) {
+                            return false;
+                        }
+
+                        return switcher->ReceiveIPv6TransitPacket(reinterpret_cast<Byte*>(e.Packet), e.PacketLength);
+                    };
+
+                ipv6_transit_tap_ = tap;
+                DebugLog("server ipv6 transit tap opened name=%s address=%s/%d", tap->GetId().data(), transit_ip.data(), prefix_length);
+#endif
                 return true;
             }
 
@@ -868,6 +1506,7 @@ namespace ppp {
                 std::shared_ptr<boost::asio::ip::udp::resolver> uresolver;
 
                 VirtualEthernetNamespaceCachePtr cache;
+                ITapPtr ipv6_transit_tap;
                 NatInformationTable nats;
                 VirtualEthernetLoggerPtr logger;
                 VirtualEthernetExchangerTable exchangers;
@@ -880,6 +1519,7 @@ namespace ppp {
                     CloseAllAcceptors();
 
                     cache = std::move(namespace_cache_);
+                    ipv6_transit_tap = std::move(ipv6_transit_tap_);
                     nats = std::move(nats_);
                     logger = std::move(logger_);
 
@@ -900,6 +1540,10 @@ namespace ppp {
 
                 Dictionary::ReleaseAllObjects(exchangers);
                 Dictionary::ReleaseAllObjects(connections);
+
+                if (NULLPTR != ipv6_transit_tap) {
+                    ipv6_transit_tap->Dispose();
+                }
 
                 if (NULLPTR != cache) {
                     cache->Clear();
@@ -1028,7 +1672,12 @@ namespace ppp {
 
                 bool bok = false;
                 if (NULLPTR != info) {
-                    bok = exchanger->DoInformation(transmission, *info, y);
+                    InformationEnvelope envelope = BuildInformationEnvelope(session_id, *info);
+                    DebugLog("server info send update session=%s json=%s",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                        envelope.ExtendedJson.data());
+                    AddIPv6Exchanger(session_id, envelope.Extensions.AssignedIPv6Address);
+                    bok = exchanger->DoInformation(transmission, envelope, y);
                     if (bok) {
                         bok = info->Valid();
                     }
