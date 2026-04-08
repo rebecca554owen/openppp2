@@ -139,7 +139,6 @@ namespace ppp {
                     int                                                     prefix_length;
                     bool                                                    routed_prefix;
                     bool                                                    neighbor_proxy;
-                    ppp::string                                             neighbor_proxy_provider;
                     ppp::string                                             gateway;
                     ppp::string                                             dns1;
                     ppp::string                                             dns2;

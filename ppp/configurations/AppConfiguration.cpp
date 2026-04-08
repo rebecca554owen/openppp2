@@ -115,7 +115,6 @@ namespace ppp {
             config.server.ipv6.prefix_length = 64;
             config.server.ipv6.routed_prefix = true;
             config.server.ipv6.neighbor_proxy = false;
-            config.server.ipv6.neighbor_proxy_provider = "kernel";
             config.server.ipv6.gateway = "";
             config.server.ipv6.dns1 = "";
             config.server.ipv6.dns2 = "";
@@ -164,7 +163,6 @@ namespace ppp {
                     &config.server.ipv6.dns1,
                     &config.server.ipv6.dns2,
                     &config.server.ipv6.stable_secret,
-                    &config.server.ipv6.neighbor_proxy_provider,
                     &config.server.ipv6.allocation,
                     &config.client.guid,
                     &config.client.server,
@@ -853,7 +851,6 @@ namespace ppp {
             AssignIfPresent(config.server.ipv6.prefix_length, json["server"]["ipv6"]["prefix-length"]);
             AssignBoolIfPresent(config.server.ipv6.routed_prefix, json["server"]["ipv6"]["routed-prefix"]);
             AssignBoolIfPresent(config.server.ipv6.neighbor_proxy, json["server"]["ipv6"]["neighbor-proxy"]);
-            AssignIfPresent(config.server.ipv6.neighbor_proxy_provider, json["server"]["ipv6"]["neighbor-proxy-provider"]);
             AssignIfPresent(config.server.ipv6.gateway, json["server"]["ipv6"]["gateway"]);
             AssignIfPresent(config.server.ipv6.dns1, json["server"]["ipv6"]["dns1"]);
             AssignIfPresent(config.server.ipv6.dns2, json["server"]["ipv6"]["dns2"]);
@@ -1035,7 +1032,6 @@ namespace ppp {
             server["ipv6"]["prefix-length"] = config.server.ipv6.prefix_length;
             server["ipv6"]["routed-prefix"] = config.server.ipv6.routed_prefix;
             server["ipv6"]["neighbor-proxy"] = config.server.ipv6.neighbor_proxy;
-            server["ipv6"]["neighbor-proxy-provider"] = config.server.ipv6.neighbor_proxy_provider;
             server["ipv6"]["gateway"] = config.server.ipv6.gateway;
             server["ipv6"]["dns1"] = config.server.ipv6.dns1;
             server["ipv6"]["dns2"] = config.server.ipv6.dns2;
