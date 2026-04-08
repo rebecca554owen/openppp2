@@ -1,288 +1,306 @@
-#include <common/aggligator/aggligator.h>
+#include <common/aggligator/aggligator.h>                                   // Include corresponding header
 
-#include <ppp/net/native/checksum.h>
-#include <ppp/net/Socket.h>
-#include <ppp/coroutines/asio/asio.h>
-#include <ppp/threading/Executors.h>
+#include <ppp/net/native/checksum.h>                                        // Internet checksum computation
+#include <ppp/net/Socket.h>                                                 // Socket helper functions
+#include <ppp/coroutines/asio/asio.h>                                       // ASIO coroutine wrappers
+#include <ppp/threading/Executors.h>                                        // GetTickCount and threading utilities
 
-#if defined(_WIN32)
-#define IPTOS_TOS_MASK      0x1E
-#define IPTOS_TOS(tos)      ((tos) & IPTOS_TOS_MASK)
-#define IPTOS_LOWDELAY      0x10
-#define IPTOS_THROUGHPUT    0x08
-#define IPTOS_RELIABILITY   0x04
-#define IPTOS_MINCOST       0x02
+#if defined(_WIN32)                                                         // Windows-specific code for QoS
+#define IPTOS_TOS_MASK      0x1E                                            // TOS field mask
+#define IPTOS_TOS(tos)      ((tos) & IPTOS_TOS_MASK)                        // Extract TOS
+#define IPTOS_LOWDELAY      0x10                                            // Low delay TOS
+#define IPTOS_THROUGHPUT    0x08                                            // Throughput TOS
+#define IPTOS_RELIABILITY   0x04                                            // Reliability TOS
+#define IPTOS_MINCOST       0x02                                            // Minimum cost TOS
 
-#include <windows/ppp/net/QoSS.h>
+#include <windows/ppp/net/QoSS.h>                                           // Windows QoS helper
 
-using ppp::net::QoSS;
+using ppp::net::QoSS;                                                       // Alias for QoS
 #endif
 
-using namespace ppp;
-using namespace ppp::coroutines;
-using namespace ppp::net;
-using namespace ppp::net::native;
+using namespace ppp;                                                        // Use ppp namespace
+using namespace ppp::coroutines;                                            // Use coroutine namespace
+using namespace ppp::net;                                                   // Use network namespace
+using namespace ppp::net::native;                                           // Use native network helpers
 
 namespace aggligator
 {
-    /* Refer:
-     * https://github.com/torvalds/linux/blob/977b1ef51866aa7170409af80740788d4f9c4841/include/net/tcp.h#L287
-     * https://lore.kernel.org/netdev/87pronqq04.fsf@chdir.org/T/
-     * https://android.googlesource.com/kernel/mediatek/+/android-mtk-3.18/include/net/tcp.h?autodive=0%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F
-     * https://elixir.bootlin.com/linux/v2.6.27-rc7/source/include/net/tcp.h
-     *
-     * The next routines deal with comparing 32 bit unsigned ints
-     * and worry about wraparound (automatic with unsigned arithmetic).
-     */    
-
-    static inline bool                                                  before(uint32_t seq1, uint32_t seq2) noexcept
+    // Helper functions for 32-bit sequence number comparison (handles wrap-around)
+    // Returns true if seq1 is strictly before seq2 in modulo 2^32 space.
+    static inline bool before(uint32_t seq1, uint32_t seq2) noexcept
     {
-        return (int32_t)(seq1 - seq2) < 0;
+        return (int32_t)(seq1 - seq2) < 0;                                  // Cast to signed to detect wrap
     }
-    
-    static inline bool                                                  after(uint32_t seq2, uint32_t seq1) noexcept
+
+    // Returns true if seq2 is after seq1 (same as before(seq1, seq2))
+    static inline bool after(uint32_t seq2, uint32_t seq1) noexcept
     {
         return before(seq1, seq2);
     }
 
+    //----------------------------------------------------------------------------
+    // Server class implementation
+    //----------------------------------------------------------------------------
     class aggligator::server
     {
     public:
-        ~server() noexcept
+        ~server() noexcept                                                   // Destructor
         {
-            close();
+            close();                                                        // Clean up all acceptors
         }
 
-        void                                                            close() noexcept
+        void                            close() noexcept                     // Close all TCP acceptors
         {
-            for (auto&& kv : acceptors_)
+            for (auto&& kv : acceptors_)                                    // Iterate over all bound ports
             {
-                acceptor& acceptor = kv.second;
-                boost::system::error_code ec;
-                acceptor->cancel(ec);
-                acceptor->close(ec);
+                acceptor& acceptor = kv.second;                             // Get the acceptor shared_ptr
+                boost::system::error_code ec;                               // Ignored error code
+                acceptor->cancel(ec);                                       // Cancel pending async_accept
+                acceptor->close(ec);                                        // Close the acceptor socket
             }
 
-            acceptors_.clear();
+            acceptors_.clear();                                             // Remove all entries
         }
 
-        boost::asio::ip::udp::endpoint                                  server_endpoint_;
-        unordered_map<int, acceptor>                                    acceptors_;
-        unordered_map<int, client_ptr>                                  clients_;
+        boost::asio::ip::udp::endpoint  server_endpoint_;                    // Destination UDP endpoint (where to send decapsulated packets)
+        unordered_map<int, acceptor>    acceptors_;                          // Port -> TCP acceptor
+        unordered_map<int, client_ptr>  clients_;                            // Remote port -> client instance (for multiplexing)
     };
 
+    //----------------------------------------------------------------------------
+    // Client class implementation
+    //----------------------------------------------------------------------------
     class aggligator::client : public std::enable_shared_from_this<client>
     {
     public:
-        client(const std::shared_ptr<aggligator>& aggligator) noexcept
-            : socket_(aggligator->context_)
-            , app_(aggligator)
-            , server_mode_(false)
-            , local_port_(0)
-            , remote_port_(0)
-            , established_num_(0)
-            , connections_num_(0)
-            , handshakeds_num_(0)
-            , last_(0)
+        client(const std::shared_ptr<aggligator>& aggligator) noexcept      // Constructor
+            : socket_(aggligator->context_)                                 // UDP socket associated with same io_context
+            , app_(aggligator)                                              // Keep reference to parent aggregator
+            , server_mode_(false)                                           // Initially not server mode
+            , local_port_(0)                                                // Local UDP port (to be determined)
+            , remote_port_(0)                                               // Remote TCP port used as client identifier
+            , established_num_(0)                                           // Number of TCP connections that completed handshake
+            , connections_num_(0)                                           // Total number of TCP connections we expect
+            , handshakeds_num_(0)                                           // Number of connections that have sent handshake complete
+            , last_(0)                                                      // Last activity timestamp (seconds)
         {
 
         }
-        ~client() noexcept
+
+        ~client() noexcept                                                  // Destructor
         {
-            close();
+            close();                                                        // Release all resources
         }
 
-        void                                                            close() noexcept;
-        bool                                                            send(Byte* packet, int packet_length) noexcept;
-        bool                                                            open(int connections, unordered_set<boost::asio::ip::tcp::endpoint>& servers) noexcept;
-        bool                                                            loopback() noexcept;
-        bool                                                            timeout() noexcept;
-        bool                                                            update(uint32_t now_seconds) noexcept;
+        void                                            close() noexcept;                                              // Close client (declared)
+        bool                                            send(Byte* packet, int packet_length) noexcept;                // Send UDP packet through aggregator
+        bool                                            open(int connections, unordered_set<boost::asio::ip::tcp::endpoint>& servers) noexcept; // Establish TCP connections
+        bool                                            loopback() noexcept;                                           // Start receiving UDP packets from external source
+        bool                                            timeout() noexcept;                                            // Start connection timeout timer
+        bool                                            update(uint32_t now_seconds) noexcept;                         // Update idle timeout and heartbeats
+            
+        boost::asio::ip::udp::endpoint                  source_endpoint_;   // Source endpoint of last received UDP packet (for reply)
+        boost::asio::ip::udp::socket                    socket_;            // UDP socket for external communication
+        std::shared_ptr<aggligator>                     app_;               // Parent aggregator
+        std::shared_ptr<convergence>                    convergence_;        // Convergence layer (sequencing, queueing)
+        deadline_timer                                  timeout_;           // Timer for initial connection timeout
+        unordered_set<boost::asio::ip::tcp::endpoint>   server_endpoints_;   // List of remote TCP servers we connect to
 
-        boost::asio::ip::udp::endpoint                                  source_endpoint_;
-        boost::asio::ip::udp::socket                                    socket_;
-        std::shared_ptr<aggligator>                                     app_;
-        std::shared_ptr<convergence>                                    convergence_;
-        deadline_timer                                                  timeout_;
-        unordered_set<boost::asio::ip::tcp::endpoint>                   server_endpoints_;
-
-        list<connection_ptr>                                            connections_;
-        bool                                                            server_mode_     = false;
-        int                                                             local_port_      = 0;
-        uint16_t                                                        remote_port_     = 0;
-        uint32_t                                                        established_num_ = 0;
-        uint32_t                                                        connections_num_ = 0;
-        uint32_t                                                        handshakeds_num_ = 0;
-        uint32_t                                                        last_            = 0;
+        list<connection_ptr>                            connections_;           // All TCP connections belonging to this client
+        bool                                            server_mode_ = false;   // True if this client was created by server (i.e., incoming)
+        int                                             local_port_ = 0;        // Local UDP port (bound or automatically assigned)
+        uint16_t                                        remote_port_ = 0;       // Remote TCP port (used as key in server mode)
+        uint32_t                                        established_num_ = 0;   // Counter of fully established TCP connections
+        uint32_t                                        connections_num_ = 0;   // Target total number of TCP connections
+        uint32_t                                        handshakeds_num_ = 0;   // Number of connections that have completed handshake (server side)
+        uint32_t                                        last_ = 0;              // Last activity timestamp (seconds since epoch)
     };
 
+    //----------------------------------------------------------------------------
+    // Convergence class implementation (sequencing, retransmission, reassembly)
+    //----------------------------------------------------------------------------
     class aggligator::convergence
     {
     public:
-        struct recv_packet
+        struct recv_packet                                                  // Received packet waiting for ordering
         {
-            uint32_t                                                    seq    = 0;
-            int                                                         length = 0;
-            std::shared_ptr<Byte>                                       packet;
-            boost::asio::ip::udp::endpoint                              dst;
+            uint32_t                        seq = 0;                        // Sequence number of this packet
+            int                             length = 0;                     // Length of data (after sequence header)
+            std::shared_ptr<Byte>           packet;                         // Data buffer (without length/seq headers)
+            boost::asio::ip::udp::endpoint  dst;                            // Destination endpoint (unused, kept for compatibility)
         };
 
+        // Comparison functor for maps that respects 32-bit wrap-around using before()
         template <typename _Tp>
-        struct packet_less 
+        struct packet_less
         {
-            constexpr bool                                              operator()(const _Tp& __x, const _Tp& __y) const noexcept 
+            constexpr bool operator()(const _Tp& __x, const _Tp& __y) const noexcept
             {
-                return before(__x, __y);
+                return before(__x, __y);                                    // Use before() for correct ordering
             }
         };
 
-        queue<send_packet>                                              send_queue_;
-        map_pr<uint32_t, recv_packet, packet_less<uint32_t>>            recv_queue_;
-        uint32_t                                                        seq_no_         = 0;
-        uint32_t                                                        ack_no_         = 1;
-        std::shared_ptr<client>                                         client_;
-        std::shared_ptr<aggligator>                                     app_;
+        // Send queue: sorted by sequence number (seq) using red-black tree. Key = seq, Value = send_packet
+        map_pr<uint32_t, send_packet, packet_less<uint32_t>> send_queue_;   // Packets ready to be sent over TCP
+        // Receive queue: sorted by sequence number for out-of-order reassembly
+        map_pr<uint32_t, recv_packet, packet_less<uint32_t>> recv_queue_;   // Out-of-order packets waiting for missing predecessors
+        uint32_t                                             seq_no_ = 0;   // Next sequence number to use for outgoing packets
+        uint32_t                                             ack_no_ = 1;   // Next expected sequence number from remote side
+        std::shared_ptr<client>                              client_;       // Client that owns this convergence
+        std::shared_ptr<aggligator>                          app_;          // Parent aggregator
 
         convergence(const std::shared_ptr<aggligator>& aggligator, const std::shared_ptr<client>& client) noexcept
-            : client_(client)
-            , app_(aggligator)
+            : client_(client)                                               // Store client reference (may be weak later)
+            , app_(aggligator)                                              // Store aggregator reference
         {
-            seq_no_ = (uint32_t)RandomNext(UINT16_MAX, INT32_MAX);
-            ack_no_ = 0;
-        }
-        ~convergence() noexcept
-        {
-            close();
+            seq_no_ = (uint32_t)RandomNext(UINT16_MAX, INT32_MAX);          // Random initial sequence number
+            ack_no_ = 0;                                                    // No packet acknowledged yet
         }
 
-        void                                                            close() noexcept;
-        std::shared_ptr<Byte>                                           pack(Byte* packet, int packet_length, uint32_t seq, int& out) noexcept;
-        bool                                                            input(Byte* packet, int packet_length) noexcept;
-        bool                                                            output(Byte* packet, int packet_length) noexcept;
+        ~convergence() noexcept                                             // Destructor
+        {
+            close();                                                        // Clean up
+        }
+
+        void                                                close() noexcept;                                              // Close convergence (clear queues)
+        std::shared_ptr<Byte>                               pack(Byte* packet, int packet_length, uint32_t seq, int& out) noexcept; // Add length+seq headers
+        bool                                                input(Byte* packet, int packet_length) noexcept;               // Process received TCP data (reassembly)
+        bool                                                output(Byte* packet, int packet_length) noexcept;              // Send decapsulated UDP packet to external destination
     };
 
+    //----------------------------------------------------------------------------
+    // Connection class implementation (per-TCP stream)
+    //----------------------------------------------------------------------------
     class aggligator::connection : public std::enable_shared_from_this<connection>
     {
     public:
         connection(const std::shared_ptr<aggligator>& aggligator, const client_ptr& client, const convergence_ptr& convergence) noexcept
-            : app_(aggligator)
-            , convergence_(convergence)
-            , client_(client)
-            , sending_(false)
-            , next_(0)
+            : app_(aggligator)                                              // Keep aggregator reference
+            , convergence_(convergence)                                     // Keep convergence reference
+            , client_(client)                                               // Keep client reference
+            , sending_(false)                                               // No ongoing async_write
+            , next_(0)                                                      // Next heartbeat time (seconds)
         {
 
         }
-        ~connection() noexcept
+
+        ~connection() noexcept                                              // Destructor
         {
-            close();
+            close();                                                        // Release all resources
         }
 
-        void                                                            close() noexcept
+        void close() noexcept                                               // Close TCP connection and cleanup
         {
-#if defined(_WIN32)
+#if defined(_WIN32)                                                         // Windows QoS cleanup
             qoss_.reset();
 #endif
 
-            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
-            if (socket)
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_); // Take ownership
+            if (socket)                                                     // If socket exists, close it properly
             {
                 aggligator::socket_close(*socket);
             }
 
-            std::shared_ptr<aggligator> aggligator = std::move(app_);
-            convergence_ptr convergence = std::move(convergence_);
- 
-            next_packet_.reset();
-            if (convergence)
+            std::shared_ptr<aggligator> aggligator = std::move(app_);       // Release aggregator reference
+            convergence_ptr convergence = std::move(convergence_);          // Release convergence reference
+
+            next_packet_.reset();                                           // Discard pending heartbeat packet
+            if (convergence)                                                // Convergence may still be referenced elsewhere
             {
-                convergence->close();
+                convergence->close();                                       // It will close its queues but may not delete itself
             }
 
-            client_ptr client = std::move(client_);
-            if (client)
+            client_ptr client = std::move(client_);                         // Release client reference
+            if (client)                                                     // If client exists, close it (may trigger reconnection)
             {
                 client->close();
             }
         }
-        bool                                                            sent(const std::shared_ptr<Byte>& packet, int length) noexcept
+
+        // Asynchronously send a packet over this TCP connection
+        bool sent(const std::shared_ptr<Byte>& packet, int length) noexcept
         {
-            ptr aggligator = app_;
-            if (!aggligator)
+            ptr aggligator = app_;                                          // Get aggregator (may be expired)
+            if (!aggligator)                                                // Already closed
             {
                 return false;
             }
 
-            std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
-            if (!socket)
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_; // Get TCP socket
+            if (!socket)                                                    // No socket
             {
                 return false;
             }
 
-            bool opened = socket->is_open();
-            if (!opened)
+            bool opened = socket->is_open();                                // Check if still open
+            if (!opened)                                                    // Closed
             {
                 return false;
             }
 
-            auto self = shared_from_this();
-            boost::asio::async_write(*socket, boost::asio::buffer(packet.get(), length),
+            auto self = shared_from_this();                                 // Keep connection alive during async operation
+            boost::asio::async_write(*socket, boost::asio::buffer(packet.get(), length), // Start async write
                 [self, this, packet, length](boost::system::error_code ec, std::size_t sz) noexcept
                 {
-                    bool processed = false;
-                    sending_ = false;
+                    bool processed = false;                                 // Whether we should continue sending
+                    sending_ = false;                                       // Write finished, clear flag
 
-                    if (ec == boost::system::errc::success)
+                    if (ec == boost::system::errc::success)                 // Write succeeded
                     {
-                        ptr aggligator = app_;
-                        if (aggligator)
+                        ptr aggligator = app_;                              // Check aggregator again
+                        if (aggligator)                                     // Still alive
                         {
-                            aggligator->tx_ += sz;
+                            aggligator->tx_ += sz;                          // Update statistics
                             aggligator->tx_pps_++;
-                            processed = next();
+                            processed = next();                             // Try to send next packet from queue
                         }
                     }
 
-                    if (!processed)
+                    if (!processed)                                         // If no more packets or error, close connection
                     {
                         close();
                     }
                 });
 
-            sending_ = true;
+            sending_ = true;                                                // Mark as busy
             return true;
         }
-        bool                                                            next() noexcept
+
+        // Called after a write completes to fetch next packet from convergence send queue
+        bool next() noexcept
         {
-            convergence_ptr convergence = convergence_;
-            if (!convergence)
+            convergence_ptr convergence = convergence_;                     // Get convergence
+            if (!convergence)                                               // No convergence -> cannot proceed
             {
                 return false;
             }
-            else
+            else                                                            // Convergence exists
             {
-                std::shared_ptr<Byte> next_packet = std::move(next_packet_);
-                if (next_packet)
+                std::shared_ptr<Byte> next_packet = std::move(next_packet_); // Check if we have a pending heartbeat
+                if (next_packet)                                            // Yes, send it now
                 {
                     return sent(next_packet, 2);
                 }
             }
 
-            auto tail = convergence->send_queue_.begin();
-            auto endl = convergence->send_queue_.end();
-            if (tail == endl)
+            // Get the packet with smallest sequence number from send queue (ordered by seq)
+            auto tail = convergence->send_queue_.begin();                   // Iterator to first element (lowest seq)
+            auto endl = convergence->send_queue_.end();                     // End iterator
+            if (tail == endl)                                               // Queue empty
             {
-                return true;
+                return true;                                                // Nothing to send, but connection remains healthy
             }
 
-            send_packet context = *tail;
-            convergence->send_queue_.erase(tail);
+            send_packet context = tail->second;                             // Copy packet info
+            convergence->send_queue_.erase(tail);                           // Remove from queue (we will send it now)
 
-            return sent(context.packet, context.length);
+            return sent(context.packet, context.length);                    // Send asynchronously
         }
-        bool                                                            recv() noexcept
+
+        // Start receiving TCP data (length header then payload)
+        bool recv() noexcept
         {
-            std::shared_ptr<aggligator> aggligator = app_;
+            std::shared_ptr<aggligator> aggligator = app_;                  // Get aggregator
             if (!aggligator)
             {
                 close();
@@ -303,54 +321,56 @@ namespace aggligator
                 return false;
             }
 
-            auto self = shared_from_this();
+            auto self = shared_from_this();                                 // Keep alive during async read
+            // Read the 2-byte length prefix (big-endian)
             boost::asio::async_read(*socket, boost::asio::buffer(buffer_, 2),
                 [self, this, socket](boost::system::error_code ec, std::size_t sz) noexcept
                 {
-                    do 
+                    do
                     {
                         ptr aggligator = app_;
-                        if (!aggligator)
+                        if (!aggligator)                                    // Aggregator destroyed
                         {
                             close();
                             break;
                         }
 
-                        aggligator->rx_ += sz;
-                        if (sz != 2)
+                        aggligator->rx_ += sz;                              // Count received bytes
+                        if (sz != 2)                                        // Incomplete length header
                         {
                             close();
                             break;
                         }
 
-                        client_ptr client = client_;
+                        client_ptr client = client_;                        // Get client
                         if (!client)
                         {
                             close();
                             break;
                         }
 
-                        std::size_t length = buffer_[0] << 8 | buffer_[1];
-                        if (length == 0)
+                        std::size_t length = buffer_[0] << 8 | buffer_[1];  // Compute payload length
+                        if (length == 0)                                    // Heartbeat packet (zero length)
                         {
-                            if (!recv())
+                            if (!recv())                                    // Continue to next packet
                             {
                                 close();
                                 break;
                             }
                             else
                             {
-                                aggligator->rx_pps_++;
+                                aggligator->rx_pps_++;                      // Count heartbeat as a packet
                             }
 
-                            client->last_ = (uint32_t)(aggligator->now() / 1000);
+                            client->last_ = (uint32_t)(aggligator->now() / 1000); // Update activity timestamp
                             break;
                         }
 
+                        // Read the payload of specified length
                         boost::asio::async_read(*socket, boost::asio::buffer(buffer_, length),
                             [self, this, length](boost::system::error_code ec, std::size_t sz) noexcept
                             {
-                                do 
+                                do
                                 {
                                     ptr aggligator = app_;
                                     if (!aggligator)
@@ -360,7 +380,7 @@ namespace aggligator
                                     }
 
                                     aggligator->rx_ += sz;
-                                    if (length != sz)
+                                    if (length != sz)                       // Incomplete payload
                                     {
                                         close();
                                         break;
@@ -384,6 +404,7 @@ namespace aggligator
                                         aggligator->rx_pps_++;
                                     }
 
+                                    // Feed the received data into convergence for reassembly
                                     bool ok = convergence->input(buffer_, length) && recv();
                                     if (ok)
                                     {
@@ -400,7 +421,9 @@ namespace aggligator
                 });
             return true;
         }
-        bool                                                            open(YieldContext& y, const boost::asio::ip::tcp::endpoint& server, const ppp::function<void(connection*)>& established) noexcept
+
+        // Establish TCP connection and perform handshake (asynchronous coroutine)
+        bool open(YieldContext& y, const boost::asio::ip::tcp::endpoint& server, const ppp::function<void(connection*)>& established) noexcept
         {
             std::shared_ptr<aggligator> aggligator = app_;
             if (!aggligator)
@@ -418,44 +441,45 @@ namespace aggligator
                 }
             }
 
-            if (socket->is_open())
+            if (socket->is_open())                                          // Already connected (should not happen)
             {
                 return false;
             }
 
             boost::system::error_code ec;
-            if (!ppp::coroutines::asio::async_open(y, *socket, server.protocol()))
+            if (!ppp::coroutines::asio::async_open(y, *socket, server.protocol())) // Open socket with correct protocol
             {
                 return false;
             }
             else
             {
-                aggligator->socket_adjust(*socket);
+                aggligator->socket_adjust(*socket);                         // Apply socket options
             }
 
-#if defined(_LINUX)
+#if defined(_LINUX)                                                         // Linux VPN protection (if configured)
             boost::asio::ip::address server_ip = server.address();
             if (server_ip.is_v4() && !server_ip.is_loopback())
             {
-                ProtectorNetworkPtr protector_network = aggligator->ProtectorNetwork; 
-                if (NULLPTR != protector_network) 
+                ProtectorNetworkPtr protector_network = aggligator->ProtectorNetwork;
+                if (NULLPTR != protector_network)
                 {
-                    if (!protector_network->Protect(socket->native_handle(), y)) 
+                    if (!protector_network->Protect(socket->native_handle(), y))
                     {
                         return false;
                     }
                 }
             }
-#elif defined(_WIN32)
+#elif defined(_WIN32)                                                       // Windows QoS tagging
             qoss_ = QoSS::New(socket->native_handle(), server.address(), server.port());
 #endif
-            socket_ = socket;
+            socket_ = socket;                                               // Store socket
 
-            connection_ptr self = shared_from_this();
-            boost::asio::post(socket->get_executor(), 
-                [self, this, established, socket, server]() noexcept 
+            connection_ptr self = shared_from_this();                       // Keep reference
+            // Post connect operation to avoid deep recursion
+            boost::asio::post(socket->get_executor(),
+                [self, this, established, socket, server]() noexcept
                 {
-                    socket->async_connect(server,
+                    socket->async_connect(server,                           // Initiate connection
                         [self, this, established](boost::system::error_code ec) noexcept
                         {
                             ptr aggligator = app_;
@@ -465,7 +489,7 @@ namespace aggligator
                                 return false;
                             }
 
-                            if (ec)
+                            if (ec)                                         // Connection failed
                             {
                                 close();
                                 return false;
@@ -478,6 +502,7 @@ namespace aggligator
                                 return false;
                             }
 
+                            // Handshake in a separate coroutine
                             boost::asio::spawn(
                                 [self, this, established](const boost::asio::yield_context& y) noexcept
                                 {
@@ -492,17 +517,20 @@ namespace aggligator
                 });
             return true;
         }
-        bool                                                            establish(const boost::asio::yield_context& y, const ppp::function<void(connection*)>& established) noexcept;
-        bool                                                            update(uint32_t now) noexcept
+
+        // Perform cryptographic-like handshake (xor checksum) and exchange sequence numbers
+        bool establish(const boost::asio::yield_context& y, const ppp::function<void(connection*)>& established) noexcept;
+        // Send heartbeat or keepalive when idle
+        bool update(uint32_t now) noexcept
         {
             std::shared_ptr<Byte> packet;
-            if (next_ == 0)
+            if (next_ == 0)                                                 // First time, schedule heartbeat
             {
-            next:
+            next:                                                           // Label for recomputing next_ after sending
                 int32_t rnd = RandomNext(1, std::min<int>(AGGLIGATOR_INACTIVE_TIMEOUT >> 1, std::max<int>(AGGLIGATOR_CONNECT_TIMEOUT, AGGLIGATOR_RECONNECT_TIMEOUT) << 2));
-                next_ = now + (uint32_t)rnd;
+                next_ = now + (uint32_t)rnd;                                // Random offset to avoid thundering herd
             }
-            elif(now >= next_)
+            else if (now >= next_)                                          // Time to send heartbeat
             {
                 std::shared_ptr<aggligator> aggligator = app_;
                 if (!aggligator)
@@ -510,136 +538,148 @@ namespace aggligator
                     return false;
                 }
 
-                packet = aggligator->make_shared_bytes(2);
+                packet = aggligator->make_shared_bytes(2);                  // Allocate 2-byte zero-length packet
                 if (!packet)
                 {
                     return false;
                 }
 
                 Byte* memory = packet.get();
-                memory[0] = 0;
-                memory[1] = 0;
+                memory[0] = 0;                                              // Length high byte = 0
+                memory[1] = 0;                                              // Length low byte = 0 (heartbeat)
 
-                if (sending_)
+                if (sending_)                                               // Already sending something, postpone
                 {
-                    next_packet_ = packet;
-                    goto next;
+                    next_packet_ = packet;                                  // Store for later
+                    goto next;                                              // Recompute next_ time
                 }
-                elif(sent(packet, 2))
+                else if (sent(packet, 2))                                   // Send heartbeat
                 {
-                    if (sending_)
+                    if (sending_)                                           // Sent started asynchronously
                     {
                         goto next;
                     }
                 }
 
-                return false;
+                return false;                                               // Send failed
             }
 
             return true;
         }
 
-        std::shared_ptr<aggligator>                                     app_;
-        convergence_ptr                                                 convergence_;
-        client_ptr                                                      client_;
-        std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_;
-        bool                                                            sending_;
-        uint32_t                                                        next_;
-        std::shared_ptr<Byte>                                           next_packet_;
-#if defined(_WIN32)
-        std::shared_ptr<QoSS>                                           qoss_;
+        std::shared_ptr<aggligator> app_;                                   // Parent aggregator
+        convergence_ptr convergence_;                                       // Convergence layer
+        client_ptr client_;                                                 // Client that owns this connection
+        std::shared_ptr<boost::asio::ip::tcp::socket> socket_;              // TCP socket
+        bool sending_;                                                      // True if async_write is pending
+        uint32_t next_;                                                     // Next heartbeat timestamp (seconds)
+        std::shared_ptr<Byte> next_packet_;                                 // Heartbeat packet pending because socket busy
+#if defined(_WIN32)                                                         // Windows QoS object
+        std::shared_ptr<QoSS> qoss_;
 #endif
-        Byte                                                            buffer_[UINT16_MAX]; /* MAX:65507 */
+        Byte buffer_[UINT16_MAX];                                           // Receive buffer (max 65507 bytes)
     };
 
+    //----------------------------------------------------------------------------
+    // aggligator constructor
+    //----------------------------------------------------------------------------
     aggligator::aggligator(boost::asio::io_context& context, const std::shared_ptr<Byte>& buffer, int buffer_size, int congestions) noexcept
-        : context_(context)
-        , buffer_(buffer)
-        , buffer_size_(buffer_size)
-        , congestions_(congestions)
-        , server_mode_(false)
-        , last_(0)
-        , now_(ppp::threading::Executors::GetTickCount())
-        , rx_(0)
+        : context_(context)                                                 // Store io_context reference
+        , buffer_(buffer)                                                   // Store UDP receive buffer
+        , buffer_size_(buffer_size)                                         // Store buffer size
+        , congestions_(congestions)                                         // Congestion threshold (max out-of-order packets)
+        , server_mode_(false)                                               // Not determined yet
+        , last_(0)                                                          // No last tick
+        , now_(ppp::threading::Executors::GetTickCount())                   // Current time in ms
+        , rx_(0)                                                            // Zero counters
         , tx_(0)
         , rx_pps_(0)
         , tx_pps_(0)
     {
-        if (NULLPTR == buffer)
+        if (NULLPTR == buffer)                                              // Invalid buffer pointer
         {
-            buffer_size = 0;
+            buffer_size = 0;                                                // Disable buffer usage
         }
-        elif(buffer_size < 1)
+        else if (buffer_size < 1)                                           // Zero or negative size
         {
-            buffer_ = NULLPTR;
+            buffer_ = NULLPTR;                                              // Clear buffer
             buffer_size = 0;
         }
     }
 
+    //----------------------------------------------------------------------------
+    // aggligator destructor
+    //----------------------------------------------------------------------------
     aggligator::~aggligator() noexcept
     {
-        close();
+        close();                                                            // Clean everything
     }
 
+    //----------------------------------------------------------------------------
+    // Close the entire aggregator, cancel all timers, close all connections
+    //----------------------------------------------------------------------------
     void aggligator::close() noexcept
     {
-        client_ptr client = std::move(client_);
-        server_ptr server = std::move(server_);
-        ppp::function<void()> exit = std::move(Exit);
+        client_ptr client = std::move(client_);                             // Take ownership of client
+        server_ptr server = std::move(server_);                             // Take ownership of server
+        ppp::function<void()> exit = std::move(Exit);                       // Move exit callback
 
-        deadline_timer_cancel(reopen_);
-        deadline_timer_cancel(timeout_);
+        deadline_timer_cancel(reopen_);                                     // Cancel and reset reconnect timer
+        deadline_timer_cancel(timeout_);                                    // Cancel and reset main tick timer
 
-        if (server)
+        if (server)                                                         // If server exists, close its acceptors
         {
             server->close();
         }
 
-        if (client)
+        if (client)                                                         // If client exists, close it (will also close connections)
         {
             client->close();
         }
 
-        if (exit)
+        if (exit)                                                           // Invoke exit callback if set
         {
-            Exit = NULLPTR;
+            Exit = NULLPTR;                                                 // Clear to avoid recursion
             exit();
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Update activity and timeouts (called periodically from timer)
+    //----------------------------------------------------------------------------
     void aggligator::update(uint64_t now) noexcept
     {
-        uint32_t now_seconds = (uint32_t)(now / 1000);
-        for (;;)
+        uint32_t now_seconds = (uint32_t)(now / 1000);                      // Convert to seconds
+        for (;;)                                                            // Single iteration (for break convenience)
         {
-            client_ptr pclient = client_;
-            if (pclient && pclient->last_ != 0 && !pclient->update(now_seconds))
+            client_ptr pclient = client_;                                   // Get client (if in client mode)
+            if (pclient && pclient->last_ != 0 && !pclient->update(now_seconds)) // Check inactivity
             {
-                pclient->close();
+                pclient->close();                                           // Close and trigger reconnect
             }
 
             break;
         }
 
-        for (;;)
+        for (;;)                                                            // Server mode: check all clients
         {
             server_ptr pserver = server_;
-            if (!pserver)
+            if (!pserver)                                                   // Not a server
             {
                 break;
             }
 
-            list<client_ptr> releases;
-            for (auto&& kv : pserver->clients_)
+            list<client_ptr> releases;                                      // Clients to be closed
+            for (auto&& kv : pserver->clients_)                             // Iterate over all clients
             {
                 client_ptr& pclient = kv.second;
-                if (pclient->last_ != 0 && !pclient->update(now_seconds))
+                if (pclient->last_ != 0 && !pclient->update(now_seconds))   // Inactive
                 {
-                    releases.emplace_back(pclient);
+                    releases.emplace_back(pclient);                         // Schedule for removal
                 }
             }
 
-            for (client_ptr& pclient : releases)
+            for (client_ptr& pclient : releases)                            // Actually close them
             {
                 pclient->close();
             }
@@ -648,57 +688,63 @@ namespace aggligator
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Create the main tick timer if not already created
+    //----------------------------------------------------------------------------
     bool aggligator::create_timeout() noexcept
     {
         deadline_timer timeout_ptr = timeout_;
-        if (timeout_ptr)
+        if (timeout_ptr)                                                    // Already exists
         {
             return true;
         }
 
-        timeout_ptr = make_shared_object<boost::asio::deadline_timer>(context_);
-        if (!timeout_ptr)
+        timeout_ptr = make_shared_object<boost::asio::deadline_timer>(context_); // Create new timer
+        if (!timeout_ptr)                                                   // Allocation failed
         {
             return false;
         }
 
         timeout_ = timeout_ptr;
-        return nawait_timeout();
+        return nawait_timeout();                                            // Start the periodic loop
     }
 
+    //----------------------------------------------------------------------------
+    // Non-blocking timer loop (fires every 10ms)
+    //----------------------------------------------------------------------------
     bool aggligator::nawait_timeout() noexcept
     {
-        deadline_timer t = timeout_;
-        if (t)
+        deadline_timer t = timeout_;                                        // Get current timer
+        if (t)                                                              // Timer exists
         {
-            auto self = shared_from_this();
-            t->expires_from_now(boost::posix_time::milliseconds(10));
+            auto self = shared_from_this();                                 // Keep aggregator alive
+            t->expires_from_now(boost::posix_time::milliseconds(10));       // Short interval for responsiveness
             t->async_wait(
                 [self, this](boost::system::error_code ec) noexcept
                 {
-                    if (ec == boost::system::errc::operation_canceled)
+                    if (ec == boost::system::errc::operation_canceled)      // Timer cancelled (closing)
                     {
                         close();
                         return false;
                     }
 
-                    uint64_t now = ppp::threading::Executors::GetTickCount();
+                    uint64_t now = ppp::threading::Executors::GetTickCount(); // Get current time
                     uint32_t now_seconds = (uint32_t)(now / 1000);
 
-                    now_ = now;
-                    if (last_ != now_seconds)
+                    now_ = now;                                             // Update timestamp
+                    if (last_ != now_seconds)                               // Only update once per second
                     {
                         last_ = now_seconds;
-                        update(now);
+                        update(now);                                        // Check timeouts
 
-                        ppp::function<void(uint64_t)> tick = Tick;
+                        ppp::function<void(uint64_t)> tick = Tick;          // External tick callback
                         if (tick)
                         {
                             tick(now);
                         }
                     }
 
-                    return nawait_timeout();
+                    return nawait_timeout();                                // Continue loop
                 });
             return true;
         }
@@ -706,90 +752,104 @@ namespace aggligator
         return false;
     }
 
+    //----------------------------------------------------------------------------
+    // Cancel a deadline timer safely
+    //----------------------------------------------------------------------------
     void aggligator::deadline_timer_cancel(deadline_timer& t) noexcept
     {
-        boost::system::error_code ec;
-        deadline_timer p = std::move(t);
-
+        boost::system::error_code ec;                                       // Ignored
+        deadline_timer p = std::move(t);                                    // Take ownership
         if (p)
         {
-            p->cancel(ec);
+            p->cancel(ec);                                                  // Cancel any pending wait
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Apply low-level socket options to native socket (TCP or UDP)
+    //----------------------------------------------------------------------------
     void aggligator::socket_adjust(int sockfd, bool in4) noexcept
     {
-        AppConfigurationPtr configuration = AppConfiguration;
+        AppConfigurationPtr configuration = AppConfiguration;               // Get configuration
         if (NULLPTR != configuration)
         {
-            auto& cfg = configuration->udp;
-            Socket::SetWindowSizeIfNotZero(sockfd, cfg.cwnd, cfg.rwnd);
+            auto& cfg = configuration->udp;                                 // UDP specific settings
+            Socket::SetWindowSizeIfNotZero(sockfd, cfg.cwnd, cfg.rwnd);     // Set send/recv window if non-zero
         }
 
-        Socket::AdjustDefaultSocketOptional(sockfd, in4);
-        Socket::SetTypeOfService(sockfd);
+        Socket::AdjustDefaultSocketOptional(sockfd, in4);                   // Set TCP_NODELAY, SO_REUSEADDR, etc.
+        Socket::SetTypeOfService(sockfd);                                   // Set IP_TOS for QoS
     }
 
+    //----------------------------------------------------------------------------
+    // Close UDP socket safely
+    //----------------------------------------------------------------------------
     void aggligator::socket_close(boost::asio::ip::udp::socket& socket) noexcept
     {
         if (socket.is_open())
         {
             boost::system::error_code ec;
-            socket.cancel(ec);
-            socket.close(ec);
+            socket.cancel(ec);                                              // Cancel pending async ops
+            socket.close(ec);                                               // Close descriptor
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Close TCP socket safely (shutdown send first)
+    //----------------------------------------------------------------------------
     void aggligator::socket_close(boost::asio::ip::tcp::socket& socket) noexcept
     {
         if (socket.is_open())
         {
             boost::system::error_code ec;
-            socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
-            socket.cancel(ec);
-            socket.close(ec);
+            socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec); // Send FIN
+            socket.cancel(ec);                                              // Cancel pending reads/writes
+            socket.close(ec);                                               // Close socket
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Server accept loop: accept new TCP connections on given acceptor
+    //----------------------------------------------------------------------------
     bool aggligator::server_accept(const acceptor& acceptor) noexcept
     {
         bool opened = acceptor->is_open();
-        if (!opened)
+        if (!opened)                                                        // Acceptor closed
         {
             close();
             return false;
         }
 
-        std::shared_ptr<boost::asio::ip::tcp::socket> socket = make_shared_object<boost::asio::ip::tcp::socket>(context_);
-        if (!socket)
+        std::shared_ptr<boost::asio::ip::tcp::socket> socket = make_shared_object<boost::asio::ip::tcp::socket>(context_); // Create new socket
+        if (!socket)                                                        // Allocation failed
         {
             close();
             return false;
         }
 
-        auto self = shared_from_this();
-        acceptor->async_accept(*socket, 
+        auto self = shared_from_this();                                     // Keep aggregator alive
+        acceptor->async_accept(*socket,                                     // Start async accept
             [self, this, acceptor, socket](boost::system::error_code ec) noexcept
             {
-                if (ec == boost::system::errc::operation_canceled)
+                if (ec == boost::system::errc::operation_canceled)          // Acceptor cancelled (shutdown)
                 {
                     close();
                     return false;
                 }
-                elif(ec == boost::system::errc::success)
+                else if (ec == boost::system::errc::success)                // New connection accepted
                 {
-                    YieldContext::Spawn(context_,
+                    YieldContext::Spawn(context_,                           // Spawn coroutine to handle handshake
                         [self, this, socket](YieldContext& y) noexcept
                         {
-                            socket_adjust(*socket);
-                            if (!(socket->is_open() && server_accept(socket, y)))
+                            socket_adjust(*socket);                         // Apply socket options
+                            if (!(socket->is_open() && server_accept(socket, y))) // Perform handshake
                             {
-                                socket_close(*socket);
+                                socket_close(*socket);                      // Failed, close socket
                             }
                         });
                 }
 
-                if (server_accept(acceptor))
+                if (server_accept(acceptor))                                // Continue accepting further connections
                 {
                     return true;
                 }
@@ -802,15 +862,19 @@ namespace aggligator
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // Process newly accepted TCP connection: handshake and attach to client
+    //----------------------------------------------------------------------------
     bool aggligator::server_accept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, YieldContext& y) noexcept
     {
         boost::system::error_code ec;
         server_ptr server = server_;
-        if (!server)
+        if (!server)                                                        // Server object missing
         {
             return false;
         }
 
+        // Set a timeout for the handshake phase
         deadline_timer timeout = make_shared_object<boost::asio::deadline_timer>(context_);
         if (!timeout)
         {
@@ -819,7 +883,7 @@ namespace aggligator
         else
         {
             timeout->expires_from_now(boost::posix_time::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
-            timeout->async_wait(
+            timeout->async_wait(                                            // If handshake not completed, close socket
                 [socket](boost::system::error_code ec) noexcept
                 {
                     if (ec != boost::system::errc::operation_canceled)
@@ -829,9 +893,10 @@ namespace aggligator
                 });
         }
 
-        Byte data[128];
-        uint16_t remote_port = 0;
+        Byte data[128];                                                     // Temporary buffer
+        uint16_t remote_port = 0;                                           // Port from client (0 for first connection)
 
+        // Read 8-byte handshake header
         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 8), y))
         {
             return false;
@@ -839,41 +904,42 @@ namespace aggligator
         else
         {
             rx_ += 8;
-            uint32_t m = *(uint32_t*)data;
-            *(uint32_t*)(data + 4) ^= m;
+            uint32_t m = *(uint32_t*)data;                                  // Random mask
+            *(uint32_t*)(data + 4) ^= m;                                    // Decrypt port field
             uint16_t* pchecksum = (uint16_t*)(data + 6);
             uint16_t checksum = *pchecksum;
 
-            *pchecksum = 0;
-            remote_port = ntohs(*(uint16_t*)(data + 4));
+            *pchecksum = 0;                                                 // Zero before checksum calculation
+            remote_port = ntohs(*(uint16_t*)(data + 4));                    // Get remote port
 
-            uint16_t chksum = inet_chksum(data, 8);
-            if (chksum != checksum)
+            uint16_t chksum = inet_chksum(data, 8);                         // Compute internet checksum
+            if (chksum != checksum)                                         // Checksum mismatch
             {
                 return false;
             }
         }
 
-        connection_ptr pconnection;
-        client_ptr pclient;
-        convergence_ptr pconvergence;
-        unordered_map<int, client_ptr>& clients = server->clients_;
+        connection_ptr pconnection;                                         // New connection object
+        client_ptr pclient;                                                 // Client (new or existing)
+        convergence_ptr pconvergence;                                       // Convergence layer
+        unordered_map<int, client_ptr>& clients = server->clients_;         // Map from remote port to client
 
-        std::shared_ptr<aggligator> my = shared_from_this();
-        if (remote_port == 0)
+        std::shared_ptr<aggligator> my = shared_from_this();                // Keep aggregator alive
+        if (remote_port == 0)                                               // First connection of this client (port 0 indicates new client)
         {
-            pclient = make_shared_object<client>(my);
+            pclient = make_shared_object<client>(my);                       // Create client
             if (!pclient)
             {
                 return false;
             }
 
-            pconvergence = make_shared_object<convergence>(my, pclient);
+            pconvergence = make_shared_object<convergence>(my, pclient);    // Create convergence
             if (!pconvergence)
             {
                 return false;
             }
 
+            // Open UDP socket for this client
             boost::asio::ip::udp::socket& socket_dgram = pclient->socket_;
             if (!ppp::coroutines::asio::async_open(y, socket_dgram, boost::asio::ip::udp::v6()))
             {
@@ -881,9 +947,10 @@ namespace aggligator
             }
             else
             {
-                socket_adjust(socket_dgram);
+                socket_adjust(socket_dgram);                                // Apply UDP options
             }
 
+            // Bind to any IPv6 address, port 0 (OS will assign)
             socket_dgram.bind(boost::asio::ip::udp::endpoint(boost::asio::ip::address_v6::any(), 0), ec);
             if (ec)
             {
@@ -896,46 +963,46 @@ namespace aggligator
                 return false;
             }
 
-            remote_port = local_endpoint.port();
-            pclient->server_mode_ = true;
-            pclient->established_num_ = 1;
-            pclient->connections_num_ = 1;
-            pclient->remote_port_ = remote_port;
-            pclient->convergence_ = pconvergence;
+            remote_port = local_endpoint.port();                            // Use the assigned port as identifier
+            pclient->server_mode_ = true;                                   // Mark as server-side client
+            pclient->established_num_ = 1;                                  // One connection established so far
+            pclient->connections_num_ = 1;                                  // Expected total connections (will be updated later)
+            pclient->remote_port_ = remote_port;                            // Store remote port for lookup
+            pclient->convergence_ = pconvergence;                           // Attach convergence
 
-            pconnection = make_shared_object<connection>(my, pclient, pconvergence);
+            pconnection = make_shared_object<connection>(my, pclient, pconvergence); // Create connection
             if (!pconnection)
             {
                 return false;
             }
 
-            clients[remote_port] = pclient;
-            pconnection->socket_ = socket;
-            pclient->connections_.emplace_back(pconnection);
+            clients[remote_port] = pclient;                                 // Register client in map
+            pconnection->socket_ = socket;                                  // Assign TCP socket
+            pclient->connections_.emplace_back(pconnection);                // Add to list
 
-            if (!pclient->timeout())
+            if (!pclient->timeout())                                        // Start connection timeout timer
             {
                 return false;
             }
         }
-        else
+        else                                                                // Subsequent connection for existing client
         {
-            auto client_tail = clients.find(remote_port);
+            auto client_tail = clients.find(remote_port);                   // Lookup by remote port
             auto client_endl = clients.end();
-            if (client_tail == client_endl)
+            if (client_tail == client_endl)                                 // No such client
             {
                 return false;
             }
 
             pclient = client_tail->second;
-            if (!pclient)
+            if (!pclient)                                                   // Client pointer invalid
             {
                 clients.erase(client_tail);
                 return false;
             }
 
             pconvergence = pclient->convergence_;
-            if (!pconvergence)
+            if (!pconvergence)                                              // Convergence missing
             {
                 return false;
             }
@@ -947,20 +1014,22 @@ namespace aggligator
             }
 
             pconnection->socket_ = socket;
-            pclient->established_num_++;
-            pclient->connections_num_++;
-            pclient->connections_.emplace_back(pconnection);
+            pclient->established_num_++;                                    // Increment established count
+            pclient->connections_num_++;                                    // Increment total connections
+            pclient->connections_.emplace_back(pconnection);                // Add to list
         }
 
-#if defined(_WIN32)
+#if defined(_WIN32)                                                         // Windows QoS tagging for this TCP socket
         if (Socket::IsDefaultFlashTypeOfService())
         {
             pconnection->qoss_ = QoSS::New(socket->native_handle());
         }
 #endif
+
+        // Send handshake response: remote port (again) and local sequence number
         data[0] = (Byte)(remote_port >> 8);
         data[1] = (Byte)(remote_port);
-        *(uint32_t*)(data + 2) = htonl(pconvergence->seq_no_);
+        *(uint32_t*)(data + 2) = htonl(pconvergence->seq_no_);              // Send our initial sequence number
 
         if (!ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, 6), y))
         {
@@ -971,27 +1040,29 @@ namespace aggligator
             tx_ += 6;
         }
 
+        // Read final handshake confirmation (8 bytes)
         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 8), y))
         {
             return false;
         }
 
         rx_ += 8;
-        if (*data != 0)
+        if (*data != 0)                                                     // First byte must be zero
         {
             return false;
         }
 
-        uint32_t connections_num = ntohl(*(uint32_t*)data);
-        if (++pclient->handshakeds_num_ < connections_num)
+        uint32_t connections_num = ntohl(*(uint32_t*)data);                 // Total number of TCP connections from client
+        if (++pclient->handshakeds_num_ < connections_num)                  // Not all connections have completed handshake yet
         {
-            return true;
+            return true;                                                    // Wait for more connections
         }
 
-        uint32_t ack = ntohl(*(uint32_t*)(data + 4)) + 1;
-        pconvergence->ack_no_ = ack;
+        uint32_t ack = ntohl(*(uint32_t*)(data + 4)) + 1;                   // Acknowledge client's sequence number
+        pconvergence->ack_no_ = ack;                                        // Set expected next sequence
 
-        pclient->last_ = (uint32_t)(now() / 1000);
+        pclient->last_ = (uint32_t)(now() / 1000);                          // Update activity timestamp
+        // Start receiving data on all connections
         for (connection_ptr& connection : pclient->connections_)
         {
             if (!connection->recv())
@@ -1000,19 +1071,22 @@ namespace aggligator
             }
         }
 
-        deadline_timer_cancel(timeout);
-        deadline_timer_cancel(pclient->timeout_);
-        return pclient->loopback();
+        deadline_timer_cancel(timeout);                                     // Handshake completed, cancel timeout
+        deadline_timer_cancel(pclient->timeout_);                           // Cancel connection timeout
+        return pclient->loopback();                                         // Start UDP receive loop
     }
 
+    //----------------------------------------------------------------------------
+    // Start server mode: listen on given ports and forward to destination IP:port
+    //----------------------------------------------------------------------------
     bool aggligator::server_open(const unordered_set<int>& bind_ports, const boost::asio::ip::address& destination_ip, int destination_port) noexcept
     {
-        if (bind_ports.empty())
+        if (bind_ports.empty())                                             // No ports to bind
         {
             return false;
         }
-        
-        if (server_ || client_) 
+
+        if (server_ || client_)                                             // Already running
         {
             return false;
         }
@@ -1023,20 +1097,20 @@ namespace aggligator
             return false;
         }
 
-        if (destination_port <= 0 || destination_port > UINT16_MAX)
+        if (destination_port <= 0 || destination_port > UINT16_MAX)         // Invalid destination port
         {
             return false;
         }
 
-        if (ip_is_invalid(destination_ip))
+        if (ip_is_invalid(destination_ip))                                  // Invalid destination IP
         {
             return false;
         }
 
-        bool any = false;
-        for (int bind_port : bind_ports)
+        bool any = false;                                                   // At least one acceptor created
+        for (int bind_port : bind_ports)                                    // Iterate over requested ports
         {
-            if (bind_port <= 0 || bind_port > UINT16_MAX)
+            if (bind_port <= 0 || bind_port > UINT16_MAX)                   // Skip invalid
             {
                 continue;
             }
@@ -1044,31 +1118,31 @@ namespace aggligator
             {
                 auto tail = server->acceptors_.find(bind_port);
                 auto endl = server->acceptors_.end();
-                if (tail != endl)
+                if (tail != endl)                                           // Already listening on this port
                 {
                     continue;
                 }
             }
 
-            auto acceptor = make_shared_object<boost::asio::ip::tcp::acceptor>(context_);
+            auto acceptor = make_shared_object<boost::asio::ip::tcp::acceptor>(context_); // Create acceptor
             if (NULLPTR == acceptor)
             {
                 break;
             }
 
             boost::system::error_code ec;
-            acceptor->open(boost::asio::ip::tcp::v6(), ec);
+            acceptor->open(boost::asio::ip::tcp::v6(), ec);                 // Open IPv6 TCP (dual-stack)
             if (ec)
             {
                 continue;
             }
             else
             {
-                socket_adjust(*acceptor);
+                socket_adjust(*acceptor);                                   // Apply options
             }
 
-            acceptor->bind(boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v6::any(), bind_port), ec);
-            if (ec && bind_port != 0)
+            acceptor->bind(boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v6::any(), bind_port), ec); // Bind to port
+            if (ec && bind_port != 0)                                       // Binding failed and port was specified, try with port 0
             {
                 acceptor->bind(boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v6::any(), 0), ec);
                 if (ec)
@@ -1077,51 +1151,54 @@ namespace aggligator
                 }
             }
 
-            acceptor->listen(UINT16_MAX, ec);
+            acceptor->listen(UINT16_MAX, ec);                               // Start listening
             if (ec)
             {
                 continue;
             }
 
-            if (server_accept(acceptor))
+            if (server_accept(acceptor))                                    // Begin async accept loop
             {
                 any |= true;
-                server->acceptors_[bind_port] = acceptor;
+                server->acceptors_[bind_port] = acceptor;                   // Store acceptor
             }
         }
 
-        server->server_endpoint_ = boost::asio::ip::udp::endpoint(destination_ip, destination_port);
-        server->server_endpoint_ = ip_v4_to_v6(server->server_endpoint_);
-        if (any)
+        server->server_endpoint_ = boost::asio::ip::udp::endpoint(destination_ip, destination_port); // Set UDP forward destination
+        server->server_endpoint_ = ip_v4_to_v6(server->server_endpoint_);   // Convert to IPv6 for consistency
+        if (any)                                                            // At least one listening socket
         {
             server_ = server;
             server_mode_ = true;
         }
 
-        return any && create_timeout();
+        return any && create_timeout();                                     // Start main timer
     }
 
+    //----------------------------------------------------------------------------
+    // Start client mode: connect to multiple servers using multiple TCP connections
+    //----------------------------------------------------------------------------
     bool aggligator::client_open(
-        int                                                                 connections,
-        const unordered_set<boost::asio::ip::tcp::endpoint>&                servers) noexcept
+        int connections,
+        const unordered_set<boost::asio::ip::tcp::endpoint>& servers) noexcept
     {
-        if (servers.empty())
+        if (servers.empty())                                                // No servers to connect
         {
             return false;
         }
 
-        if (connections < 1)
+        if (connections < 1)                                                // At least one connection per server
         {
             connections = 1;
         }
 
-        if (server_ || client_)
+        if (server_ || client_)                                             // Already active
         {
             return false;
         }
 
-        unordered_set<boost::asio::ip::tcp::endpoint> connect_servers;
-        for (const boost::asio::ip::tcp::endpoint& ep : servers)
+        unordered_set<boost::asio::ip::tcp::endpoint> connect_servers;      // Valid servers after filtering
+        for (const boost::asio::ip::tcp::endpoint& ep : servers)            // Validate each endpoint
         {
             int server_port = ep.port();
             if (server_port <= 0 || server_port > UINT16_MAX)
@@ -1138,12 +1215,12 @@ namespace aggligator
             connect_servers.emplace(ep);
         }
 
-        if (connect_servers.empty())
+        if (connect_servers.empty())                                        // No valid servers
         {
             return false;
         }
 
-        client_ptr pclient = make_shared_object<client>(shared_from_this());
+        client_ptr pclient = make_shared_object<client>(shared_from_this()); // Create client
         if (!pclient)
         {
             return false;
@@ -1151,31 +1228,34 @@ namespace aggligator
 
         client_ = pclient;
         server_mode_ = false;
-        return create_timeout() && pclient->open(connections, connect_servers);
+        return create_timeout() && pclient->open(connections, connect_servers); // Open TCP connections
     }
 
+    //----------------------------------------------------------------------------
+    // Check if IP address is unusable (unspecified, multicast, loopback sometimes allowed)
+    //----------------------------------------------------------------------------
     bool aggligator::ip_is_invalid(const boost::asio::ip::address& address) noexcept
     {
         if (address.is_v4())
         {
             boost::asio::ip::address_v4 in = address.to_v4();
-            if (in.is_multicast() || in.is_unspecified())
+            if (in.is_multicast() || in.is_unspecified())                   // Multicast or 0.0.0.0
             {
                 return true;
             }
 
             uint32_t ip = htonl(in.to_uint());
-            return ip == INADDR_ANY || ip == INADDR_NONE;
+            return ip == INADDR_ANY || ip == INADDR_NONE;                   // Also any address or none
         }
-        elif(address.is_v6())
+        else if (address.is_v6())
         {
             boost::asio::ip::address_v6 in = address.to_v6();
-            if (in.is_multicast() || in.is_unspecified())
+            if (in.is_multicast() || in.is_unspecified())                   // Multicast or ::
             {
                 return true;
             }
 
-            return false;
+            return false;                                                   // All other IPv6 addresses considered valid
         }
         else
         {
@@ -1183,9 +1263,12 @@ namespace aggligator
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Called when a server-mode client is closed (cleanup map entry)
+    //----------------------------------------------------------------------------
     bool aggligator::server_closed(client* client) noexcept
     {
-        if (client->server_mode_)
+        if (client->server_mode_)                                           // Only for server-side clients
         {
             server_ptr server = server_;
             if (server)
@@ -1195,10 +1278,10 @@ namespace aggligator
                 auto endl = clients.end();
                 if (tail != endl)
                 {
-                    client_ptr p = std::move(tail->second);
+                    client_ptr p = std::move(tail->second);                 // Remove from map
                     clients.erase(tail);
 
-                    if (p)
+                    if (p)                                                  // Close client (already closing, but ensure)
                     {
                         p->close();
                     }
@@ -1209,37 +1292,43 @@ namespace aggligator
         return false;
     }
 
+    //----------------------------------------------------------------------------
+    // Retrieve concurrency parameters (number of servers and channels per server)
+    //----------------------------------------------------------------------------
     void aggligator::client_fetch_concurrency(int& servers, int& channels) noexcept
     {
         servers = 0;
         channels = 0;
 
         client_ptr client = client_;
-        if (NULLPTR != client && !client->server_mode_) 
+        if (NULLPTR != client && !client->server_mode_)
         {
-            servers = (int)client->server_endpoints_.size();
-            if (servers > 0) 
+            servers = (int)client->server_endpoints_.size();                // Number of remote server addresses
+            if (servers > 0)
             {
-                channels = (int)client->connections_num_ / servers;
+                channels = (int)client->connections_num_ / servers;         // Connections per server (round robin)
             }
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Reconnect after client failure (called from client::close)
+    //----------------------------------------------------------------------------
     bool aggligator::client_reopen(client* client) noexcept
     {
-        if (client->server_mode_ || client != client_.get())
+        if (client->server_mode_ || client != client_.get())                // Not the active client
         {
             return false;
         }
 
-        client_ptr pclient = std::move(client_);
+        client_ptr pclient = std::move(client_);                            // Discard current client
         if (pclient)
         {
-            pclient->close();
+            pclient->close();                                               // Fully close it
         }
         else
         {
-            close();
+            close();                                                        // No client to reopen, shut down
             return false;
         }
 
@@ -1250,28 +1339,28 @@ namespace aggligator
             return false;
         }
 
-        unordered_set<boost::asio::ip::tcp::endpoint> servers = pclient->server_endpoints_;
-        uint32_t connections = pclient->connections_num_ / servers.size();
-        int bind_port = pclient->local_port_;
+        unordered_set<boost::asio::ip::tcp::endpoint> servers = pclient->server_endpoints_; // Remember original servers
+        uint32_t connections = pclient->connections_num_ / servers.size();  // Connections per server
+        int bind_port = pclient->local_port_;                               // Local UDP port (if any)
 
         auto self = shared_from_this();
         t->expires_from_now(boost::posix_time::seconds(AGGLIGATOR_RECONNECT_TIMEOUT));
         t->async_wait(
             [self, this, connections, bind_port, servers](boost::system::error_code ec) noexcept
             {
-                deadline_timer_cancel(reopen_);
+                deadline_timer_cancel(reopen_);                             // Clear reopen timer reference
                 if (ec == boost::system::errc::operation_canceled)
                 {
                     close();
                     return false;
                 }
-                elif(ec)
+                else if (ec)
                 {
                     close();
                     return false;
                 }
 
-                bool opened = client_open(connections, servers);
+                bool opened = client_open(connections, servers);            // Attempt to reopen
                 if (!opened)
                 {
                     close();
@@ -1281,28 +1370,34 @@ namespace aggligator
                 return true;
             });
 
-        reopen_ = t;
+        reopen_ = t;                                                        // Store timer for cancellation
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // Allocate shared byte array using the configured allocator
+    //----------------------------------------------------------------------------
     std::shared_ptr<Byte> aggligator::make_shared_bytes(int length) noexcept
     {
         if (length > 0)
         {
-            BufferswapAllocatorPtr allocator = BufferswapAllocator;
-            return ppp::threading::BufferswapAllocator::MakeByteArray(allocator, length);
+            BufferswapAllocatorPtr allocator = BufferswapAllocator;         // Get allocator (may be null)
+            return ppp::threading::BufferswapAllocator::MakeByteArray(allocator, length); // Allocate
         }
-        else 
+        else
         {
             return NULLPTR;
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Client::update: check inactivity and propagate update to connections
+    //----------------------------------------------------------------------------
     bool aggligator::client::update(uint32_t now_seconds) noexcept
     {
-        if (now_seconds >= (last_ + AGGLIGATOR_INACTIVE_TIMEOUT))
+        if (now_seconds >= (last_ + AGGLIGATOR_INACTIVE_TIMEOUT))           // Idle too long
         {
-            return false;
+            return false;                                                   // Signal close
         }
 
         std::shared_ptr<aggligator> aggligator = app_;
@@ -1317,13 +1412,13 @@ namespace aggligator
             return false;
         }
 
-        int rq_congestions = (int)pconvergence->recv_queue_.size();
-        if (rq_congestions >= aggligator->congestions_)
+        int rq_congestions = (int)pconvergence->recv_queue_.size();         // Current out-of-order queue size
+        if (rq_congestions >= aggligator->congestions_)                     // Congestion threshold exceeded
         {
-            return false;
+            return false;                                                   // Stop receiving (drop new packets)
         }
 
-        for (connection_ptr& connection : connections_)
+        for (connection_ptr& connection : connections_)                     // Update each connection (send heartbeat)
         {
             if (!connection->update(now_seconds))
             {
@@ -1334,37 +1429,43 @@ namespace aggligator
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // Client::close: close all TCP connections, UDP socket, and notify aggregator
+    //----------------------------------------------------------------------------
     void aggligator::client::close() noexcept
     {
-        std::shared_ptr<aggligator> aggligator = std::move(app_);
+        std::shared_ptr<aggligator> aggligator = std::move(app_);           // Release aggregator reference
         convergence_ptr convergence = std::move(convergence_);
 
-        if (convergence)
+        if (convergence)                                                    // Close convergence (clears queues)
         {
             convergence->close();
         }
 
-        list<connection_ptr> connections = std::move(connections_);
+        list<connection_ptr> connections = std::move(connections_);         // Take ownership of connections list
         connections_.clear();
 
-        for (connection_ptr& connection : connections)
+        for (connection_ptr& connection : connections)                      // Close each TCP connection
         {
             connection->close();
         }
 
-        deadline_timer_cancel(timeout_);
-        aggligator::socket_close(socket_);
+        deadline_timer_cancel(timeout_);                                    // Cancel connection timeout timer
+        aggligator::socket_close(socket_);                                  // Close UDP socket
 
-        if (aggligator)
+        if (aggligator)                                                     // Notify aggregator to cleanup mapping and possibly reconnect
         {
             aggligator->server_closed(this);
             aggligator->client_reopen(this);
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Client::send: take a UDP packet, add headers, and queue for transmission over TCP
+    //----------------------------------------------------------------------------
     bool aggligator::client::send(Byte* packet, int packet_length) noexcept
     {
-        if (NULLPTR == packet || packet_length < 1)
+        if (NULLPTR == packet || packet_length < 1)                         // Invalid packet
         {
             return false;
         }
@@ -1375,53 +1476,59 @@ namespace aggligator
             return false;
         }
 
-        auto tail = connections_.begin();
+        auto tail = connections_.begin();                                   // Start from first connection
         auto endl = connections_.end();
-        if (tail == endl)
+        if (tail == endl)                                                   // No active TCP connections
         {
             return false;
         }
 
-        int message_length;
-        uint32_t seq = ++convergence->seq_no_;
+        int message_length;                                                 // Length after adding sequence header
+        uint32_t seq = ++convergence->seq_no_;                              // Increment sequence number (mod 2^32)
 
-        std::shared_ptr<Byte> message = convergence->pack(packet, packet_length, seq, message_length);
+        std::shared_ptr<Byte> message = convergence->pack(packet, packet_length, seq, message_length); // Add length+seq headers
         if (NULLPTR == message || message_length < 1)
         {
             return false;
         }
 
-        queue<send_packet>& send_queue = convergence->send_queue_;
-        send_queue.emplace_back(send_packet{ message, message_length });
+        // Build send packet structure
+        send_packet sp;
+        sp.seq = seq;                                                       // Sequence number for ordering
+        sp.packet = message;                                                // Packet data
+        sp.length = message_length;                                         // Total length
 
-        for (;;)
+        // Insert into send queue (automatically sorted by seq using map)
+        convergence->send_queue_.emplace(std::make_pair(seq, sp));
+
+        for (;;)                                                            // Try to send immediately if there is an idle connection
         {
-            auto sqt = send_queue.begin();
-            if (sqt == send_queue.end())
+            auto sqt = convergence->send_queue_.begin();                    // Get the packet with smallest seq
+            if (sqt == convergence->send_queue_.end())                      // Queue empty
             {
                 return true;
             }
 
-            connection_ptr connection;
+            connection_ptr connection;                                      // Find an idle connection
             for (; tail != endl; tail++)
             {
                 connection_ptr& i = *tail;
-                if (!i->sending_)
+                if (!i->sending_)                                           // Not currently writing
                 {
                     connection = i;
                     break;
                 }
             }
 
-            if (connection)
+            if (connection)                                                 // Found idle connection
             {
-                send_packet messages = *sqt;
-                send_queue.erase(sqt);
+                send_packet messages = sqt->second;                         // Copy packet
+                convergence->send_queue_.erase(sqt);                        // Remove from queue
 
-                bool ok = connection->sent(messages.packet, messages.length);
+                bool ok = connection->sent(messages.packet, messages.length); // Send asynchronously
                 if (ok)
                 {
-                    if (connection->sending_ && connections_num_ > 1)
+                    if (connection->sending_ && connections_num_ > 1)       // If write started, move connection to end for round-robin
                     {
                         connections_.erase(tail);
                         connections_.emplace_back(connection);
@@ -1430,15 +1537,18 @@ namespace aggligator
                     return true;
                 }
 
-                return false;
+                return false;                                               // Send failed
             }
-            else
+            else                                                            // All connections busy, packet stays in queue
             {
                 return true;
             }
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Client::timeout: start a timer that will close the client if handshake not finished
+    //----------------------------------------------------------------------------
     bool aggligator::client::timeout() noexcept
     {
         ptr aggligator = app_;
@@ -1455,7 +1565,7 @@ namespace aggligator
             return false;
         }
 
-        auto self = shared_from_this();
+        auto self = shared_from_this();                                     // Keep client alive
         timeout->expires_from_now(boost::posix_time::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
         timeout->async_wait(
             [self, this](boost::system::error_code ec) noexcept
@@ -1466,7 +1576,7 @@ namespace aggligator
                 }
                 else
                 {
-                    close();
+                    close();                                                // Timeout expired, abort client
                     return true;
                 }
             });
@@ -1475,6 +1585,9 @@ namespace aggligator
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // Client::loopback: start receiving UDP packets from external source and forward through aggregator
+    //----------------------------------------------------------------------------
     bool aggligator::client::loopback() noexcept
     {
         ptr aggligator = app_;
@@ -1484,7 +1597,7 @@ namespace aggligator
             return false;
         }
 
-        std::shared_ptr<Byte> buffer = aggligator->buffer_;
+        std::shared_ptr<Byte> buffer = aggligator->buffer_;                 // Shared buffer for UDP receive
         if (!buffer)
         {
             close();
@@ -1492,7 +1605,7 @@ namespace aggligator
         }
 
         boost::system::error_code ec;
-        if (!socket_.is_open())
+        if (!socket_.is_open())                                             // Open UDP socket if not already
         {
             socket_.open(boost::asio::ip::udp::v6(), ec);
             if (ec)
@@ -1505,6 +1618,7 @@ namespace aggligator
                 aggligator->socket_adjust(socket_);
             }
 
+            // Bind to any IPv6 address, using local_port_ (0 means OS chooses)
             socket_.bind(boost::asio::ip::udp::endpoint(boost::asio::ip::address_v6::any(), local_port_), ec);
             if (ec)
             {
@@ -1512,15 +1626,15 @@ namespace aggligator
                 return false;
             }
 
-            if (local_port_ == 0)
+            if (local_port_ == 0)                                           // Retrieve assigned port
             {
                 boost::asio::ip::udp::endpoint localEP = socket_.local_endpoint(ec);
                 local_port_ = localEP.port();
             }
         }
 
-        auto self = shared_from_this();
-        socket_.async_receive_from(boost::asio::buffer(buffer.get(), aggligator->buffer_size_), source_endpoint_,
+        auto self = shared_from_this();                                     // Keep client alive
+        socket_.async_receive_from(boost::asio::buffer(buffer.get(), aggligator->buffer_size_), source_endpoint_, // Receive UDP
             [self, this](boost::system::error_code ec, std::size_t sz) noexcept
             {
                 ptr aggligator = app_;
@@ -1531,7 +1645,7 @@ namespace aggligator
                 }
 
                 int bytes_transferred = static_cast<int>(sz);
-                if (bytes_transferred > 0 && ec == boost::system::errc::success)
+                if (bytes_transferred > 0 && ec == boost::system::errc::success) // Valid packet
                 {
                     std::shared_ptr<Byte> buffer = aggligator->buffer_;
                     if (!buffer)
@@ -1540,7 +1654,7 @@ namespace aggligator
                         return false;
                     }
 
-                    bool bok = send(buffer.get(), bytes_transferred);
+                    bool bok = send(buffer.get(), bytes_transferred);       // Send via aggregator
                     if (!bok)
                     {
                         close();
@@ -1548,11 +1662,14 @@ namespace aggligator
                     }
                 }
 
-                return loopback();
+                return loopback();                                          // Continue receiving
             });
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // Client::open: establish multiple TCP connections to servers (round-robin)
+    //----------------------------------------------------------------------------
     bool aggligator::client::open(int connections, unordered_set<boost::asio::ip::tcp::endpoint>& servers) noexcept
     {
         using tcp_endpoint_list = list<boost::asio::ip::tcp::endpoint>;
@@ -1569,7 +1686,7 @@ namespace aggligator
             return false;
         }
 
-        client_ptr self = shared_from_this();
+        client_ptr self = shared_from_this();                               // Keep client alive
         convergence_ptr pconvergence = make_shared_object<convergence>(aggligator, self);
         if (NULLPTR == pconvergence)
         {
@@ -1581,7 +1698,8 @@ namespace aggligator
         local_port_ = 0;
         server_endpoints_ = servers;
 
-        auto connect_to_server = 
+        // Lambda to initiate a connection to a single server
+        auto connect_to_server =
             [self, this, aggligator, pconvergence](const boost::asio::ip::tcp::endpoint& server, const ppp::function<void(connection*)>& established) noexcept
             {
                 connection_ptr pconnection = make_shared_object<connection>(aggligator, self, pconvergence);
@@ -1590,8 +1708,8 @@ namespace aggligator
                     return false;
                 }
 
-                YieldContext::Spawn(aggligator->context_,
-                    [self, this, pconnection, server, established](YieldContext& y) noexcept 
+                YieldContext::Spawn(aggligator->context_,                   // Spawn coroutine for connection
+                    [self, this, pconnection, server, established](YieldContext& y) noexcept
                     {
                         bool ok = pconnection->open(y, server, established);
                         if (ok)
@@ -1602,6 +1720,7 @@ namespace aggligator
                 return true;
             };
 
+        // Build a list of endpoints: each server repeated 'connections' times
         for (int i = 0; i < connections; i++)
         {
             for (const boost::asio::ip::tcp::endpoint& server : servers)
@@ -1611,24 +1730,26 @@ namespace aggligator
             }
         }
 
+        // The first endpoint is the "master" node (will carry the final handshake)
         boost::asio::ip::tcp::endpoint master_node = list->front();
         list->pop_front();
 
-        if (list->begin() == list->end())
+        if (list->begin() == list->end())                                   // Only one server and one connection
         {
             list.reset();
         }
 
+        // Start connection timeout timer, then connect master node first
         return timeout() && connect_to_server(master_node,
             [this, list, connect_to_server](connection* connection) noexcept
             {
-                if (NULLPTR == list)
+                if (NULLPTR == list)                                        // No more connections to establish
                 {
                     return false;
                 }
 
                 bool any = false;
-                for (const boost::asio::ip::tcp::endpoint& server : *list)
+                for (const boost::asio::ip::tcp::endpoint& server : *list)  // Connect the rest
                 {
                     any |= connect_to_server(server, NULLPTR);
                 }
@@ -1637,6 +1758,9 @@ namespace aggligator
             });
     }
 
+    //----------------------------------------------------------------------------
+    // Convergence::pack: add 2-byte length header and 4-byte sequence number
+    //----------------------------------------------------------------------------
     std::shared_ptr<Byte> aggligator::convergence::pack(Byte* packet, int packet_length, uint32_t seq, int& out) noexcept
     {
         out = 0;
@@ -1645,8 +1769,8 @@ namespace aggligator
             return NULLPTR;
         }
 
-        int message_length = 4 + packet_length;
-        int final_length = 2 + message_length;
+        int message_length = 4 + packet_length;                             // Sequence number (4) + payload
+        int final_length = 2 + message_length;                              // Length prefix (2) + message
 
         std::shared_ptr<aggligator> aggligator = app_;
         if (NULLPTR == aggligator)
@@ -1661,22 +1785,25 @@ namespace aggligator
         }
 
         Byte* stream = message.get();
-        *stream++ = (Byte)(message_length >> 8);
-        *stream++ = (Byte)(message_length);
+        *stream++ = (Byte)(message_length >> 8);                            // Length high byte
+        *stream++ = (Byte)(message_length);                                 // Length low byte
 
-        *stream++ = (Byte)(seq >> 24);
+        *stream++ = (Byte)(seq >> 24);                                      // Sequence number (big-endian)
         *stream++ = (Byte)(seq >> 16);
         *stream++ = (Byte)(seq >> 8);
         *stream++ = (Byte)(seq);
 
         out = final_length;
-        memcpy(stream, packet, packet_length);
+        memcpy(stream, packet, packet_length);                              // Copy original payload
         return message;
     }
 
+    //----------------------------------------------------------------------------
+    // Convergence::input: process received TCP data (reassemble in order)
+    //----------------------------------------------------------------------------
     bool aggligator::convergence::input(Byte* packet, int packet_length) noexcept
     {
-        if (NULLPTR == packet || packet_length < 4)
+        if (NULLPTR == packet || packet_length < 4)                         // Need at least sequence number
         {
             return false;
         }
@@ -1687,16 +1814,16 @@ namespace aggligator
             return false;
         }
 
-        uint32_t seq = htonl(*(uint32_t*)packet);
-        packet += 4;
+        uint32_t seq = htonl(*(uint32_t*)packet);                           // Extract sequence number (network to host)
+        packet += 4;                                                        // Skip seq
         packet_length -= 4;
 
         int max_congestions = aggligator->congestions_;
-        if (max_congestions < 1)
+        if (max_congestions < 1)                                            // Congestion control disabled
         {
-            if (output(packet, packet_length))
+            if (output(packet, packet_length))                              // Directly output to UDP
             {
-                ack_no_++;
+                ack_no_++;                                                  // Increase expected seq
                 return true;
             }
             else
@@ -1704,47 +1831,50 @@ namespace aggligator
                 return false;
             }
         }
-        else
+        else                                                                // Congestion control enabled
         {
-            if (seq < ack_no_)
+            // Handle 32-bit wrap-around: if seq < ack_no_, it might be a future packet due to wrap
+            if (seq < ack_no_)                                              // seq appears smaller
             {
-                bool wraparound = before(ack_no_, seq);
-                if (!wraparound)
+                bool wraparound = before(ack_no_, seq);                     // Check if ack_no is actually before seq (wrap)
+                if (!wraparound)                                            // It's an old duplicate packet
                 {
-                    return true;
+                    return true;                                            // Silently ignore
                 }
+                // Otherwise, it's a future packet (seq wrapped), continue processing
             }
 
-            int rq_congestions = (int)recv_queue_.size();
-            if (rq_congestions >= max_congestions)
+            int rq_congestions = (int)recv_queue_.size();                   // Current out-of-order queue size
+            if (rq_congestions >= max_congestions)                          // Too many pending packets
             {
-                return false;
+                return false;                                               // Drop this packet (congestion)
             }
         }
 
-        if (ack_no_ == seq)
+        if (ack_no_ == seq)                                                 // This is the expected next packet
         {
-            if (output(packet, packet_length))
+            if (output(packet, packet_length))                              // Send to UDP
             {
-                ack_no_++;
+                ack_no_++;                                                  // Move window forward
             }
             else
             {
                 return false;
             }
 
+            // Check if any subsequent packets are now in order (due to this delivery)
             auto tail = recv_queue_.begin();
             auto endl = recv_queue_.end();
             while (tail != endl)
             {
-                if (ack_no_ != tail->first)
+                if (ack_no_ != tail->first)                                 // Not the next expected
                 {
                     break;
                 }
-                else
+                else                                                        // Next expected packet is in queue
                 {
                     recv_packet& pr = tail->second;
-                    if (output(pr.packet.get(), pr.length))
+                    if (output(pr.packet.get(), pr.length))                 // Output it
                     {
                         ack_no_++;
                     }
@@ -1754,20 +1884,21 @@ namespace aggligator
                     }
                 }
 
-                tail = recv_queue_.erase(tail);
+                tail = recv_queue_.erase(tail);                             // Remove delivered packet
             }
 
             return true;
         }
 
+        // Out-of-order packet: store in receive queue (sorted by seq)
         recv_packet r;
         r.seq = seq;
         r.length = packet_length;
-        r.packet = aggligator->make_shared_bytes(packet_length);
+        r.packet = aggligator->make_shared_bytes(packet_length);            // Copy data
         if (r.packet)
         {
             memcpy(r.packet.get(), packet, packet_length);
-            return recv_queue_.emplace(std::make_pair(seq, r)).second;
+            return recv_queue_.emplace(std::make_pair(seq, r)).second;      // Insert into map
         }
         else
         {
@@ -1775,20 +1906,26 @@ namespace aggligator
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Convergence::close: clear queues and release references
+    //----------------------------------------------------------------------------
     void aggligator::convergence::close() noexcept
     {
-        std::shared_ptr<client> client = std::move(client_);
-        std::shared_ptr<aggligator> aggligator = std::move(app_);
+        std::shared_ptr<client> client = std::move(client_);                // Release client
+        std::shared_ptr<aggligator> aggligator = std::move(app_);           // Release aggregator
 
-        send_queue_.clear();
-        recv_queue_.clear();
+        send_queue_.clear();                                                // Clear send queue (map)
+        recv_queue_.clear();                                                // Clear receive queue (map)
 
-        if (client)
+        if (client)                                                         // Client may still be referenced elsewhere
         {
-            client->close();
+            client->close();                                                // Ensure client closes
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Convergence::output: send decapsulated UDP packet to the external destination
+    //----------------------------------------------------------------------------
     bool aggligator::convergence::output(Byte* packet, int packet_length) noexcept
     {
         std::shared_ptr<aggligator> aggligator = app_;
@@ -1810,7 +1947,7 @@ namespace aggligator
         }
 
         boost::system::error_code ec;
-        if (client->server_mode_)
+        if (client->server_mode_)                                           // Server mode: send to preconfigured destination
         {
             server_ptr server = aggligator->server_;
             if (!server)
@@ -1820,20 +1957,24 @@ namespace aggligator
 
             socket.send_to(boost::asio::buffer(packet, packet_length), server->server_endpoint_, boost::asio::socket_base::message_end_of_record, ec);
         }
-        else
+        else                                                                // Client mode: send back to the source endpoint we received from
         {
             socket.send_to(boost::asio::buffer(packet, packet_length), client->source_endpoint_, boost::asio::socket_base::message_end_of_record, ec);
         }
 
+        // Ignore errors (best effort)
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // Socket adjustment wrappers (UDP, TCP, Acceptor)
+    //----------------------------------------------------------------------------
     bool aggligator::socket_adjust(boost::asio::ip::udp::socket& socket) noexcept
     {
-        if (aggligator_socket_adjust(socket))
+        if (aggligator_socket_adjust(socket))                               // Common adjustments
         {
             boost::system::error_code ec;
-            socket.set_option(boost::asio::ip::udp::socket::reuse_address(true), ec);
+            socket.set_option(boost::asio::ip::udp::socket::reuse_address(true), ec); // Allow address reuse
             return true;
         }
 
@@ -1850,6 +1991,9 @@ namespace aggligator
         return aggligator_tcp_socket_adjust(socket);
     }
 
+    //----------------------------------------------------------------------------
+    // Get client UDP endpoint for external use (e.g., to send data to client)
+    //----------------------------------------------------------------------------
     boost::asio::ip::udp::endpoint aggligator::client_endpoint(const boost::asio::ip::address& interface_ip) noexcept
     {
         client_ptr client = client_;
@@ -1863,6 +2007,9 @@ namespace aggligator
         }
     }
 
+    //----------------------------------------------------------------------------
+    // Fill information structure with current statistics
+    //----------------------------------------------------------------------------
     bool aggligator::info(information& i) noexcept
     {
         i.server_endpoints.clear();
@@ -1877,22 +2024,22 @@ namespace aggligator
 
         server_ptr server = server_;
         client_ptr client = client_;
-        if (server)
+        if (server)                                                         // Server mode
         {
-            i.client_count = server->clients_.size();
-            for (auto&& kv : server->acceptors_)
+            i.client_count = server->clients_.size();                       // Number of clients
+            for (auto&& kv : server->acceptors_)                            // Listening ports
             {
                 i.bind_ports.emplace(kv.first);
             }
 
-            for (auto&& kv : server->clients_)
+            for (auto&& kv : server->clients_)                              // Aggregate client stats
             {
                 client_ptr& pclient = kv.second;
                 i.establish_count += pclient->established_num_;
                 i.connection_count += pclient->connections_num_;
             }
         }
-        elif(client)
+        else if (client)                                                    // Client mode
         {
             boost::asio::ip::udp::socket& dgram_socket = client->socket_;
             if (dgram_socket.is_open())
@@ -1905,10 +2052,13 @@ namespace aggligator
             i.establish_count = client->established_num_;
             i.server_endpoints = client->server_endpoints_;
         }
-        
+
         return true;
     }
 
+    //----------------------------------------------------------------------------
+    // IP version conversion helpers
+    //----------------------------------------------------------------------------
     boost::asio::ip::udp::endpoint aggligator::ip_v6_to_v4(const boost::asio::ip::udp::endpoint& ep) noexcept
     {
         return Ipep::V6ToV4(ep);
@@ -1931,23 +2081,26 @@ namespace aggligator
         return boost::asio::ip::tcp::endpoint(r.address(), r.port());
     }
 
+    //----------------------------------------------------------------------------
+    // Determine link status based on information structure
+    //----------------------------------------------------------------------------
     aggligator::link_status aggligator::status(information& i) noexcept
     {
-        if (server_mode())
+        if (server_mode())                                                  // Server mode has no "link" concept
         {
             return link_status_none;
         }
 
-        if (i.bind_ports.empty())
+        if (i.bind_ports.empty())                                           // No UDP port (still binding)
         {
             return i.client_count > 0 ? link_status_connecting : link_status_reconnecting;
         }
-        
-        if (i.establish_count < i.connection_count)
+
+        if (i.establish_count < i.connection_count)                         // Not all TCP connections ready
         {
             return link_status_connecting;
         }
-        else 
+        else
         {
             return link_status_established;
         }
@@ -1964,6 +2117,9 @@ namespace aggligator
         return link_status_unknown;
     }
 
+    //----------------------------------------------------------------------------
+    // Connection::establish: perform handshake over TCP (called after TCP connected)
+    //----------------------------------------------------------------------------
     bool aggligator::connection::establish(const boost::asio::yield_context& y, const ppp::function<void(connection*)>& established) noexcept
     {
         std::shared_ptr<aggligator> aggligator = app_;
@@ -1998,25 +2154,26 @@ namespace aggligator
         else
         {
             Byte* p = data;
-            uint32_t m = (uint32_t)RandomNext(1, INT32_MAX);
-            *(uint32_t*)p = m;
+            uint32_t m = (uint32_t)RandomNext(1, INT32_MAX);                // Random mask
+            *(uint32_t*)p = m;                                              // Store mask
             p += 4;
 
             uint16_t remote_port = 0;
-            if (client->established_num_ != 0)
+            if (client->established_num_ != 0)                              // Not first connection, use existing remote port
             {
                 remote_port = client->remote_port_;
             }
 
-            *(uint16_t*)p = htons(remote_port);
+            *(uint16_t*)p = htons(remote_port);                             // Port (0 for first)
             p += 2;
 
-            *(uint16_t*)p = 0;
-            *(uint16_t*)p = inet_chksum(data, 8);
-            *(uint32_t*)(data + 4) ^= m;
+            *(uint16_t*)p = 0;                                              // Placeholder for checksum
+            *(uint16_t*)p = inet_chksum(data, 8);                           // Compute checksum
+            *(uint32_t*)(data + 4) ^= m;                                    // XOR mask to obscure port
         }
 
         boost::system::error_code ec;
+        // Send 8-byte handshake initiation
         boost::asio::async_write(*socket, boost::asio::buffer(data, 8), y[ec]);
         if (ec)
         {
@@ -2027,6 +2184,7 @@ namespace aggligator
             aggligator->tx_ += 8;
         }
 
+        // Read 6-byte response (remote port + server sequence number)
         boost::asio::async_read(*socket, boost::asio::buffer(data, 6), y[ec]);
         if (ec)
         {
@@ -2037,18 +2195,18 @@ namespace aggligator
             aggligator->rx_ += 6;
         }
 
-        uint16_t remote_port = (uint16_t)(data[0] << 8 | data[1]);
+        uint16_t remote_port = (uint16_t)(data[0] << 8 | data[1]);          // Server-assigned port
         if (remote_port < 1)
         {
             return false;
         }
 
-        uint32_t ack = ntohl(*(uint32_t*)(data + 2)) + 1;
-        if (client->established_num_ == 0)
+        uint32_t ack = ntohl(*(uint32_t*)(data + 2)) + 1;                   // Server's sequence number + 1
+        if (client->established_num_ == 0)                                  // First connection, set expected ack_no
         {
             convergence->ack_no_ = ack;
         }
-        elif(convergence->ack_no_ != ack)
+        else if (convergence->ack_no_ != ack)                               // Subsequent connections must match
         {
             return false;
         }
@@ -2060,11 +2218,12 @@ namespace aggligator
             established(this);
         }
 
-        if (client->established_num_ < client->connections_num_)
+        if (client->established_num_ < client->connections_num_)            // Not all connections ready yet
         {
             return true;
         }
 
+        // All connections established: send final confirmation (total connections and local seq)
         *(uint32_t*)data = htonl(client->connections_num_);
         *(uint32_t*)(data + 4) = htonl(convergence->seq_no_);
 
@@ -2090,7 +2249,8 @@ namespace aggligator
             aggligator->tx_ += 8;
         }
 
-        client->last_ = (uint32_t)(aggligator->now() / 1000);
+        client->last_ = (uint32_t)(aggligator->now() / 1000);               // Mark active
+        // Start receive loops on all connections
         for (connection_ptr& connection : client->connections_)
         {
             if (!connection->recv())
@@ -2100,10 +2260,10 @@ namespace aggligator
         }
 
         std::shared_ptr<connection> self = shared_from_this();
-        deadline_timer_cancel(client->timeout_);
+        deadline_timer_cancel(client->timeout_);                            // Handshake complete, cancel timeout
 
         boost::asio::io_context& context = aggligator->context_;
-        boost::asio::post(context, 
+        boost::asio::post(context,                                          // Start UDP loop on client
             [self, this, aggligator, client]() noexcept
             {
                 bool ok = client->loopback();
