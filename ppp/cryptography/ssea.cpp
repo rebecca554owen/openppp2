@@ -166,7 +166,7 @@ namespace ppp
         //   kf        - offset subtracted from each byte before encoding
         //   outlen    - (output) length of the encoded string (in characters)
         // Returns:
-        //   Shared pointer to the encoded null‑terminated string (or nullptr on error)
+        //   Shared pointer to the encoded null‑terminated string (or NULLPTR on error)
         // -----------------------------------------------------------------------------
         std::shared_ptr<Byte> ssea::base94_encode(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen, int kf, int& outlen) noexcept
         {
@@ -238,7 +238,7 @@ namespace ppp
         //   kf        - offset added back to each decoded byte
         //   outlen    - (output) length of the decoded binary data
         // Returns:
-        //   Shared pointer to the decoded binary data (or nullptr on error)
+        //   Shared pointer to the decoded binary data (or NULLPTR on error)
         // -----------------------------------------------------------------------------
         std::shared_ptr<Byte> ssea::base94_decode(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen, int kf, int& outlen) noexcept
         {

@@ -435,7 +435,7 @@ namespace ppp {
                 // Locate the end of headers: "\r\n\r\n"
                 const char* data = reinterpret_cast<const char*>(messages_.GetBuffer().get());
                 const char* end = data + size;
-                const char* headers_end = nullptr;
+                const char* headers_end = NULLPTR;
                 
                 // Find the first occurrence of "\r\n\r\n"
                 for (const char* p = data; p + 3 < end; ++p) {
