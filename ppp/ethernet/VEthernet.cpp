@@ -514,6 +514,7 @@ namespace ppp
             std::vector<std::shared_ptr<boost::asio::io_context>/**/> stop_ssmts;
             for (SynchronizedObjectScope scope(syncobj_);;)
             {
+                ssmt_mq_to_take_effect_ = false;
                 stop_ssmts = std::move(sssmt_);
                 sssmt_.clear();
                 break;
@@ -678,6 +679,8 @@ namespace ppp
                 bool ssmt_ok = linux_tap->Ssmt(context);
                 if (!ssmt_ok)
                 {
+                    context->stop();
+                    sssmt_.pop_back();
                     return false;
                 }
 
