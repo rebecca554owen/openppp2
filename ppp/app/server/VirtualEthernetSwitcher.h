@@ -87,7 +87,7 @@ namespace ppp {
                 typedef std::shared_ptr<VirtualEthernetNamespaceCache>  VirtualEthernetNamespaceCachePtr;
 
             public:
-                VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name = ppp::string()) noexcept;
+                VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name = ppp::string(), int tun_ssmt = 0, bool tun_ssmt_mq = false) noexcept;
                 virtual ~VirtualEthernetSwitcher() noexcept;
 
             public:
@@ -158,6 +158,8 @@ namespace ppp {
                 void                                                    TickAllConnections(UInt64 now) noexcept;
                 bool                                                    OpenManagedServerIfNeed() noexcept;
                 bool                                                    OpenIPv6TransitIfNeed() noexcept;
+                bool                                                    OpenIPv6TransitSsmtIfNeed(const ITapPtr& tap) noexcept;
+                void                                                    CloseIPv6TransitSsmtContexts() noexcept;
 
             private:
                 VirtualEthernetStaticEchoAllocatedContextPtr            StaticEchoUnallocated(int allocated_id) noexcept;
@@ -230,8 +232,11 @@ namespace ppp {
                 boost::asio::ip::udp::endpoint                          dnsserverEP_;
                 boost::asio::ip::address                                interfaceIP_;
                 ppp::string                                             tun_name_;
+                int                                                     tun_ssmt_ = 0;
+                bool                                                    tun_ssmt_mq_ = false;
                 ppp::string                                             ipv6_neighbor_proxy_ifname_;
                 ITapPtr                                                 ipv6_transit_tap_;
+                ppp::vector<std::shared_ptr<boost::asio::io_context>>   ipv6_transit_ssmt_contexts_;
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;
                 ITransmissionStatisticsPtr                              statistics_;
                 VirtualEthernetManagedServerPtr                         managed_server_;

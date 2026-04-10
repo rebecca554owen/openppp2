@@ -48,11 +48,13 @@ namespace ppp {
 
     namespace app {
         namespace server {
-            VirtualEthernetSwitcher::VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name) noexcept
+            VirtualEthernetSwitcher::VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name, int tun_ssmt, bool tun_ssmt_mq) noexcept
                 : disposed_(false)
                 , configuration_(configuration)
                 , context_(Executors::GetDefault())
                 , tun_name_(tun_name)
+                , tun_ssmt_(std::max<int>(0, tun_ssmt))
+                , tun_ssmt_mq_(tun_ssmt_mq)
                 , static_echo_socket_(*context_)
                 , static_echo_bind_port_(IPEndPoint::MinPort) {
                 
@@ -1166,10 +1168,86 @@ namespace ppp {
                         return switcher->ReceiveIPv6TransitPacket(reinterpret_cast<Byte*>(e.Packet), e.PacketLength);
                     };
 
+                if (!OpenIPv6TransitSsmtIfNeed(tap)) {
+                    tap->Dispose();
+                    return false;
+                }
+
                 ipv6_transit_tap_ = tap;
                 DebugLog("server ipv6 transit tap opened name=%s address=%s/%d", tap->GetId().data(), transit_ip.data(), prefix_length);
 #endif
                 return true;
+            }
+
+            bool VirtualEthernetSwitcher::OpenIPv6TransitSsmtIfNeed(const ITapPtr& tap) noexcept {
+#if defined(_LINUX)
+                if (tun_ssmt_ <= 0 || !tun_ssmt_mq_) {
+                    return true;
+                }
+
+                auto linux_tap = std::dynamic_pointer_cast<ppp::tap::TapLinux>(tap);
+                if (NULLPTR == linux_tap) {
+                    return false;
+                }
+
+                ppp::vector<std::shared_ptr<boost::asio::io_context>> contexts;
+                contexts.reserve(tun_ssmt_);
+                for (int i = 0; i < tun_ssmt_; ++i) {
+                    std::shared_ptr<boost::asio::io_context> worker = make_shared_object<boost::asio::io_context>();
+                    if (NULLPTR == worker) {
+                        for (auto& context : contexts) {
+                            context->stop();
+                        }
+                        return false;
+                    }
+
+                    std::thread ssmt_thread(
+                        [worker]() noexcept {
+                            if (ppp::RT) {
+                                SetThreadPriorityToMaxLevel();
+                            }
+
+                            SetThreadName("srv-ssmt");
+                            boost::system::error_code ec;
+                            boost::asio::io_context::work work(*worker);
+                            worker->restart();
+                            worker->run(ec);
+                        });
+                    ssmt_thread.detach();
+
+                    if (!linux_tap->Ssmt(worker)) {
+                        worker->stop();
+                        for (auto& context : contexts) {
+                            context->stop();
+                        }
+                        return false;
+                    }
+
+                    contexts.emplace_back(worker);
+                }
+                DebugLog("server ipv6 transit multiqueue enabled name=%s workers=%d", tap->GetId().data(), tun_ssmt_);
+
+                SynchronizedObjectScope scope(syncobj_);
+                ipv6_transit_ssmt_contexts_ = std::move(contexts);
+#else
+                (void)tap;
+#endif
+                return true;
+            }
+
+            void VirtualEthernetSwitcher::CloseIPv6TransitSsmtContexts() noexcept {
+#if defined(_LINUX)
+                ppp::vector<std::shared_ptr<boost::asio::io_context>> contexts;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    contexts = std::move(ipv6_transit_ssmt_contexts_);
+                    ipv6_transit_ssmt_contexts_.clear();
+                }
+
+                for (auto& context : contexts) {
+                    context->stop();
+                }
+#endif
             }
 
             bool VirtualEthernetSwitcher::OpenLogger() noexcept {
@@ -1558,6 +1636,7 @@ namespace ppp {
                     break;
                 }
 
+                CloseIPv6TransitSsmtContexts();
                 CloseAlwaysTimeout();
                 CloseIPv6NeighborProxyIfNeed();
 
