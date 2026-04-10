@@ -688,7 +688,8 @@ namespace vmux {
             vmux_linlayer_add_ack_packet* packet = (vmux_linlayer_add_ack_packet*)packet_memory.get();
             uint32_t receive_id = ntohs(packet->receive_id);
 
-            if (receive_id == 0 && receive_id <= rx_links_.size()) {
+            // receive_id is 1-based; 0 and anything beyond the negotiated link count are invalid.
+            if (receive_id == 0 || receive_id > rx_links_.size()) {
                 return false;
             }
 

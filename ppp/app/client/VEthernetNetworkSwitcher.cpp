@@ -22,37 +22,6 @@
 
 extern void DebugLog(const char* format, ...) noexcept;
 
-#if defined(_LINUX)
-static ppp::string LinuxReadDefaultIPv6Route() noexcept {
-    FILE* pipe = popen("ip -6 route show default 2>/dev/null", "r");
-    if (NULLPTR == pipe) {
-        return ppp::string();
-    }
-
-    char buffer[1024];
-    ppp::string route;
-    while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
-        route.append(buffer);
-    }
-    pclose(pipe);
-
-    while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
-        route.pop_back();
-    }
-    return route;
-}
-
-static bool LinuxApplyDefaultIPv6RouteCommand(const ppp::string& route) noexcept {
-    if (route.empty()) {
-        return false;
-    }
-
-    char command[1600];
-    snprintf(command, sizeof(command), "ip -6 route replace %s > /dev/null 2>&1", route.data());
-    return system(command) == 0;
-}
-#endif
-
 #if defined(_MACOS)
 static bool MacosSetIPv6Address(const ppp::string& ifr_name, const ppp::string& address, int prefix_length) noexcept {
     if (ifr_name.empty() || address.empty()) {
@@ -725,7 +694,7 @@ namespace ppp {
                     if (ppp::win32::network::SetIPv6Address(tun_ni->Index, addr_str, prefix)) {
                         applied = true;
                     }
-#elif defined(_LINUX) || defined(_ANDROID)
+#elif defined(_LINUX)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         if (ppp::tap::TapLinux::SetIPv6Address(tun_ni->Name, addr_str, prefix)) {
@@ -748,7 +717,7 @@ namespace ppp {
                 }
 
                 bool ipv6_default_route_handled = false;
-#if defined(_LINUX) || defined(_ANDROID)
+#if defined(_LINUX)
                 if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !extensions.AssignedIPv6Gateway.is_v6()) {
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
@@ -772,7 +741,7 @@ namespace ppp {
                     if (ppp::win32::network::SetIPv6DefaultGateway(tun_ni->Index, gw_str, 0)) {
                         applied = true;
                     }
-#elif defined(_LINUX) || defined(_ANDROID)
+#elif defined(_LINUX)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         if (ppp::tap::TapLinux::AddRoute6(tun_ni->Name, "::", 0, gw_str)) {
@@ -872,7 +841,7 @@ namespace ppp {
                 auto& ext = information_extensions_;
 
                 bool ipv6_default_route_cleared = false;
-#if defined(_LINUX) || defined(_ANDROID)
+#if defined(_LINUX)
                 if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !ext.AssignedIPv6Gateway.is_v6()) {
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
@@ -887,7 +856,7 @@ namespace ppp {
                     ppp::string gw_str(gw_std.data(), gw_std.size());
 #if defined(_WIN32)
                     ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index);
-#elif defined(_LINUX) || defined(_ANDROID)
+#elif defined(_LINUX)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, gw_str);
@@ -910,7 +879,7 @@ namespace ppp {
                     int prefix = std::max<int>(1, std::min<int>(128, (int)ext.AssignedIPv6PrefixLength));
 #if defined(_WIN32)
                     ppp::win32::network::DeleteIPv6Address(tun_ni->Index, addr_str);
-#elif defined(_LINUX) || defined(_ANDROID)
+#elif defined(_LINUX)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix) {
@@ -923,7 +892,7 @@ namespace ppp {
 #endif
                 }
                 else if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_LINUX) || defined(_ANDROID)
+#if defined(_LINUX)
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                     if (NULLPTR != linux_tap) {
                         ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, ppp::string());
@@ -941,16 +910,10 @@ namespace ppp {
                 if (!ipv6_original_dns_restore_.empty()) {
                     ppp::unix__::UnixAfx::SetDnsResolveConfiguration(ipv6_original_dns_restore_);
                 }
-#if defined(_LINUX)
-                if (!ipv6_original_default_route_restore_.empty()) {
-                    LinuxApplyDefaultIPv6RouteCommand(ipv6_original_default_route_restore_);
-                }
-#endif
 #endif
 
                 ipv6_applied_ = false;
                 ipv6_original_dns_restore_.clear();
-                ipv6_original_default_route_restore_.clear();
             }
 
             bool VEthernetNetworkSwitcher::OnInformation(const std::shared_ptr<VirtualEthernetInformation>& info) noexcept {
@@ -974,7 +937,7 @@ namespace ppp {
                     extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
                     extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "");
 
-                if (ipv6_applied_ && information_extensions_.ToJson() != extensions.ToJson()) {
+                if (ipv6_applied_ && !information_extensions_.Equals(extensions)) {
                     RestoreAssignedIPv6();
                 }
 

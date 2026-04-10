@@ -16,6 +16,7 @@
 #include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 
@@ -134,10 +135,9 @@ static bool LinuxPrepareIpv6NatEnvironment(const std::shared_ptr<AppConfiguratio
     snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1");
     if (!LinuxExecuteCommand(sysctl_command))
     {
-        fprintf(stdout, "Linux IPv6 NAT prepare failed: cannot enable ipv6 forwarding.\r\n");
-        return false;
+        fprintf(stdout, "Linux IPv6 NAT prepare warning: cannot enable ipv6 forwarding.\r\n");
+        return true;
     }
-    DebugLog("linux ipv6 nat forwarding enabled prefix=%s/%d", prefix.data(), prefix_length);
 
     char nft_flush_command[256];
     snprintf(nft_flush_command, sizeof(nft_flush_command), "nft list table ip6 openppp2 >/dev/null 2>&1 && nft flush table ip6 openppp2 >/dev/null 2>&1 || true");
@@ -157,7 +157,6 @@ static bool LinuxPrepareIpv6NatEnvironment(const std::shared_ptr<AppConfiguratio
 
     if (LinuxExecuteCommand(nft_command))
     {
-        DebugLog("linux ipv6 nat prepared with nft prefix=%s/%d", prefix.data(), prefix_length);
         return true;
     }
 
@@ -177,12 +176,11 @@ static bool LinuxPrepareIpv6NatEnvironment(const std::shared_ptr<AppConfiguratio
     int ip6tables_status = LinuxExecuteCommandWithStatus(ip6tables_command);
     if (ip6tables_status == 0)
     {
-        DebugLog("linux ipv6 nat prepared with ip6tables prefix=%s/%d", prefix.data(), prefix_length);
         return true;
     }
 
-    fprintf(stdout, "Linux IPv6 NAT prepare failed: nft and ip6tables rules both failed.\r\n");
-    return false;
+    fprintf(stdout, "Linux IPv6 NAT prepare warning: nft and ip6tables rules both failed.\r\n");
+    return true;
 }
 #endif
 
@@ -1389,7 +1387,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 #endif
 
             // Create server switcher
-            ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration);
+            ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId);
             if (NULLPTR == ethernet)
             {
                 break;

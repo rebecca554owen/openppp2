@@ -61,6 +61,7 @@ namespace ppp {
 
                 void                                                Clear() noexcept;
                 bool                                                HasAny() const noexcept;
+                bool                                                Equals(const VirtualEthernetInformationExtensions& other) const noexcept;
                 void                                                ToJson(Json::Value& json) const noexcept;
                 ppp::string                                         ToJson() const noexcept;
                 static bool                                         FromJson(VirtualEthernetInformationExtensions& value, const ppp::string& json) noexcept;

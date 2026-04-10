@@ -91,6 +91,16 @@ namespace ppp {
                     AssignedIPv6Dns2.is_v6();
             }
 
+            bool VirtualEthernetInformationExtensions::Equals(const VirtualEthernetInformationExtensions& other) const noexcept {
+                return AssignedIPv6Mode == other.AssignedIPv6Mode &&
+                    AssignedIPv6PrefixLength == other.AssignedIPv6PrefixLength &&
+                    AssignedIPv6Flags == other.AssignedIPv6Flags &&
+                    AssignedIPv6Address == other.AssignedIPv6Address &&
+                    AssignedIPv6Gateway == other.AssignedIPv6Gateway &&
+                    AssignedIPv6Dns1 == other.AssignedIPv6Dns1 &&
+                    AssignedIPv6Dns2 == other.AssignedIPv6Dns2;
+            }
+
             void VirtualEthernetInformationExtensions::ToJson(Json::Value& json) const noexcept {
                 json["AssignedIPv6Mode"] = AssignedIPv6Mode;
                 json["AssignedIPv6PrefixLength"] = AssignedIPv6PrefixLength;

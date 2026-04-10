@@ -301,6 +301,16 @@ namespace ppp {
             return ExecuteIpCommand(command);
         }
 
+        bool TapLinux::DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
+            if (ifrName.empty()) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "sysctl -w net.ipv6.conf.%s.proxy_ndp=0 > /dev/null 2>&1", ifrName.data());
+            return ExecuteIpCommand(command);
+        }
+
         bool TapLinux::AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
             if (ifrName.empty() || addressIP.empty()) {
                 return false;

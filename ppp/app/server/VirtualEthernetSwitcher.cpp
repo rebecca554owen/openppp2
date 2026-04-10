@@ -48,10 +48,11 @@ namespace ppp {
 
     namespace app {
         namespace server {
-            VirtualEthernetSwitcher::VirtualEthernetSwitcher(const AppConfigurationPtr& configuration) noexcept
+            VirtualEthernetSwitcher::VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name) noexcept
                 : disposed_(false)
                 , configuration_(configuration)
                 , context_(Executors::GetDefault())
+                , tun_name_(tun_name)
                 , static_echo_socket_(*context_)
                 , static_echo_bind_port_(IPEndPoint::MinPort) {
                 
@@ -381,6 +382,19 @@ namespace ppp {
 
                 ipv6_neighbor_proxy_ifname_ = uplink_name;
                 DebugLog("server ipv6 neighbor proxy enabled if=%s", uplink_name.data());
+#endif
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::CloseIPv6NeighborProxyIfNeed() noexcept {
+#if defined(_LINUX)
+                if (ipv6_neighbor_proxy_ifname_.empty()) {
+                    return true;
+                }
+
+                bool ok = ppp::tap::TapLinux::DisableIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_);
+                DebugLog("server ipv6 neighbor proxy disabled if=%s status=%s", ipv6_neighbor_proxy_ifname_.data(), ok ? "ok" : "fail");
+                ipv6_neighbor_proxy_ifname_.clear();
 #endif
                 return true;
             }
@@ -735,16 +749,22 @@ namespace ppp {
 
                 VirtualEthernetInformation fallback_information;
                 const VirtualEthernetInformation* established_information = i.get();
-                if (NULLPTR == established_information && configuration_->server.ipv6.enabled) {
+                if (NULLPTR == established_information && configuration_->server.ipv6.enabled && configuration_->server.backend.empty()) {
                     fallback_information.Clear();
                     fallback_information.BandwidthQoS = 0;
                     fallback_information.IncomingTraffic = std::numeric_limits<UInt64>::max();
                     fallback_information.OutgoingTraffic = std::numeric_limits<UInt64>::max();
                     fallback_information.ExpiredTime = std::numeric_limits<UInt32>::max();
                     established_information = &fallback_information;
-                    const char* reason = configuration_->server.backend.empty() ? "no-managed-backend" : "managed-info-empty";
+                    const char* reason = "no-managed-backend";
                     DebugLog("server establish using local bootstrap info session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                     DebugLog("server establish info source=local-bootstrap reason=%s session=%s", reason, auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                }
+
+                if (NULLPTR == established_information && !configuration_->server.backend.empty()) {
+                    DebugLog("server establish aborted reason=managed-info-empty session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                    DeleteExchanger(channel.get());
+                    return false;
                 }
 
                 bool run = true;
@@ -1113,7 +1133,12 @@ namespace ppp {
                 int prefix_length = std::max<int>(64, std::min<int>(128, ipv6.prefix_length));
 
                 ppp::vector<ppp::string> no_dns;
-                ITapPtr tap = ppp::tap::ITap::Create(context_, "openppp2v6", "169.254.254.1", "169.254.254.2", "255.255.255.252", false, false, no_dns);
+                ppp::string tun_name = tun_name_;
+                if (tun_name.empty()) {
+                    tun_name = "ppp";
+                }
+
+                ITapPtr tap = ppp::tap::ITap::Create(context_, tun_name, "169.254.254.1", "169.254.254.2", "255.255.255.252", false, false, no_dns);
                 if (NULLPTR == tap || !tap->Open()) {
                     return false;
                 }
@@ -1534,6 +1559,7 @@ namespace ppp {
                 }
 
                 CloseAlwaysTimeout();
+                CloseIPv6NeighborProxyIfNeed();
 
                 CancelAllResolver(tresolver);
                 CancelAllResolver(uresolver);

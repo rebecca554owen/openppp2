@@ -175,13 +175,13 @@ namespace ppp {
             req.ai_family = AF_UNSPEC;
             req.ai_socktype = SOCK_STREAM;
 
-            struct addrinfo* hints_raw = nullptr;
-            if (getaddrinfo(host.data(), nullptr, &req, &hints_raw) != 0) {
+            struct addrinfo* hints_raw = NULLPTR;
+            if (getaddrinfo(host.data(), NULLPTR, &req, &hints_raw) != 0) {
                 return IPEndPoint(IPEndPoint::AnyAddress, port);
             }
 
             AddrinfoPtr hints(hints_raw);
-            for (struct addrinfo* p = hints.get(); p != nullptr; p = p->ai_next) {
+            for (struct addrinfo* p = hints.get(); p != NULLPTR; p = p->ai_next) {
                 if (p->ai_family == AF_INET) {
                     auto* ipv4 = reinterpret_cast<struct sockaddr_in*>(p->ai_addr);
                     return IPEndPoint(AddressFamily::InterNetwork,
@@ -190,7 +190,7 @@ namespace ppp {
                 }
             }
 
-            for (struct addrinfo* p = hints.get(); p != nullptr; p = p->ai_next) {
+            for (struct addrinfo* p = hints.get(); p != NULLPTR; p = p->ai_next) {
                 if (p->ai_family == AF_INET6) {
                     auto* ipv6 = reinterpret_cast<struct sockaddr_in6*>(p->ai_addr);
                     return IPEndPoint(AddressFamily::InterNetworkV6,

@@ -87,7 +87,7 @@ namespace ppp {
                 typedef std::shared_ptr<VirtualEthernetNamespaceCache>  VirtualEthernetNamespaceCachePtr;
 
             public:
-                VirtualEthernetSwitcher(const AppConfigurationPtr& configuration) noexcept;
+                VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name = ppp::string()) noexcept;
                 virtual ~VirtualEthernetSwitcher() noexcept;
 
             public:
@@ -183,6 +183,7 @@ namespace ppp {
                 bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
                 VirtualEthernetExchangerPtr                             FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
+                bool                                                    CloseIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    SyncNdppdNeighborProxy() noexcept;
@@ -228,6 +229,7 @@ namespace ppp {
                 ContextPtr                                              context_;
                 boost::asio::ip::udp::endpoint                          dnsserverEP_;
                 boost::asio::ip::address                                interfaceIP_;
+                ppp::string                                             tun_name_;
                 ppp::string                                             ipv6_neighbor_proxy_ifname_;
                 ITapPtr                                                 ipv6_transit_tap_;
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;

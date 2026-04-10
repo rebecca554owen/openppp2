@@ -1,4 +1,3 @@
-// ITransmission.cpp
 #include <ppp/transmissions/ITransmission.h>
 
 // Cryptographic and I/O utilities.
@@ -100,7 +99,7 @@ namespace ppp {
                 }
                 else {
                     outlen = 0;
-                    return packet;   // nullptr
+                    return packet;   // NULLPTR
                 }
             }
 

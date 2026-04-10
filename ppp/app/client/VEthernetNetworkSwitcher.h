@@ -286,7 +286,6 @@ namespace ppp {
                 VirtualEthernetInformationExtensions                                information_extensions_;
                 bool                                                                ipv6_applied_ = false;
                 ppp::string                                                         ipv6_original_dns_restore_;
-                ppp::string                                                         ipv6_original_default_route_restore_;
                 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 SynchronizedObject                                                  prdr_;
