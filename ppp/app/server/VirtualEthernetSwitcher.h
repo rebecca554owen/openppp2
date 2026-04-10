@@ -41,7 +41,6 @@ namespace ppp {
                 typedef std::unordered_map<ppp::string, std::shared_ptr<class VirtualEthernetExchanger>> IPv6ExchangerTable;
                 typedef ppp::cryptography::Ciphertext                   Ciphertext;
                 typedef std::shared_ptr<Ciphertext>                     CiphertextPtr;
-                typedef std::unordered_map<ppp::string, int>            IPv6TransitTunAffinityTable;
 
             public:
                 typedef ppp::app::protocol::VirtualEthernetInformation  VirtualEthernetInformation;
@@ -185,8 +184,6 @@ namespace ppp {
                 bool                                                    AddIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
                 VirtualEthernetExchangerPtr                             FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept;
-                int                                                     FindIPv6TransitAffinityFd(const boost::asio::ip::address& ip) noexcept;
-                void                                                    UpdateIPv6TransitAffinityFd(const boost::asio::ip::address& ip, int fd) noexcept;
                 bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    CloseIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
@@ -238,7 +235,6 @@ namespace ppp {
                 int                                                     tun_ssmt_ = 0;
                 bool                                                    tun_ssmt_mq_ = false;
                 ppp::string                                             ipv6_neighbor_proxy_ifname_;
-                IPv6TransitTunAffinityTable                             ipv6_transit_affinity_;
                 ITapPtr                                                 ipv6_transit_tap_;
                 ppp::vector<std::shared_ptr<boost::asio::io_context>>   ipv6_transit_ssmt_contexts_;
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;
