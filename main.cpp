@@ -1331,7 +1331,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 #endif
 
             // Create server switcher
-            ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId);
+            ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId, network_interface->Ssmt, network_interface->SsmtMQ);
             if (NULLPTR == ethernet)
             {
                 break;
