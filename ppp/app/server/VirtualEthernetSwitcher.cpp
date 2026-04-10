@@ -342,36 +342,6 @@ namespace ppp {
                 return tail == ipv6s_.end() ? NULLPTR : tail->second;
             }
 
-            int VirtualEthernetSwitcher::FindIPv6TransitAffinityFd(const boost::asio::ip::address& ip) noexcept {
-                if (!ip.is_v6()) {
-                    return -1;
-                }
-
-                std::string ip_std = ip.to_string();
-                ppp::string ip_key(ip_std.data(), ip_std.size());
-
-                SynchronizedObjectScope scope(syncobj_);
-                auto tail = ipv6_transit_affinity_.find(ip_key);
-                return tail == ipv6_transit_affinity_.end() ? -1 : tail->second;
-            }
-
-            void VirtualEthernetSwitcher::UpdateIPv6TransitAffinityFd(const boost::asio::ip::address& ip, int fd) noexcept {
-                if (!ip.is_v6()) {
-                    return;
-                }
-
-                std::string ip_std = ip.to_string();
-                ppp::string ip_key(ip_std.data(), ip_std.size());
-
-                SynchronizedObjectScope scope(syncobj_);
-                if (fd < 0) {
-                    ipv6_transit_affinity_.erase(ip_key);
-                }
-                else {
-                    ipv6_transit_affinity_[ip_key] = fd;
-                }
-            }
-
             bool VirtualEthernetSwitcher::OpenIPv6NeighborProxyIfNeed() noexcept {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -1072,12 +1042,16 @@ namespace ppp {
                 boost::asio::ip::address_v6 source;
                 boost::asio::ip::address_v6 destination;
                 if (ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
-                    int affinity_fd = FindIPv6TransitAffinityFd(destination);
-                    if (affinity_fd >= 0) {
-                        int last_fd = ppp::tap::TapLinux::SetLastHandle(affinity_fd);
-                        bool ok = tap->Output(packet, packet_length);
-                        ppp::tap::TapLinux::SetLastHandle(last_fd);
-                        return ok;
+                    VirtualEthernetExchangerPtr exchanger = FindIPv6Exchanger(destination);
+                    if (NULLPTR != exchanger) {
+                        int affinity_fd = exchanger->GetPreferredTunFd();
+                        if (affinity_fd >= 0) {
+                            DebugLog("server ipv6 transit preferred-fd hit session=%s fd=%d", auxiliary::StringAuxiliary::Int128ToGuidString(exchanger->GetId()).data(), affinity_fd);
+                            int last_fd = ppp::tap::TapLinux::SetLastHandle(affinity_fd);
+                            bool ok = tap->Output(packet, packet_length);
+                            ppp::tap::TapLinux::SetLastHandle(last_fd);
+                            return ok;
+                        }
                     }
                 }
 #endif
@@ -1130,7 +1104,7 @@ namespace ppp {
                 }
 
 #if defined(_LINUX)
-                UpdateIPv6TransitAffinityFd(destination, ppp::tap::TapLinux::GetLastHandle());
+                exchanger->SetPreferredTunFd(ppp::tap::TapLinux::GetLastHandle());
 #endif
 
                 app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, 80));
@@ -1676,8 +1650,6 @@ namespace ppp {
 
                     exchangers = std::move(exchangers_);
                     exchangers_.clear();
-
-                    ipv6_transit_affinity_.clear();
 
                     connections = std::move(connections_);
                     connections_.clear();
