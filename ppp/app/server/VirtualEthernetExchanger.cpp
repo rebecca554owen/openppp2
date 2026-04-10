@@ -180,6 +180,7 @@ namespace ppp {
                 if (switcher_) {
                     VirtualEthernetInformationExtensions extensions;
                     if (switcher_->BuildInformationIPv6Extensions(GetId(), extensions)) {
+                        switcher_->UpdateIPv6TransitAffinityFd(extensions.AssignedIPv6Address, -1);
                         switcher_->DeleteIPv6Exchanger(GetId(), extensions.AssignedIPv6Address);
                     }
                 }
