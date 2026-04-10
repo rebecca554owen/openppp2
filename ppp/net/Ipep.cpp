@@ -27,6 +27,21 @@
 
 namespace ppp {
     namespace net {
+        static bool Ipep_ParsePortString(const ppp::string& port_string, int& port) noexcept {
+            if (port_string.empty()) {
+                return false;
+            }
+
+            for (char c : port_string) {
+                if (c < '0' || c > '9') {
+                    return false;
+                }
+            }
+
+            port = atoi(port_string.c_str());
+            return port >= IPEndPoint::MinPort && port <= IPEndPoint::MaxPort;
+        }
+
         IPEndPoint Ipep::GetEndPoint(const ppp::string& address, bool resolver) noexcept {
             int destinationPort = IPEndPoint::MinPort;
             ppp::string destinationIP;
@@ -74,8 +89,10 @@ namespace ppp {
                 }
                 else {
                     ppp::string portStr = address.substr(portPos + 1);
+                    if (!Ipep_ParsePortString(portStr, destinationPort)) {
+                        return false;
+                    }
                     destinationAddress = std::move(host);
-                    destinationPort = atoi(portStr.c_str()); 
                 }
             }
             else {
@@ -94,20 +111,22 @@ namespace ppp {
                     }
 
                     ppp::string portStr = address.substr(colonPos + 1);
+                    if (!Ipep_ParsePortString(portStr, destinationPort)) {
+                        return false;
+                    }
                     destinationAddress = std::move(host);
-                    destinationPort = atoi(portStr.c_str());
                 }
             }
 
             return true;
         }
 
-        boost::asio::ip::udp::udp::endpoint Ipep::ParseEndPoint(const ppp::string& address) noexcept {
+        boost::asio::ip::udp::endpoint Ipep::ParseEndPoint(const ppp::string& address) noexcept {
             ppp::string* destinationAddress = NULLPTR;
             return Ipep::ParseEndPoint(address, destinationAddress);
         }
 
-        boost::asio::ip::udp::udp::endpoint Ipep::ParseEndPoint(const ppp::string& address, ppp::string* destinationAddress) noexcept {
+        boost::asio::ip::udp::endpoint Ipep::ParseEndPoint(const ppp::string& address, ppp::string* destinationAddress) noexcept {
             int destinationPort = IPEndPoint::MinPort;
             ppp::string destinationIP;
 
@@ -132,7 +151,7 @@ namespace ppp {
                 *destinationAddress = std::move(destinationIP);
             }
 
-            return boost::asio::ip::udp::udp::endpoint(ip, destinationPort);
+            return boost::asio::ip::udp::endpoint(ip, destinationPort);
         }
 
         ppp::string Ipep::ToIpepAddress(const IPEndPoint& ep) noexcept {

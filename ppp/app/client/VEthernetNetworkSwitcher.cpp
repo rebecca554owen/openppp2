@@ -675,13 +675,6 @@ namespace ppp {
 
                 bool applied = false;
 
-#if defined(_LINUX)
-                if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && ipv6_original_default_route_restore_.empty()) {
-                    ipv6_original_default_route_restore_ = LinuxReadDefaultIPv6Route();
-                    DebugLog("client ipv6 original default route=%s", ipv6_original_default_route_restore_.empty() ? "<none>" : ipv6_original_default_route_restore_.data());
-                }
-#endif
-
                 if (extensions.AssignedIPv6Address.is_v6()) {
                     std::string addr_std = extensions.AssignedIPv6Address.to_string();
                     ppp::string addr_str(addr_std.data(), addr_std.size());

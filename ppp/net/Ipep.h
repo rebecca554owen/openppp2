@@ -16,8 +16,8 @@ namespace ppp {
             static IPEndPoint                                                   GetEndPoint(boost::asio::io_context& context, const ppp::string& host, int port, bool resolver = true) noexcept;
 
         public:
-            static boost::asio::ip::udp::udp::endpoint                          ParseEndPoint(const ppp::string& address) noexcept;
-            static boost::asio::ip::udp::udp::endpoint                          ParseEndPoint(const ppp::string& address, ppp::string* destinationAddress) noexcept;
+            static boost::asio::ip::udp::endpoint                               ParseEndPoint(const ppp::string& address) noexcept;
+            static boost::asio::ip::udp::endpoint                               ParseEndPoint(const ppp::string& address, ppp::string* destinationAddress) noexcept;
             static bool                                                         ParseEndPoint(const ppp::string& address, ppp::string& destinationAddress, int& destinationPort) noexcept;
             static bool                                                         PacketIsQUIC(const IPEndPoint& destinationEP, Byte* p, int length) noexcept;
 
