@@ -68,7 +68,7 @@ namespace ppp {
                     const Int128&                                                           id) noexcept;
                 virtual ~VirtualEthernetExchanger() noexcept;   
     
-            public: 
+            public:
                 virtual bool                                                                Update(UInt64 now) noexcept;
                 virtual bool                                                                Open() noexcept;
                 virtual void                                                                Dispose() noexcept;
@@ -78,6 +78,8 @@ namespace ppp {
                 VirtualEthernetManagedServerPtr                                             GetManagedServer() noexcept { return managed_server_; }
                 ITransmissionStatisticsPtr                                                  GetStatistics() noexcept    { return statistics_; }
                 std::shared_ptr<vmux::vmux_net>                                             GetMux() noexcept           { return mux_; }
+                int                                                                         GetPreferredTunFd() noexcept;
+                void                                                                        SetPreferredTunFd(int fd) noexcept;
 
             protected:  
                 virtual bool                                                                OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept override;
@@ -159,6 +161,7 @@ namespace ppp {
             private:    
                 bool                                                                        disposed_ = false;
                 uint32_t                                                                    address_  = 0;
+                int                                                                         preferred_tun_fd_ = -1;
                 VirtualEthernetSwitcherPtr                                                  switcher_;
                 std::shared_ptr<Byte>                                                       buffer_;
                 FirewallPtr                                                                 firewall_;

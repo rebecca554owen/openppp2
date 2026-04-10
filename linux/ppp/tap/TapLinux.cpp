@@ -967,6 +967,8 @@ namespace ppp {
                 return true;
             }
 
+            tun_ssmt_fds_size_--;
+            tun_ssmt_sds_.pop_back();
             ppp::net::Socket::Closestream(sd);
             return false;
         }

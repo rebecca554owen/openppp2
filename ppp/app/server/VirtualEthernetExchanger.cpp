@@ -119,6 +119,17 @@ namespace ppp {
                 Finalize();
             }
 
+            int VirtualEthernetExchanger::GetPreferredTunFd() noexcept {
+                SynchronizedObjectScope scope(syncobj_);
+                return preferred_tun_fd_;
+            }
+
+            void VirtualEthernetExchanger::SetPreferredTunFd(int fd) noexcept {
+                SynchronizedObjectScope scope(syncobj_);
+                preferred_tun_fd_ = fd;
+                DebugLog("server ipv6 transit preferred-fd update session=%s fd=%d", auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(), fd);
+            }
+
             void VirtualEthernetExchanger::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
