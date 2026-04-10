@@ -14,16 +14,16 @@ namespace vmux {
         vmux->Vlan                       = 0;
    
         vmux->base_.server_or_client_    = server_mode;
-        vmux->base_.disposed_            = false;
-        vmux->base_.ftt_                 = false;
-        vmux->base_.established_         = false;
+        vmux->base_.disposed_.store(false, std::memory_order_release);
+        vmux->base_.ftt_.store(false, std::memory_order_release);
+        vmux->base_.established_.store(false, std::memory_order_release);
         vmux->base_.acceleration_        = acceleration;
         
         vmux->status_.max_connections    = max_connections;
-        vmux->status_.opened_connections = 0;
+        vmux->status_.opened_connections.store(0, std::memory_order_release);
 
-        vmux->status_.rx_ack_            = 0;
-        vmux->status_.tx_seq_            = 0;
+        vmux->status_.rx_ack_.store(0, std::memory_order_release);
+        vmux->status_.tx_seq_.store(0, std::memory_order_release);
 
         uint64_t now                     = now_tick();
         vmux->status_.last_              = now;
@@ -35,6 +35,9 @@ namespace vmux {
     }
 
     vmux_net::~vmux_net() noexcept {
+        // finalize without relying on shared_from_this() (destructor
+        // context may not have shared ownership). Prefer callers to
+        // invoke close_exec() which posts finalize onto the strand.
         finalize();
     }
 
@@ -47,8 +50,8 @@ namespace vmux {
 
         for (;;) {
             SynchronizationObjectScope __SCOPE__(syncobj_);
-            if (!base_.disposed_) {
-                base_.disposed_ = true;
+            if (!base_.disposed_.load(std::memory_order_acquire)) {
+                base_.disposed_.store(true, std::memory_order_release);
                 status_.last_ = now_tick(); 
             }
 
@@ -96,17 +99,17 @@ namespace vmux {
 
     bool vmux_net::ftt(uint32_t seq, uint32_t ack) noexcept {
         SynchronizationObjectScope __SCOPE__(syncobj_);
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
         
-        if (!base_.ftt_) {
-            base_.ftt_ = true;
-            status_.tx_seq_ = seq;
-            status_.rx_ack_ = ack;
+        if (!base_.ftt_.load(std::memory_order_acquire)) {
+            base_.ftt_.store(true, std::memory_order_release);
+            status_.tx_seq_.store(seq, std::memory_order_release);
+            status_.rx_ack_.store(ack, std::memory_order_release);
         }
 
-        return (status_.tx_seq_ == seq) && (status_.rx_ack_ == ack);
+        return (status_.tx_seq_.load(std::memory_order_acquire) == seq) && (status_.rx_ack_.load(std::memory_order_acquire) == ack);
     }
 
     uint32_t vmux_net::ftt_random_aid(int min, int max) noexcept {
@@ -165,7 +168,7 @@ namespace vmux {
             return false;
         }
         
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -207,7 +210,7 @@ namespace vmux {
     }
 
     bool vmux_net::update() noexcept {
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -220,7 +223,7 @@ namespace vmux {
                 uint64_t max_tcp_connect_timeout = ((uint64_t)AppConfiguration->tcp.connect.timeout) * 1000ULL;
 
                 uint64_t now = now_tick();
-                if (base_.established_) {
+                 if (base_.established_.load(std::memory_order_acquire)) {
                     for (const std::pair<uint32_t, vmux_skt_ptr>& kv : skts_) {
                         bool is_port_aging = false;
                         const vmux_skt_ptr& skt = kv.second;
@@ -242,10 +245,10 @@ namespace vmux {
                 uint64_t max_mux_inactive_timeout = ((uint64_t)AppConfiguration->mux.inactive.timeout) * 1000ULL;
                 uint64_t max_mux_connect_timeout = ((uint64_t)AppConfiguration->mux.connect.timeout) * 1000ULL;
 
-                if ((now - status_.last_) >= (base_.established_ ? max_mux_inactive_timeout : max_mux_connect_timeout)) {
+                if ((now - status_.last_) >= (base_.established_.load(std::memory_order_acquire) ? max_mux_inactive_timeout : max_mux_connect_timeout)) {
                     close_exec();
                 }
-                elif(base_.established_ && (now - status_.last_heartbeat_) >= status_.heartbeat_timeout_) {
+                elif(base_.established_.load(std::memory_order_acquire) && (now - status_.last_heartbeat_) >= status_.heartbeat_timeout_) {
                     if (post(cmd_keep_alived, NULLPTR, 0, ftt_random_aid(1, INT32_MAX))) {
                         status_.last_heartbeat_ = now;
                         switch_to_next_heartbeat_timeout();
@@ -276,14 +279,14 @@ namespace vmux {
 
     bool vmux_net::packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept {
         // Prepare the ack frames.
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
         uint32_t seq = ntohl(h->seq);
-        if (status_.rx_ack_ == seq) {
+        if (status_.rx_ack_.load(std::memory_order_acquire) == seq) {
             if (packet_input(h->cmd, (Byte*)h, length, now)) {
-                status_.rx_ack_++;
+                status_.rx_ack_.fetch_add(1, std::memory_order_acq_rel);
             }
             else {
                 return false;
@@ -292,13 +295,13 @@ namespace vmux {
             for (;;) {
                 rx_packet_ssqueue::iterator packet_tail = rx_queue_.begin();
                 rx_packet_ssqueue::iterator packet_endl = rx_queue_.end();
-                if (packet_tail != packet_endl && status_.rx_ack_ == packet_tail->first) {
+                if (packet_tail != packet_endl && status_.rx_ack_.load(std::memory_order_acquire) == packet_tail->first) {
                     rx_packet i = packet_tail->second;
                     vmux_hdr* p = (vmux_hdr*)i.buffer.get();
                     rx_queue_.erase(packet_tail);
 
                     if (packet_input(p->cmd, (Byte*)p, i.length, now)) {
-                        status_.rx_ack_++;
+                        status_.rx_ack_.fetch_add(1, std::memory_order_acq_rel);
                     }
                     else {
                         return false;
@@ -313,7 +316,14 @@ namespace vmux {
             linklayer_update(linklayer);
             return true;
         }
-        elif(packet_less<uint32_t>::after(seq, status_.rx_ack_)) {
+        elif(packet_less<uint32_t>::after(seq, status_.rx_ack_.load(std::memory_order_acquire))) {
+            // Protect against absurd packet sizes and allocate within limit.
+            // 'length' here includes the vmux_hdr; ensure it's at least a header
+            // and does not exceed header + max_buffers_size.
+            if (length < sizeof(vmux_hdr) || length > (sizeof(vmux_hdr) + max_buffers_size)) {
+                return false;
+            }
+
             std::shared_ptr<Byte> buf = make_byte_array(length);
             if (NULLPTR == buf) {
                 return false;
@@ -414,7 +424,7 @@ namespace vmux {
     }
     
     bool vmux_net::process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept {
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -483,12 +493,13 @@ namespace vmux {
             return false;
         }
         
-        if (base_.disposed_ || !base_.established_) {
+        if (base_.disposed_.load(std::memory_order_acquire) || !base_.established_.load(std::memory_order_acquire)) {
             return false;
         }
 
         vmux_hdr* h = (vmux_hdr*)packet.get();
-        h->seq = htonl(status_.tx_seq_++);
+        uint32_t seq = status_.tx_seq_.fetch_add(1, std::memory_order_acq_rel);
+        h->seq = htonl(seq);
 
         if (acceleration && base_.acceleration_) {
             vmux_linklayer_list::iterator linklayer_tail = tx_links_.begin();
@@ -544,7 +555,12 @@ namespace vmux {
             return false;
         }
 
-        if (base_.disposed_ || !base_.established_) {
+        if (base_.disposed_.load(std::memory_order_acquire) || !base_.established_.load(std::memory_order_acquire)) {
+            return false;
+        }
+
+        // Ensure packet length does not exceed negotiated max buffer size.
+        if (buffer_size > max_buffers_size) {
             return false;
         }
 
@@ -556,7 +572,8 @@ namespace vmux {
         }
 
         Byte* packet_memory = packet_managed.get();
-        if (NULLPTR != buffer) {
+        if (NULLPTR != buffer && buffer_size > 0) {
+            // memcpy with validated length to avoid overflow.
             memcpy(packet_memory + sizeof(vmux_hdr), buffer, buffer_size);
         }
 
@@ -573,7 +590,7 @@ namespace vmux {
         }
 
         SynchronizationObjectScope __SCOPE__(syncobj_);
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -619,7 +636,7 @@ namespace vmux {
 
             uint16_t connection_id = 0;
             if (base_.server_or_client_) {
-                connection_id = ++status_.opened_connections;
+                connection_id = static_cast<uint16_t>(status_.opened_connections.fetch_add(1, std::memory_order_acq_rel) + 1);
             }
 
             auto& connection = linklayer->connection;
@@ -646,7 +663,7 @@ namespace vmux {
     }
 
     bool vmux_net::handshake(const vmux_linklayer_ptr& linklayer, uint16_t connection_id, ppp::coroutines::YieldContext& y) noexcept {
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -694,7 +711,7 @@ namespace vmux {
             }
 
             SynchronizationObjectScope __SCOPE__(syncobj_);
-            status_.opened_connections++;
+            status_.opened_connections.fetch_add(1, std::memory_order_acq_rel);
         }
 
         linklayer_established();
@@ -703,9 +720,10 @@ namespace vmux {
 
     void vmux_net::linklayer_established() noexcept {
         SynchronizationObjectScope __SCOPE__(syncobj_);
-        if (!base_.established_) {
-            base_.established_ = 
-                status_.opened_connections >= status_.max_connections;
+        if (!base_.established_.load(std::memory_order_acquire)) {
+            base_.established_.store(
+                status_.opened_connections.load(std::memory_order_acquire) >= status_.max_connections,
+                std::memory_order_release);
 
             uint64_t now = now_tick();
             status_.last_heartbeat_ = now;
@@ -716,7 +734,7 @@ namespace vmux {
     }
 
     bool vmux_net::forwarding(const vmux_linklayer_ptr& linklayer, ppp::coroutines::YieldContext& y) noexcept {
-        if (base_.disposed_) {
+        if (base_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -738,7 +756,7 @@ namespace vmux {
 
         linklayer_update(linklayer);
         for (;;) {
-            if (base_.disposed_) {
+            if (base_.disposed_.load(std::memory_order_acquire)) {
                 break;
             }
 
@@ -785,7 +803,7 @@ namespace vmux {
         const template_string&                               host,
         int                                                  port) noexcept {
 
-        if (base_.disposed_ || !base_.established_) {
+        if (base_.disposed_.load(std::memory_order_acquire) || !base_.established_.load(std::memory_order_acquire)) {
             return false;
         }
 

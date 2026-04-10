@@ -32,8 +32,8 @@ namespace vmux {
 
     public:
         void                                            close() noexcept;
-        bool                                            is_disposed() noexcept { return status_.disposed_; }
-        bool                                            is_connected() noexcept { return !status_.disposed_ && status_.connected_; }
+        bool                                            is_disposed() noexcept { return status_.disposed_.load(std::memory_order_acquire); }
+        bool                                            is_connected() noexcept { return !status_.disposed_.load(std::memory_order_acquire) && status_.connected_.load(std::memory_order_acquire); }
         bool                                            run() noexcept;
         bool                                            send_to_peer_yield(const void* packet, int packet_length, ppp::coroutines::YieldContext& y) noexcept;
 
@@ -70,16 +70,14 @@ namespace vmux {
 
     private:
         struct vmux_status {
-            struct {
-                bool                                    disposed_        : 1;
-                bool                                    connected_       : 1;
-                bool                                    fin_             : 1;
-                bool                                    tx_acceleration_ : 1;
-                bool                                    rx_acceleration_ : 1;
-                bool                                    connecton_       : 3;
-            };
-            std::atomic<int>                            sending_    = false;
-            std::atomic<int>                            forwarding_ = false;
+            std::atomic<bool>                        disposed_        { false };
+            std::atomic<bool>                        connected_       { false };
+            std::atomic<bool>                        fin_             { false };
+            std::atomic<bool>                        tx_acceleration_ { true };
+            std::atomic<bool>                        rx_acceleration_ { true };
+            std::atomic<bool>                        connecton_       { false };
+            std::atomic<int>                         sending_         { 0 };
+            std::atomic<int>                         forwarding_      { 0 };
         }                                               status_;
 
 #if defined(_WIN32)

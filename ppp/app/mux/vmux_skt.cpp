@@ -6,14 +6,14 @@ namespace vmux {
         assert(connection_id != 0 && "The connect_id cannot be set to 0.");
 
         vmux_skt* const skt           = this;
-        skt->status_.disposed_        = false;
-        skt->status_.connected_       = false;
-        skt->status_.fin_             = false;
-        skt->status_.sending_         = false;
-        skt->status_.forwarding_      = false;
-        skt->status_.connecton_       = false;
-        skt->status_.rx_acceleration_ = true;
-        skt->status_.tx_acceleration_ = true;
+        skt->status_.disposed_.store(false, std::memory_order_release);
+        skt->status_.connected_.store(false, std::memory_order_release);
+        skt->status_.fin_.store(false, std::memory_order_release);
+        skt->status_.sending_.store(0, std::memory_order_release);
+        skt->status_.forwarding_.store(0, std::memory_order_release);
+        skt->status_.connecton_.store(false, std::memory_order_release);
+        skt->status_.rx_acceleration_.store(true, std::memory_order_release);
+        skt->status_.tx_acceleration_.store(true, std::memory_order_release);
 
         uint64_t now                  = mux->now_tick();
         skt->mux_                     = mux;
@@ -32,13 +32,13 @@ namespace vmux {
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket;
         bool fin = false;
 
-        if (!status_.fin_) { 
+        if (!status_.fin_.load(std::memory_order_acquire)) { 
             fin = true;
-            status_.connected_ = false;
+            status_.connected_.store(false, std::memory_order_release);
         }
 
-        status_.fin_ = true;
-        status_.disposed_ = true;
+        status_.fin_.store(true, std::memory_order_release);
+        status_.disposed_.store(true, std::memory_order_release);
 
 #if defined(_WIN32)
         qoss_.reset();
@@ -101,7 +101,7 @@ namespace vmux {
     }
 
     bool vmux_skt::accept(const template_string& host, int port) noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -156,14 +156,14 @@ namespace vmux {
     }
 
     bool vmux_skt::run() noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
         
         std::shared_ptr<vmux_skt> self = shared_from_this();
         return vmux_post_exec(mux_->context_, mux_->strand_,
             [self, this]() noexcept {
-                if (!status_.connected_) {
+                if (!status_.connected_.load(std::memory_order_acquire)) {
                     return false;
                 }
 
@@ -194,20 +194,20 @@ namespace vmux {
         
         if (rx_congestions_ <= 0) {
             rx_congestions_ = 0;
-            if (status_.rx_acceleration_) {
+            if (status_.rx_acceleration_.load(std::memory_order_acquire)) {
                 return true;
             }
             
             Byte acceleration = TRUE;
-            status_.rx_acceleration_ = true;
+            status_.rx_acceleration_.store(true, std::memory_order_release);
 
             return mux_->post(vmux_net::cmd_acceleration, &acceleration, sizeof(acceleration), connection_id_);
         }
 
         if (rx_congestions_ >= max_congestions) {
-            if (status_.rx_acceleration_) {
+            if (status_.rx_acceleration_.load(std::memory_order_acquire)) {
                 Byte acceleration = FALSE;
-                status_.rx_acceleration_ = false;
+                status_.rx_acceleration_.store(false, std::memory_order_release);
 
                 return mux_->post(vmux_net::cmd_acceleration, &acceleration, sizeof(acceleration), connection_id_);
             }
@@ -238,7 +238,7 @@ namespace vmux {
             return false;
         }
 
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -266,7 +266,7 @@ namespace vmux {
         }
 
         connect_ac_ = ac;
-        status_.fin_ = true;
+        status_.fin_.store(true, std::memory_order_release);
         
         tx_strand_ = strand;
         tx_context_ = context;
@@ -274,12 +274,12 @@ namespace vmux {
     }
 
     bool vmux_skt::connect_ok(bool successed) noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
         if (!successed) {
-            status_.fin_ = true;
+            status_.fin_.store(true, std::memory_order_release);
             return false;
         }
 
@@ -288,12 +288,12 @@ namespace vmux {
             return false;
         }
         
-        if (status_.connected_) {
+        if (status_.connected_.load(std::memory_order_acquire)) {
             return false;
         }
 
-        status_.fin_ = false;
-        status_.connected_ = true;
+        status_.fin_.store(false, std::memory_order_release);
+        status_.connected_.store(true, std::memory_order_release);
 
         on_connected(true);
         if (!tx_socket->is_open()) {
@@ -304,7 +304,7 @@ namespace vmux {
     }
 
     bool vmux_skt::input(Byte* payload, int payload_size) noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -324,7 +324,7 @@ namespace vmux {
         }
 
         rx_queue_.emplace_back(packet{ buffer,  payload_size });
-        if (status_.sending_) {
+        if (status_.sending_.load(std::memory_order_acquire)) {
             return true;
         }
 
@@ -343,7 +343,7 @@ namespace vmux {
             return false;
         }
 
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -353,7 +353,7 @@ namespace vmux {
         }
 
         auto self = shared_from_this();
-        bool sending = mux_->post(vmux_net::cmd_push, packet, packet_length, connection_id_, status_.tx_acceleration_,
+        bool sending = mux_->post(vmux_net::cmd_push, packet, packet_length, connection_id_, status_.tx_acceleration_.load(std::memory_order_acquire),
             [self, this, ac](bool ok) noexcept {
                 if (ac) {
                     ac(this, ok);
@@ -401,7 +401,7 @@ namespace vmux {
     }
 
     bool vmux_skt::do_accept(const template_string& host, int remote_port, ppp::coroutines::YieldContext& y) noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -448,7 +448,7 @@ namespace vmux {
             }
             else {
                 boost::asio::post(tx_socket->get_executor(),
-                    [&tx_socket, &ec, &remote_endpoint, &y]() noexcept {
+                    [tx_socket, &ec, remote_endpoint, &y]() noexcept {
                         tx_socket->open(remote_endpoint.protocol(), ec);
                         y.R();
                     });
@@ -488,7 +488,7 @@ namespace vmux {
 #endif        
 
             boost::asio::post(tx_socket->get_executor(), 
-                [&tx_socket, &ec, &remote_endpoint, &y]() noexcept {
+                [tx_socket, &ec, remote_endpoint, &y]() noexcept {
                     tx_socket->async_connect(remote_endpoint,
                         [&y, &ec](const boost::system::error_code& err) noexcept {
                             ec = err;
@@ -553,7 +553,7 @@ namespace vmux {
     }
 
     bool vmux_skt::forward_to_rx_socket() noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
         
@@ -566,7 +566,7 @@ namespace vmux {
             return false;
         }
 
-        if (!status_.tx_acceleration_) {
+        if (!status_.tx_acceleration_.load(std::memory_order_acquire)) {
             return true;
         }
         
@@ -590,7 +590,7 @@ namespace vmux {
 
                         if (ec == boost::system::errc::success) {
                             bool forwarding = 
-                                mux_->post(vmux_net::cmd_push, tx_buffer_.get(), bytes_transferred, connection_id_, status_.tx_acceleration_,
+                                mux_->post(vmux_net::cmd_push, tx_buffer_.get(), bytes_transferred, connection_id_, status_.tx_acceleration_.load(std::memory_order_acquire),
                                     [self, this](bool successed) noexcept {
                                         if (successed) {
                                             if (forward_to_rx_socket()) {
@@ -623,11 +623,11 @@ namespace vmux {
     }
 
     bool vmux_skt::tx_acceleration(bool acceleration) noexcept {
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
-        status_.tx_acceleration_ = acceleration;
+        status_.tx_acceleration_.store(acceleration, std::memory_order_release);
         return acceleration ? forward_to_rx_socket() : true;
     }
 
@@ -636,7 +636,7 @@ namespace vmux {
             return false;
         }
 
-        if (status_.disposed_) {
+        if (status_.disposed_.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -706,7 +706,7 @@ namespace vmux {
     void vmux_skt::active(uint64_t now) noexcept {
         ActiveEventHandler h = active_event; 
         if (NULLPTR != h) {
-            h(this, !status_.disposed_);
+            h(this, !status_.disposed_.load(std::memory_order_acquire));
         }
 
         last_ = now;

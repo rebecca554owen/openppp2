@@ -55,8 +55,12 @@ namespace vmux {
 
         template <typename _Tp>
         struct packet_less {
+            // Compare two 32-bit sequence numbers with wrap-around semantics.
+            // Avoid unsigned arithmetic followed by signed conversion which
+            // may be implementation-defined. Cast both operands to int32_t
+            // first which gives a defined signed subtraction.
             static constexpr bool                                                   before(uint32_t seq1, uint32_t seq2) noexcept {
-                return (int32_t)(seq1 - seq2) < 0;
+                return static_cast<int32_t>(seq1) - static_cast<int32_t>(seq2) < 0;
             }
 
             static constexpr bool                                                   after(uint32_t seq2, uint32_t seq1) noexcept {
@@ -120,10 +124,10 @@ namespace vmux {
         const ContextPtr&                                                           get_context()         noexcept { return context_; }
         uint16_t                                                                    get_max_connections() noexcept { return status_.max_connections; }
         uint64_t                                                                    get_last()            noexcept { return status_.last_; }
-        const uint32_t&                                                             get_tx_seq()          noexcept { return status_.tx_seq_; }
-        const uint32_t&                                                             get_rx_ack()          noexcept { return status_.rx_ack_; }
-        bool                                                                        is_disposed()         noexcept { return base_.disposed_; }
-        bool                                                                        is_established()      noexcept { return !base_.disposed_ && base_.established_; }
+        uint32_t                                                                    get_tx_seq()          noexcept { return status_.tx_seq_.load(std::memory_order_acquire); }
+        uint32_t                                                                    get_rx_ack()          noexcept { return status_.rx_ack_.load(std::memory_order_acquire); }
+        bool                                                                        is_disposed()         noexcept { return base_.disposed_.load(std::memory_order_acquire); }
+        bool                                                                        is_established()      noexcept { return !base_.disposed_.load(std::memory_order_acquire) && base_.established_.load(std::memory_order_acquire); }
 
         bool                                                                        ftt(uint32_t seq, uint32_t ack) noexcept;
         static uint32_t                                                             ftt_random_aid(int min, int max) noexcept;
@@ -180,7 +184,7 @@ namespace vmux {
         bool                                                                        process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept;
 
         void                                                                        active(uint64_t now) noexcept { 
-            if (!base_.disposed_) {
+            if (!base_.disposed_.load(std::memory_order_acquire)) {
                 status_.last_ = now; 
             }
         }
@@ -229,19 +233,19 @@ namespace vmux {
 
     private:
         struct {
-            bool                                                                    disposed_          : 1;
-            bool                                                                    ftt_               : 1;
-            bool                                                                    established_       : 1;
+            std::atomic<bool>                                                      disposed_          { false };
+            std::atomic<bool>                                                      ftt_               { false };
+            std::atomic<bool>                                                      established_       { false };
             bool                                                                    server_or_client_  : 1;
-            bool                                                                    acceleration_      : 4;
+            unsigned                                                                acceleration_      : 4;
         }                                                                           base_;
 
         struct {
             uint16_t                                                                max_connections    = 0;
-            uint16_t                                                                opened_connections = 0;
+            std::atomic<uint16_t>                                                   opened_connections { 0 };
 
-            uint32_t                                                                rx_ack_            = 0;
-            uint32_t                                                                tx_seq_            = 0;
+            std::atomic<uint32_t>                                                  rx_ack_            { 0 };
+            std::atomic<uint32_t>                                                  tx_seq_            { 0 };
 
             uint64_t                                                                last_              = 0;
             uint64_t                                                                last_heartbeat_    = 0;
