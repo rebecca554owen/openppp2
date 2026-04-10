@@ -192,7 +192,7 @@ namespace ppp {
 
                 boost::asio::ip::basic_endpoint<TProtocol> results = IPEndPoint::AnyAddressV4<TProtocol>(IPEndPoint::MinPort);
                 auto processing =
-                    [status, &results, &y](IPEndPoint* ep) noexcept {
+                    [status, &results, &y](const std::shared_ptr<IPEndPoint>& ep) noexcept {
                         if (!status->exchange(true)) {
                             if (NULLPTR != ep) {
                                 results = IPEndPoint::ToEndPoint<TProtocol>(*ep);

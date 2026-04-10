@@ -537,18 +537,26 @@ namespace vmux {
     }
 
     template <class T1, class T2, class T3>
-    static inline void vmux_skt_async_write(T1& socket, const T2& buffers, T3&& handler) noexcept {
-        boost::asio::post(socket.get_executor(),
-            [&socket, buffers, handler]() noexcept {
-                boost::asio::async_write(socket, buffers, handler);
+    static inline void vmux_skt_async_write(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
+        if (socket == NULLPTR) {
+            return;
+        }
+
+        boost::asio::post(socket->get_executor(),
+            [socket, buffers, handler]() noexcept {
+                boost::asio::async_write(*socket, buffers, handler);
             });
     }
 
     template <class T1, class T2, class T3>
-    static inline void vmux_skt_async_read_some(T1& socket, const T2& buffers, T3&& handler) noexcept {
-        boost::asio::post(socket.get_executor(),
-            [&socket, buffers, handler]() noexcept {
-                socket.async_read_some(buffers, handler);
+    static inline void vmux_skt_async_read_some(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
+        if (socket == NULLPTR) {
+            return;
+        }
+
+        boost::asio::post(socket->get_executor(),
+            [socket, buffers, handler]() noexcept {
+                socket->async_read_some(buffers, handler);
             });
     }
 
@@ -618,7 +626,7 @@ namespace vmux {
             };
         
         int bytes_transferred = ppp::BufferSkateboarding(mux_->AppConfiguration->key.sb, vmux_net::max_buffers_size, vmux_net::max_buffers_size);
-        vmux_skt_async_read_some(*tx_socket, boost::asio::buffer(tx_buffer_.get(), bytes_transferred), reading_cb);
+        vmux_skt_async_read_some(tx_socket, boost::asio::buffer(tx_buffer_.get(), bytes_transferred), reading_cb);
         return true;
     }
 
@@ -699,7 +707,7 @@ namespace vmux {
                     });
             };
 
-        vmux_skt_async_write(*tx_socket, boost::asio::buffer(payload.get(), payload_size), writing_cb);
+        vmux_skt_async_write(tx_socket, boost::asio::buffer(payload.get(), payload_size), writing_cb);
         return true;
     }
 

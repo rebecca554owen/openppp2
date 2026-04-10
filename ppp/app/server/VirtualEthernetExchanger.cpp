@@ -608,12 +608,17 @@ namespace ppp {
                     return false;
                 }
 
-                const auto max_buffer_size = PPP_BUFFER_SIZE - sizeof(destinationEP);
+                const auto max_buffer_size = PPP_BUFFER_SIZE;
                 const auto self = shared_from_this();
+                
+                const auto responseEP = make_shared_object<boost::asio::ip::udp::endpoint>();
+                if (NULLPTR == responseEP) {
+                    return false;
+                }
 
                 socket->async_receive_from(boost::asio::buffer(buffer_.get(), max_buffer_size),
-                    *reinterpret_cast<boost::asio::ip::udp::endpoint*>(buffer_.get() + max_buffer_size),
-                    [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP](boost::system::error_code ec, size_t sz) noexcept {
+                    *responseEP,
+                    [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP, responseEP](boost::system::error_code ec, size_t sz) noexcept {
                         DeleteTimeout(socket.get());
                         if (ec == boost::system::errc::success) {
                             int bytes_transferred = static_cast<int>(sz);
@@ -679,7 +684,7 @@ namespace ppp {
                 const std::shared_ptr<boost::asio::io_context> context = in->GetContext();
 
                 const Ipep::GetAddressByHostNameCallback cb = 
-                    [self, this, buffer, packet_length, static_transit, source, in, destination, context](IPEndPoint* redirectEP) noexcept {
+                    [self, this, buffer, packet_length, static_transit, source, in, destination, context](const std::shared_ptr<IPEndPoint>& redirectEP) noexcept {
                         if (!redirectEP) {
                             return false;
                         }

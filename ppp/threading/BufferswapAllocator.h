@@ -40,7 +40,13 @@ namespace ppp
                     return NULLPTR;
                 }
 
-                T* memory = (T*)Alloc(length * sizeof(T));
+                if (static_cast<size_t>(length) > (std::numeric_limits<uint32_t>::max)() / sizeof(T)) {
+                    return NULLPTR;
+                }
+
+                uint32_t allocated_size = (uint32_t)((size_t)length * sizeof(T));
+                T* memory = (T*)Alloc(allocated_size);
+
                 if (NULLPTR == memory) {
                     return make_shared_alloc<T>(length);
                 }

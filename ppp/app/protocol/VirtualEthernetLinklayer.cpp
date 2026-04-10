@@ -60,7 +60,7 @@ namespace ppp {
                     stream += address_length;                               // move past hostname
                     packet_length -= address_length;                        // subtract hostname length
 
-                    if (packet_length < 0) {                                // safety check
+                    if (packet_length < 1) {                                // safety check
                         return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                     }
 

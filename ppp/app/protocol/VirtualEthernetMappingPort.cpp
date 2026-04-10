@@ -220,9 +220,6 @@ namespace ppp {
                     return false;
                 }
 
-                server_ = server;                            // Store server instance
-                logger_ = logger;                            // Store logger
-
                 if (tcp_) {                                  // TCP (stream) mode
                     bool opened = OpenNetworkSocketStream(); // Open TCP acceptor
                     if (!opened) {
@@ -234,15 +231,20 @@ namespace ppp {
                     acceptor.listen(configuration_->tcp.backlog, ec);   // Start listening
 
                     if (ec) {
+                        ppp::net::Socket::Closesocket(acceptor);
                         return false;
                     }
 
                     // Start asynchronous accept loop
                     std::shared_ptr<VirtualEthernetMappingPort> self = shared_from_this();
-                    return ppp::net::Socket::AcceptLoopbackAsync(acceptor, 
+                    bool accepted = ppp::net::Socket::AcceptLoopbackAsync(acceptor, 
                         [self, this, server](const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioTcpSocket& socket) noexcept {
                             return Server_AcceptFrpUserSocket(server, context, socket);
                         });
+                    if (!accepted) {
+                        ppp::net::Socket::Closesocket(acceptor);
+                        return false;
+                    }
                 }
                 else {                                       // UDP (datagram) mode
                     bool opened = OpenNetworkSocketDatagram(); // Open UDP socket
@@ -250,8 +252,15 @@ namespace ppp {
                         return false;
                     }
 
-                    return LoopbackFrpServer();              // Start receive loop
+                    if (!LoopbackFrpServer()) {              // Start receive loop
+                        ppp::net::Socket::Closesocket(server->socket_udp_);
+                        return false;
+                    }
                 }
+
+                server_ = server;                       // Publish only for the open/listen sequence
+                logger_ = logger;                       // Store logger after successful startup
+                return true;
             }
 
             // Returns the bound endpoint of the FRP server (if any)
@@ -914,7 +923,6 @@ namespace ppp {
                     return false;
                 }
 
-                client_ = client;
                 client->local_in_ = local_ip.is_v4();   // Store IP version
                 client->local_ep_ = boost::asio::ip::udp::endpoint(local_ip, local_port);
 
@@ -926,6 +934,7 @@ namespace ppp {
                     nullof<YieldContext>());
 
                 if (ok) {
+                    client_ = client;
                     return true;
                 }
 

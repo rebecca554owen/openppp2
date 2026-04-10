@@ -22,8 +22,8 @@ namespace ppp {
             };
             typedef ppp::function<void(Timer* sender, TickEventArgs& e)>                                    TickEventHandler;
             typedef ppp::function<void(Timer*)>                                                             TimeoutEventHandler;
-            typedef std::weak_ptr<TimeoutEventHandler>                                                      TimeoutEventHandlerWeakPtr;
-            typedef ppp::unordered_map<void*, TimeoutEventHandlerWeakPtr>                                   TimeoutEventHandlerTable;
+            typedef std::shared_ptr<TimeoutEventHandler>                                                    TimeoutEventHandlerPtr;
+            typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>                                       TimeoutEventHandlerTable;
             enum DurationType {
                 kHours,                                                                                     // 时
                 kMinutes,                                                                                   // 分

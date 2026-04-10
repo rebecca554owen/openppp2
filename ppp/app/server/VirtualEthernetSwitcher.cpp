@@ -1159,7 +1159,7 @@ namespace ppp {
                 ppp::vector<ppp::string> no_dns;
                 ppp::string tun_name = tun_name_;
                 if (tun_name.empty()) {
-                    tun_name = "ppp";
+                    tun_name = BOOST_BEAST_VERSION_STRING;
                 }
 
                 ITapPtr tap = ppp::tap::ITap::Create(context_, tun_name, "169.254.254.1", "169.254.254.2", "255.255.255.252", false, false, no_dns);

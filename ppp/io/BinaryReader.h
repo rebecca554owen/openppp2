@@ -36,7 +36,11 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                int size = counts * sizeof(TValueType);
+                if (static_cast<size_t>(counts) > (std::numeric_limits<int>::max)() / sizeof(TValueType)) {
+                    return NULLPTR;
+                }
+
+                int size = static_cast<int>((static_cast<size_t>(counts) * sizeof(TValueType)));
                 int len = _stream.Read(buf.get(), 0, size);
                 return len > 0 && len == size ? buf : NULLPTR;
             }

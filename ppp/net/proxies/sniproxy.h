@@ -25,6 +25,8 @@ namespace ppp {
             class sniproxy final : public std::enable_shared_from_this<sniproxy> {
                 typedef ppp::io::MemoryStream                                       MemoryStream;
                 typedef ppp::threading::Timer                                       Timer;
+                typedef boost::asio::strand<boost::asio::io_context::executor_type> Strand;
+                typedef std::lock_guard<std::mutex>                                 SynchronizedObjectScope;
 
 #pragma pack(push, 1)
                 /**
@@ -93,6 +95,12 @@ namespace ppp {
                 /// Start forwarding data from remote -> local.
                 bool                                                                remote_to_local() noexcept;
 
+                /// Return whether close logic already ran.
+                bool                                                                is_disposed() const noexcept;
+
+                /// Execute a callback on the socket executor to serialize state mutation.
+                bool                                                                post(const ppp::function<void()>& callback) noexcept;
+
                 /// Check if the first few bytes look like an HTTP request.
                 static bool                                                         be_http(const void* p) noexcept;
 
@@ -125,11 +133,14 @@ namespace ppp {
                 int                                                                 cdn_;               ///< CDN flag
                 std::shared_ptr<ppp::configurations::AppConfiguration>              configuration_;    ///< App config
                 std::shared_ptr<boost::asio::io_context>                            context_;           ///< IO context
+                Strand                                                              strand_;            ///< Serializes proxy state
                 std::shared_ptr<boost::asio::ip::tcp::socket>                       local_socket_;      ///< Client socket
                 boost::asio::ip::tcp::socket                                        remote_socket_;     ///< Upstream socket
                 uint64_t                                                            last_;              ///< Last activity timestamp (ms)
                 std::shared_ptr<Timer>                                              timeout_;           ///< Handshake timeout timer
                 std::shared_ptr<Timer>                                              inactivity_timer_;  ///< Inactivity timeout timer
+                mutable std::mutex                                                  syncobj_;
+                std::atomic<bool>                                                   disposed_{ false };
                 char                                                                local_socket_buf_[FORWARD_MSS];  ///< Read buffer for local socket
                 char                                                                remote_socket_buf_[FORWARD_MSS]; ///< Read buffer for remote socket
             };

@@ -2589,12 +2589,17 @@ namespace ppp {
                     return false;
                 }
 
-                const auto max_buffer_size = PPP_BUFFER_SIZE - sizeof(serverEP);
+                const auto max_buffer_size = PPP_BUFFER_SIZE;
                 boost::asio::ip::udp::endpoint sourceEP = IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                 boost::asio::ip::udp::endpoint destinationEP(destinationIP, frame->Destination.Port);
+                
+                const auto serverEPPtr = make_shared_object<boost::asio::ip::udp::endpoint>();
+                if (NULLPTR == serverEPPtr) {
+                    return false;
+                }
 
-                socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *reinterpret_cast<boost::asio::ip::udp::endpoint*>(buffer.get() + max_buffer_size),
-                    [self, this, socket, timeout, buffer, sourceEP, destinationEP](boost::system::error_code ec, size_t sz) noexcept {
+                socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,
+                    [self, this, socket, timeout, buffer, sourceEP, destinationEP, serverEPPtr](boost::system::error_code ec, size_t sz) noexcept {
                         DeleteTimeout(socket.get());
                         if (ec == boost::system::errc::success) {
                             if (sz > 0) {

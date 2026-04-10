@@ -81,6 +81,10 @@ namespace ppp {
                     return NULLPTR;
                 }
 
+                if (messages->Length < sizeof(struct udp_hdr)) {
+                    return NULLPTR;
+                }
+
                 struct udp_hdr* udphdr = (struct udp_hdr*)messages->Buffer.get();
                 if (NULLPTR == udphdr) {
                     return NULLPTR;

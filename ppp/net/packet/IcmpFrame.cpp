@@ -73,6 +73,10 @@ namespace ppp {
                     return NULLPTR;
                 }
 
+                if (messages->Length < sizeof(struct icmp_hdr)) {
+                    return NULLPTR;
+                }
+
                 struct icmp_hdr* icmphdr = (struct icmp_hdr*)messages->Buffer.get();
                 if (NULLPTR == icmphdr) {
                     return NULLPTR;

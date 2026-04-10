@@ -47,8 +47,8 @@ namespace ppp {
                 typedef ppp::app::client::dns::Rule::Ptr                            DNSRulePtr;
                 typedef ppp::unordered_map<ppp::string, DNSRulePtr>                 DNSRuleTable;
                 typedef ppp::threading::Timer                                       Timer;
-                typedef std::weak_ptr<Timer::TimeoutEventHandler>                   TimeoutEventHandlerWeakPtr;
-                typedef ppp::unordered_map<void*, TimeoutEventHandlerWeakPtr>       TimeoutEventHandlerTable;
+                typedef Timer::TimeoutEventHandlerPtr                                TimeoutEventHandlerPtr;
+                typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>            TimeoutEventHandlerTable;
                 typedef ppp::vector<std::pair<ppp::string, uint32_t>/**/>           LoadIPListFileVector;
                 typedef std::shared_ptr<LoadIPListFileVector>                       LoadIPListFileVectorPtr;
                 typedef ppp::vector<boost::asio::ip::address>                       NicDnsServerAddresses;

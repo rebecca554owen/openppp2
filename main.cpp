@@ -468,11 +468,11 @@ ppp::string NetworkInterface::GetDefaultTun() noexcept
 {
     const char* default_tun_name = NULLPTR;
 #if defined(_WIN32)
-    default_tun_name = "PPP";
+    default_tun_name = PPP_APPLICATION_NAME;
 #elif defined(_MACOS)
     default_tun_name = "utun0";
 #else
-    default_tun_name = "ppp";
+    default_tun_name = BOOST_BEAST_VERSION_STRING;
 #endif
     return default_tun_name;
 }

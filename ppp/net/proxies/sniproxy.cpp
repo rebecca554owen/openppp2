@@ -48,6 +48,7 @@ namespace ppp {
                 : cdn_(cdn)
                 , configuration_(configuration)
                 , context_(context)
+                , strand_(context->get_executor())
                 , local_socket_(socket)
                 , remote_socket_(*context)
                 , last_(Executors::GetTickCount()) {
@@ -80,6 +81,19 @@ namespace ppp {
                     (0 == strncasecmp(data, "CONNECT ", 8)) ||
                     (0 == strncasecmp(data, "TRACE ", 6)) ||
                     (0 == strncasecmp(data, "PATCH ", 6));
+            }
+
+            bool sniproxy::post(const ppp::function<void()>& callback) noexcept {
+                if (NULLPTR == callback) {
+                    return false;
+                }
+
+                boost::asio::post(strand_, std::move(callback));
+                return true;
+            }
+
+            bool sniproxy::is_disposed() const noexcept {
+                return disposed_.load(std::memory_order_acquire);
             }
 
             bool sniproxy::be_host(ppp::string host, ppp::string domain) noexcept {
@@ -659,10 +673,11 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                inactivity_timer_ = Timer::Timeout(timeout_sec * 1000,
+                inactivity_timer_ = Timer::Timeout(context_, (int)(timeout_sec * 1000),
                     [this, self](Timer*) noexcept {
-                        // Timer expired: no activity for the configured period, close connection.
-                        close();
+                        post([this, self]() noexcept {
+                            close();
+                        });
                     });
             }
 
@@ -678,13 +693,18 @@ namespace ppp {
             // -----------------------------------------------------------------------------
 
             bool sniproxy::local_to_remote() noexcept {
-                if (!socket_is_open()) {
+                if (is_disposed() || !socket_is_open()) {
                     return false;
                 }
 
                 auto self = shared_from_this();
                 local_socket_->async_read_some(boost::asio::buffer(local_socket_buf_, FORWARD_MSS),
+                    boost::asio::bind_executor(strand_,
                     [self, this](const boost::system::error_code& ec, uint32_t sz) noexcept {
+                        if (is_disposed()) {
+                            return;
+                        }
+
                         int by = (ec || (0 == sz)) ? -1 : static_cast<int>(sz);
                         if (by < 1) {
                             close();
@@ -693,9 +713,14 @@ namespace ppp {
 
                         last_ = Executors::GetTickCount(); // update activity timestamp
                         reset_inactivity_timer();          // reset timer on read activity
-                        
+
                         boost::asio::async_write(remote_socket_, boost::asio::buffer(local_socket_buf_, by),
+                            boost::asio::bind_executor(strand_,
                             [self, this](const boost::system::error_code& ec, uint32_t) noexcept {
+                                if (is_disposed()) {
+                                    return;
+                                }
+
                                 if (ec) {
                                     close();
                                     return;
@@ -704,19 +729,24 @@ namespace ppp {
                                 last_ = Executors::GetTickCount(); // update on write success
                                 reset_inactivity_timer();          // reset timer on write activity
                                 local_to_remote();                 // continue reading
-                            });
-                    });
+                            }));
+                    }));
                 return true;
             }
 
             bool sniproxy::remote_to_local() noexcept {
-                if (!socket_is_open()) {
+                if (is_disposed() || !socket_is_open()) {
                     return false;
                 }
 
                 auto self = shared_from_this();
                 remote_socket_.async_read_some(boost::asio::buffer(remote_socket_buf_, FORWARD_MSS),
+                    boost::asio::bind_executor(strand_,
                     [self, this](const boost::system::error_code& ec, uint32_t sz) noexcept {
+                        if (is_disposed()) {
+                            return;
+                        }
+
                         int by = (ec || (0 == sz)) ? -1 : static_cast<int>(sz);
                         if (by < 1) {
                             close();
@@ -725,9 +755,14 @@ namespace ppp {
 
                         last_ = Executors::GetTickCount(); // update activity timestamp
                         reset_inactivity_timer();          // reset timer on read activity
-                        
+
                         boost::asio::async_write(*local_socket_, boost::asio::buffer(remote_socket_buf_, by),
+                            boost::asio::bind_executor(strand_,
                             [self, this](const boost::system::error_code& ec, uint32_t) noexcept {
+                                if (is_disposed()) {
+                                    return;
+                                }
+
                                 if (ec) {
                                     close();
                                     return;
@@ -736,8 +771,8 @@ namespace ppp {
                                 last_ = Executors::GetTickCount(); // update on write success
                                 reset_inactivity_timer();          // reset timer on write activity
                                 remote_to_local();                 // continue reading
-                            });
-                    });
+                            }));
+                    }));
                 return true;
             }
 
@@ -746,6 +781,12 @@ namespace ppp {
             }
 
             void sniproxy::close() noexcept {
+                bool expected = false;
+                if (!disposed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                    return;
+                }
+
+                SynchronizedObjectScope scope(syncobj_);
                 boost::system::error_code ec;
                 if (local_socket_) {
                     Socket::Closesocket(*local_socket_);
@@ -784,7 +825,16 @@ namespace ppp {
                     return false;
                 }
 
-                // Not TLS: check if it's HTTP
+                static constexpr int http_probe_sz = 8;
+                if (!ppp::coroutines::asio::async_read(*local_socket_,
+                    boost::asio::buffer(local_socket_buf_ + hdr_sz, http_probe_sz - hdr_sz), y)) {
+                    return false;
+                }
+
+                if (!ms.Write(local_socket_buf_ + hdr_sz, 0, http_probe_sz - hdr_sz)) {
+                    return false;
+                }
+
                 if (!be_http(local_socket_buf_)) {
                     return false;
                 }
@@ -798,16 +848,18 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                timeout_ = Timer::Timeout(static_cast<uint64_t>(configuration_->tcp.connect.timeout) * 1000,
+                timeout_ = Timer::Timeout(context_, (int)(static_cast<uint64_t>(configuration_->tcp.connect.timeout) * 1000),
                     [this, self](Timer*) noexcept {
-                        close();
+                        post([this, self]() noexcept {
+                            close();
+                        });
                     });
                 if (NULLPTR == timeout_) {
                     return false;
                 }
 
                 auto ctx = context_;
-                return ppp::coroutines::YieldContext::Spawn(*ctx,
+                return ppp::coroutines::YieldContext::Spawn(NULLPTR, *ctx, &strand_,
                     [this, self](ppp::coroutines::YieldContext& y) noexcept {
                         bool ok = do_handshake(y);
                         if (!ok) {

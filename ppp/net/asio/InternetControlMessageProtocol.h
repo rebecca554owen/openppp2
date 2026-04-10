@@ -18,8 +18,8 @@ namespace ppp {
             public:
                 typedef ppp::threading::Timer                                   Timer;
                 typedef Timer::TimeoutEventHandler                              TimeoutEventHandler;
-                typedef std::weak_ptr<TimeoutEventHandler>                      TimeoutEventHandlerWeakPtr;
-                typedef ppp::unordered_map<void*, TimeoutEventHandlerWeakPtr>   TimeoutEventHandlerTable;
+                typedef Timer::TimeoutEventHandlerPtr                           TimeoutEventHandlerPtr;
+                typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>       TimeoutEventHandlerTable;
                 typedef ppp::net::packet::IPFrame                               IPFrame;
                 typedef ppp::net::packet::IcmpFrame                             IcmpFrame;
                 typedef ppp::net::IPEndPoint                                    IPEndPoint;

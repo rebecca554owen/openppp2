@@ -8,7 +8,7 @@ namespace ppp {
     namespace net {
         class Ipep final {
         public:
-            typedef ppp::function<void(IPEndPoint*)>                            GetAddressByHostNameCallback;
+            typedef ppp::function<void(const std::shared_ptr<IPEndPoint>&)>     GetAddressByHostNameCallback;
 
         public:
             static IPEndPoint                                                   GetEndPoint(const ppp::string& address, bool resolver = true) noexcept;

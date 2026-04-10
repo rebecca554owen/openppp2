@@ -802,6 +802,10 @@ namespace ppp {
 
             Byte* l = p + length; // QUIC IETF
             Byte kf = *p++;
+            auto require = [l](const Byte* current, int count) noexcept -> bool {
+                return current <= l && count >= 0 && (l - current) >= count;
+            };
+
             int F_Header_Form = ppp::net::native::GetBitValueAt(kf, 7);
             int F_Fixed_Bit = ppp::net::native::GetBitValueAt(kf, 6);
             int F_Packet_Type_Bit = ppp::net::native::GetBitValueAt(kf, 5) << 1 | ppp::net::native::GetBitValueAt(kf, 4);
@@ -820,40 +824,66 @@ namespace ppp {
                 return false;
             }
 
-            p += 0x04;
-            if (p > l) {
+            if (!require(p, sizeof(UInt32))) {
                 return false;
             }
 
-            UInt32 Version = ntohl(((UInt32*)p)[-1]);
+            UInt32 version_network = 0;
+            memcpy(&version_network, p, sizeof(version_network));
+
+            UInt32 Version = ntohl(version_network);
+            p += sizeof(UInt32);
+
             if (Version != 0x01) { // Version
                 return false;
             }
 
+            if (!require(p, 1)) {
+                return false;
+            }
+
             int Destination_Connection_ID_Length = *p++;
+            if (Destination_Connection_ID_Length < 0x01 || !require(p, Destination_Connection_ID_Length)) {
+                return false;
+            }
+
             p += Destination_Connection_ID_Length;
-            if (p > l || Destination_Connection_ID_Length < 0x01) {
+
+            if (!require(p, 1)) {
                 return false;
             }
 
             int Source_Connection_ID_Length = *p++;
-            p += Source_Connection_ID_Length;
-            if (p > l) {
+            if (!require(p, Source_Connection_ID_Length)) {
                 return false;
             }
 
+            p += Source_Connection_ID_Length;
+
             if (F_Packet_Type_Bit == 0x00) { // Initial(0)
-                int Token_Length = *p++;
-                p += Token_Length;
-                if (p > l || Token_Length < 0x01)
-                {
+                if (!require(p, 1)) {
                     return false;
                 }
+
+                int Token_Length = *p++;
+                if (Token_Length < 0x01 || !require(p, Token_Length)) {
+                    return false;
+                }
+
+                p += Token_Length;
             }
 
-            int Packet_Length = ntohs(*(UInt16*)p) & 0x3FFF;
+            if (!require(p, (int)sizeof(UInt16))) {
+                return false;
+            }
+
+            UInt16 packet_length_network = 0;
+            memcpy(&packet_length_network, p, sizeof(packet_length_network));
+
+            int Packet_Length = ntohs(packet_length_network) & 0x3FFF;
             p += 0x02;
-            if (p > l || Packet_Length < 0x01) {
+            
+            if (Packet_Length < 0x01 || !require(p, Packet_Length)) {
                 return false;
             }
 
@@ -873,11 +903,14 @@ namespace ppp {
             boost::system::error_code ec;
             boost::asio::ip::address address = StringToAddress(hostname, ec);
             if (ec == boost::system::errc::success) {
-                IPEndPoint localEP = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(address, port));
+                std::shared_ptr<IPEndPoint> localEP = make_shared_object<IPEndPoint>(IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(address, port)));
+                if (NULLPTR == localEP) {
+                    return false;
+                }
+
                 boost::asio::post(context,
                     [callback, localEP]() noexcept {
-                        IPEndPoint* p = const_cast<IPEndPoint*>(&localEP);
-                        callback(p);
+                        callback(localEP);
                     });
                 return true;
             }
@@ -887,11 +920,12 @@ namespace ppp {
                     return ppp::net::asio::vdns::ResolveAsync(context, hostname.data(), PPP_RESOLVE_DNS_TIMEOUT, *dns_servers,
                         [dns_servers, port, callback](const boost::asio::ip::address& ip) noexcept {
                             boost::asio::ip::tcp::endpoint endpoint(ip, port);
-                            if (IPEndPoint ip = IPEndPoint::ToEndPoint(endpoint); IPEndPoint::IsInvalid(ip)) {
+                            std::shared_ptr<IPEndPoint> addressEP = make_shared_object<IPEndPoint>(IPEndPoint::ToEndPoint(endpoint));
+                            if (NULLPTR == addressEP || IPEndPoint::IsInvalid(*addressEP)) {
                                 callback(NULLPTR);
                             }
                             else {
-                                callback(&ip);
+                                callback(addressEP);
                             }
                         });
                 }
@@ -911,11 +945,12 @@ namespace ppp {
                     }
 
                     boost::asio::ip::tcp::endpoint endpoint = ppp::net::asio::internal::GetAddressByHostName<boost::asio::ip::tcp>(r, port);
-                    if (IPEndPoint ip = IPEndPoint::ToEndPoint(endpoint); IPEndPoint::IsInvalid(ip)) {
+                    std::shared_ptr<IPEndPoint> addressEP = make_shared_object<IPEndPoint>(IPEndPoint::ToEndPoint(endpoint));
+                    if (NULLPTR == addressEP || IPEndPoint::IsInvalid(*addressEP)) {
                         callback(NULLPTR);
                     }
                     else {
-                        callback(&ip);
+                        callback(addressEP);
                     }
                 });
             return true;

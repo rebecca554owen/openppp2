@@ -44,8 +44,8 @@ namespace ppp {
                 typedef std::shared_ptr<Timer>                                              TimerPtr;
                 typedef ppp::net::Firewall                                                  Firewall;
                 typedef std::shared_ptr<ppp::net::Firewall>                                 FirewallPtr;
-                typedef std::weak_ptr<Timer::TimeoutEventHandler>                           TimeoutEventHandlerWeakPtr;
-                typedef ppp::unordered_map<void*, TimeoutEventHandlerWeakPtr>               TimeoutEventHandlerTable;
+                typedef Timer::TimeoutEventHandlerPtr                                       TimeoutEventHandlerPtr;
+                typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>                   TimeoutEventHandlerTable;
                 typedef ppp::transmissions::ITransmissionStatistics                         ITransmissionStatistics;
                 typedef std::shared_ptr<ITransmissionStatistics>                            ITransmissionStatisticsPtr;
                 typedef ppp::net::Ipep                                                      Ipep;

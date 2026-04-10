@@ -241,7 +241,7 @@ namespace ppp {
             timeouts.clear();
 
             for (auto&& kv : list) {
-                std::shared_ptr<TimeoutEventHandler> h = kv.second.lock();
+                std::shared_ptr<TimeoutEventHandler> h = kv.second;
                 if (h) {
                     Timer* k = static_cast<Timer*>(kv.first);
                     (*h)(k);
