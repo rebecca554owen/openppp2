@@ -1715,9 +1715,9 @@ void PppApplication::PrintHelpInformation() noexcept
         col_description_width, "SSMT thread optimization", 
         col_default_width, "0");
 #elif defined(_LINUX)
-    printf("│ %-*s │ %-*s │ %-*s │\n", 
-        col_option_width, "--tun-ssmt=<N>[/<mode>]", 
-        col_description_width, "SSMT threads (N), mode: st or mq (optional)", 
+    printf("│ %-*s │ %-*s │ %-*s │\n",
+        col_option_width, "--tun-ssmt=<N>[/<mode>]",
+        col_description_width, "SSMT threads (N), mode: st or mq; mq opens one Linux tun queue per worker",
         col_default_width, "0/st");
 #endif
     
