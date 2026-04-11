@@ -124,10 +124,10 @@ namespace vmux {
         const ContextPtr&                                                           get_context()         noexcept { return context_; }
         uint16_t                                                                    get_max_connections() noexcept { return status_.max_connections; }
         uint64_t                                                                    get_last()            noexcept { return status_.last_; }
-        uint32_t                                                                    get_tx_seq()          noexcept { return status_.tx_seq_.load(std::memory_order_acquire); }
-        uint32_t                                                                    get_rx_ack()          noexcept { return status_.rx_ack_.load(std::memory_order_acquire); }
-        bool                                                                        is_disposed()         noexcept { return base_.disposed_.load(std::memory_order_acquire); }
-        bool                                                                        is_established()      noexcept { return !base_.disposed_.load(std::memory_order_acquire) && base_.established_.load(std::memory_order_acquire); }
+        const uint32_t&                                                             get_tx_seq()          noexcept { return status_.tx_seq_; }
+        const uint32_t&                                                             get_rx_ack()          noexcept { return status_.rx_ack_; }
+        bool                                                                        is_disposed()         noexcept { return base_.disposed_; }
+        bool                                                                        is_established()      noexcept { return !base_.disposed_ && base_.established_; }
 
         bool                                                                        ftt(uint32_t seq, uint32_t ack) noexcept;
         static uint32_t                                                             ftt_random_aid(int min, int max) noexcept;
@@ -184,7 +184,7 @@ namespace vmux {
         bool                                                                        process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept;
 
         void                                                                        active(uint64_t now) noexcept { 
-            if (!base_.disposed_.load(std::memory_order_acquire)) {
+            if (!base_.disposed_) {
                 status_.last_ = now; 
             }
         }
@@ -233,23 +233,22 @@ namespace vmux {
 
     private:
         struct {
-            std::atomic<bool>                                                      disposed_          { false };
-            std::atomic<bool>                                                      ftt_               { false };
-            std::atomic<bool>                                                      established_       { false };
+            bool                                                                    disposed_          : 1;
+            bool                                                                    ftt_               : 1;
+            bool                                                                    established_       : 1;
             bool                                                                    server_or_client_  : 1;
-            unsigned                                                                acceleration_      : 4;
+            bool                                                                    acceleration_      : 4;
         }                                                                           base_;
 
         struct {
             uint16_t                                                                max_connections    = 0;
-            std::atomic<uint16_t>                                                   opened_connections { 0 };
+            uint16_t                                                                opened_connections = 0;
 
-            std::atomic<uint32_t>                                                  rx_ack_            { 0 };
-            std::atomic<uint32_t>                                                  tx_seq_            { 0 };
+            uint32_t                                                                rx_ack_            = 0;
+            uint32_t                                                                tx_seq_            = 0;
 
             uint64_t                                                                last_              = 0;
             uint64_t                                                                last_heartbeat_    = 0;
-            uint64_t                                                                rx_reorder_since_  = 0;
 
             uint64_t                                                                heartbeat_timeout_ = 0;
         }                                                                           status_;
