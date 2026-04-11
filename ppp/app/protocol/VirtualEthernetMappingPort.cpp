@@ -220,47 +220,57 @@ namespace ppp {
                     return false;
                 }
 
-                if (tcp_) {                                  // TCP (stream) mode
-                    bool opened = OpenNetworkSocketStream(); // Open TCP acceptor
-                    if (!opened) {
-                        return false;
-                    }
-
-                    boost::system::error_code ec;
-                    boost::asio::ip::tcp::acceptor& acceptor = server->socket_tcp_;
-                    acceptor.listen(configuration_->tcp.backlog, ec);   // Start listening
-
-                    if (ec) {
-                        ppp::net::Socket::Closesocket(acceptor);
-                        return false;
-                    }
-
-                    // Start asynchronous accept loop
-                    std::shared_ptr<VirtualEthernetMappingPort> self = shared_from_this();
-                    bool accepted = ppp::net::Socket::AcceptLoopbackAsync(acceptor, 
-                        [self, this, server](const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioTcpSocket& socket) noexcept {
-                            return Server_AcceptFrpUserSocket(server, context, socket);
-                        });
-                    if (!accepted) {
-                        ppp::net::Socket::Closesocket(acceptor);
-                        return false;
-                    }
-                }
-                else {                                       // UDP (datagram) mode
-                    bool opened = OpenNetworkSocketDatagram(); // Open UDP socket
-                    if (!opened) {
-                        return false;
-                    }
-
-                    if (!LoopbackFrpServer()) {              // Start receive loop
-                        ppp::net::Socket::Closesocket(server->socket_udp_);
-                        return false;
-                    }
-                }
-
                 server_ = server;                       // Publish only for the open/listen sequence
                 logger_ = logger;                       // Store logger after successful startup
-                return true;
+
+                for (;;) {
+                    if (tcp_) {                                  // TCP (stream) mode
+                        bool opened = OpenNetworkSocketStream(); // Open TCP acceptor
+                        if (!opened) {
+                            break;
+                        }
+
+                        boost::system::error_code ec;
+                        boost::asio::ip::tcp::acceptor& acceptor = server->socket_tcp_;
+                        acceptor.listen(configuration_->tcp.backlog, ec);   // Start listening
+
+                        if (ec) {
+                            break;
+                        }
+
+                        // Start asynchronous accept loop
+                        std::shared_ptr<VirtualEthernetMappingPort> self = shared_from_this();
+                        bool accepted = ppp::net::Socket::AcceptLoopbackAsync(acceptor,
+                            [self, this, server](const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioTcpSocket& socket) noexcept {
+                                return Server_AcceptFrpUserSocket(server, context, socket);
+                            });
+                        if (accepted) {
+                            return true;
+                        }
+                    }
+                    else {                                         // UDP (datagram) mode
+                        bool opened = OpenNetworkSocketDatagram(); // Open UDP socket
+                        if (opened) {
+                            if (LoopbackFrpServer()) {             // Start receive loop
+                                return true;
+                            }
+                        }
+                    }
+
+                    break;
+                }
+
+                if (tcp_) {
+                    ppp::net::Socket::Closesocket(server->socket_tcp_);
+                }
+                else {
+                    ppp::net::Socket::Closesocket(server->socket_udp_);
+                }
+
+                server_.reset(); // Clean
+                logger_.reset();
+
+                return false;
             }
 
             // Returns the bound endpoint of the FRP server (if any)
