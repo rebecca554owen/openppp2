@@ -157,6 +157,7 @@ namespace ppp {
                 void                                                    TickAllExchangers(UInt64 now) noexcept;
                 void                                                    TickAllConnections(UInt64 now) noexcept;
                 bool                                                    OpenManagedServerIfNeed() noexcept;
+                bool                                                    SupportsIPv6DataPlane() noexcept;
                 bool                                                    OpenIPv6TransitIfNeed() noexcept;
                 bool                                                    OpenIPv6TransitSsmtIfNeed(const ITapPtr& tap) noexcept;
                 void                                                    CloseIPv6TransitSsmtContexts() noexcept;
@@ -185,6 +186,7 @@ namespace ppp {
                 bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
                 VirtualEthernetExchangerPtr                             FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
+                bool                                                    CloseIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    AddIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;

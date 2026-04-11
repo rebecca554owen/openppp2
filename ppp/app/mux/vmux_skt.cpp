@@ -29,6 +29,10 @@ namespace vmux {
     }
 
     void vmux_skt::finalize() noexcept {
+        if (status_.disposed_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket;
         bool fin = false;
 
@@ -38,7 +42,6 @@ namespace vmux {
         }
 
         status_.fin_.store(true, std::memory_order_release);
-        status_.disposed_.store(true, std::memory_order_release);
 
 #if defined(_WIN32)
         qoss_.reset();
@@ -221,14 +224,33 @@ namespace vmux {
             return false;
         }
 
+        template_string host;
+        int port = 0;
+
         const char* sdata = host_and_port.data();
-        const char* colon = strchr(sdata, ':');
-        if (NULLPTR == colon) {
-            return false;
+        size_t slen = host_and_port.size();
+        if (slen > 0 && sdata[0] == '[') {
+            const char* right = strchr(sdata + 1, ']');
+            if (NULLPTR == right || right[1] != ':') {
+                return false;
+            }
+
+            host = host_and_port.substr(1, right - (sdata + 1));
+            port = atoi(right + 2);
+        }
+        else {
+            const char* colon = strrchr(sdata, ':');
+            if (NULLPTR == colon) {
+                return false;
+            }
+
+            host = host_and_port.substr(0, colon - sdata);
+            port = atoi(colon + 1);
         }
 
-        template_string host = host_and_port.substr(0, colon - sdata);
-        int port = atoi(colon + 1);
+        if (host.empty()) {
+            return false;
+        }
 
         return accept(host, port);
     }
@@ -260,7 +282,12 @@ namespace vmux {
             return false;
         }
 
-        template_string host_and_port_string = host + ":" + vmux_to_string(port);
+        template_string host_and_port_string = host;
+        if (host.find(':') != template_string::npos && (host.front() != '[' || host.back() != ']')) {
+            host_and_port_string = "[" + host + "]";
+        }
+
+        host_and_port_string.append(":" + vmux_to_string(port));
         if (!mux_->post(vmux_net::cmd_syn, host_and_port_string.data(), (int)host_and_port_string.size(), connection_id_)) {
             return false;
         }

@@ -27,23 +27,23 @@ namespace ppp
 
             typedef struct
             {
-                ppp::string                                     Driver;                 // 驱动
-                ppp::string                                     Guid;                   // GUID
-                ppp::string                                     MacAddress;             // MAC地址
-                int                                             Index;                  // 索引
-                int                                             InterfaceIndex;         // 接口索引
-                ppp::vector<ppp::string>                        IPSubnet;               // IP子网
-                ppp::vector<ppp::string>                        DnsAddresses;           // DNS服务器
-                ppp::vector<ppp::string>                        IPAddresses;            // IP地址
-                ppp::vector<ppp::string>                        DefaultIPGateway;       // 默认IP网关
-                bool                                            DhcpEnabled;            // 启用DHCP
-                int                                             Metric;                 // 度量值
-                bool                                            IPEnabled;              // IP启用
-                ppp::string                                     ConnectionId;           // 连接ID
-                ppp::string                                     ScopeId;                // 作用域ID
-                ppp::string                                     Caption;                // 标题
-                ppp::string                                     Description;            // 描述信息
-                OperationalStatus                               Status;                 // 运行状态
+                ppp::string                                     Driver;
+                ppp::string                                     Guid;
+                ppp::string                                     MacAddress;
+                int                                             Index;
+                int                                             InterfaceIndex;
+                ppp::vector<ppp::string>                        IPSubnet;
+                ppp::vector<ppp::string>                        DnsAddresses;
+                ppp::vector<ppp::string>                        IPAddresses;
+                ppp::vector<ppp::string>                        DefaultIPGateway;
+                bool                                            DhcpEnabled;
+                int                                             Metric;
+                bool                                            IPEnabled;
+                ppp::string                                     ConnectionId;
+                ppp::string                                     ScopeId;
+                ppp::string                                     Caption;
+                ppp::string                                     Description;
+                OperationalStatus                               Status;
             } NetworkInterface;
 
             typedef struct
@@ -58,14 +58,13 @@ namespace ppp
                 ppp::string                                     SecondaryWinsServer;
                 ppp::string                                     MacAddress;
                 int                                             IfIndex;
-                int                                             IfType; // MIB_IF_TYPE
+                int                                             IfType;
                 OperationalStatus                               Status;
             } AdapterInterface;
 
             typedef std::shared_ptr<NetworkInterface>           NetworkInterfacePtr;
             typedef std::shared_ptr<AdapterInterface>           AdapterInterfacePtr;
 
-            bool                                                SetInterfaceName(int interface_index, const ppp::string& interface_name) noexcept;
             bool                                                SetDnsAddresses(int interface_index, const ppp::vector<ppp::string>& servers) noexcept;
             bool                                                SetDnsAddressesV6(int interface_index, const ppp::vector<ppp::string>& servers) noexcept;
             bool                                                SetDefaultIPGateway(int interface_index, const ppp::vector<ppp::string>& servers) noexcept;
@@ -75,7 +74,7 @@ namespace ppp
             bool                                                DeleteIPv6Address(int interface_index, const ppp::string& ip) noexcept;
             bool                                                SetIPv6DefaultRoute(int interface_index, int metric) noexcept;
             bool                                                SetIPv6DefaultGateway(int interface_index, const ppp::string& gateway, int metric) noexcept;
-            bool                                                DeleteIPv6DefaultGateway(int interface_index) noexcept;
+            bool                                                DeleteIPv6DefaultGateway(int interface_index, const ppp::string& gateway) noexcept;
             bool                                                SetIPAddresses(int interface_index, const ppp::vector<ppp::string>& ips, const ppp::vector<ppp::string>& masks) noexcept;
             bool                                                DhcpEnabled(int interface_index) noexcept;
             bool                                                ResetNetworkEnvironment() noexcept;

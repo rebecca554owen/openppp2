@@ -5,8 +5,15 @@ SET(NAME ppp)
 PROJECT(${NAME} C CXX) # CMAKE_CURRENT_SOURCE_DIR
 
 # C/CXX compiler configurations.
-SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
-SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
+IF(MSVC)
+    SET(CMAKE_C_FLAGS "")
+    SET(CMAKE_CXX_FLAGS "")
+    ADD_COMPILE_OPTIONS(/EHsc)
+    ADD_DEFINITIONS(-D_WIN32_WINNT=0x0601)
+ELSE()
+    SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
+    SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
+ENDIF()
 
 # Configure predefined compilation macros.
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)
@@ -55,19 +62,21 @@ ENDIF()
 # C
 IF(PLATFORM_DEBUG)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_DEBUG -g3")
-ELSE()
+ELSEIF(NOT MSVC)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
 ENDIF()
 
 # C/CXX
 IF(PLATFORM_DEBUG)
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_DEBUG -g3")
-ELSE()
+ELSEIF(NOT MSVC)
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 ENDIF()
 
 # Reduce the display of compiler warnings.
-ADD_COMPILE_OPTIONS(-Wno-deprecated-declarations)
+IF(NOT MSVC)
+    ADD_COMPILE_OPTIONS(-Wno-deprecated-declarations)
+ENDIF()
 
 # When compiling only linux kernel distributions >= 5.10 and later, 
 # You can enable this macro to get the new io_uring asynchronous event driver model support.
@@ -78,8 +87,13 @@ ADD_COMPILE_OPTIONS(-Wno-deprecated-declarations)
 
 # Check C/CXX compiler supports.
 INCLUDE(CheckCXXCompilerFlag)
-CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
-CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
+IF(MSVC)
+    SET(COMPILER_SUPPORTS_CXX17 TRUE)
+    SET(COMPILER_SUPPORTS_CXX1Z FALSE)
+ELSE()
+    CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
+    CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
+ENDIF()
 
 # If the current compiler environment is detected to support AES.
 SET(__SIMD__ FALSE)
@@ -113,7 +127,9 @@ IF(PLATFORM_SYSTEM_DARWIN)
     ADD_DEFINITIONS(-DBOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED)
 ELSE()
     # CXX17
-    IF(COMPILER_SUPPORTS_CXX17)
+    IF(MSVC)
+        SET(CMAKE_CXX_STANDARD 17)
+    ELSEIF(COMPILER_SUPPORTS_CXX17)
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
     ELSEIF(COMPILER_SUPPORTS_CXX1Z)
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z")
@@ -156,7 +172,11 @@ LINK_DIRECTORIES(
 )
 
 # Set the compiled source file search directorys.
-IF(PLATFORM_SYSTEM_DARWIN)
+IF(MSVC)
+    FILE(GLOB_RECURSE PLATFORM_SOURCE_FILES 
+        ${PROJECT_SOURCE_DIR}/windows/*.c 
+        ${PROJECT_SOURCE_DIR}/windows/*.cpp)
+ELSEIF(PLATFORM_SYSTEM_DARWIN)
     FILE(GLOB_RECURSE PLATFORM_SOURCE_FILES 
         ${PROJECT_SOURCE_DIR}/darwin/*.c 
         ${PROJECT_SOURCE_DIR}/darwin/*.cpp)
@@ -181,12 +201,17 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/common/json/src/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/libtcpip/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/dnslib/*.cpp 
-    ${PROJECT_SOURCE_DIR}/common/unix/*.c 
-    ${PROJECT_SOURCE_DIR}/common/unix/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/aesni/aes.cpp
 
     ${PROJECT_SOURCE_DIR}/ppp/*.c 
     ${PROJECT_SOURCE_DIR}/ppp/*.cpp)
+
+IF(NOT MSVC)
+    FILE(GLOB_RECURSE UNIX_SOURCE_FILES 
+        ${PROJECT_SOURCE_DIR}/common/unix/*.c 
+        ${PROJECT_SOURCE_DIR}/common/unix/*.cpp)
+    LIST(APPEND SOURCE_FILES ${UNIX_SOURCE_FILES})
+ENDIF()
 
 # Add the compiled output binary files.
 ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
@@ -235,7 +260,7 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
         libboost_context.a
         libboost_regex.a 
         libboost_filesystem.a) 
-ELSE()
+ELSEIF(NOT MSVC)
     TARGET_LINK_LIBRARIES(${NAME} 
         libc.a
         libssl.a 
@@ -257,4 +282,15 @@ ELSE()
         libboost_context.a 
         libboost_regex.a
         libboost_filesystem.a) 
+ELSE()
+    TARGET_LINK_LIBRARIES(${NAME}
+        ws2_32
+        iphlpapi
+        setupapi
+        ole32
+        oleaut32
+        wbemuuid
+        advapi32
+        userenv
+        crypt32)
 ENDIF()

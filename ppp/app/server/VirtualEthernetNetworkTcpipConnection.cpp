@@ -150,9 +150,6 @@ namespace ppp {
                 elif(mux->Vlan != vlan) {
                     return false;
                 }
-                elif(mux->is_established()) {
-                    return false;
-                }
                 elif(!mux->ftt(seq, ack)) {
                     return false;
                 }

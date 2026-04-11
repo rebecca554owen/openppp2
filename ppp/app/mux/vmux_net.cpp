@@ -10,28 +10,29 @@ namespace vmux {
     vmux_net::vmux_net(const ContextPtr& context, const StrandPtr strand, uint16_t max_connections, bool server_mode, bool acceleration) noexcept {
         assert(max_connections > 0 && "The value of max_connections must be greater than 0.");
 
-        vmux_net* const vmux             = this;
-        vmux->Vlan                       = 0;
+        vmux_net* const self             = this;
+        self->Vlan                       = 0;
    
-        vmux->base_.server_or_client_    = server_mode;
-        vmux->base_.disposed_.store(false, std::memory_order_release);
-        vmux->base_.ftt_.store(false, std::memory_order_release);
-        vmux->base_.established_.store(false, std::memory_order_release);
-        vmux->base_.acceleration_        = acceleration;
+        self->base_.server_or_client_    = server_mode;
+        self->base_.disposed_.store(false, std::memory_order_release);
+        self->base_.ftt_.store(false, std::memory_order_release);
+        self->base_.established_.store(false, std::memory_order_release);
+        self->base_.acceleration_        = acceleration;
         
-        vmux->status_.max_connections    = max_connections;
-        vmux->status_.opened_connections.store(0, std::memory_order_release);
+        self->status_.max_connections    = max_connections;
+        self->status_.opened_connections.store(0, std::memory_order_release);
 
-        vmux->status_.rx_ack_.store(0, std::memory_order_release);
-        vmux->status_.tx_seq_.store(0, std::memory_order_release);
+        self->status_.rx_ack_.store(0, std::memory_order_release);
+        self->status_.tx_seq_.store(0, std::memory_order_release);
 
         uint64_t now                     = now_tick();
-        vmux->status_.last_              = now;
-        vmux->status_.last_heartbeat_    = now;
-        vmux->status_.heartbeat_timeout_ = 0;
+        self->status_.last_              = now;
+        self->status_.last_heartbeat_    = now;
+        self->status_.rx_reorder_since_  = 0;
+        self->status_.heartbeat_timeout_ = 0;
 
-        vmux->strand_                    = strand;
-        vmux->context_                   = context;
+        self->strand_                    = strand;
+        self->context_                   = context;
     }
 
     vmux_net::~vmux_net() noexcept {
@@ -249,10 +250,33 @@ namespace vmux {
                     close_exec();
                 }
                 elif(base_.established_.load(std::memory_order_acquire) && (now - status_.last_heartbeat_) >= status_.heartbeat_timeout_) {
-                    if (post(cmd_keep_alived, NULLPTR, 0, ftt_random_aid(1, INT32_MAX))) {
+                    bool keepalived = true;
+
+                    // Heartbeat must touch every currently idle underlying TCP
+                    // link. Sending only one mux keepalive lets rinetd-style
+                    // forwarders age out the other idle sub-links silently.
+                    size_t idle_links = tx_links_.size();
+                    for (size_t i = 0; i < idle_links; i++) {
+                        if (!post(cmd_keep_alived, NULLPTR, 0, ftt_random_aid(1, INT32_MAX))) {
+                            keepalived = false;
+                            break;
+                        }
+                    }
+
+                    if (keepalived) {
                         status_.last_heartbeat_ = now;
                         switch_to_next_heartbeat_timeout();
                     }
+                }
+
+                if (status_.rx_reorder_since_ != 0 && !rx_queue_.empty()) {
+                    uint64_t max_reorder_timeout = std::max<uint64_t>(1000ULL, ((uint64_t)AppConfiguration->tcp.connect.timeout) * 1000ULL);
+                    if ((now - status_.rx_reorder_since_) >= max_reorder_timeout) {
+                        close_exec();
+                    }
+                }
+                else {
+                    status_.rx_reorder_since_ = 0;
                 }
 
                 for (vmux_skt_ptr& skt : release_skts) {
@@ -312,6 +336,10 @@ namespace vmux {
                 }
             }
 
+            if (rx_queue_.empty()) {
+                status_.rx_reorder_since_ = 0;
+            }
+
             active(now);
             linklayer_update(linklayer);
             return true;
@@ -332,7 +360,12 @@ namespace vmux {
             rx_packet packet = { buf, length };
             memcpy(buf.get(), h, length);
 
-            return rx_queue_.emplace(std::make_pair(seq, packet)).second;
+            bool ok = rx_queue_.emplace(std::make_pair(seq, packet)).second;
+            if (ok && status_.rx_reorder_since_ == 0) {
+                status_.rx_reorder_since_ = now;
+            }
+
+            return ok;
         }
         else {
             return false;
@@ -616,15 +649,8 @@ namespace vmux {
         tx_links_.emplace_back(linklayer);
         rx_links_.emplace_back(linklayer);
 
-        bool unlimited = rx_links_.size() < status_.max_connections;
-        if (unlimited) {
-            if (NULLPTR != cb && !cb()) {
-                return false;
-            }
-
-            return true;
-        }
-        elif(NULLPTR != cb && !cb()) {
+        if (NULLPTR != cb && !cb()) {
+            close_exec();
             return false;
         }
 
@@ -632,32 +658,32 @@ namespace vmux {
         active(now);
 
         std::shared_ptr<vmux_net> self = shared_from_this();
-        for (vmux_linklayer_ptr& linklayer : rx_links_) {
-
-            uint16_t connection_id = 0;
-            if (base_.server_or_client_) {
-                connection_id = static_cast<uint16_t>(status_.opened_connections.fetch_add(1, std::memory_order_acq_rel) + 1);
-            }
-
-            auto& connection = linklayer->connection;
-            ContextPtr connection_context = connection->GetContext();
-            StrandPtr connection_strand = connection->GetStrand();
-
-            auto process =
-                [self, this, linklayer, connection_id, connection_context, connection_strand](ppp::coroutines::YieldContext& y) noexcept {
-                    if (handshake(linklayer, connection_id, y)) {
-                        forwarding(linklayer, y);
-                    }
-
-                    close_exec();
-                };
-
-            if (!ppp::coroutines::YieldContext::Spawn(BufferAllocator.get(), *connection_context, connection_strand.get(), process)) {
-                return false;
-            }
-
-            linklayer_update(linklayer);
+        uint16_t connection_id = 0;
+        if (base_.server_or_client_) {
+            connection_id = static_cast<uint16_t>(status_.opened_connections.fetch_add(1, std::memory_order_acq_rel) + 1);
         }
+
+        auto& link_connection = linklayer->connection;
+        ContextPtr connection_context = link_connection->GetContext();
+        StrandPtr connection_strand = link_connection->GetStrand();
+
+        auto process =
+            [self, this, linklayer, connection_id, connection_context, connection_strand](ppp::coroutines::YieldContext& y) noexcept {
+                if (handshake(linklayer, connection_id, y)) {
+                    if (forwarding(linklayer, y)) {
+                        return;
+                    }
+                }
+
+                close_exec();
+            };
+
+        if (!ppp::coroutines::YieldContext::Spawn(BufferAllocator.get(), *connection_context, connection_strand.get(), process)) {
+            close_exec();
+            return false;
+        }
+
+        linklayer_update(linklayer);
 
         return true;
     }

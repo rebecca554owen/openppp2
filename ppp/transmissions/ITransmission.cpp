@@ -894,7 +894,7 @@ namespace ppp {
                 }
             }
 
-            return stl::to_number<Int128>(std::string_view(reinterpret_cast<char*>(p), packet_length), 10);
+            return ppp::Int128FromString(std::string_view(reinterpret_cast<char*>(p), packet_length), 10);
         }
 
         static bool Transmission_Handshake_SessionId(
@@ -1087,10 +1087,11 @@ namespace ppp {
                 return false;
             }
             
-            Int128 nmux = (Int128)RandomNext() << 32 |
-                (Int128)RandomNext() << 64 |
-                (Int128)RandomNext() << 96 |
-                (Int128)RandomNext();
+            uint64_t nmux_low = (static_cast<uint64_t>(RandomNext()) << 32) |
+                                static_cast<uint32_t>(RandomNext());
+            uint64_t nmux_high = (static_cast<uint64_t>(RandomNext()) << 32) |
+                                 static_cast<uint32_t>(RandomNext());
+            Int128 nmux = MAKE_OWORD(nmux_low, nmux_high);
             if (mux) {
                 while ((nmux & 1) == 0) ++nmux;
             }

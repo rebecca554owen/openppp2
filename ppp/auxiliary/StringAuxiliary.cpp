@@ -18,20 +18,23 @@ namespace ppp
 
         Int128 StringAuxiliary::GuidStringToInt128(const boost::uuids::uuid& guid) noexcept
         {
+            Int128 network_guid = 0;
 #if BOOST_VERSION >= 108600
-            return ppp::net::Ipep::NetworkToHostOrder(*(Int128*)&guid);
+            std::memcpy(&network_guid, &guid, sizeof(network_guid));
 #else
-            return ppp::net::Ipep::NetworkToHostOrder(*(Int128*)guid.data);
+            std::memcpy(&network_guid, guid.data, sizeof(network_guid));
 #endif
+            return ppp::net::Ipep::NetworkToHostOrder(network_guid);
         }
 
         ppp::string StringAuxiliary::Int128ToGuidString(const Int128& guid) noexcept 
         {
             boost::uuids::uuid uuid;
+            Int128 network_guid = ppp::net::Ipep::HostToNetworkOrder(guid);
 #if BOOST_VERSION >= 108600
-            *(Int128*)&uuid = ppp::net::Ipep::HostToNetworkOrder(guid);
+            std::memcpy(&uuid, &network_guid, sizeof(network_guid));
 #else
-            *(Int128*)uuid.data = ppp::net::Ipep::HostToNetworkOrder(guid);
+            std::memcpy(uuid.data, &network_guid, sizeof(network_guid));
 #endif
             return GuidToString(uuid);
         }

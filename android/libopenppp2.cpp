@@ -1395,7 +1395,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_prefix_1to_1
         return JNIENV_NewStringUTF(env, mask_string.data());
     }
     else {
-        ppp::Int128 mask = prefix_ ? (((ppp::Int128)-1L) << (128L - prefix_)) : 0L;
+        ppp::Int128 mask = ppp::PrefixMask128(prefix_);
         mask = Ipep::NetworkToHostOrder(mask);
 
         ppp::string mask_string = IPEndPoint(ppp::net::AddressFamily::InterNetworkV6, &mask, sizeof(mask), 0).ToAddressString();

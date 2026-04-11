@@ -34,7 +34,7 @@ using ppp::threading::Executors;
 using ppp::coroutines::YieldContext;
 using ppp::collections::Dictionary;
 
-extern void DebugLog(const char* format, ...) noexcept;
+static void DebugLog(const char* format, ...) noexcept {}
 
 namespace ppp {
     namespace transmissions {
@@ -82,12 +82,26 @@ namespace ppp {
                 return envelope;
             }
 
+            bool VirtualEthernetSwitcher::SupportsIPv6DataPlane() noexcept {
+#if defined(_LINUX)
+                return true;
+#else
+                return false;
+#endif
+            }
+
             bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
                 extensions.Clear();
 
                 const auto& ipv6 = configuration_->server.ipv6;
                 if (!ipv6.enabled) {
                     DebugLog("server ipv6 disabled session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
+                    return false;
+                }
+
+                if (!SupportsIPv6DataPlane()) {
+                    DebugLog("server ipv6 ignored session=%s reason=unsupported-platform",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                     return false;
                 }
 
@@ -193,7 +207,7 @@ namespace ppp {
                         (unsigned)extensions.AssignedIPv6Flags);
                     return extensions.HasAny();
                 }
-                elif(mode == "prefix") {
+                else if (mode == "prefix") {
                     extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Prefix;
                     if (ipv6.routed_prefix) {
                         extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_RoutedPrefix;
@@ -255,7 +269,7 @@ namespace ppp {
                         auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
                         ipv6.routed_prefix ? "yes" : "no",
                         ipv6.neighbor_proxy ? "yes" : "no",
-                        ipv6.neighbor_proxy_provider.empty() ? "kernel" : ipv6.neighbor_proxy_provider.data(),
+                        "kernel",
                         (unsigned)extensions.AssignedIPv6PrefixLength);
                 }
 
@@ -275,7 +289,6 @@ namespace ppp {
                     return false;
                 }
 
-                bool need_ndppd_sync = false;
                 {
                     SynchronizedObjectScope scope(syncobj_);
                     for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
@@ -290,10 +303,6 @@ namespace ppp {
                     ipv6s_[ip_key] = exchanger;
                     AddIPv6TransitRoute(ip);
                     AddIPv6NeighborProxy(ip);
-                    need_ndppd_sync = false;
-                }
-                if (need_ndppd_sync) {
-                    SyncNdppdNeighborProxy();
                 }
                 return true;
             }
@@ -306,7 +315,6 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_key(ip_std.data(), ip_std.size());
 
-                bool need_ndppd_sync = false;
                 {
                     SynchronizedObjectScope scope(syncobj_);
                     auto tail = ipv6s_.find(ip_key);
@@ -321,10 +329,6 @@ namespace ppp {
                     DeleteIPv6TransitRoute(ip);
                     DeleteIPv6NeighborProxy(ip);
                     ipv6s_.erase(tail);
-                    need_ndppd_sync = false;
-                }
-                if (need_ndppd_sync) {
-                    SyncNdppdNeighborProxy();
                 }
                 return true;
             }
@@ -349,26 +353,7 @@ namespace ppp {
                     return true;
                 }
 
-                ppp::string provider = ToLower(ipv6.neighbor_proxy_provider);
-                if (provider.empty()) {
-                    provider = "kernel";
-                }
-
-                DebugLog("server ipv6 neighbor proxy provider=%s", provider.data());
-                if (provider == "ndppd") {
-                    DebugLog("server ipv6 ndppd provider is externally managed; skip in-process config generation");
-                    return true;
-                }
-
-                if (provider == "manual" || provider == "external") {
-                    DebugLog("server ipv6 neighbor proxy provider=%s externally managed; skip in-process setup", provider.data());
-                    return true;
-                }
-
-                if (provider != "kernel") {
-                    DebugLog("server ipv6 neighbor proxy provider=%s not yet implemented in-process", provider.data());
-                    return true;
-                }
+                DebugLog("server ipv6 neighbor proxy provider=%s", "kernel");
 
                 ppp::string uplink_name;
                 UInt32 address = 0;
@@ -384,6 +369,10 @@ namespace ppp {
 
                 ipv6_neighbor_proxy_ifname_ = uplink_name;
                 DebugLog("server ipv6 neighbor proxy enabled if=%s", uplink_name.data());
+#else
+                if (configuration_->server.ipv6.enabled) {
+                    DebugLog("server ipv6 neighbor proxy ignored reason=unsupported-platform");
+                }
 #endif
                 return true;
             }
@@ -397,65 +386,6 @@ namespace ppp {
                 bool ok = ppp::tap::TapLinux::DisableIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_);
                 DebugLog("server ipv6 neighbor proxy disabled if=%s status=%s", ipv6_neighbor_proxy_ifname_.data(), ok ? "ok" : "fail");
                 ipv6_neighbor_proxy_ifname_.clear();
-#endif
-                return true;
-            }
-
-            bool VirtualEthernetSwitcher::SyncNdppdNeighborProxy() noexcept {
-#if defined(_LINUX)
-                const auto& ipv6 = configuration_->server.ipv6;
-                if (!ipv6.enabled || ToLower(ipv6.mode) != "prefix" || !ipv6.neighbor_proxy) {
-                    return true;
-                }
-
-                ppp::string uplink_name;
-                UInt32 address = 0;
-                UInt32 mask = 0;
-                UInt32 gw = 0;
-                if (!ppp::tap::TapLinux::GetPreferredNetworkInterface(uplink_name, address, mask, gw, ppp::string())) {
-                    return false;
-                }
-
-                ppp::string config_path = "/tmp/openppp2-ndppd.conf";
-                ppp::string config_text = "proxy ";
-                config_text += uplink_name;
-                config_text += " {\n";
-
-                int rules = 0;
-                {
-                    SynchronizedObjectScope scope(syncobj_);
-                    for (const auto& [ip_key, exchanger] : ipv6s_) {
-                        if (NULLPTR == exchanger) {
-                            continue;
-                        }
-
-                        config_text += "  rule ";
-                        config_text += ip_key;
-                        config_text += "/128 {\n";
-                        config_text += "    static\n";
-                        config_text += "  }\n";
-                        rules++;
-                    }
-                }
-
-                if (rules < 1) {
-                    config_text += "  rule ";
-                    config_text += ipv6.prefix;
-                    config_text += "/";
-                    config_text += stl::to_string<ppp::string>(ipv6.prefix_length);
-                    config_text += " {\n";
-                    config_text += "    static\n";
-                    config_text += "  }\n";
-                }
-
-                config_text += "}\n";
-
-                if (!ppp::io::File::WriteAllBytes(config_path.data(), config_text.data(), static_cast<int>(config_text.size()))) {
-                    return false;
-                }
-
-                DebugLog("server ipv6 ndppd config synced path=%s uplink=%s rules=%d", config_path.data(), uplink_name.data(), rules);
-                DebugLog("server ipv6 ndppd reload required path=%s", config_path.data());
 #endif
                 return true;
             }
@@ -1197,6 +1127,10 @@ namespace ppp {
 
                 ipv6_transit_tap_ = tap;
                 DebugLog("server ipv6 transit tap opened name=%s address=%s/%d", tap->GetId().data(), transit_ip.data(), prefix_length);
+#else
+                if (configuration_->server.ipv6.enabled) {
+                    DebugLog("server ipv6 transit ignored reason=unsupported-platform");
+                }
 #endif
                 return true;
             }

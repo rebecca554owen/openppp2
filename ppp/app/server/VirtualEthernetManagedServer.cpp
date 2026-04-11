@@ -269,7 +269,12 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                int length_num = (int)stl::to_number<Int128, ppp::string>(ppp::string(length_hex, sizeof(length_hex)), 16);
+                Int128 length_value = ppp::Int128FromString(ppp::string(length_hex, sizeof(length_hex)), 16);
+                if (length_value > static_cast<Int128>(std::numeric_limits<int>::max())) {
+                    return NULLPTR;
+                }
+
+                int length_num = static_cast<int>(length_value);
                 if (length_num < 1) {
                     return NULLPTR;
                 }

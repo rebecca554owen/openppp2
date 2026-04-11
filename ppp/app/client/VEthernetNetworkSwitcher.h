@@ -66,6 +66,33 @@ namespace ppp {
                 typedef ppp::function<void(VEthernetNetworkSwitcher*, UInt64)>      VEthernetTickEventHandler;
                 typedef ppp::transmissions::ITransmissionStatistics                 ITransmissionStatistics;
                 typedef std::shared_ptr<ITransmissionStatistics>                    ITransmissionStatisticsPtr;
+                struct IPv6AppliedState {
+                    bool                                                            AddressApplied = false;
+                    bool                                                            PrefixRouteApplied = false;
+                    bool                                                            DefaultRouteApplied = false;
+                    bool                                                            DnsApplied = false;
+                    bool                                                            DefaultRouteWasPresent = false;
+                    ppp::string                                                     Address;
+                    ppp::string                                                     DefaultRouteGateway;
+                    ppp::vector<ppp::string>                                        DnsServers;
+                    ppp::vector<ppp::string>                                        OriginalDnsServers;
+                    ppp::string                                                     OriginalDnsConfiguration;
+                    ppp::string                                                     OriginalDefaultRoute;
+
+                    inline void                                                     Clear() noexcept {
+                        AddressApplied = false;
+                        PrefixRouteApplied = false;
+                        DefaultRouteApplied = false;
+                        DnsApplied = false;
+                        DefaultRouteWasPresent = false;
+                        Address.clear();
+                        DefaultRouteGateway.clear();
+                        DnsServers.clear();
+                        OriginalDnsServers.clear();
+                        OriginalDnsConfiguration.clear();
+                        OriginalDefaultRoute.clear();
+                    }
+                };
                 class NetworkInterface {    
                 public: 
                     ppp::string                                                     Name;
@@ -285,8 +312,7 @@ namespace ppp {
                 IForwardingPtr                                                      forwarding_;
                 VirtualEthernetInformationExtensions                                information_extensions_;
                 bool                                                                ipv6_applied_ = false;
-                ppp::string                                                         ipv6_original_dns_restore_;
-                ppp::string                                                         ipv6_original_default_route_restore_;
+                IPv6AppliedState                                                    ipv6_state_;
                 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 SynchronizedObject                                                  prdr_;

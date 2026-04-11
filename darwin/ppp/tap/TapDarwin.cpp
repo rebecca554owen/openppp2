@@ -663,9 +663,19 @@ namespace ppp
                 return false;
             }
 
-            // Check whether the IP packet protocol output by the VPN protocol stack is AF_INET.
             struct ip_hdr* iphdr = (struct ip_hdr*)packet;
-            if (ip_hdr::IPH_V(iphdr) != ip_hdr::IP_VER)
+            int ip_version = ip_hdr::IPH_V(iphdr);
+
+            int address_family = AF_UNSPEC;
+            if (ip_version == ip_hdr::IP_VER)
+            {
+                address_family = AF_INET;
+            }
+            else if (ip_version == 6)
+            {
+                address_family = AF_INET6;
+            }
+            else
             {
                 return false;
             }
@@ -682,7 +692,7 @@ namespace ppp
                 Byte chunk[ITap::Mtu + sizeof(uint32_t)];
                 size_t chunk_size = packet_size + sizeof(uint32_t);
 
-                *(uint32_t*)chunk = htonl(AF_INET);
+                *(uint32_t*)chunk = htonl(address_family);
                 memcpy(chunk + sizeof(uint32_t), packet, packet_size);
 
                 ssize_t bytes_transferred = ::write(tun, chunk, chunk_size);
@@ -708,8 +718,8 @@ namespace ppp
             if (packet_length > sizeof(uint32_t))
             {
                 Byte* packet = (Byte*)e.Packet;
-                Byte protocol = (Byte)ntohl(*(uint32_t*)packet);
-                if (protocol == AF_INET)
+                uint32_t protocol = ntohl(*(uint32_t*)packet);
+                if (protocol == AF_INET || protocol == AF_INET6)
                 {
                     e.Packet = packet + sizeof(uint32_t);
                     e.PacketLength = packet_length - sizeof(uint32_t);

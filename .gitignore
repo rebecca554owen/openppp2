@@ -71,3 +71,5 @@ ppp.log
 /ppp/x64
 /ppp/Debug
 /ppp/Release
+build-check/
+/scratch

@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#include <Mstcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #else
@@ -527,6 +528,55 @@ namespace ppp {
             return err == 0;
         }
 
+        bool Socket::SetKeepAlive(int fd, bool enable, int idle_seconds, int interval_seconds, int probe_count) noexcept {
+            if (fd == -1) {
+                return false;
+            }
+
+            int on = enable ? 1 : 0;
+            if (::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&on, sizeof(on)) != 0) {
+                return false;
+            }
+
+            if (!enable) {
+                return true;
+            }
+
+            idle_seconds = std::max<int>(1, idle_seconds);
+            interval_seconds = std::max<int>(1, interval_seconds);
+            probe_count = std::max<int>(1, probe_count);
+
+#if defined(_WIN32)
+            tcp_keepalive settings;
+            memset(&settings, 0, sizeof(settings));
+            settings.onoff = 1;
+            settings.keepalivetime = static_cast<ULONG>(idle_seconds) * 1000UL;
+            settings.keepaliveinterval = static_cast<ULONG>(interval_seconds) * 1000UL;
+
+            DWORD returned = 0;
+            return ::WSAIoctl((SOCKET)fd, SIO_KEEPALIVE_VALS,
+                &settings, sizeof(settings),
+                NULLPTR, 0,
+                &returned, NULLPTR, NULLPTR) == 0;
+#else
+#if defined(TCP_KEEPIDLE)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&idle_seconds, sizeof(idle_seconds));
+#elif defined(TCP_KEEPALIVE)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, (char*)&idle_seconds, sizeof(idle_seconds));
+#endif
+
+#if defined(TCP_KEEPINTVL)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (char*)&interval_seconds, sizeof(interval_seconds));
+#endif
+
+#if defined(TCP_KEEPCNT)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (char*)&probe_count, sizeof(probe_count));
+#endif
+
+            return true;
+#endif
+        }
+
         bool Socket::SetWindowSizeIfNotZero(int sockfd, int cwnd, int rwnd) noexcept {
             if (sockfd == -1) {
                 return false;
@@ -588,6 +638,11 @@ namespace ppp {
                 int no_sigpipe = 1;
                 ::setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
 #endif
+
+                // User-space forwarders such as rinetd often reclaim idle TCP
+                // sessions earlier than NAT devices. Keepalive prevents VMUX
+                // sub-links from being silently dropped while the mux is idle.
+                SetKeepAlive(sockfd, true);
             }
         }
 

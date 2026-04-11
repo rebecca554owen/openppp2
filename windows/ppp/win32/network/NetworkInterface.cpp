@@ -1287,7 +1287,7 @@ namespace ppp
                 }
 
                 char command[1200];
-                snprintf(command, sizeof(command), "netsh interface ipv6 set address interface=\"%s\" address=%s/%d", interface_name.data(), ip.data(), prefix_length);
+                snprintf(command, sizeof(command), "netsh interface ipv6 set address interface=\"%s\" address=%s/%d store=active", interface_name.data(), ip.data(), prefix_length);
                 return ExecuteNetshCommand(command);
             }
 
@@ -1324,14 +1324,19 @@ namespace ppp
                 return ExecuteNetshCommand(command);
             }
 
-            bool DeleteIPv6DefaultGateway(int interface_index) noexcept {
+            bool DeleteIPv6DefaultGateway(int interface_index, const ppp::string& gateway) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
                 if (interface_name.empty()) {
                     return false;
                 }
 
                 char command[1200];
-                snprintf(command, sizeof(command), "netsh interface ipv6 delete route ::/0 interface=\"%s\" store=active", interface_name.data());
+                if (gateway.empty()) {
+                    snprintf(command, sizeof(command), "netsh interface ipv6 delete route prefix=::/0 interface=\"%s\" store=active", interface_name.data());
+                }
+                else {
+                    snprintf(command, sizeof(command), "netsh interface ipv6 delete route prefix=::/0 interface=\"%s\" nexthop=%s store=active", interface_name.data(), gateway.data());
+                }
                 return ExecuteNetshCommand(command);
             }
 

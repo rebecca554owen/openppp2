@@ -159,6 +159,7 @@ namespace ppp {
                 virtual bool                                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept override;
     
             private:    
+                SynchronizedObject                                                          syncobj_;
                 bool                                                                        disposed_ = false;
                 uint32_t                                                                    address_  = 0;
                 int                                                                         preferred_tun_fd_ = -1;

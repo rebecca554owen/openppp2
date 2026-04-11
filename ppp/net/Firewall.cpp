@@ -13,6 +13,16 @@ namespace ppp
 {
     namespace net
     {
+        static UInt32 FirewallPrefixMask(int prefix, UInt32) noexcept
+        {
+            return prefix ? ~0u << (32 - prefix) : 0u;
+        }
+
+        static Int128 FirewallPrefixMask(int prefix, Int128) noexcept
+        {
+            return PrefixMask128(prefix);
+        }
+
         bool Firewall::DropNetworkPort(int port) noexcept
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
@@ -88,8 +98,11 @@ namespace ppp
                     prefix = 128;
                 }
 
-                Int128 __mask = prefix ? Int128(-1) << (128 - prefix) : 0L;
-                Int128 __ip = Ipep::NetworkToHostOrder(*(Int128*)ip.to_v6().to_bytes().data());
+                Int128 __mask = PrefixMask128(prefix);
+                boost::asio::ip::address_v6::bytes_type bytes = ip.to_v6().to_bytes();
+                Int128 network_ip = 0;
+                std::memcpy(&network_ip, bytes.data(), sizeof(network_ip));
+                Int128 __ip = Ipep::NetworkToHostOrder(network_ip);
                 Int128 __networkIP = __ip & __mask;
 
                 SynchronizedObjectScope scope(syncobj_);
@@ -166,7 +179,7 @@ namespace ppp
 
             for (int prefix = max_prefix; prefix >= MIN_PREFIX_VALUE; prefix--)
             {
-                T __mask = prefix ? 0u << (max_prefix - prefix) : 0L;
+                T __mask = FirewallPrefixMask(prefix, T{});
                 T __networkIP = __ip & __mask;
 
                 auto tail = network_segments.find(__networkIP);
@@ -198,7 +211,9 @@ namespace ppp
             {
                 boost::asio::ip::address_v6::bytes_type __bytes_ip = ip.to_v6().to_bytes();
                 {
-                    Int128 __ip = Ipep::NetworkToHostOrder(*(Int128*)__bytes_ip.data());
+                    Int128 network_ip = 0;
+                    std::memcpy(&network_ip, __bytes_ip.data(), sizeof(network_ip));
+                    Int128 __ip = Ipep::NetworkToHostOrder(network_ip);
                     {
                         SynchronizedObjectScope scope(syncobj_);
                         return Firewall_IsDropNetworkSegment<Int128>(ip, __ip, 128, network_segments_);

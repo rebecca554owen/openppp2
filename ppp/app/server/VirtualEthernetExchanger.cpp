@@ -6,6 +6,7 @@
 #include <ppp/app/server/VirtualInternetControlMessageProtocolStatic.h>
 #include <ppp/app/server/VirtualEthernetDatagramPortStatic.h>
 #include <ppp/app/server/VirtualEthernetIPv6.h>
+#include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
@@ -33,6 +34,8 @@ typedef ppp::net::packet::IPFrame                                   IPFrame;
 typedef ppp::net::packet::IcmpFrame                                 IcmpFrame;
 typedef ppp::threading::Executors                                   Executors;
 typedef ppp::collections::Dictionary                                Dictionary;
+
+static void DebugLog(const char* format, ...) noexcept {}
 
 namespace {
     static bool HandleIPv6GatewayEchoReply(ppp::Byte* packet, int packet_length, const boost::asio::ip::address_v6& gateway) noexcept {

@@ -249,6 +249,7 @@ namespace vmux {
 
             uint64_t                                                                last_              = 0;
             uint64_t                                                                last_heartbeat_    = 0;
+            uint64_t                                                                rx_reorder_since_  = 0;
 
             uint64_t                                                                heartbeat_timeout_ = 0;
         }                                                                           status_;

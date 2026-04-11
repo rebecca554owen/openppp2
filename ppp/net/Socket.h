@@ -129,6 +129,7 @@ namespace ppp {
             static int                                                                                  GetDefaultTTL() noexcept;
             static int                                                                                  GetTcpMss(int fd) noexcept;
             static bool                                                                                 SetTcpMss(int fd, int mss) noexcept;
+            static bool                                                                                 SetKeepAlive(int fd, bool enable, int idle_seconds = 60, int interval_seconds = 15, int probe_count = 4) noexcept;
             static bool                                                                                 IsDefaultFlashTypeOfService() noexcept { return SOCKET_RESTRICTIONS_.IP_TOS_DEFAULT_FLASH; }
             static void                                                                                 SetDefaultFlashTypeOfService(bool value) noexcept { SOCKET_RESTRICTIONS_.IP_TOS_DEFAULT_FLASH = value; } 
             static bool                                                                                 SetTypeOfService(int fd, int tos = ~0) noexcept;

@@ -12,10 +12,10 @@ namespace ppp {
     namespace net {
         namespace packet {
             static Int128 FragmentKey(const std::shared_ptr<IPFrame>& packet) noexcept {
-                Int128 key = (Int128)packet->Source;
-                key = key | ((Int128)packet->Destination) << 32;
-                key = key | ((Int128)packet->Id) << 64;
-                return key;
+                uint64_t low = static_cast<uint64_t>(packet->Source) |
+                               (static_cast<uint64_t>(packet->Destination) << 32);
+                uint64_t high = static_cast<uint64_t>(packet->Id);
+                return MAKE_OWORD(low, high);
             }
 
             bool IPFragment::Input(const std::shared_ptr<IPFrame>& packet) noexcept {
