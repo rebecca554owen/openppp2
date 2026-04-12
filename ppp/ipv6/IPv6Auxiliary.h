@@ -52,7 +52,7 @@ namespace ppp {
             bool                                                              PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic) noexcept;
             bool                                                              ClientSupportsManaged() noexcept;
             void                                                              CaptureClientOriginalState(const ClientContext& context, bool nat_mode, ClientState& state) noexcept;
-            bool                                                              ApplyClientAddress(const ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool prefix_mode, ClientState& state) noexcept;
+            bool                                                              ApplyClientAddress(const ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ClientState& state) noexcept;
             bool                                                              ApplyClientDefaultRoute(const ClientContext& context, const boost::asio::ip::address& gateway, bool nat_mode, ClientState& state) noexcept;
             bool                                                              ApplyClientDns(const ClientContext& context, const ppp::vector<ppp::string>& dns_servers, ClientState& state) noexcept;
             void                                                              RestoreClientConfiguration(const ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool nat_mode, ClientState& state) noexcept;

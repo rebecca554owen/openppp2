@@ -19,6 +19,7 @@
 #include <ppp/net/native/icmp.h>
 #include <ppp/net/native/checksum.h>
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
 static void DebugLog(const char* format, ...) noexcept {}
 
@@ -198,7 +199,9 @@ namespace ppp {
                     return false;
                 }
 
-                if ((packet[0] >> 4) != 6) {
+                boost::asio::ip::address_v6 source;
+                boost::asio::ip::address_v6 destination;
+                if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
                     return false;
                 }
 
@@ -613,14 +616,15 @@ namespace ppp {
 
                 DebugLog("client ipv6 apply begin mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
                     (unsigned)extensions.AssignedIPv6Mode,
-                    (unsigned)extensions.AssignedIPv6PrefixLength,
+                    (unsigned)extensions.AssignedIPv6AddressPrefixLength,
                     (unsigned)extensions.AssignedIPv6Flags,
                     extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
                     extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
                     extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
                     extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "");
 
-                bool applied = false;
+                bool applied = true;
+                bool attempted = false;
                 ipv6_state_.Clear();
 
                 ppp::ipv6::auxiliary::ClientContext ipv6_context;
@@ -628,20 +632,24 @@ namespace ppp {
                 ipv6_context.InterfaceIndex = tun_ni->Index;
                 ipv6_context.InterfaceName = tun_ni->Name;
 
-                int prefix = std::max<int>(1, std::min<int>(128, (int)extensions.AssignedIPv6PrefixLength));
+                int prefix = std::max<int>(1, std::min<int>(128, (int)extensions.AssignedIPv6AddressPrefixLength));
                 if (prefix < 1) {
                     prefix = 64;
                 }
 
-                bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat;
-                bool prefix_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix;
+                bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                bool gua_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
                 ppp::ipv6::auxiliary::CaptureClientOriginalState(ipv6_context, nat_mode, ipv6_state_);
 
                 if (extensions.AssignedIPv6Address.is_v6()) {
-                    applied |= ppp::ipv6::auxiliary::ApplyClientAddress(ipv6_context, extensions.AssignedIPv6Address, prefix, prefix_mode, ipv6_state_);
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientAddress(ipv6_context, extensions.AssignedIPv6Address, prefix, gua_mode, ipv6_state_);
                 }
 
-                applied |= ppp::ipv6::auxiliary::ApplyClientDefaultRoute(ipv6_context, extensions.AssignedIPv6Gateway, nat_mode, ipv6_state_);
+                if (extensions.AssignedIPv6Gateway.is_v6() || nat_mode) {
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientDefaultRoute(ipv6_context, extensions.AssignedIPv6Gateway, nat_mode, ipv6_state_);
+                }
 
                 ppp::vector<ppp::string> dns_servers;
                 if (extensions.AssignedIPv6Dns1.is_v6()) {
@@ -654,14 +662,19 @@ namespace ppp {
                 }
 
                 if (!dns_servers.empty()) {
-                    applied |= ppp::ipv6::auxiliary::ApplyClientDns(ipv6_context, dns_servers, ipv6_state_);
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientDns(ipv6_context, dns_servers, ipv6_state_);
                 }
-                
+
+                applied &= attempted;
+
                 if (applied) {
                     ipv6_applied_ = true;
                     DebugLog("client ipv6 apply done");
                 }
                 else {
+                    ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, extensions.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
+                    ipv6_state_.Clear();
                     DebugLog("client ipv6 apply skipped-or-failed");
                 }
 
@@ -685,7 +698,7 @@ namespace ppp {
                     return;
                 }
 
-                int prefix = std::max<int>(1, std::min<int>(128, (int)information_extensions_.AssignedIPv6PrefixLength));
+                int prefix = std::max<int>(1, std::min<int>(128, (int)information_extensions_.AssignedIPv6AddressPrefixLength));
                 if (prefix < 1) {
                     prefix = 64;
                 }
@@ -695,7 +708,7 @@ namespace ppp {
                 ipv6_context.InterfaceIndex = tun_ni->Index;
                 ipv6_context.InterfaceName = tun_ni->Name;
 
-                bool nat_mode = information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat;
+                bool nat_mode = information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                 ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, information_extensions_.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
 
                 ipv6_applied_ = false;
@@ -716,7 +729,7 @@ namespace ppp {
 
                 DebugLog("client switcher info ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
                     (unsigned)extensions.AssignedIPv6Mode,
-                    (unsigned)extensions.AssignedIPv6PrefixLength,
+                    (unsigned)extensions.AssignedIPv6AddressPrefixLength,
                     (unsigned)extensions.AssignedIPv6Flags,
                     extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
                     extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",

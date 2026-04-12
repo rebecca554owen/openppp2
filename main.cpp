@@ -133,6 +133,7 @@ struct NetworkInterface final
 
     boost::asio::ip::address                            Ngw;                        // Preferred gateway
     boost::asio::ip::address                            IPAddress;                  // Virtual adapter IP
+    boost::asio::ip::address                            IPv6Address;                // Requested virtual adapter IPv6
     boost::asio::ip::address                            GatewayServer;              // Virtual adapter gateway
     boost::asio::ip::address                            SubmaskAddress;             // Subnet mask
 
@@ -977,13 +978,22 @@ bool PppApplication::PrintEnvironmentInformation() noexcept
                     }
 
                     if (ipv6_ext.AssignedIPv6Address.is_v6()) {
-                        printfn("IPv6 Address          : %s/%d", ipv6_ext.AssignedIPv6Address.to_string().data(), (int)ipv6_ext.AssignedIPv6PrefixLength);
+                        printfn("IPv6 Address          : %s/%d", ipv6_ext.AssignedIPv6Address.to_string().data(), (int)ipv6_ext.AssignedIPv6AddressPrefixLength);
+                    }
+                    if (ipv6_ext.RequestedIPv6Address.is_v6()) {
+                        printfn("IPv6 Requested        : %s", ipv6_ext.RequestedIPv6Address.to_string().data());
+                    }
+                    if (ipv6_ext.IPv6StatusCode != ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_None) {
+                        printfn("IPv6 Status           : %u", (unsigned)ipv6_ext.IPv6StatusCode);
+                    }
+                    if (!ipv6_ext.IPv6StatusMessage.empty()) {
+                        printfn("IPv6 Status Message   : %s", ipv6_ext.IPv6StatusMessage.data());
                     }
                     if (ipv6_ext.AssignedIPv6Gateway.is_v6()) {
                         printfn("IPv6 Gateway          : %s", ipv6_ext.AssignedIPv6Gateway.to_string().data());
                     }
-                    if (ipv6_ext.AssignedIPv6PrefixLength > 0) {
-                        printfn("IPv6 Prefix Length    : %d", (int)ipv6_ext.AssignedIPv6PrefixLength);
+                    if (ipv6_ext.AssignedIPv6AddressPrefixLength > 0) {
+                        printfn("IPv6 Address Prefix   : %d", (int)ipv6_ext.AssignedIPv6AddressPrefixLength);
                     }
                     if (ipv6_ext.AssignedIPv6Dns1.is_v6()) {
                         printfn("IPv6 DNS 1            : %s", ipv6_ext.AssignedIPv6Dns1.to_string().data());
@@ -1141,6 +1151,11 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
             if (NULLPTR == ethernet)
             {
                 break;
+            }
+            if (network_interface->IPv6Address.is_v6())
+            {
+                std::string requested_ipv6_std = network_interface->IPv6Address.to_string();
+                ethernet->RequestedIPv6(ppp::string(requested_ipv6_std.data(), requested_ipv6_std.size()));
             }
 
 #if !defined(_WIN32)
@@ -1512,10 +1527,15 @@ void PppApplication::PrintHelpInformation() noexcept
         col_description_width, "Virtual adapter name", 
         col_default_width, NetworkInterface::GetDefaultTun().c_str());
     
-    printf("│ %-*s │ %-*s │ %-*s │\n", 
-        col_option_width, "--tun-ip=<ip>", 
-        col_description_width, "Virtual adapter IP address", 
+    printf("│ %-*s │ %-*s │ %-*s │\n",
+        col_option_width, "--tun-ip=<ip>",
+        col_description_width, "Virtual adapter IP address",
         col_default_width, "10.0.0.2");
+
+    printf("│ %-*s │ %-*s │ %-*s │\n",
+        col_option_width, "--tun-ipv6=<ip>",
+        col_description_width, "Requested virtual adapter IPv6",
+        col_default_width, "server-assigned");
 
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--tun-gw=<ip>", 
@@ -1838,6 +1858,7 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         // Parse network addresses
         ni->Ngw = GetNetworkAddress("--ngw", 0, 32, "0.0.0.0", argc, argv);
         ni->IPAddress = GetNetworkAddress("--tun-ip", 0, 32, "10.0.0.2", argc, argv);
+        ni->IPv6Address = GetNetworkAddress("--tun-ipv6", 0, 128, argc, argv);
         ni->SubmaskAddress = GetNetworkAddress("--tun-mask", 16, 32, "255.255.255.252", argc, argv);
 
         // Suggested Ethernet card address setting.

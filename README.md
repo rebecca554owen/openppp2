@@ -380,6 +380,37 @@ Next-generation security network access technology, providing high-performance V
 | `｜`   | Option separator     |
 | `!`    | Not available / Disabled |
 
+### IPv6 Model
+- Server IPv6 uses a minimal model: `mode`, `cidr`, `gateway`, `dns1`, `dns2`, `lease-time`, `static-addresses`.
+- `mode` supports `none`, `nat66`, and `gua`.
+- Every client GUID receives exactly one IPv6 `/128` address.
+- Clients do not receive delegated prefixes or multiple IPv6 addresses.
+- Client-side IPv6 input is runtime-only: `--tun-ipv6=<ipv6>`.
+- `--tun-ipv6` is only a request. The server may accept it, replace it, or auto-assign another address inside the configured CIDR.
+- The server prefers reusing the last lease for the same GUID and supports static bindings through `static-addresses`.
+
+### IPv6 Server Example
+```json
+"server": {
+    "ipv6": {
+        "mode": "nat66",
+        "cidr": "fd42:4242:4242::/64",
+        "gateway": "fd42:4242:4242::1",
+        "dns1": "2606:4700:4700::1111",
+        "dns2": "2606:4700:4700::1001",
+        "lease-time": 300,
+        "static-addresses": {
+            "{F4569208-BB45-4DEB-B115-0FEA1D91B85B}": "fd42:4242:4242::100"
+        }
+    }
+}
+```
+
+### IPv6 Modes
+- `none`: disable managed IPv6.
+- `nat66`: assign one `/128` from the configured IPv6 CIDR and install server-side NAT66 handling.
+- `gua`: assign one `/128` from the configured IPv6 CIDR and use server-side neighbor-proxy handling.
+
 <a id="network-protocol-static-guide"></a>
 
 ### 🌐 Network Protocol Stack

@@ -97,6 +97,7 @@ namespace ppp {
 
             public:
                 virtual bool                                                            Nat(const void* packet, int packet_size) noexcept;
+                bool                                                                    SendRequestedIPv6Configuration(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
                 virtual bool                                                            Echo(int ack_id) noexcept;
                 virtual bool                                                            Echo(const void* packet, int packet_size) noexcept;
                 virtual bool                                                            SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept;

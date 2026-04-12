@@ -6,6 +6,27 @@ namespace ppp {
     namespace darwin {
         namespace ipv6 {
             namespace auxiliary {
+            namespace {
+                static bool IsSafeShellToken(const ppp::string& value) noexcept {
+                    if (value.empty()) {
+                        return false;
+                    }
+
+                    for (char ch : value) {
+                        bool ok =
+                            (ch >= 'a' && ch <= 'z') ||
+                            (ch >= 'A' && ch <= 'Z') ||
+                            (ch >= '0' && ch <= '9') ||
+                            ch == ':' || ch == '.' || ch == '_' || ch == '-' || ch == '%';
+                        if (!ok) {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
+            }
+
             ppp::string ComputeNetworkAddress(const boost::asio::ip::address_v6& address, int prefix_length) noexcept {
                 boost::asio::ip::address_v6::bytes_type bytes = address.to_bytes();
                 prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
@@ -62,7 +83,7 @@ namespace ppp {
             }
 
             bool SetRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
-                if (ifrName.empty() || addressIP.empty()) {
+                if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
                     return false;
                 }
 
@@ -85,7 +106,7 @@ namespace ppp {
             }
 
             bool DeleteRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
-                if (ifrName.empty() || addressIP.empty()) {
+                if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
                     return false;
                 }
 
@@ -115,8 +136,9 @@ namespace ppp {
                 state.DefaultRouteWasPresent = !state.OriginalDefaultRouteInterface.empty();
             }
 
-            bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool prefix_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                if (context.InterfaceName.empty() || !address.is_v6()) {
+            bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                (void)gua_mode;
+                if (!IsSafeShellToken(context.InterfaceName) || !address.is_v6()) {
                     return false;
                 }
 
@@ -129,10 +151,6 @@ namespace ppp {
 
                 state.AddressApplied = true;
                 state.Address = addr_str;
-                if (prefix_mode) {
-                    ppp::string route_prefix = ComputeNetworkAddress(address.to_v6(), prefix_length);
-                    state.NetworkRouteApplied = SetRoute(context.InterfaceName, route_prefix, prefix_length, ppp::string());
-                }
                 return true;
             }
 
@@ -206,7 +224,7 @@ namespace ppp {
                     system(cmd);
                 }
 
-                if (state.DnsApplied && !state.OriginalDnsConfiguration.empty()) {
+                if (state.DnsApplied) {
                     ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
                 }
                 if (state.DefaultRouteApplied && state.DefaultRouteWasPresent && !state.OriginalDefaultRouteInterface.empty()) {

@@ -31,14 +31,30 @@ namespace ppp {
                 friend class                                            VirtualEthernetManagedServer;
                 friend class                                            VirtualInternetControlMessageProtocolStatic;
                 friend class                                            VirtualEthernetDatagramPortStatic;
-                typedef struct {
+                struct NatInformation {
                     uint32_t                                            IPAddress;
                     uint32_t                                            SubmaskAddress;
                     std::shared_ptr<VirtualEthernetExchanger>           Exchanger;
-                }                                                       NatInformation;
+                };
                 typedef std::shared_ptr<NatInformation>                 NatInformationPtr;
                 typedef std::unordered_map<uint32_t, NatInformationPtr> NatInformationTable;
                 typedef std::unordered_map<ppp::string, std::shared_ptr<class VirtualEthernetExchanger>> IPv6ExchangerTable;
+                struct IPv6RequestEntry {
+                    bool                                                 Present = false;
+                    bool                                                 Accepted = false;
+                    Byte                                                 StatusCode = VirtualEthernetInformationExtensions::IPv6Status_None;
+                    boost::asio::ip::address                             RequestedAddress;
+                    ppp::string                                          StatusMessage;
+                };
+                struct IPv6LeaseEntry {
+                    Int128                                               SessionId = 0;
+                    UInt64                                               ExpiresAt = 0;
+                    boost::asio::ip::address                             Address;
+                    Byte                                                 AddressPrefixLength = 0;
+                    bool                                                 StaticBinding = false;
+                };
+                typedef ppp::unordered_map<Int128, IPv6RequestEntry>     IPv6RequestTable;
+                typedef ppp::unordered_map<Int128, IPv6LeaseEntry>       IPv6LeaseTable;
                 typedef ppp::cryptography::Ciphertext                   Ciphertext;
                 typedef std::shared_ptr<Ciphertext>                     CiphertextPtr;
 
@@ -183,15 +199,17 @@ namespace ppp {
                 bool                                                    FlowerArrangement(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
                 InformationEnvelope                                     BuildInformationEnvelope(const Int128& session_id, const VirtualEthernetInformation& info) noexcept;
                 bool                                                    BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept;
-                bool                                                    AddIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
-                bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const boost::asio::ip::address& ip) noexcept;
+                bool                                                    UpdateIPv6Request(const Int128& session_id, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept;
+                void                                                    TickIPv6Leases(UInt64 now) noexcept;
+                bool                                                    AddIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept;
+                bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept;
                 VirtualEthernetExchangerPtr                             FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    CloseIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
-                bool                                                    AddIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;
-                bool                                                    DeleteIPv6TransitRoute(const boost::asio::ip::address& ip) noexcept;
+                bool                                                    AddIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept;
+                bool                                                    DeleteIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept;
                 bool                                                    SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
                 bool                                                    ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
                 bool                                                    SendIPv6PacketToClient(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
@@ -225,6 +243,8 @@ namespace ppp {
                 VirtualEthernetLoggerPtr                                logger_;
                 NatInformationTable                                     nats_;
                 IPv6ExchangerTable                                      ipv6s_;
+                IPv6RequestTable                                        ipv6_requests_;
+                IPv6LeaseTable                                          ipv6_leases_;
                 FirewallPtr                                             firewall_;
                 VirtualEthernetExchangerTable                           exchangers_;
                 TimerPtr                                                timeout_;

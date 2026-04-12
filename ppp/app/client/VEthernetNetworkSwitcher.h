@@ -124,6 +124,8 @@ namespace ppp {
 #endif  
                 std::shared_ptr<ppp::configurations::AppConfiguration>              GetConfiguration()           noexcept { return configuration_; }
                 std::shared_ptr<VEthernetExchanger>                                 GetExchanger()               noexcept { return exchanger_; }
+                void                                                                RequestedIPv6(const ppp::string& value) noexcept { requested_ipv6_ = value; }
+                ppp::string                                                         RequestedIPv6() noexcept { return requested_ipv6_; }
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS>               GetQoS()                     noexcept { return qos_; }
                 std::shared_ptr<ppp::transmissions::ITransmissionStatistics>        GetStatistics()              noexcept { return statistics_; }
                 std::shared_ptr<VirtualEthernetInformation>                         GetInformation()             noexcept;
@@ -262,9 +264,10 @@ namespace ppp {
                 bool                                                                EchoOtherServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept;
                 bool                                                                EchoGatewayServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept;
 
-            private:    
+            private:
                 std::shared_ptr<VEthernetExchanger>                                 exchanger_;
                 std::shared_ptr<ppp::configurations::AppConfiguration>              configuration_;
+                ppp::string                                                         requested_ipv6_;
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS>               qos_;
                 std::shared_ptr<ppp::transmissions::ITransmissionStatistics>        statistics_;
                 VEthernetIcmpPacketTable                                            icmppackets_;

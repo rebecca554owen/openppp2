@@ -43,18 +43,18 @@ namespace ppp {
 #endif
         }
 
-        bool ApplyClientAddress(const ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool prefix_mode, ClientState& state) noexcept {
+        bool ApplyClientAddress(const ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ClientState& state) noexcept {
 #if defined(_WIN32)
-            return ppp::win32::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, prefix_mode, state);
+            return ppp::win32::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, gua_mode, state);
 #elif defined(_MACOS)
-            return ppp::darwin::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, prefix_mode, state);
+            return ppp::darwin::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, gua_mode, state);
 #elif defined(_LINUX)
-            return ppp::linux::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, prefix_mode, state);
+            return ppp::linux::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, gua_mode, state);
 #else
             (void)context;
             (void)address;
             (void)prefix_length;
-            (void)prefix_mode;
+            (void)gua_mode;
             (void)state;
             return false;
 #endif

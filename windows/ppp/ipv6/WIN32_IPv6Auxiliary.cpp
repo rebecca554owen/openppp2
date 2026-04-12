@@ -70,8 +70,8 @@ namespace ppp {
                 }
             }
 
-            bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool prefix_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                (void)prefix_mode;
+            bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                (void)gua_mode;
                 if (!address.is_v6()) {
                     return false;
                 }

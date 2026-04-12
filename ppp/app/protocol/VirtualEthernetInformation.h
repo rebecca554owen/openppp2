@@ -41,23 +41,35 @@ namespace ppp {
             struct VirtualEthernetInformationExtensions {
                 enum IPv6Mode {
                     IPv6Mode_None                                      = 0,
-                    IPv6Mode_Prefix                                    = 1,
-                    IPv6Mode_Nat                                       = 2,
+                    IPv6Mode_Nat66                                     = 1,
+                    IPv6Mode_Gua                                       = 2,
                 };
 
                 enum IPv6Flags {
                     IPv6Flag_None                                      = 0,
-                    IPv6Flag_RoutedPrefix                              = 1 << 0,
-                    IPv6Flag_NeighborProxy                             = 1 << 1,
+                    IPv6Flag_NeighborProxy                             = 1 << 0,
                 };
 
                 Byte                                                AssignedIPv6Mode = IPv6Mode_None;
-                Byte                                                AssignedIPv6PrefixLength = 0;
+                Byte                                                AssignedIPv6AddressPrefixLength = 0;
                 Byte                                                AssignedIPv6Flags = 0;
                 boost::asio::ip::address                            AssignedIPv6Address;
                 boost::asio::ip::address                            AssignedIPv6Gateway;
                 boost::asio::ip::address                            AssignedIPv6Dns1;
                 boost::asio::ip::address                            AssignedIPv6Dns2;
+                Byte                                                IPv6StatusCode = 0;
+                boost::asio::ip::address                            RequestedIPv6Address;
+                ppp::string                                         IPv6StatusMessage;
+
+                enum IPv6Status {
+                    IPv6Status_None                                 = 0,
+                    IPv6Status_Applied                              = 1,
+                    IPv6Status_ServerAssigned                       = 2,
+                    IPv6Status_ClientRequested                      = 3,
+                    IPv6Status_UnsupportedClient                    = 4,
+                    IPv6Status_Rejected                             = 5,
+                    IPv6Status_Failed                               = 6,
+                };
 
                 void                                                Clear() noexcept;
                 bool                                                HasAny() const noexcept;

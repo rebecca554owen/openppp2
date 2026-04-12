@@ -22,8 +22,14 @@ namespace ppp {
                 ppp::string                                                 nic;
 #endif
                 uint32_t                                                    ngw;
-                ppp::string                                                 path;    
-                ppp::string                                                 vbgp;                    
+                ppp::string                                                 path;
+                ppp::string                                                 vbgp;
+            };
+
+            enum IPv6Mode {
+                IPv6Mode_None = 0,
+                IPv6Mode_Nat66 = 1,
+                IPv6Mode_Gua = 2,
             };
 
         public:
@@ -133,17 +139,14 @@ namespace ppp {
                 ppp::string                                                 backend;
                 ppp::string                                                 backend_key;
                 struct {
-                    bool                                                    enabled;
-                    ppp::string                                             mode;
-                    ppp::string                                             prefix;
+                    IPv6Mode                                                mode;
+                    ppp::string                                             cidr;
                     int                                                     prefix_length;
-                    bool                                                    routed_prefix;
-                    bool                                                    neighbor_proxy;
                     ppp::string                                             gateway;
                     ppp::string                                             dns1;
                     ppp::string                                             dns2;
-                    ppp::string                                             stable_secret;
-                    ppp::string                                             allocation;
+                    int                                                     lease_time;
+                    ppp::map<ppp::string, ppp::string>                      static_addresses;
                 }                                                           ipv6;
             }                                                               server;
             struct {

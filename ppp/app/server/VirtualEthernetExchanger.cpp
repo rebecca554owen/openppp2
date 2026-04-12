@@ -20,6 +20,7 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
 typedef ppp::app::protocol::VirtualEthernetInformation              VirtualEthernetInformation;
 typedef ppp::collections::Dictionary                                Dictionary;
@@ -44,13 +45,11 @@ namespace {
         }
 
         ppp::app::server::VirtualEthernetIPv6MinimalHeader* header = reinterpret_cast<ppp::app::server::VirtualEthernetIPv6MinimalHeader*>(packet);
-        if ((header->VersionTrafficClass >> 4) != 6 || header->NextHeader != IPPROTO_ICMPV6) {
-            return false;
-        }
-
         boost::asio::ip::address_v6 source;
         boost::asio::ip::address_v6 destination;
-        if (!ppp::app::server::ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+        ppp::Byte next_header = 0;
+        int payload_length = 0;
+        if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination, &next_header, &payload_length) || next_header != IPPROTO_ICMPV6) {
             return false;
         }
 
@@ -59,7 +58,7 @@ namespace {
         }
 
         icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(packet + 40);
-        int icmp_length = packet_length - 40;
+        int icmp_length = payload_length;
         if (icmp_length < static_cast<int>(sizeof(icmp_hdr))) {
             return false;
         }
@@ -194,7 +193,7 @@ namespace ppp {
                 if (switcher_) {
                     VirtualEthernetInformationExtensions extensions;
                     if (switcher_->BuildInformationIPv6Extensions(GetId(), extensions)) {
-                        switcher_->DeleteIPv6Exchanger(GetId(), extensions.AssignedIPv6Address);
+                        switcher_->DeleteIPv6Exchanger(GetId(), extensions);
                     }
                 }
                 switcher_->DeleteExchanger(this);
@@ -242,7 +241,30 @@ namespace ppp {
             }
 
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
+                if (disposed_ || NULLPTR == switcher_ || NULLPTR == transmission) {
+                    return false;
+                }
+
+                const VirtualEthernetInformationExtensions& request = information.Extensions;
+                bool has_ipv6_request = request.RequestedIPv6Address.is_v6();
+                bool is_server_response = request.AssignedIPv6Address.is_v6() || request.IPv6StatusCode != VirtualEthernetInformationExtensions::IPv6Status_None;
+                if (!has_ipv6_request || is_server_response) {
+                    return false;
+                }
+
+                VirtualEthernetInformationExtensions response;
+                if (!switcher_->UpdateIPv6Request(GetId(), request, response)) {
+                    return false;
+                }
+
+                VirtualEthernetInformation info;
+                info.Clear();
+                
+                VirtualEthernetSwitcher::InformationEnvelope envelope;
+                envelope.Base = info;
+                envelope.Extensions = response;
+                envelope.ExtendedJson = response.ToJson();
+                return DoInformation(transmission, envelope, y);
             }
 
             bool VirtualEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
@@ -343,7 +365,20 @@ namespace ppp {
 
                 boost::asio::ip::address_v6 source;
                 boost::asio::ip::address_v6 destination;
-                if (!ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+                if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
+                    return false;
+                }
+
+                VirtualEthernetInformationExtensions approved;
+                if (!switcher_->BuildInformationIPv6Extensions(GetId(), approved) || !approved.AssignedIPv6Address.is_v6()) {
+                    return false;
+                }
+
+                if (source != approved.AssignedIPv6Address.to_v6()) {
+                    DebugLog("server ipv6 source rejected session=%s source=%s assigned=%s",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(),
+                        source.to_string().c_str(),
+                        approved.AssignedIPv6Address.to_string().c_str());
                     return false;
                 }
 

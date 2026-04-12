@@ -73,3 +73,4 @@ ppp.log
 /ppp/Release
 build-check/
 /scratch
+builds/cmake-check/

@@ -1340,6 +1340,40 @@ namespace ppp
                 return ExecuteNetshCommand(command);
             }
 
+            bool AddIPv6Route(int interface_index, const ppp::string& prefix, int prefix_length, const ppp::string& gateway, int metric) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty() || prefix.empty()) {
+                    return false;
+                }
+
+                prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                char command[1200];
+                if (gateway.empty()) {
+                    snprintf(command, sizeof(command), "netsh interface ipv6 add route %s/%d interface=\"%s\" metric=%d store=active", prefix.data(), prefix_length, interface_name.data(), std::max<int>(1, metric));
+                }
+                else {
+                    snprintf(command, sizeof(command), "netsh interface ipv6 add route %s/%d interface=\"%s\" nexthop=%s metric=%d store=active", prefix.data(), prefix_length, interface_name.data(), gateway.data(), std::max<int>(1, metric));
+                }
+                return ExecuteNetshCommand(command);
+            }
+
+            bool DeleteIPv6Route(int interface_index, const ppp::string& prefix, int prefix_length, const ppp::string& gateway) noexcept {
+                ppp::string interface_name = GetInterfaceName(interface_index);
+                if (interface_name.empty() || prefix.empty()) {
+                    return false;
+                }
+
+                prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                char command[1200];
+                if (gateway.empty()) {
+                    snprintf(command, sizeof(command), "netsh interface ipv6 delete route prefix=%s/%d interface=\"%s\" store=active", prefix.data(), prefix_length, interface_name.data());
+                }
+                else {
+                    snprintf(command, sizeof(command), "netsh interface ipv6 delete route prefix=%s/%d interface=\"%s\" nexthop=%s store=active", prefix.data(), prefix_length, interface_name.data(), gateway.data());
+                }
+                return ExecuteNetshCommand(command);
+            }
+
             bool SetDnsAddressesV6(int interface_index, const ppp::vector<ppp::string>& servers) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
                 if (interface_name.empty()) {

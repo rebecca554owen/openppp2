@@ -30,6 +30,58 @@ namespace {
         return false;
 #endif
     }
+
+    static ppp::configurations::AppConfiguration::IPv6Mode ParseIPv6Mode(const ppp::string& mode) noexcept {
+        ppp::string value = ToLower(mode);
+        if (value == "nat66") {
+            return ppp::configurations::AppConfiguration::IPv6Mode_Nat66;
+        }
+        if (value == "gua") {
+            return ppp::configurations::AppConfiguration::IPv6Mode_Gua;
+        }
+        return ppp::configurations::AppConfiguration::IPv6Mode_None;
+    }
+
+    static ppp::string IPv6ModeToString(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
+        switch (mode) {
+        case ppp::configurations::AppConfiguration::IPv6Mode_Nat66:
+            return "nat66";
+        case ppp::configurations::AppConfiguration::IPv6Mode_Gua:
+            return "gua";
+        default:
+            return "";
+        }
+    }
+
+    static ppp::configurations::AppConfiguration::IPv6Mode NormalizeIPv6Mode(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
+        switch (mode) {
+        case ppp::configurations::AppConfiguration::IPv6Mode_Nat66:
+        case ppp::configurations::AppConfiguration::IPv6Mode_Gua:
+            return mode;
+        default:
+            return ppp::configurations::AppConfiguration::IPv6Mode_None;
+        }
+    }
+
+    static bool ParseIPv6Cidr(const ppp::string& cidr, ppp::string& prefix, int& prefix_length) noexcept {
+        prefix.clear();
+        prefix_length = 0;
+        if (cidr.empty()) {
+            return false;
+        }
+
+        std::size_t slash = cidr.find('/');
+        if (slash == ppp::string::npos) {
+            prefix = cidr;
+            prefix_length = 128;
+            return true;
+        }
+
+        prefix = cidr.substr(0, slash);
+        prefix_length = atoi(cidr.substr(slash + 1).c_str());
+        prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+        return !prefix.empty();
+    }
 }
 
 namespace ppp {
@@ -48,7 +100,6 @@ namespace ppp {
             config.concurrent = Thread::GetProcessorCount();
             config.cdn[0] = IPEndPoint::MinPort;
             config.cdn[1] = IPEndPoint::MinPort;
-
             config.ip.public_ = "";
             config.ip.interface_ = "";
 
@@ -119,17 +170,14 @@ namespace ppp {
             config.server.mapping = true;
             config.server.backend = "";
             config.server.backend_key = "";
-            config.server.ipv6.enabled = false;
-            config.server.ipv6.mode = "";
-            config.server.ipv6.prefix = "";
-            config.server.ipv6.prefix_length = 64;
-            config.server.ipv6.routed_prefix = true;
-            config.server.ipv6.neighbor_proxy = false;
+            config.server.ipv6.mode = AppConfiguration::IPv6Mode_None;
+            config.server.ipv6.cidr = "";
+            config.server.ipv6.prefix_length = 128;
             config.server.ipv6.gateway = "";
             config.server.ipv6.dns1 = "";
             config.server.ipv6.dns2 = "";
-            config.server.ipv6.stable_secret = "";
-            config.server.ipv6.allocation = "guid-hash";
+            config.server.ipv6.lease_time = 300;
+            config.server.ipv6.static_addresses.clear();
 
             config.client.mappings.clear();
             config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
@@ -167,13 +215,10 @@ namespace ppp {
                     &config.server.backend,
                     &config.server.backend_key,
                     &config.server.log,
-                    &config.server.ipv6.mode,
-                    &config.server.ipv6.prefix,
+                    &config.server.ipv6.cidr,
                     &config.server.ipv6.gateway,
                     &config.server.ipv6.dns1,
                     &config.server.ipv6.dns2,
-                    &config.server.ipv6.stable_secret,
-                    &config.server.ipv6.allocation,
                     &config.client.guid,
                     &config.client.server,
                     &config.client.server_proxy,
@@ -416,45 +461,30 @@ namespace ppp {
                 }
             }
 
-            ppp::string ipv6_mode = ToLower(config.server.ipv6.mode);
-            config.server.ipv6.mode = ipv6_mode;
-            if (config.server.ipv6.enabled && !SupportsServerIPv6DataPlane()) {
-                config.server.ipv6.enabled = false;
-                config.server.ipv6.mode = "";
+            config.server.ipv6.mode = NormalizeIPv6Mode(config.server.ipv6.mode);
+            bool ipv6_server_enabled = config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66 ||
+                config.server.ipv6.mode == AppConfiguration::IPv6Mode_Gua;
+            if (ipv6_server_enabled && !SupportsServerIPv6DataPlane()) {
+                config.server.ipv6.mode = AppConfiguration::IPv6Mode_None;
                 config.server.ipv6.gateway = "";
                 config.server.ipv6.dns1 = "";
                 config.server.ipv6.dns2 = "";
+                ipv6_server_enabled = false;
             }
 
-            ipv6_mode = config.server.ipv6.mode;
-            if (config.server.ipv6.enabled) {
-                bool has_public_ipv6_plan = !config.server.ipv6.prefix.empty();
-                if (ipv6_mode.empty()) {
-                    config.server.ipv6.mode = has_public_ipv6_plan ? "prefix" : "nat";
-                }
+            ppp::string ipv6_prefix;
+            ParseIPv6Cidr(config.server.ipv6.cidr, ipv6_prefix, config.server.ipv6.prefix_length);
 
-                if (config.server.ipv6.mode == "nat") {
-                    config.server.ipv6.routed_prefix = false;
-                    config.server.ipv6.neighbor_proxy = false;
-                    if (config.server.ipv6.prefix.empty()) {
-                        config.server.ipv6.prefix = "fd42:4242:4242::";
-                    }
-                    if (config.server.ipv6.prefix_length < 64) {
+            if (ipv6_server_enabled) {
+                if (config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66) {
+                    if (ipv6_prefix.empty()) {
+                        ipv6_prefix = "fd42:4242:4242::";
                         config.server.ipv6.prefix_length = 64;
                     }
                 }
-                elif(config.server.ipv6.mode == "prefix") {
-                    if (config.server.ipv6.prefix.empty()) {
-                        config.server.ipv6.mode = "nat";
-                        config.server.ipv6.routed_prefix = false;
-                        config.server.ipv6.neighbor_proxy = false;
-                        config.server.ipv6.prefix = "fd42:4242:4242::";
-                        config.server.ipv6.prefix_length = 64;
-                    }
-                }
-                else {
-                    config.server.ipv6.mode = has_public_ipv6_plan ? "prefix" : "nat";
-                }
+            }
+            else {
+                config.server.ipv6.mode = AppConfiguration::IPv6Mode_None;
             }
 
             if (!Ciphertext::Support(config.key.protocol)) {
@@ -497,6 +527,14 @@ namespace ppp {
                 config.websocket.http.error = "";
                 config.websocket.http.request.clear();
                 config.websocket.http.response.clear();
+            }
+
+            config.server.ipv6.prefix_length = std::max<int>(0, std::min<int>(128, config.server.ipv6.prefix_length));
+            config.server.ipv6.lease_time = std::max<int>(0, config.server.ipv6.lease_time);
+            config.server.ipv6.cidr = ipv6_prefix;
+            if (config.server.ipv6.prefix_length > 0) {
+                config.server.ipv6.cidr.append("/");
+                config.server.ipv6.cidr.append(stl::to_string<ppp::string>(config.server.ipv6.prefix_length));
             }
 
             if (ips) {
@@ -864,17 +902,19 @@ namespace ppp {
             AssignBoolIfPresent(config.server.mapping, json["server"]["mapping"]);
             config.server.backend = JsonAuxiliary::AsValue<ppp::string>(json["server"]["backend"]);
             config.server.backend_key = JsonAuxiliary::AsValue<ppp::string>(json["server"]["backend-key"]);
-            AssignBoolIfPresent(config.server.ipv6.enabled, json["server"]["ipv6"]["enabled"]);
-            AssignIfPresent(config.server.ipv6.mode, json["server"]["ipv6"]["mode"]);
-            AssignIfPresent(config.server.ipv6.prefix, json["server"]["ipv6"]["prefix"]);
+            config.server.ipv6.mode = ParseIPv6Mode(JsonAuxiliary::AsValue<ppp::string>(json["server"]["ipv6"]["mode"]));
+            AssignIfPresent(config.server.ipv6.cidr, json["server"]["ipv6"]["cidr"]);
             AssignIfPresent(config.server.ipv6.prefix_length, json["server"]["ipv6"]["prefix-length"]);
-            AssignBoolIfPresent(config.server.ipv6.routed_prefix, json["server"]["ipv6"]["routed-prefix"]);
-            AssignBoolIfPresent(config.server.ipv6.neighbor_proxy, json["server"]["ipv6"]["neighbor-proxy"]);
             AssignIfPresent(config.server.ipv6.gateway, json["server"]["ipv6"]["gateway"]);
             AssignIfPresent(config.server.ipv6.dns1, json["server"]["ipv6"]["dns1"]);
             AssignIfPresent(config.server.ipv6.dns2, json["server"]["ipv6"]["dns2"]);
-            AssignIfPresent(config.server.ipv6.stable_secret, json["server"]["ipv6"]["stable-secret"]);
-            AssignIfPresent(config.server.ipv6.allocation, json["server"]["ipv6"]["allocation"]);
+            AssignIfPresent(config.server.ipv6.lease_time, json["server"]["ipv6"]["lease-time"]);
+            if (Json::Value& static_addresses = json["server"]["ipv6"]["static-addresses"]; static_addresses.isObject()) {
+                config.server.ipv6.static_addresses.clear();
+                for (Json::ValueConstIterator it = static_addresses.begin(); it != static_addresses.end(); ++it) {
+                    config.server.ipv6.static_addresses[it.name()] = JsonAuxiliary::AsValue<ppp::string>(*it);
+                }
+            }
 
             LoadAllMappings(config, json["client"]["mappings"]);
             LoadAllRoutes(config.client.routes, json["client"]["routes"]);
@@ -1045,17 +1085,17 @@ namespace ppp {
             server["mapping"] = config.server.mapping;
             server["backend"] = config.server.backend; /* ws://192.168.0.24/ppp/webhook */
             server["backend-key"] = config.server.backend_key;
-            server["ipv6"]["enabled"] = config.server.ipv6.enabled;
-            server["ipv6"]["mode"] = config.server.ipv6.mode;
-            server["ipv6"]["prefix"] = config.server.ipv6.prefix;
-            server["ipv6"]["prefix-length"] = config.server.ipv6.prefix_length;
-            server["ipv6"]["routed-prefix"] = config.server.ipv6.routed_prefix;
-            server["ipv6"]["neighbor-proxy"] = config.server.ipv6.neighbor_proxy;
+            server["ipv6"]["mode"] = IPv6ModeToString(config.server.ipv6.mode);
+            server["ipv6"]["cidr"] = config.server.ipv6.cidr;
             server["ipv6"]["gateway"] = config.server.ipv6.gateway;
             server["ipv6"]["dns1"] = config.server.ipv6.dns1;
             server["ipv6"]["dns2"] = config.server.ipv6.dns2;
-            server["ipv6"]["stable-secret"] = config.server.ipv6.stable_secret;
-            server["ipv6"]["allocation"] = config.server.ipv6.allocation;
+            server["ipv6"]["lease-time"] = config.server.ipv6.lease_time;
+            Json::Value static_addresses;
+            for (const auto& kv : config.server.ipv6.static_addresses) {
+                static_addresses[kv.first] = kv.second;
+            }
+            server["ipv6"]["static-addresses"] = static_addresses;
             root["server"] = server;
 
             // Set client structure

@@ -63,6 +63,27 @@ using ppp::net::AddressFamily;
 
 namespace ppp {
     namespace tap {
+        namespace {
+            static bool IsSafeShellToken(const ppp::string& value) noexcept {
+                if (value.empty()) {
+                    return false;
+                }
+
+                for (char ch : value) {
+                    bool ok =
+                        (ch >= 'a' && ch <= 'z') ||
+                        (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= '0' && ch <= '9') ||
+                        ch == ':' || ch == '.' || ch == '_' || ch == '-' || ch == '%' || ch == '/';
+                    if (!ok) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
         class IfcctlSocket final { // ifc_ctl_sock6
         public:
             int                                 sock_v4;
@@ -210,7 +231,7 @@ namespace ppp {
         }
 
         bool TapLinux::SetIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
-            if (ifrName.empty() || addressIP.empty()) {
+            if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
                 return false;
             }
 
@@ -220,7 +241,7 @@ namespace ppp {
         }
 
         bool TapLinux::SetMtu(const ppp::string& ifrName, int mtu) noexcept {
-            if (ifrName.empty()) {
+            if (!IsSafeShellToken(ifrName)) {
                 return false;
             }
 
@@ -232,7 +253,7 @@ namespace ppp {
         }
 
         bool TapLinux::DeleteIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
-            if (ifrName.empty() || addressIP.empty()) {
+            if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
                 return false;
             }
 
@@ -242,7 +263,7 @@ namespace ppp {
         }
 
         bool TapLinux::AddRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
-            if (ifrName.empty() || addressIP.empty()) {
+            if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
                 return false;
             }
 
@@ -267,7 +288,7 @@ namespace ppp {
         }
 
         bool TapLinux::DeleteRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
-            if (ifrName.empty() || addressIP.empty()) {
+            if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
                 return false;
             }
 
@@ -292,7 +313,7 @@ namespace ppp {
         }
 
         bool TapLinux::EnableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
-            if (ifrName.empty()) {
+            if (!IsSafeShellToken(ifrName)) {
                 return false;
             }
 
@@ -302,7 +323,7 @@ namespace ppp {
         }
 
         bool TapLinux::DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
-            if (ifrName.empty()) {
+            if (!IsSafeShellToken(ifrName)) {
                 return false;
             }
 
@@ -312,7 +333,7 @@ namespace ppp {
         }
 
         bool TapLinux::AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
-            if (ifrName.empty() || addressIP.empty()) {
+            if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
                 return false;
             }
 
@@ -322,7 +343,7 @@ namespace ppp {
         }
 
         bool TapLinux::DeleteIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
-            if (ifrName.empty() || addressIP.empty()) {
+            if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
                 return false;
             }
 

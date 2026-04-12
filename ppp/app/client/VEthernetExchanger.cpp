@@ -79,6 +79,34 @@ namespace ppp {
                 Finalize();
             }
 
+            bool VEthernetExchanger::SendRequestedIPv6Configuration(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
+                AppConfigurationPtr configuration = GetConfiguration();
+                if (NULLPTR == transmission || NULLPTR == configuration) {
+                    return false;
+                }
+
+                VirtualEthernetInformationExtensions request;
+                std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_;
+                boost::system::error_code ec;
+                if (switcher && !switcher->RequestedIPv6().empty()) {
+                    boost::asio::ip::address address = StringToAddress(switcher->RequestedIPv6(), ec);
+                    if (!ec && address.is_v6()) {
+                        request.RequestedIPv6Address = address;
+                    }
+                }
+
+                if (!request.HasAny()) {
+                    return true;
+                }
+
+                InformationEnvelope envelope;
+                envelope.Base.Clear();
+                envelope.Extensions = request;
+                envelope.ExtendedJson = request.ToJson();
+                DebugLog("client info send ipv6-request json=%s", envelope.ExtendedJson.data());
+                return DoInformation(transmission, envelope, y);
+            }
+
             void VEthernetExchanger::Finalize() noexcept {
                 VirtualEthernetMappingPortTable mappings;
                 VEthernetDatagramPortTable datagrams;
@@ -454,6 +482,10 @@ namespace ppp {
                             if (transmission->HandshakeServer(y, GetId(), true) && EchoLanToRemoteExchanger(transmission, y) > -1) {
                                 ExchangeToEstablishState(); {
                                     transmission_ = transmission; {
+                                        if (!SendRequestedIPv6Configuration(transmission, y)) {
+                                            transmission->Dispose();
+                                            continue;
+                                        }
                                         RegisterAllMappingPorts();
                                         if (StaticEchoAllocatedToRemoteExchanger(y) && Run(transmission, y)) {
                                             run_once = true;
@@ -848,7 +880,7 @@ namespace ppp {
                             DebugLog("client info envelope raw-json=%s", information.ExtendedJson.data());
                             DebugLog("client info received ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
                                 (unsigned)information.Extensions.AssignedIPv6Mode,
-                                (unsigned)information.Extensions.AssignedIPv6PrefixLength,
+                                (unsigned)information.Extensions.AssignedIPv6AddressPrefixLength,
                                 (unsigned)information.Extensions.AssignedIPv6Flags,
                                 information.Extensions.AssignedIPv6Address.is_v6() ? information.Extensions.AssignedIPv6Address.to_string().c_str() : "",
                                 information.Extensions.AssignedIPv6Gateway.is_v6() ? information.Extensions.AssignedIPv6Gateway.to_string().c_str() : "",

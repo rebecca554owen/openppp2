@@ -380,6 +380,37 @@
 | `｜` | 选项分隔 |
 | `!` | 不可用或禁用 |
 
+### IPv6 模型
+- 服务端 IPv6 使用精简模型：`mode`、`cidr`、`gateway`、`dns1`、`dns2`、`lease-time`、`static-addresses`。
+- `mode` 支持 `none`、`nat66`、`gua`。
+- 每个客户端 GUID 只会获得一个 IPv6 `/128` 地址。
+- 不做前缀委派，不下发多个 IPv6 地址。
+- 客户端 IPv6 只有运行时入口：`--tun-ipv6=<ipv6>`。
+- `--tun-ipv6` 只是请求，服务端可以接受、替换，或者在配置的 CIDR 内自动分配其它地址。
+- 服务端会优先复用同一 GUID 的历史租约，并支持通过 `static-addresses` 做静态绑定。
+
+### IPv6 服务端示例
+```json
+"server": {
+    "ipv6": {
+        "mode": "nat66",
+        "cidr": "fd42:4242:4242::/64",
+        "gateway": "fd42:4242:4242::1",
+        "dns1": "2606:4700:4700::1111",
+        "dns2": "2606:4700:4700::1001",
+        "lease-time": 300,
+        "static-addresses": {
+            "{F4569208-BB45-4DEB-B115-0FEA1D91B85B}": "fd42:4242:4242::100"
+        }
+    }
+}
+```
+
+### IPv6 模式说明
+- `none`：禁用托管 IPv6。
+- `nat66`：从配置的 IPv6 CIDR 中为客户端分配一个 `/128`，并在服务端启用 NAT66 处理。
+- `gua`：从配置的 IPv6 CIDR 中为客户端分配一个 `/128`，并在服务端使用 neighbor proxy 处理。
+
 <a id="network-protocol-static-guide"></a>
 
 ### 🌐 网络协议栈
