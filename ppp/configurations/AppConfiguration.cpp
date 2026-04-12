@@ -567,6 +567,11 @@ namespace ppp {
 
                 ppp::map<ppp::string, ppp::string> normalized_static_addresses;
                 for (const auto& kv : config.server.ipv6.static_addresses) {
+                    Int128 static_guid_id = auxiliary::StringAuxiliary::GuidStringToInt128(kv.first);
+                    if (static_guid_id == 0) {
+                        continue;
+                    }
+
                     boost::system::error_code static_ec;
                     boost::asio::ip::address static_address = StringToAddress(kv.second, static_ec);
                     if (static_ec || !static_address.is_v6()) {
@@ -582,7 +587,7 @@ namespace ppp {
                         continue;
                     }
 
-                    normalized_static_addresses[kv.first] = static_v6.to_string();
+                    normalized_static_addresses[auxiliary::StringAuxiliary::Int128ToGuidString(static_guid_id)] = static_v6.to_string();
                 }
                 config.server.ipv6.static_addresses = std::move(normalized_static_addresses);
             }

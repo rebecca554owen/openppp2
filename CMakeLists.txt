@@ -257,20 +257,27 @@ INCLUDE_DIRECTORIES(
     ${PROJECT_SOURCE_DIR}/common/json/include
     ${PROJECT_SOURCE_DIR}/common/lwip/my
     ${PROJECT_SOURCE_DIR}/common/lwip/include
-
-    # ${THIRD_PARTY_LIBRARY_DIR}/curl/include
-    # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src/include
 )
+
+IF(NOT PLATFORM_SYSTEM_WINDOWS)
+    INCLUDE_DIRECTORIES(
+        ${THIRD_PARTY_LIBRARY_DIR}/boost
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/include
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl/include
+    )
+ENDIF()
 
 # Set the third library connection directory to searchs.
-LINK_DIRECTORIES(
-    ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
-    ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl
+IF(NOT PLATFORM_SYSTEM_WINDOWS)
+    LINK_DIRECTORIES(
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl
 
-    # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src
-    # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
-)
+        # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src
+        # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
+    )
+ENDIF()
 
 # Set the compiled source file search directorys.
 IF(MSVC)

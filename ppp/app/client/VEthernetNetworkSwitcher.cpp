@@ -217,9 +217,11 @@ namespace ppp {
             }
 
             bool VEthernetNetworkSwitcher::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept {
-                if (!vnet || NULLPTR == packet || packet_length < 40) {
+                if (NULLPTR == packet || packet_length < 40) {
                     return false;
                 }
+
+                (void)vnet;
 
                 if (!IsApprovedIPv6Packet(packet, packet_length)) {
                     return false;

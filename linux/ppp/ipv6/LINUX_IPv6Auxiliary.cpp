@@ -85,8 +85,12 @@ namespace {
             snprintf(command, sizeof(command),
                 "ip6tables -C FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1 || "
                 "ip6tables -A FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
+                "ip6tables -C FORWARD -d %s/%d -j ACCEPT >/dev/null 2>&1 || "
+                "ip6tables -A FORWARD -d %s/%d -j ACCEPT >/dev/null 2>&1; "
                 "ip6tables -C FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || "
                 "ip6tables -A FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1",
+                prefix.data(), prefix_length,
+                prefix.data(), prefix_length,
                 prefix.data(), prefix_length,
                 prefix.data(), prefix_length,
                 prefix.data(), prefix_length,
@@ -95,7 +99,9 @@ namespace {
         else {
             snprintf(command, sizeof(command),
                 "ip6tables -D FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
+                "ip6tables -D FORWARD -d %s/%d -j ACCEPT >/dev/null 2>&1; "
                 "ip6tables -D FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1",
+                prefix.data(), prefix_length,
                 prefix.data(), prefix_length,
                 prefix.data(), prefix_length);
         }
@@ -104,6 +110,28 @@ namespace {
     }
 
     static ppp::string ResolveIpv6UplinkInterface(const ppp::string& preferred_nic) noexcept {
+        if (!preferred_nic.empty() && IsSafeShellToken(preferred_nic)) {
+            return preferred_nic;
+        }
+
+        FILE* pipe = popen("ip -6 route show default 2>/dev/null", "r");
+        if (NULLPTR != pipe) {
+            char buffer[1024];
+            while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+                ppp::string route = buffer;
+                while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
+                    route.pop_back();
+                }
+
+                ppp::string interface_name = ExtractRouteInterface(route);
+                if (!interface_name.empty()) {
+                    pclose(pipe);
+                    return interface_name;
+                }
+            }
+            pclose(pipe);
+        }
+
         ppp::string interface_name;
         ppp::UInt32 ip = ppp::net::IPEndPoint::AnyAddress;
         ppp::UInt32 gw = ppp::net::IPEndPoint::AnyAddress;
@@ -166,8 +194,6 @@ namespace {
         else if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
             LinuxExecuteCommand(forward_cleanup);
             if (!uplink_name.empty()) {
-                snprintf(command, sizeof(command), "ip -6 neigh flush proxy dev %s >/dev/null 2>&1", uplink_name.data());
-                LinuxExecuteCommand(command);
                 ppp::tap::TapLinux::DisableIPv6NeighborProxy(uplink_name);
             }
         }
@@ -222,7 +248,8 @@ namespace ppp {
                     }
                 }
 
-                return boost::asio::ip::address_v6(bytes).to_string();
+                std::string network = boost::asio::ip::address_v6(bytes).to_string();
+                return ppp::string(network.data(), network.size());
             }
 
             bool ApplyDefaultRouteCommand(const ppp::string& route) noexcept {
@@ -272,6 +299,12 @@ namespace ppp {
                 if (!uplink_name.empty() && !IsSafeShellToken(uplink_name)) {
                     fprintf(stdout, "Linux IPv6 server prepare failed: invalid uplink interface.\r\n");
                     return false;
+                }
+
+                if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua && !uplink_name.empty()) {
+                    char accept_ra_command[512];
+                    snprintf(accept_ra_command, sizeof(accept_ra_command), "sysctl -w net.ipv6.conf.%s.accept_ra=2 > /dev/null 2>&1", uplink_name.data());
+                    LinuxExecuteCommand(accept_ra_command);
                 }
 
                 ppp::string forward_rules = BuildIpv6ForwardRules(true, prefix, prefix_length);
@@ -335,7 +368,8 @@ namespace ppp {
                     return false;
                 }
 
-                ppp::string addr_str = address.to_string();
+                std::string addr_std = address.to_string();
+                ppp::string addr_str(addr_std.data(), addr_std.size());
                 if (!ppp::tap::TapLinux::SetIPv6Address(context.InterfaceName, addr_str, prefix_length)) {
                     return false;
                 }
@@ -386,7 +420,8 @@ namespace ppp {
                     return false;
                 }
 
-                ppp::string prefix_string = prefix.to_string();
+                std::string prefix_std = prefix.to_string();
+                ppp::string prefix_string(prefix_std.data(), prefix_std.size());
                 prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
                 if (!ppp::tap::TapLinux::AddRoute6(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
                     return false;

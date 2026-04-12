@@ -822,13 +822,9 @@ namespace ppp {
             }
 
             bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                bool vnet = switcher_->IsVNet();
-                if (vnet) {
-                    return switcher_->Output(packet, packet_length);
-                }
-                else {
-                    return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
-                }
+                (void)transmission;
+                (void)y;
+                return switcher_->Output(packet, packet_length);
             }
 
             bool VEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept {
