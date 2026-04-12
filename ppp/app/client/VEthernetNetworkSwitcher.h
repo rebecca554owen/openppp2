@@ -212,6 +212,7 @@ namespace ppp {
 #endif  
 
             private:
+                bool                                                                IsApprovedIPv6Packet(Byte* packet, int packet_length) noexcept;
                 bool                                                                RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept;
                 bool                                                                RedirectDnsServer(
                     ppp::coroutines::YieldContext&                                  y,

@@ -191,10 +191,7 @@ namespace ppp {
 
                 static_allocated_context_.reset();
                 if (switcher_) {
-                    VirtualEthernetInformationExtensions extensions;
-                    if (switcher_->BuildInformationIPv6Extensions(GetId(), extensions)) {
-                        switcher_->DeleteIPv6Exchanger(GetId(), extensions);
-                    }
+                    switcher_->DeleteIPv6Exchanger(GetId());
                 }
                 switcher_->DeleteExchanger(this);
                 switcher_->DeleteNatInformation(this, address_);
@@ -370,7 +367,7 @@ namespace ppp {
                 }
 
                 VirtualEthernetInformationExtensions approved;
-                if (!switcher_->BuildInformationIPv6Extensions(GetId(), approved) || !approved.AssignedIPv6Address.is_v6()) {
+                if (!switcher_->TryGetAssignedIPv6Extensions(GetId(), approved) || !approved.AssignedIPv6Address.is_v6()) {
                     return false;
                 }
 
@@ -382,10 +379,8 @@ namespace ppp {
                     return false;
                 }
 
-                const auto& ipv6 = GetConfiguration()->server.ipv6;
-                boost::system::error_code ec;
-                boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
-                if (!ec && gateway.is_v6()) {
+                boost::asio::ip::address gateway = switcher_->GetIPv6TransitGateway();
+                if (gateway.is_v6()) {
                     if (HandleIPv6GatewayEchoReply(packet, packet_length, gateway.to_v6())) {
                         return DoNat(transmission_, packet, packet_length, y);
                     }

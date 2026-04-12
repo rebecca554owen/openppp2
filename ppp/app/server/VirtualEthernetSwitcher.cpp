@@ -37,6 +37,21 @@ using ppp::collections::Dictionary;
 
 static void DebugLog(const char* format, ...) noexcept {}
 
+static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boost::asio::ip::address_v6& host) noexcept {
+    boost::asio::ip::address_v6::bytes_type bytes = network.to_bytes();
+    for (int i = 15; i >= 0; --i) {
+        if (bytes[i] != 0xff) {
+            ++bytes[i];
+            for (int j = i + 1; j < 16; ++j) {
+                bytes[j] = 0;
+            }
+            host = boost::asio::ip::address_v6(bytes);
+            return true;
+        }
+    }
+    return false;
+}
+
 namespace ppp {
     namespace transmissions {
         typedef ITransmission::AppConfigurationPtr      AppConfigurationPtr;
@@ -96,6 +111,34 @@ namespace ppp {
                 return SupportsIPv6DataPlane() && (mode == AppConfiguration::IPv6Mode_Nat66 || mode == AppConfiguration::IPv6Mode_Gua);
             }
 
+            boost::asio::ip::address VirtualEthernetSwitcher::GetIPv6TransitGateway() noexcept {
+                const auto& ipv6 = configuration_->server.ipv6;
+
+                boost::system::error_code ec;
+                boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, ec);
+                if (!ec && configured_gateway.is_v6()) {
+                    return configured_gateway;
+                }
+
+                ppp::string prefix_string = ipv6.cidr;
+                std::size_t slash = prefix_string.find('/');
+                if (slash != ppp::string::npos) {
+                    prefix_string = prefix_string.substr(0, slash);
+                }
+
+                ec.clear();
+                boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
+                if (ec || !prefix.is_v6()) {
+                    return boost::asio::ip::address();
+                }
+
+                boost::asio::ip::address_v6 gateway;
+                if (!TryGetFirstHostIPv6(prefix.to_v6(), gateway)) {
+                    return boost::asio::ip::address();
+                }
+                return boost::asio::ip::address(gateway);
+            }
+
             bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
                 extensions.Clear();
 
@@ -145,9 +188,8 @@ namespace ppp {
 
                     boost::asio::ip::address_v6 candidate = boost::asio::ip::address_v6(network_bytes);
 
-                    boost::system::error_code gateway_ec;
-                    boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, gateway_ec);
-                    if (!gateway_ec && configured_gateway.is_v6() && candidate == configured_gateway.to_v6()) {
+                    boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
+                    if (transit_gateway.is_v6() && candidate == transit_gateway.to_v6()) {
                         boost::asio::ip::address_v6::bytes_type candidate_bytes = candidate.to_bytes();
                         candidate_bytes[15] ^= 0x01;
                         candidate = boost::asio::ip::address_v6(candidate_bytes);
@@ -158,9 +200,8 @@ namespace ppp {
                 };
 
                 auto try_commit_ipv6_lease = [&](const boost::asio::ip::address_v6& candidate, bool static_binding, Byte status_code, const ppp::string& status_message) noexcept -> bool {
-                    boost::system::error_code gateway_ec;
-                    boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, gateway_ec);
-                    if (!gateway_ec && configured_gateway.is_v6() && candidate == configured_gateway.to_v6()) {
+                    boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
+                    if (transit_gateway.is_v6() && candidate == transit_gateway.to_v6()) {
                         return false;
                     }
 
@@ -226,6 +267,21 @@ namespace ppp {
                     extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                     extensions.AssignedIPv6AddressPrefixLength = 128;
 
+                    if (configuration_->server.subnet && ipv6.prefix_length > 0 && ipv6.prefix_length < 128) {
+                        boost::system::error_code route_ec;
+                        ppp::string route_prefix_string = ipv6.cidr;
+                        std::size_t route_slash = route_prefix_string.find('/');
+                        if (route_slash != ppp::string::npos) {
+                            route_prefix_string = route_prefix_string.substr(0, route_slash);
+                        }
+
+                        boost::asio::ip::address route_prefix = StringToAddress(route_prefix_string, route_ec);
+                        if (!route_ec && route_prefix.is_v6()) {
+                            extensions.AssignedIPv6RoutePrefix = route_prefix;
+                            extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
+                        }
+                    }
+
                     boost::asio::ip::address_v6::bytes_type ula_bytes = {};
                     ec.clear();
                     ppp::string configured_prefix_string = ipv6.cidr;
@@ -290,9 +346,8 @@ namespace ppp {
                         }
                     }
 
-                    ec.clear();
-                    boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
-                    if (!ec && gateway.is_v6()) {
+                    boost::asio::ip::address gateway = GetIPv6TransitGateway();
+                    if (gateway.is_v6()) {
                         extensions.AssignedIPv6Gateway = gateway;
                     }
 
@@ -311,10 +366,12 @@ namespace ppp {
                         extensions.AssignedIPv6Dns2 = dns2;
                     }
 
-                    DebugLog("server ipv6 build result session=%s address=%s gateway=%s dns1=%s dns2=%s flags=%u",
+                    DebugLog("server ipv6 build result session=%s address=%s gateway=%s route=%s/%u dns1=%s dns2=%s flags=%u",
                         auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
                         extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
                         extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
+                        extensions.AssignedIPv6RoutePrefix.is_v6() ? extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
+                        (unsigned)extensions.AssignedIPv6RoutePrefixLength,
                         extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
                         extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "",
                         (unsigned)extensions.AssignedIPv6Flags);
@@ -340,6 +397,11 @@ namespace ppp {
                     extensions.Clear();
                     DebugLog("server ipv6 build failed session=%s reason=invalid-cidr cidr=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(), ipv6.cidr.data());
                     return false;
+                }
+
+                if (configuration_->server.subnet && ipv6.prefix_length > 0 && ipv6.prefix_length < 128) {
+                    extensions.AssignedIPv6RoutePrefix = prefix;
+                    extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
                 }
 
                 boost::asio::ip::address_v6::bytes_type bytes = prefix.to_v6().to_bytes();
@@ -392,9 +454,8 @@ namespace ppp {
                     }
                 }
 
-                ec.clear();
-                boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
-                if (!ec && gateway.is_v6()) {
+                boost::asio::ip::address gateway = GetIPv6TransitGateway();
+                if (gateway.is_v6()) {
                     extensions.AssignedIPv6Gateway = gateway;
                 }
 
@@ -410,10 +471,12 @@ namespace ppp {
                     extensions.AssignedIPv6Dns2 = dns2;
                 }
 
-                DebugLog("server ipv6 build result session=%s address=%s gateway=%s dns1=%s dns2=%s flags=%u",
+                DebugLog("server ipv6 build result session=%s address=%s gateway=%s route=%s/%u dns1=%s dns2=%s flags=%u",
                     auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
                     extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
                     extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
+                    extensions.AssignedIPv6RoutePrefix.is_v6() ? extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
+                    (unsigned)extensions.AssignedIPv6RoutePrefixLength,
                     extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
                     extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "",
                     (unsigned)extensions.AssignedIPv6Flags);
@@ -425,7 +488,78 @@ namespace ppp {
                         (unsigned)extensions.AssignedIPv6AddressPrefixLength);
                 }
 
+                if (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
+                    extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Gua) {
+                    DebugLog("server ipv6 build failed session=%s reason=invalid-assigned-mode mode=%u",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                        (unsigned)extensions.AssignedIPv6Mode);
+                    extensions.Clear();
+                    return false;
+                }
+
                 return extensions.HasAny();
+            }
+
+            bool VirtualEthernetSwitcher::TryGetAssignedIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
+                extensions.Clear();
+                if (!IsIPv6ServerEnabled()) {
+                    return false;
+                }
+
+                const auto& ipv6 = configuration_->server.ipv6;
+                AppConfiguration::IPv6Mode mode = ipv6.mode;
+                if (mode != AppConfiguration::IPv6Mode_Nat66 && mode != AppConfiguration::IPv6Mode_Gua) {
+                    return false;
+                }
+
+                IPv6LeaseEntry lease;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    auto lease_it = ipv6_leases_.find(session_id);
+                    if (lease_it == ipv6_leases_.end() || !lease_it->second.Address.is_v6()) {
+                        return false;
+                    }
+                    lease = lease_it->second;
+                }
+
+                boost::system::error_code ec;
+                ppp::string prefix_string = ipv6.cidr;
+                std::size_t slash = prefix_string.find('/');
+                if (slash != ppp::string::npos) {
+                    prefix_string = prefix_string.substr(0, slash);
+                }
+                boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
+                if (ec || !prefix.is_v6()) {
+                    return false;
+                }
+
+                extensions.AssignedIPv6Mode = mode == AppConfiguration::IPv6Mode_Nat66 ?
+                    VirtualEthernetInformationExtensions::IPv6Mode_Nat66 :
+                    VirtualEthernetInformationExtensions::IPv6Mode_Gua;
+                extensions.AssignedIPv6AddressPrefixLength = 128;
+                extensions.AssignedIPv6Address = lease.Address;
+                extensions.AssignedIPv6Gateway = GetIPv6TransitGateway();
+                if (mode == AppConfiguration::IPv6Mode_Gua) {
+                    extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
+                }
+                if (configuration_->server.subnet && ipv6.prefix_length > 0 && ipv6.prefix_length < 128) {
+                    extensions.AssignedIPv6RoutePrefix = prefix;
+                    extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
+                }
+
+                ec.clear();
+                boost::asio::ip::address dns1 = StringToAddress(ipv6.dns1, ec);
+                if (!ec && dns1.is_v6()) {
+                    extensions.AssignedIPv6Dns1 = dns1;
+                }
+
+                ec.clear();
+                boost::asio::ip::address dns2 = StringToAddress(ipv6.dns2, ec);
+                if (!ec && dns2.is_v6()) {
+                    extensions.AssignedIPv6Dns2 = dns2;
+                }
+
+                return extensions.AssignedIPv6Address.is_v6();
             }
 
             bool VirtualEthernetSwitcher::AddIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
@@ -447,6 +581,12 @@ namespace ppp {
                     for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
                         VirtualEthernetExchangerPtr current = tail->second;
                         if (current && current->GetId() == session_id && tail->first != ip_key) {
+                            boost::system::error_code stale_ec;
+                            boost::asio::ip::address stale_ip = StringToAddress(tail->first, stale_ec);
+                            if (!stale_ec && stale_ip.is_v6()) {
+                                DeleteIPv6TransitRoute(stale_ip, 128);
+                                DeleteIPv6NeighborProxy(stale_ip);
+                            }
                             tail = ipv6s_.erase(tail);
                         }
                         else {
@@ -489,6 +629,31 @@ namespace ppp {
                 return true;
             }
 
+            bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id) noexcept {
+                bool any = false;
+
+                SynchronizedObjectScope scope(syncobj_);
+                for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
+                    VirtualEthernetExchangerPtr current = tail->second;
+                    if (!current || current->GetId() != session_id) {
+                        ++tail;
+                        continue;
+                    }
+
+                    boost::system::error_code ec;
+                    boost::asio::ip::address ip = StringToAddress(tail->first, ec);
+                    if (!ec && ip.is_v6()) {
+                        DeleteIPv6TransitRoute(ip, 128);
+                        DeleteIPv6NeighborProxy(ip);
+                    }
+
+                    tail = ipv6s_.erase(tail);
+                    any = true;
+                }
+
+                return any;
+            }
+
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept {
                 if (!ip.is_v6()) {
                     return NULLPTR;
@@ -519,7 +684,7 @@ namespace ppp {
                 UInt32 address = 0;
                 UInt32 mask = 0;
                 UInt32 gw = 0;
-                if (!ppp::tap::TapLinux::GetPreferredNetworkInterface(uplink_name, address, mask, gw, ppp::string())) {
+                if (!ppp::tap::TapLinux::GetPreferredNetworkInterface(uplink_name, address, mask, gw, preferred_nic_)) {
                     return false;
                 }
 
@@ -612,6 +777,21 @@ namespace ppp {
 #else
                 return false;
 #endif
+            }
+
+            void VirtualEthernetSwitcher::ClearIPv6ExchangersUnsafe() noexcept {
+                for (const auto& kv : ipv6s_) {
+                    boost::system::error_code ec;
+                    boost::asio::ip::address ip = StringToAddress(kv.first, ec);
+                    if (ec || !ip.is_v6()) {
+                        continue;
+                    }
+
+                    DeleteIPv6TransitRoute(ip, 128);
+                    DeleteIPv6NeighborProxy(ip);
+                }
+
+                ipv6s_.clear();
             }
 
             bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept {
@@ -1189,6 +1369,39 @@ namespace ppp {
                     return false;
                 }
 
+                const auto& ipv6 = configuration_->server.ipv6;
+                boost::system::error_code prefix_ec;
+                ppp::string prefix_string = ipv6.cidr;
+                std::size_t slash = prefix_string.find('/');
+                if (slash != ppp::string::npos) {
+                    prefix_string = prefix_string.substr(0, slash);
+                }
+                boost::asio::ip::address prefix = StringToAddress(prefix_string, prefix_ec);
+                if (!prefix_ec && prefix.is_v6()) {
+                    int allowed_prefix_length = std::max<int>(0, std::min<int>(128, ipv6.prefix_length));
+                    if (!ppp::ipv6::PrefixMatch(destination, prefix.to_v6(), allowed_prefix_length)) {
+                        DebugLog("server ipv6 transit rejected reason=destination-outside-cidr destination=%s cidr=%s",
+                            destination.to_string().c_str(),
+                            ipv6.cidr.data());
+                        return false;
+                    }
+
+                    if (source.is_unspecified() || source.is_multicast() || source.is_loopback()) {
+                        DebugLog("server ipv6 transit rejected reason=invalid-source-class source=%s",
+                            source.to_string().c_str());
+                        return false;
+                    }
+
+                    boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
+                    bool source_is_transit_gateway = transit_gateway.is_v6() && source == transit_gateway.to_v6();
+                    if (!source_is_transit_gateway && ppp::ipv6::PrefixMatch(source, prefix.to_v6(), allowed_prefix_length) && FindIPv6Exchanger(source) == NULLPTR) {
+                        DebugLog("server ipv6 transit rejected reason=source-spoofed-vpn-address source=%s cidr=%s",
+                            source.to_string().c_str(),
+                            ipv6.cidr.data());
+                        return false;
+                    }
+                }
+
                 VirtualEthernetExchangerPtr exchanger = FindIPv6Exchanger(destination);
                 if (NULLPTR == exchanger) {
                     return false;
@@ -1228,6 +1441,7 @@ namespace ppp {
                     return false;
                 }
 
+                boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
                 boost::asio::ip::address_v6 transit = prefix.to_v6();
                 if (transit.is_unspecified()) {
                     boost::asio::ip::address_v6::bytes_type bytes = {};
@@ -1240,22 +1454,20 @@ namespace ppp {
                     transit = boost::asio::ip::address_v6(bytes);
                 }
 
-                if (!ipv6.gateway.empty()) {
-                    ec.clear();
-                    boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, ec);
-                    if (!ec && configured_gateway.is_v6()) {
-                        transit = configured_gateway.to_v6();
-                    }
+                if (transit_gateway.is_v6()) {
+                    transit = transit_gateway.to_v6();
                 }
                 else {
-                    boost::asio::ip::address_v6::bytes_type bytes = transit.to_bytes();
-                    bytes[15] = 1;
-                    transit = boost::asio::ip::address_v6(bytes);
+                    boost::asio::ip::address_v6 derived_transit;
+                    if (!TryGetFirstHostIPv6(transit, derived_transit)) {
+                        return false;
+                    }
+                    transit = derived_transit;
                 }
 
                 std::string transit_std = transit.to_string();
                 ppp::string transit_ip(transit_std.data(), transit_std.size());
-                int prefix_length = std::max<int>(64, std::min<int>(128, ipv6.prefix_length));
+                int prefix_length = std::max<int>(1, std::min<int>(128, ipv6.prefix_length));
 
                 ppp::vector<ppp::string> no_dns;
                 ppp::string tun_name = tun_name_;
@@ -1301,6 +1513,56 @@ namespace ppp {
 #else
                 if (IsIPv6ServerEnabled()) {
                     DebugLog("server ipv6 transit ignored reason=unsupported-platform");
+                }
+#endif
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::RefreshIPv6NeighborProxyIfNeed() noexcept {
+#if defined(_LINUX)
+                const auto& ipv6 = configuration_->server.ipv6;
+                if (!IsIPv6ServerEnabled() || ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
+                    return true;
+                }
+
+                ppp::string uplink_name;
+                UInt32 address = 0;
+                UInt32 mask = 0;
+                UInt32 gw = 0;
+                if (!ppp::tap::TapLinux::GetPreferredNetworkInterface(uplink_name, address, mask, gw, preferred_nic_)) {
+                    return false;
+                }
+
+                if (uplink_name.empty()) {
+                    return false;
+                }
+
+                bool reopened = false;
+                if (ipv6_neighbor_proxy_ifname_ != uplink_name) {
+                    CloseIPv6NeighborProxyIfNeed();
+                    if (!ppp::tap::TapLinux::EnableIPv6NeighborProxy(uplink_name)) {
+                        return false;
+                    }
+
+                    ipv6_neighbor_proxy_ifname_ = uplink_name;
+                    reopened = true;
+                    DebugLog("server ipv6 neighbor proxy rebound if=%s", uplink_name.data());
+                }
+                else if (!ppp::tap::TapLinux::EnableIPv6NeighborProxy(uplink_name)) {
+                    return false;
+                }
+
+                if (reopened) {
+                    for (const auto& kv : ipv6s_) {
+                        boost::system::error_code ec;
+                        boost::asio::ip::address ip = StringToAddress(kv.first, ec);
+                        if (ec || !ip.is_v6()) {
+                            continue;
+                        }
+
+                        AddIPv6TransitRoute(ip, 128);
+                        AddIPv6NeighborProxy(ip);
+                    }
                 }
 #endif
                 return true;
@@ -1759,6 +2021,8 @@ namespace ppp {
                     connections = std::move(connections_);
                     connections_.clear();
 
+                    ClearIPv6ExchangersUnsafe();
+
                     static_echo_allocateds_.clear();
                     break;
                 }
@@ -1865,11 +2129,27 @@ namespace ppp {
             void VirtualEthernetSwitcher::TickIPv6Leases(UInt64 now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 for (auto it = ipv6_leases_.begin(); it != ipv6_leases_.end();) {
-                    const IPv6LeaseEntry& lease = it->second;
+                    IPv6LeaseEntry& lease = it->second;
                     if (lease.StaticBinding || lease.ExpiresAt == UINT64_MAX || lease.ExpiresAt > now) {
                         ++it;
                         continue;
                     }
+
+                    auto exchanger_it = exchangers_.find(it->first);
+                    if (exchanger_it != exchangers_.end()) {
+                        const VirtualEthernetExchangerPtr& exchanger = exchanger_it->second;
+                        if (exchanger && !exchanger->IsDisposed()) {
+                            if (configuration_->server.ipv6.lease_time > 0) {
+                                lease.ExpiresAt = now + static_cast<UInt64>(configuration_->server.ipv6.lease_time) * 1000ULL;
+                            }
+                            else {
+                                lease.ExpiresAt = UINT64_MAX;
+                            }
+                            ++it;
+                            continue;
+                        }
+                    }
+
                     it = ipv6_leases_.erase(it);
                 }
 
@@ -1895,6 +2175,7 @@ namespace ppp {
                 TickAllExchangers(now);
                 TickAllConnections(now);
                 TickIPv6Leases(now);
+                RefreshIPv6NeighborProxyIfNeed();
 
                 VirtualEthernetNamespaceCachePtr cache = namespace_cache_;
                 if (NULLPTR != cache) {
@@ -1970,6 +2251,13 @@ namespace ppp {
                 VirtualEthernetInformation info;
                 info.Clear();
                 BuildInformationIPv6Extensions(session_id, response);
+                if (response.AssignedIPv6Address.is_v6()) {
+                    AddIPv6Exchanger(session_id, response);
+                }
+                else {
+                    DeleteIPv6Exchanger(session_id);
+                }
+
                 if (!entry.Accepted && entry.StatusCode != VirtualEthernetInformationExtensions::IPv6Status_None) {
                     response.IPv6StatusCode = entry.StatusCode;
                     response.IPv6StatusMessage = entry.StatusMessage;

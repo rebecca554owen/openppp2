@@ -116,6 +116,7 @@ namespace ppp {
                 VirtualEthernetLoggerPtr                                GetLogger() noexcept             { return logger_; }
                 VirtualEthernetManagedServerPtr                         GetManagedServer() noexcept      { return managed_server_; }
                 VirtualEthernetNamespaceCachePtr                        GetNamespaceCache() noexcept     { return namespace_cache_; }
+                void                                                    PreferredNic(const ppp::string& nic) noexcept { preferred_nic_ = nic; }
 
             public:
                 virtual bool                                            Open(const ppp::string& firewall) noexcept;
@@ -178,6 +179,7 @@ namespace ppp {
                 bool                                                    OpenIPv6TransitIfNeed() noexcept;
                 bool                                                    OpenIPv6TransitSsmtIfNeed(const ITapPtr& tap) noexcept;
                 void                                                    CloseIPv6TransitSsmtContexts() noexcept;
+                boost::asio::ip::address                                GetIPv6TransitGateway() noexcept;
 
             private:
                 VirtualEthernetStaticEchoAllocatedContextPtr            StaticEchoUnallocated(int allocated_id) noexcept;
@@ -199,17 +201,21 @@ namespace ppp {
                 bool                                                    FlowerArrangement(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
                 InformationEnvelope                                     BuildInformationEnvelope(const Int128& session_id, const VirtualEthernetInformation& info) noexcept;
                 bool                                                    BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept;
+                bool                                                    TryGetAssignedIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept;
                 bool                                                    UpdateIPv6Request(const Int128& session_id, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept;
                 void                                                    TickIPv6Leases(UInt64 now) noexcept;
                 bool                                                    AddIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept;
+                bool                                                    DeleteIPv6Exchanger(const Int128& session_id) noexcept;
                 bool                                                    DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept;
                 VirtualEthernetExchangerPtr                             FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    OpenIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    CloseIPv6NeighborProxyIfNeed() noexcept;
+                bool                                                    RefreshIPv6NeighborProxyIfNeed() noexcept;
                 bool                                                    AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept;
                 bool                                                    AddIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept;
                 bool                                                    DeleteIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept;
+                void                                                    ClearIPv6ExchangersUnsafe() noexcept;
                 bool                                                    SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
                 bool                                                    ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
                 bool                                                    SendIPv6PacketToClient(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
@@ -255,6 +261,7 @@ namespace ppp {
                 ppp::string                                             tun_name_;
                 int                                                     tun_ssmt_ = 0;
                 bool                                                    tun_ssmt_mq_ = false;
+                ppp::string                                             preferred_nic_;
                 ppp::string                                             ipv6_neighbor_proxy_ifname_;
                 ITapPtr                                                 ipv6_transit_tap_;
                 ppp::vector<std::shared_ptr<boost::asio::io_context>>   ipv6_transit_ssmt_contexts_;

@@ -55,6 +55,8 @@ namespace ppp {
                 Byte                                                AssignedIPv6Flags = 0;
                 boost::asio::ip::address                            AssignedIPv6Address;
                 boost::asio::ip::address                            AssignedIPv6Gateway;
+                boost::asio::ip::address                            AssignedIPv6RoutePrefix;
+                Byte                                                AssignedIPv6RoutePrefixLength = 0;
                 boost::asio::ip::address                            AssignedIPv6Dns1;
                 boost::asio::ip::address                            AssignedIPv6Dns2;
                 Byte                                                IPv6StatusCode = 0;

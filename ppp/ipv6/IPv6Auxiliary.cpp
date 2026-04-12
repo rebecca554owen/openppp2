@@ -11,12 +11,13 @@
 namespace ppp {
     namespace ipv6 {
         namespace auxiliary {
-        bool PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic) noexcept {
+        bool PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
 #if defined(_LINUX)
-            return ppp::linux::ipv6::auxiliary::PrepareServerEnvironment(configuration, preferred_nic);
+            return ppp::linux::ipv6::auxiliary::PrepareServerEnvironment(configuration, preferred_nic, transit_ifname);
 #else
             (void)configuration;
             (void)preferred_nic;
+            (void)transit_ifname;
             return true;
 #endif
         }
@@ -69,6 +70,24 @@ namespace ppp {
             return ppp::linux::ipv6::auxiliary::ApplyClientDefaultRoute(context, gateway, nat_mode, state);
 #else
             (void)context;
+            (void)gateway;
+            (void)nat_mode;
+            (void)state;
+            return false;
+#endif
+        }
+
+        bool ApplyClientSubnetRoute(const ClientContext& context, const boost::asio::ip::address& prefix, int prefix_length, const boost::asio::ip::address& gateway, bool nat_mode, ClientState& state) noexcept {
+#if defined(_WIN32)
+            return ppp::win32::ipv6::auxiliary::ApplyClientSubnetRoute(context, prefix, prefix_length, gateway, nat_mode, state);
+#elif defined(_MACOS)
+            return ppp::darwin::ipv6::auxiliary::ApplyClientSubnetRoute(context, prefix, prefix_length, gateway, nat_mode, state);
+#elif defined(_LINUX)
+            return ppp::linux::ipv6::auxiliary::ApplyClientSubnetRoute(context, prefix, prefix_length, gateway, nat_mode, state);
+#else
+            (void)context;
+            (void)prefix;
+            (void)prefix_length;
             (void)gateway;
             (void)nat_mode;
             (void)state;

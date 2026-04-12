@@ -1280,9 +1280,47 @@ namespace ppp
                 return dwExitCode == ERROR_SUCCESS;
             }
 
+            static bool IsSafeNetshInterfaceName(const ppp::string& value) noexcept {
+                if (value.empty()) {
+                    return false;
+                }
+
+                for (char ch : value) {
+                    bool ok =
+                        (ch >= 'a' && ch <= 'z') ||
+                        (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= '0' && ch <= '9') ||
+                        ch == ' ' || ch == '_' || ch == '-' || ch == '.' || ch == ':' || ch == '(' || ch == ')' || ch == '[' || ch == ']';
+                    if (!ok) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            static bool IsSafeNetshToken(const ppp::string& value) noexcept {
+                if (value.empty()) {
+                    return false;
+                }
+
+                for (char ch : value) {
+                    bool ok =
+                        (ch >= 'a' && ch <= 'z') ||
+                        (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= '0' && ch <= '9') ||
+                        ch == ':' || ch == '.' || ch == '_' || ch == '-' || ch == '%' || ch == '/';
+                    if (!ok) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
             bool SetIPv6Address(int interface_index, const ppp::string& ip, int prefix_length) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty() || ip.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(ip)) {
                     return false;
                 }
 
@@ -1293,7 +1331,7 @@ namespace ppp
 
             bool DeleteIPv6Address(int interface_index, const ppp::string& ip) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty() || ip.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(ip)) {
                     return false;
                 }
 
@@ -1304,29 +1342,42 @@ namespace ppp
 
             bool SetIPv6DefaultRoute(int interface_index, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name)) {
                     return false;
                 }
 
                 char command[1200];
                 snprintf(command, sizeof(command), "netsh interface ipv6 add route ::/0 interface=\"%s\" metric=%d store=active", interface_name.data(), std::max<int>(1, metric));
+                if (ExecuteNetshCommand(command)) {
+                    return true;
+                }
+
+                DeleteIPv6DefaultGateway(interface_index, ppp::string());
                 return ExecuteNetshCommand(command);
             }
 
             bool SetIPv6DefaultGateway(int interface_index, const ppp::string& gateway, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty() || gateway.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(gateway)) {
                     return false;
                 }
 
                 char command[1200];
                 snprintf(command, sizeof(command), "netsh interface ipv6 add route ::/0 interface=\"%s\" nexthop=%s metric=%d store=active", interface_name.data(), gateway.data(), std::max<int>(1, metric));
+                if (ExecuteNetshCommand(command)) {
+                    return true;
+                }
+
+                DeleteIPv6DefaultGateway(interface_index, gateway);
                 return ExecuteNetshCommand(command);
             }
 
             bool DeleteIPv6DefaultGateway(int interface_index, const ppp::string& gateway) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name)) {
+                    return false;
+                }
+                if (!gateway.empty() && !IsSafeNetshToken(gateway)) {
                     return false;
                 }
 
@@ -1342,7 +1393,10 @@ namespace ppp
 
             bool AddIPv6Route(int interface_index, const ppp::string& prefix, int prefix_length, const ppp::string& gateway, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty() || prefix.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(prefix)) {
+                    return false;
+                }
+                if (!gateway.empty() && !IsSafeNetshToken(gateway)) {
                     return false;
                 }
 
@@ -1354,12 +1408,21 @@ namespace ppp
                 else {
                     snprintf(command, sizeof(command), "netsh interface ipv6 add route %s/%d interface=\"%s\" nexthop=%s metric=%d store=active", prefix.data(), prefix_length, interface_name.data(), gateway.data(), std::max<int>(1, metric));
                 }
+
+                if (ExecuteNetshCommand(command)) {
+                    return true;
+                }
+
+                DeleteIPv6Route(interface_index, prefix, prefix_length, gateway);
                 return ExecuteNetshCommand(command);
             }
 
             bool DeleteIPv6Route(int interface_index, const ppp::string& prefix, int prefix_length, const ppp::string& gateway) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty() || prefix.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(prefix)) {
+                    return false;
+                }
+                if (!gateway.empty() && !IsSafeNetshToken(gateway)) {
                     return false;
                 }
 
@@ -1376,7 +1439,7 @@ namespace ppp
 
             bool SetDnsAddressesV6(int interface_index, const ppp::vector<ppp::string>& servers) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (interface_name.empty()) {
+                if (!IsSafeNetshInterfaceName(interface_name)) {
                     return false;
                 }
 
@@ -1391,6 +1454,9 @@ namespace ppp
                 for (const ppp::string& server : servers) {
                     if (server.empty()) {
                         continue;
+                    }
+                    if (!IsSafeNetshToken(server)) {
+                        return false;
                     }
 
                     char command[1200];

@@ -50,11 +50,57 @@ namespace {
         return system(command.data()) == 0;
     }
 
+    static ppp::string ExtractRouteInterface(const ppp::string& route) noexcept {
+        static const char token[] = " dev ";
+
+        std::size_t pos = route.find(token);
+        if (pos == ppp::string::npos) {
+            return ppp::string();
+        }
+
+        pos += sizeof(token) - 1;
+        std::size_t end = route.find(' ', pos);
+        ppp::string interface_name = end == ppp::string::npos ? route.substr(pos) : route.substr(pos, end - pos);
+        if (!IsSafeShellToken(interface_name)) {
+            return ppp::string();
+        }
+
+        return interface_name;
+    }
+
     static int LinuxExecuteCommandWithStatus(const ppp::string& command) noexcept {
         if (command.empty()) {
             return -1;
         }
         return system(command.data());
+    }
+
+    static ppp::string BuildIpv6ForwardRules(bool add_rules, const ppp::string& prefix, int prefix_length) noexcept {
+        if (prefix.empty()) {
+            return ppp::string();
+        }
+
+        char command[2048];
+        if (add_rules) {
+            snprintf(command, sizeof(command),
+                "ip6tables -C FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1 || "
+                "ip6tables -A FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
+                "ip6tables -C FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || "
+                "ip6tables -A FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1",
+                prefix.data(), prefix_length,
+                prefix.data(), prefix_length,
+                prefix.data(), prefix_length,
+                prefix.data(), prefix_length);
+        }
+        else {
+            snprintf(command, sizeof(command),
+                "ip6tables -D FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
+                "ip6tables -D FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1",
+                prefix.data(), prefix_length,
+                prefix.data(), prefix_length);
+        }
+
+        return ppp::string(command);
     }
 
     static ppp::string ResolveIpv6UplinkInterface(const ppp::string& preferred_nic) noexcept {
@@ -88,7 +134,7 @@ namespace {
         return !prefix.empty();
     }
 
-    static void CleanupServerRules(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& prefix, int prefix_length, const ppp::string& preferred_nic) noexcept {
+    static void CleanupServerRules(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& prefix, int prefix_length, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
         if (prefix.empty()) {
             return;
         }
@@ -99,35 +145,37 @@ namespace {
         }
 
         char command[4096];
+        ppp::string forward_cleanup = BuildIpv6ForwardRules(false, prefix, prefix_length);
         if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
             if (uplink_name.empty()) {
                 snprintf(command, sizeof(command),
-                    "ip6tables -D FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
-                    "ip6tables -D FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; "
+                    "%s; "
                     "ip6tables -t nat -D POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1",
-                    prefix.data(), prefix_length,
-                    prefix.data(), prefix_length,
+                    forward_cleanup.data(),
                     prefix.data(), prefix_length);
             }
             else {
                 snprintf(command, sizeof(command),
-                    "ip6tables -D FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
-                    "ip6tables -D FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; "
+                    "%s; "
                     "ip6tables -t nat -D POSTROUTING -o %s -s %s/%d -j MASQUERADE >/dev/null 2>&1",
-                    prefix.data(), prefix_length,
-                    prefix.data(), prefix_length,
+                    forward_cleanup.data(),
                     uplink_name.data(), prefix.data(), prefix_length);
             }
             LinuxExecuteCommand(command);
         }
-        else if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua && !uplink_name.empty()) {
-            snprintf(command, sizeof(command), "ip -6 neigh flush proxy dev %s >/dev/null 2>&1", uplink_name.data());
-            LinuxExecuteCommand(command);
-            ppp::tap::TapLinux::DisableIPv6NeighborProxy(uplink_name);
+        else if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
+            LinuxExecuteCommand(forward_cleanup);
+            if (!uplink_name.empty()) {
+                snprintf(command, sizeof(command), "ip -6 neigh flush proxy dev %s >/dev/null 2>&1", uplink_name.data());
+                LinuxExecuteCommand(command);
+                ppp::tap::TapLinux::DisableIPv6NeighborProxy(uplink_name);
+            }
         }
 
-        snprintf(command, sizeof(command), "ip -6 route flush dev ppp_transit_v6 >/dev/null 2>&1; ip -6 addr flush dev ppp_transit_v6 >/dev/null 2>&1");
-        LinuxExecuteCommand(command);
+        if (!transit_ifname.empty() && IsSafeShellToken(transit_ifname)) {
+            snprintf(command, sizeof(command), "ip -6 route flush dev %s >/dev/null 2>&1; ip -6 addr flush dev %s >/dev/null 2>&1", transit_ifname.data(), transit_ifname.data());
+            LinuxExecuteCommand(command);
+        }
     }
 }
 
@@ -144,13 +192,15 @@ namespace ppp {
                 char buffer[1024];
                 ppp::string route;
                 while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
-                    route.append(buffer);
+                    route = buffer;
+                    while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
+                        route.pop_back();
+                    }
+                    if (!route.empty()) {
+                        break;
+                    }
                 }
                 pclose(pipe);
-
-                while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
-                    route.pop_back();
-                }
                 return route;
             }
 
@@ -185,7 +235,7 @@ namespace ppp {
                 return system(command) == 0;
             }
 
-            bool PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic) noexcept {
+            bool PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
                 if (NULLPTR == configuration) {
                     return false;
                 }
@@ -208,17 +258,13 @@ namespace ppp {
                     return false;
                 }
 
-                CleanupServerRules(mode, prefix, prefix_length, preferred_nic);
+                CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
 
                 char sysctl_command[512];
                 snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 > /dev/null 2>&1");
                 if (!LinuxExecuteCommand(sysctl_command)) {
                     fprintf(stdout, "Linux IPv6 server prepare failed: cannot enable ipv6 forwarding.\r\n");
                     return false;
-                }
-
-                if (mode != ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
-                    return true;
                 }
 
                 ppp::string uplink_name = ResolveIpv6UplinkInterface(preferred_nic);
@@ -228,33 +274,36 @@ namespace ppp {
                     return false;
                 }
 
+                ppp::string forward_rules = BuildIpv6ForwardRules(true, prefix, prefix_length);
+                if (forward_rules.empty()) {
+                    fprintf(stdout, "Linux IPv6 server prepare failed: invalid ipv6 forward rules.\r\n");
+                    return false;
+                }
+
+                if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
+                    if (LinuxExecuteCommandWithStatus(forward_rules) == 0) {
+                        return true;
+                    }
+
+                    fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables forward rules failed.\r\n");
+                    return false;
+                }
+
                 if (uplink_name.empty()) {
                     snprintf(ip6tables_command, sizeof(ip6tables_command),
-                        "ip6tables -C FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1 || "
-                        "ip6tables -A FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
-                        "ip6tables -C FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || "
-                        "ip6tables -A FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; "
+                        "%s; "
                         "ip6tables -t nat -C POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1 || "
                         "ip6tables -t nat -A POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1",
-                        prefix.data(), prefix_length,
-                        prefix.data(), prefix_length,
-                        prefix.data(), prefix_length,
-                        prefix.data(), prefix_length,
+                        forward_rules.data(),
                         prefix.data(), prefix_length,
                         prefix.data(), prefix_length);
                 }
                 else {
                     snprintf(ip6tables_command, sizeof(ip6tables_command),
-                        "ip6tables -C FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1 || "
-                        "ip6tables -A FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
-                        "ip6tables -C FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || "
-                        "ip6tables -A FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; "
+                        "%s; "
                         "ip6tables -t nat -C POSTROUTING -o %s -s %s/%d -j MASQUERADE >/dev/null 2>&1 || "
                         "ip6tables -t nat -A POSTROUTING -o %s -s %s/%d -j MASQUERADE >/dev/null 2>&1",
-                        prefix.data(), prefix_length,
-                        prefix.data(), prefix_length,
-                        prefix.data(), prefix_length,
-                        prefix.data(), prefix_length,
+                        forward_rules.data(),
                         uplink_name.data(), prefix.data(), prefix_length,
                         uplink_name.data(), prefix.data(), prefix_length);
                 }
@@ -269,11 +318,11 @@ namespace ppp {
 
             void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                 (void)context;
+                (void)nat_mode;
                 state.OriginalDnsConfiguration = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
-                if (nat_mode) {
-                    state.OriginalDefaultRoute = ReadDefaultRoute();
-                    state.DefaultRouteWasPresent = !state.OriginalDefaultRoute.empty();
-                }
+                state.OriginalDefaultRoute = ReadDefaultRoute();
+                state.DefaultRouteWasPresent = !state.OriginalDefaultRoute.empty();
+                state.OriginalDefaultRouteInterface = ExtractRouteInterface(state.OriginalDefaultRoute);
             }
 
             bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
@@ -324,6 +373,31 @@ namespace ppp {
                 return true;
             }
 
+            bool ApplyClientSubnetRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& prefix, int prefix_length, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                if (NULLPTR == context.Tap || context.InterfaceName.empty() || !prefix.is_v6()) {
+                    return false;
+                }
+
+                ppp::string gateway_string;
+                if (gateway.is_v6()) {
+                    gateway_string = gateway.to_string();
+                }
+                else if (!nat_mode) {
+                    return false;
+                }
+
+                ppp::string prefix_string = prefix.to_string();
+                prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                if (!ppp::tap::TapLinux::AddRoute6(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
+                    return false;
+                }
+
+                state.SubnetRouteApplied = true;
+                state.SubnetRoutePrefix = prefix_string;
+                state.SubnetRoutePrefixLength = prefix_length;
+                return true;
+            }
+
             bool ApplyClientDns(const ::ppp::ipv6::auxiliary::ClientContext& context, const ppp::vector<ppp::string>& dns_servers, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                 (void)context;
                 if (dns_servers.empty()) {
@@ -360,6 +434,10 @@ namespace ppp {
                     return;
                 }
 
+                if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
+                    ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                }
+
                 if (state.DefaultRouteApplied && nat_mode && state.DefaultRouteGateway.empty()) {
                     ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, ppp::string());
                 }
@@ -368,13 +446,6 @@ namespace ppp {
                 }
 
                 if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
-                    if (state.NetworkRouteApplied) {
-                        ppp::string network_prefix = ComputeNetworkAddress(address.to_v6(), prefix_length);
-                        ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, network_prefix, prefix_length, ppp::string());
-                    }
-                    if (state.PrefixRouteApplied) {
-                        ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.Address, 128, ppp::string());
-                    }
                     ppp::tap::TapLinux::DeleteIPv6Address(context.InterfaceName, state.Address, prefix_length);
                 }
 

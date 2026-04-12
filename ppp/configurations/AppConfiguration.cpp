@@ -7,6 +7,7 @@
 #include <ppp/ssl/SSL.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/ipv6/IPv6Packet.h>
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
@@ -81,6 +82,32 @@ namespace {
         prefix_length = atoi(cidr.substr(slash + 1).c_str());
         prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
         return !prefix.empty();
+    }
+
+    static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boost::asio::ip::address_v6& host) noexcept {
+        boost::asio::ip::address_v6::bytes_type bytes = network.to_bytes();
+        for (int i = 15; i >= 0; --i) {
+            if (bytes[i] != 0xff) {
+                ++bytes[i];
+                for (int j = i + 1; j < 16; ++j) {
+                    bytes[j] = 0;
+                }
+                host = boost::asio::ip::address_v6(bytes);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void DisableServerIPv6(ppp::configurations::AppConfiguration& config) noexcept {
+        config.server.ipv6.mode = ppp::configurations::AppConfiguration::IPv6Mode_None;
+        config.server.ipv6.cidr.clear();
+        config.server.ipv6.prefix_length = 0;
+        config.server.ipv6.gateway.clear();
+        config.server.ipv6.dns1.clear();
+        config.server.ipv6.dns2.clear();
+        config.server.ipv6.lease_time = 0;
+        config.server.ipv6.static_addresses.clear();
     }
 }
 
@@ -482,9 +509,82 @@ namespace ppp {
                         config.server.ipv6.prefix_length = 64;
                     }
                 }
+
+                if (config.server.ipv6.prefix_length <= 0 || config.server.ipv6.prefix_length >= 128) {
+                    DisableServerIPv6(config);
+                    ipv6_prefix = "";
+                    ipv6_server_enabled = false;
+                }
             }
             else {
                 config.server.ipv6.mode = AppConfiguration::IPv6Mode_None;
+            }
+
+            if (ipv6_server_enabled) {
+                boost::asio::ip::address_v6 cidr_prefix = boost::asio::ip::address_v6();
+                boost::system::error_code cidr_ec;
+                if (!ipv6_prefix.empty()) {
+                    cidr_prefix = boost::asio::ip::address_v6::from_string(ipv6_prefix.c_str(), cidr_ec);
+                    if (!cidr_ec) {
+                        cidr_prefix = ppp::ipv6::ComputeNetworkAddress(cidr_prefix, config.server.ipv6.prefix_length);
+                        ipv6_prefix = cidr_prefix.to_string();
+                    }
+                }
+
+                bool invalid_server_prefix = cidr_ec || ipv6_prefix.empty() || cidr_prefix.is_unspecified() || cidr_prefix.is_multicast() || cidr_prefix.is_loopback();
+                if (invalid_server_prefix) {
+                    DisableServerIPv6(config);
+                    ipv6_prefix.clear();
+                    ipv6_server_enabled = false;
+                }
+            }
+
+            if (ipv6_server_enabled) {
+                boost::asio::ip::address_v6 cidr_prefix = boost::asio::ip::address_v6();
+                boost::system::error_code cidr_ec;
+                if (!ipv6_prefix.empty()) {
+                    cidr_prefix = boost::asio::ip::address_v6::from_string(ipv6_prefix.c_str(), cidr_ec);
+                }
+
+                boost::system::error_code gateway_ec;
+                boost::asio::ip::address configured_gateway = StringToAddress(config.server.ipv6.gateway, gateway_ec);
+                boost::asio::ip::address_v6 effective_gateway_v6 = boost::asio::ip::address_v6();
+                bool has_effective_gateway = false;
+                if (gateway_ec || !configured_gateway.is_v6() || cidr_ec) {
+                    config.server.ipv6.gateway.clear();
+                }
+                else if (!ppp::ipv6::PrefixMatch(configured_gateway.to_v6(), cidr_prefix, config.server.ipv6.prefix_length)) {
+                    config.server.ipv6.gateway.clear();
+                }
+                else {
+                    effective_gateway_v6 = configured_gateway.to_v6();
+                    has_effective_gateway = true;
+                }
+
+                if (!has_effective_gateway && !cidr_ec) {
+                    has_effective_gateway = TryGetFirstHostIPv6(cidr_prefix, effective_gateway_v6);
+                }
+
+                ppp::map<ppp::string, ppp::string> normalized_static_addresses;
+                for (const auto& kv : config.server.ipv6.static_addresses) {
+                    boost::system::error_code static_ec;
+                    boost::asio::ip::address static_address = StringToAddress(kv.second, static_ec);
+                    if (static_ec || !static_address.is_v6()) {
+                        continue;
+                    }
+
+                    boost::asio::ip::address_v6 static_v6 = static_address.to_v6();
+                    if (cidr_ec || !ppp::ipv6::PrefixMatch(static_v6, cidr_prefix, config.server.ipv6.prefix_length)) {
+                        continue;
+                    }
+
+                    if (has_effective_gateway && static_v6 == effective_gateway_v6) {
+                        continue;
+                    }
+
+                    normalized_static_addresses[kv.first] = static_v6.to_string();
+                }
+                config.server.ipv6.static_addresses = std::move(normalized_static_addresses);
             }
 
             if (!Ciphertext::Support(config.key.protocol)) {
@@ -904,7 +1004,6 @@ namespace ppp {
             config.server.backend_key = JsonAuxiliary::AsValue<ppp::string>(json["server"]["backend-key"]);
             config.server.ipv6.mode = ParseIPv6Mode(JsonAuxiliary::AsValue<ppp::string>(json["server"]["ipv6"]["mode"]));
             AssignIfPresent(config.server.ipv6.cidr, json["server"]["ipv6"]["cidr"]);
-            AssignIfPresent(config.server.ipv6.prefix_length, json["server"]["ipv6"]["prefix-length"]);
             AssignIfPresent(config.server.ipv6.gateway, json["server"]["ipv6"]["gateway"]);
             AssignIfPresent(config.server.ipv6.dns1, json["server"]["ipv6"]["dns1"]);
             AssignIfPresent(config.server.ipv6.dns2, json["server"]["ipv6"]["dns2"]);

@@ -82,27 +82,54 @@ namespace ppp {
                 pclose(pipe);
             }
 
+            bool IsCurrentDefaultRoute(const ppp::string& interface_name, const ppp::string& gateway) noexcept {
+                ppp::string current_interface;
+                ppp::string current_gateway;
+                ReadPrimaryDefaultRoute(current_interface, current_gateway);
+
+                if (!gateway.empty()) {
+                    return gateway == current_gateway;
+                }
+
+                return !interface_name.empty() && interface_name == current_interface;
+            }
+
             bool SetRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
                 if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
                     return false;
                 }
 
-                char cmd[1200];
+                char add_cmd[1200];
+                char change_cmd[1200];
                 if (addressIP == "::" && prefix_length == 0) {
                     if (gw.empty()) {
-                        snprintf(cmd, sizeof(cmd), "route -n add -inet6 default -interface %s > /dev/null 2>&1", ifrName.data());
+                        snprintf(add_cmd, sizeof(add_cmd), "route -n add -inet6 default -interface %s > /dev/null 2>&1", ifrName.data());
                     }
                     else {
-                        snprintf(cmd, sizeof(cmd), "route -n add -inet6 default %s > /dev/null 2>&1", gw.data());
+                        snprintf(add_cmd, sizeof(add_cmd), "route -n add -inet6 default %s > /dev/null 2>&1", gw.data());
                     }
+
+                    if (system(add_cmd) == 0) {
+                        return true;
+                    }
+
+                    return IsCurrentDefaultRoute(ifrName, gw);
                 }
+
                 else if (gw.empty()) {
-                    snprintf(cmd, sizeof(cmd), "route -n add -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+                    snprintf(add_cmd, sizeof(add_cmd), "route -n add -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+                    snprintf(change_cmd, sizeof(change_cmd), "route -n change -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
                 }
                 else {
-                    snprintf(cmd, sizeof(cmd), "route -n add -inet6 %s/%d %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data());
+                    snprintf(add_cmd, sizeof(add_cmd), "route -n add -inet6 %s/%d %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data());
+                    snprintf(change_cmd, sizeof(change_cmd), "route -n change -inet6 %s/%d %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data());
                 }
-                return system(cmd) == 0;
+
+                if (system(add_cmd) == 0) {
+                    return true;
+                }
+
+                return system(change_cmd) == 0;
             }
 
             bool DeleteRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
@@ -173,7 +200,31 @@ namespace ppp {
 
                 state.DefaultRouteApplied = true;
                 state.DefaultRouteGateway = gateway_string;
-                state.DefaultRouteAppliedByInterface = gateway_string.empty();
+                return true;
+            }
+
+            bool ApplyClientSubnetRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& prefix, int prefix_length, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                if (context.InterfaceName.empty() || !prefix.is_v6()) {
+                    return false;
+                }
+
+                ppp::string gateway_string;
+                if (gateway.is_v6()) {
+                    gateway_string = gateway.to_string();
+                }
+                else if (!nat_mode) {
+                    return false;
+                }
+
+                ppp::string prefix_string = prefix.to_string();
+                prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                if (!SetRoute(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
+                    return false;
+                }
+
+                state.SubnetRouteApplied = true;
+                state.SubnetRoutePrefix = prefix_string;
+                state.SubnetRoutePrefixLength = prefix_length;
                 return true;
             }
 
@@ -209,16 +260,15 @@ namespace ppp {
                     return;
                 }
 
+                if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
+                    DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                }
+
                 if (state.DefaultRouteApplied) {
                     DeleteRoute(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
                 }
 
                 if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
-                    if (state.NetworkRouteApplied) {
-                        ppp::string route_prefix = ComputeNetworkAddress(address.to_v6(), prefix_length);
-                        DeleteRoute(context.InterfaceName, route_prefix, prefix_length, ppp::string());
-                    }
-
                     char cmd[600];
                     snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s delete > /dev/null 2>&1", context.InterfaceName.data(), state.Address.data());
                     system(cmd);

@@ -878,12 +878,14 @@ namespace ppp {
                         information_ = ei;
                         if (!disposed_) {
                             DebugLog("client info envelope raw-json=%s", information.ExtendedJson.data());
-                            DebugLog("client info received ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
+                            DebugLog("client info received ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s route=%s/%u dns1=%s dns2=%s",
                                 (unsigned)information.Extensions.AssignedIPv6Mode,
                                 (unsigned)information.Extensions.AssignedIPv6AddressPrefixLength,
                                 (unsigned)information.Extensions.AssignedIPv6Flags,
                                 information.Extensions.AssignedIPv6Address.is_v6() ? information.Extensions.AssignedIPv6Address.to_string().c_str() : "",
                                 information.Extensions.AssignedIPv6Gateway.is_v6() ? information.Extensions.AssignedIPv6Gateway.to_string().c_str() : "",
+                                information.Extensions.AssignedIPv6RoutePrefix.is_v6() ? information.Extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
+                                (unsigned)information.Extensions.AssignedIPv6RoutePrefixLength,
                                 information.Extensions.AssignedIPv6Dns1.is_v6() ? information.Extensions.AssignedIPv6Dns1.to_string().c_str() : "",
                                 information.Extensions.AssignedIPv6Dns2.is_v6() ? information.Extensions.AssignedIPv6Dns2.to_string().c_str() : "");
                             switcher_->OnInformation(ei, information.Extensions);

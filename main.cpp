@@ -1245,7 +1245,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
         do
         {
 #if defined(_LINUX)
-            if (!ppp::ipv6::auxiliary::PrepareServerEnvironment(configuration, network_interface->Nic))
+            if (!ppp::ipv6::auxiliary::PrepareServerEnvironment(configuration, network_interface->Nic, network_interface->ComponentId))
             {
                 fprintf(stdout, "%s\r\n", "Failed to prepare Linux IPv6 server environment.");
                 break;
@@ -1262,6 +1262,8 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
             {
                 break;
             }
+
+            ethernet->PreferredNic(network_interface->Nic);
 
             // Open switcher
             if (!ethernet->Open(network_interface->FirewallRules))
