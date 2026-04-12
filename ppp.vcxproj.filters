@@ -330,6 +330,9 @@
     <ClCompile Include="ppp\app\client\VEthernetNetworkSwitcher.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\protocol\VirtualEthernetTcpipConnection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -367,6 +370,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="windows\ppp\win32\Win32PerformanceCounter.cpp">
@@ -1160,6 +1166,9 @@
     <ClInclude Include="ppp\configurations\AppConfiguration.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\ipv6\IPv6Auxiliary.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\Int128.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1173,6 +1182,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\net\proxies\HttpProxy.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\win32\Win32RegistryKey.h">

@@ -22,6 +22,16 @@ using ppp::net::IPEndPoint;
 using ppp::threading::Thread;
 using ppp::threading::Executors;
 
+namespace {
+    static bool                                         SupportsServerIPv6DataPlane() noexcept {
+#if defined(_LINUX)
+        return true;
+#else
+        return false;
+#endif
+    }
+}
+
 namespace ppp {
     namespace configurations {
         static constexpr int                            EVP_HEADER_MSS_MIN_MOD = 64 * 64 * 64;
@@ -408,6 +418,15 @@ namespace ppp {
 
             ppp::string ipv6_mode = ToLower(config.server.ipv6.mode);
             config.server.ipv6.mode = ipv6_mode;
+            if (config.server.ipv6.enabled && !SupportsServerIPv6DataPlane()) {
+                config.server.ipv6.enabled = false;
+                config.server.ipv6.mode = "";
+                config.server.ipv6.gateway = "";
+                config.server.ipv6.dns1 = "";
+                config.server.ipv6.dns2 = "";
+            }
+
+            ipv6_mode = config.server.ipv6.mode;
             if (config.server.ipv6.enabled) {
                 bool has_public_ipv6_plan = !config.server.ipv6.prefix.empty();
                 if (ipv6_mode.empty()) {

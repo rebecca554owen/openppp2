@@ -22,37 +22,6 @@
 
 static void DebugLog(const char* format, ...) noexcept {}
 
-#if defined(_LINUX)
-static ppp::string LinuxReadDefaultIPv6Route() noexcept {
-    FILE* pipe = popen("ip -6 route show default 2>/dev/null", "r");
-    if (NULLPTR == pipe) {
-        return ppp::string();
-    }
-
-    char buffer[1024];
-    ppp::string route;
-    while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
-        route.append(buffer);
-    }
-    pclose(pipe);
-
-    while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
-        route.pop_back();
-    }
-    return route;
-}
-
-static bool LinuxApplyDefaultIPv6RouteCommand(const ppp::string& route) noexcept {
-    if (route.empty()) {
-        return false;
-    }
-
-    char command[1600];
-    snprintf(command, sizeof(command), "ip -6 route replace %s > /dev/null 2>&1", route.data());
-    return system(command) == 0;
-}
-#endif
-
 static bool ClientSupportsManagedIPv6() noexcept {
 #if defined(_WIN32) || defined(_LINUX) || defined(_MACOS)
     return true;
@@ -61,53 +30,6 @@ static bool ClientSupportsManagedIPv6() noexcept {
 #endif
 }
 
-#if defined(_MACOS)
-static bool MacosSetIPv6Route(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
-    if (ifrName.empty() || addressIP.empty()) {
-        return false;
-    }
-
-    char cmd[1200];
-    if (addressIP == "::" && prefix_length == 0) {
-        if (gw.empty()) {
-            snprintf(cmd, sizeof(cmd), "route -n add -inet6 default -interface %s > /dev/null 2>&1", ifrName.data());
-        }
-        else {
-            snprintf(cmd, sizeof(cmd), "route -n add -inet6 default %s > /dev/null 2>&1", gw.data());
-        }
-    }
-    else if (gw.empty()) {
-        snprintf(cmd, sizeof(cmd), "route -n add -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
-    }
-    else {
-        snprintf(cmd, sizeof(cmd), "route -n add -inet6 %s/%d %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data());
-    }
-    return system(cmd) == 0;
-}
-
-static bool MacosDeleteIPv6Route(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
-    if (ifrName.empty() || addressIP.empty()) {
-        return false;
-    }
-
-    char cmd[1200];
-    if (addressIP == "::" && prefix_length == 0) {
-        if (gw.empty()) {
-            snprintf(cmd, sizeof(cmd), "route -n delete -inet6 default -interface %s > /dev/null 2>&1", ifrName.data());
-        }
-        else {
-            snprintf(cmd, sizeof(cmd), "route -n delete -inet6 default %s > /dev/null 2>&1", gw.data());
-        }
-    }
-    else if (gw.empty()) {
-        snprintf(cmd, sizeof(cmd), "route -n delete -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
-    }
-    else {
-        snprintf(cmd, sizeof(cmd), "route -n delete -inet6 %s/%d %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data());
-    }
-    return system(cmd) == 0;
-}
-#endif
 
 #include <ppp/net/asio/vdns.h>
 #include <ppp/net/Socket.h>
@@ -701,127 +623,25 @@ namespace ppp {
                 bool applied = false;
                 ipv6_state_.Clear();
 
-#if defined(_LINUX)
-                if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-                    ipv6_state_.OriginalDefaultRoute = LinuxReadDefaultIPv6Route();
-                    ipv6_state_.DefaultRouteWasPresent = !ipv6_state_.OriginalDefaultRoute.empty();
-                    DebugLog("client ipv6 original default route=%s", ipv6_state_.OriginalDefaultRoute.empty() ? "<none>" : ipv6_state_.OriginalDefaultRoute.data());
-                }
-#endif
+                ppp::ipv6::auxiliary::ClientContext ipv6_context;
+                ipv6_context.Tap = tap.get();
+                ipv6_context.InterfaceIndex = tun_ni->Index;
+                ipv6_context.InterfaceName = tun_ni->Name;
 
-#if !defined(_WIN32)
-                ipv6_state_.OriginalDnsConfiguration = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
-#else
-                if (auto current_ni = ppp::win32::network::GetNetworkInterfaceByInterfaceIndex(tun_ni->Index); NULLPTR != current_ni) {
-                    ipv6_state_.OriginalDnsServers = current_ni->DnsAddresses;
+                int prefix = std::max<int>(1, std::min<int>(128, (int)extensions.AssignedIPv6PrefixLength));
+                if (prefix < 1) {
+                    prefix = 64;
                 }
-#endif
+
+                bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat;
+                bool prefix_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix;
+                ppp::ipv6::auxiliary::CaptureClientOriginalState(ipv6_context, nat_mode, ipv6_state_);
 
                 if (extensions.AssignedIPv6Address.is_v6()) {
-                    std::string addr_std = extensions.AssignedIPv6Address.to_string();
-                    ppp::string addr_str(addr_std.data(), addr_std.size());
-                    int prefix = std::max<int>(1, std::min<int>(128, (int)extensions.AssignedIPv6PrefixLength));
-                    if (prefix < 1) {
-                        prefix = 64;
-                    }
-
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetIPv6Address(tun_ni->Index, addr_str, prefix)) {
-                        applied = true;
-                        ipv6_state_.AddressApplied = true;
-                        ipv6_state_.Address = addr_str;
-                    }
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ppp::tap::TapLinux::SetIPv6Address(tun_ni->Name, addr_str, prefix)) {
-                            applied = true;
-                            ipv6_state_.AddressApplied = true;
-                            ipv6_state_.Address = addr_str;
-                            DebugLog("client ipv6 address ok nic=%s address=%s/%d", tun_ni->Name.data(), addr_str.data(), prefix);
-                            if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix) {
-                                bool route_ok = ppp::tap::TapLinux::AddRoute6(tun_ni->Name, addr_str, prefix, ppp::string());
-                                ipv6_state_.PrefixRouteApplied = route_ok;
-                                DebugLog("client ipv6 prefix route %s nic=%s route=%s/%d", route_ok ? "ok" : "fail", tun_ni->Name.data(), addr_str.data(), prefix);
-                            }
-                        }
-                        else {
-                            DebugLog("client ipv6 address fail nic=%s address=%s/%d", tun_ni->Name.data(), addr_str.data(), prefix);
-                        }
-                    }
-#else
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s prefixlen %d alias > /dev/null 2>&1", tun_ni->Name.data(), addr_str.data(), prefix);
-                    if (system(cmd) == 0) {
-                        applied = true;
-                        ipv6_state_.AddressApplied = true;
-                        ipv6_state_.Address = addr_str;
-                    }
-#endif
+                    applied |= ppp::ipv6::auxiliary::ApplyClientAddress(ipv6_context, extensions.AssignedIPv6Address, prefix, prefix_mode, ipv6_state_);
                 }
 
-                bool ipv6_default_route_handled = false;
-#if defined(_LINUX)
-                if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !extensions.AssignedIPv6Gateway.is_v6()) {
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ppp::tap::TapLinux::AddRoute6(tun_ni->Name, "::", 0, ppp::string())) {
-                            applied = true;
-                            ipv6_default_route_handled = true;
-                            ipv6_state_.DefaultRouteApplied = true;
-                            DebugLog("client ipv6 default route ok nic=%s gateway=<direct>", tun_ni->Name.data());
-                        }
-                        else {
-                            ipv6_default_route_handled = true;
-                            DebugLog("client ipv6 default route fail nic=%s gateway=<direct>", tun_ni->Name.data());
-                        }
-                    }
-                }
-#endif
-
-                if (!ipv6_default_route_handled && extensions.AssignedIPv6Gateway.is_v6()) {
-                    std::string gw_std = extensions.AssignedIPv6Gateway.to_string();
-                    ppp::string gw_str(gw_std.data(), gw_std.size());
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetIPv6DefaultGateway(tun_ni->Index, gw_str, 0)) {
-                        applied = true;
-                        ipv6_state_.DefaultRouteApplied = true;
-                        ipv6_state_.DefaultRouteGateway = gw_str;
-                    }
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ppp::tap::TapLinux::AddRoute6(tun_ni->Name, "::", 0, gw_str)) {
-                            applied = true;
-                            ipv6_state_.DefaultRouteApplied = true;
-                            ipv6_state_.DefaultRouteGateway = gw_str;
-                            DebugLog("client ipv6 default route ok nic=%s gateway=%s", tun_ni->Name.data(), gw_str.data());
-                        }
-                        else {
-                            DebugLog("client ipv6 default route fail nic=%s gateway=%s", tun_ni->Name.data(), gw_str.data());
-                        }
-                    }
-#else
-                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, gw_str)) {
-                        applied = true;
-                        ipv6_state_.DefaultRouteApplied = true;
-                        ipv6_state_.DefaultRouteGateway = gw_str;
-                    }
-#endif
-                }
-                else if (!ipv6_default_route_handled && extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetIPv6DefaultRoute(tun_ni->Index, 0)) {
-                        applied = true;
-                        ipv6_state_.DefaultRouteApplied = true;
-                    }
-#elif defined(_MACOS)
-                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, ppp::string())) {
-                        applied = true;
-                        ipv6_state_.DefaultRouteApplied = true;
-                    }
-#endif
-                }
+                applied |= ppp::ipv6::auxiliary::ApplyClientDefaultRoute(ipv6_context, extensions.AssignedIPv6Gateway, nat_mode, ipv6_state_);
 
                 ppp::vector<ppp::string> dns_servers;
                 if (extensions.AssignedIPv6Dns1.is_v6()) {
@@ -834,36 +654,7 @@ namespace ppp {
                 }
 
                 if (!dns_servers.empty()) {
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetDnsAddressesV6(tun_ni->Index, dns_servers)) {
-                        applied = true;
-                        ipv6_state_.DnsApplied = true;
-                        ipv6_state_.DnsServers = dns_servers;
-                        ppp::tap::TapWindows::DnsFlushResolverCache();
-                    }
-#else
-                    ppp::vector<boost::asio::ip::address> dns_addrs;
-                    ppp::vector<boost::asio::ip::address> current_addrs;
-                    ppp::unix__::UnixAfx::GetDnsAddresses(current_addrs);
-                    for (auto& s : dns_servers) {
-                        boost::system::error_code ec;
-                        auto addr = StringToAddress(s, ec);
-                        if (!ec && addr.is_v6()) {
-                            dns_addrs.emplace_back(addr);
-                        }
-                    }
-                    if (!dns_addrs.empty()) {
-                        if (ppp::unix__::UnixAfx::MergeDnsAddresses(dns_addrs, current_addrs)) {
-                            applied = true;
-                            ipv6_state_.DnsApplied = true;
-                            ipv6_state_.DnsServers = dns_servers;
-                            DebugLog("client ipv6 dns ok count=%d", (int)dns_addrs.size());
-                        }
-                        else {
-                            DebugLog("client ipv6 dns fail count=%d", (int)dns_addrs.size());
-                        }
-                    }
-#endif
+                    applied |= ppp::ipv6::auxiliary::ApplyClientDns(ipv6_context, dns_servers, ipv6_state_);
                 }
                 
                 if (applied) {
@@ -894,81 +685,18 @@ namespace ppp {
                     return;
                 }
 
-                auto& ext = information_extensions_;
-                auto& state = ipv6_state_;
-
-                bool ipv6_default_route_cleared = false;
-#if defined(_LINUX)
-                if (state.DefaultRouteApplied && ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && state.DefaultRouteGateway.empty()) {
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, ppp::string());
-                        ipv6_default_route_cleared = true;
-                    }
-                }
-#endif
-
-                if (!ipv6_default_route_cleared && state.DefaultRouteApplied) {
-                    ppp::string gw_str = state.DefaultRouteGateway;
-#if defined(_WIN32)
-                    ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index, gw_str);
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, gw_str);
-                    }
-#else
-                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, gw_str);
-#endif
+                int prefix = std::max<int>(1, std::min<int>(128, (int)information_extensions_.AssignedIPv6PrefixLength));
+                if (prefix < 1) {
+                    prefix = 64;
                 }
 
-                if (state.AddressApplied && !state.Address.empty()) {
-                    ppp::string addr_str = state.Address;
-                    int prefix = std::max<int>(1, std::min<int>(128, (int)ext.AssignedIPv6PrefixLength));
-#if defined(_WIN32)
-                    ppp::win32::network::DeleteIPv6Address(tun_ni->Index, addr_str);
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (state.PrefixRouteApplied) {
-                            ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, addr_str, prefix, ppp::string());
-                        }
-                        ppp::tap::TapLinux::DeleteIPv6Address(tun_ni->Name, addr_str, prefix);
-                    }
-#else
-                    char cmd[600];
-                    snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s delete > /dev/null 2>&1", tun_ni->Name.data(), addr_str.data());
-                    system(cmd);
-#endif
-                }
-                else if (state.DefaultRouteApplied && ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_WIN32)
-                    ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index, state.DefaultRouteGateway);
-#elif defined(_MACOS)
-                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, state.DefaultRouteGateway);
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, state.DefaultRouteGateway);
-                    }
-#endif
-                }
+                ppp::ipv6::auxiliary::ClientContext ipv6_context;
+                ipv6_context.Tap = tap.get();
+                ipv6_context.InterfaceIndex = tun_ni->Index;
+                ipv6_context.InterfaceName = tun_ni->Name;
 
-#if defined(_WIN32)
-                if (state.DnsApplied) {
-                    ppp::win32::network::SetDnsAddressesV6(tun_ni->Index, state.OriginalDnsServers);
-                    ppp::tap::TapWindows::DnsFlushResolverCache();
-                }
-#else
-                if (state.DnsApplied && !state.OriginalDnsConfiguration.empty()) {
-                    ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
-                }
-#if defined(_LINUX)
-                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent && !state.OriginalDefaultRoute.empty()) {
-                    LinuxApplyDefaultIPv6RouteCommand(state.OriginalDefaultRoute);
-                }
-#endif
-#endif
+                bool nat_mode = information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat;
+                ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, information_extensions_.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
 
                 ipv6_applied_ = false;
                 ipv6_state_.Clear();

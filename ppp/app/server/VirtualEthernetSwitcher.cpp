@@ -90,18 +90,16 @@ namespace ppp {
 #endif
             }
 
+            bool VirtualEthernetSwitcher::IsIPv6ServerEnabled() noexcept {
+                return configuration_->server.ipv6.enabled && SupportsIPv6DataPlane();
+            }
+
             bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
                 extensions.Clear();
 
                 const auto& ipv6 = configuration_->server.ipv6;
-                if (!ipv6.enabled) {
+                if (!IsIPv6ServerEnabled()) {
                     DebugLog("server ipv6 disabled session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
-                    return false;
-                }
-
-                if (!SupportsIPv6DataPlane()) {
-                    DebugLog("server ipv6 ignored session=%s reason=unsupported-platform",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                     return false;
                 }
 
@@ -349,7 +347,7 @@ namespace ppp {
             bool VirtualEthernetSwitcher::OpenIPv6NeighborProxyIfNeed() noexcept {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
-                if (!ipv6.enabled || ToLower(ipv6.mode) != "prefix" || !ipv6.neighbor_proxy) {
+                if (!IsIPv6ServerEnabled() || ToLower(ipv6.mode) != "prefix" || !ipv6.neighbor_proxy) {
                     return true;
                 }
 
@@ -370,7 +368,7 @@ namespace ppp {
                 ipv6_neighbor_proxy_ifname_ = uplink_name;
                 DebugLog("server ipv6 neighbor proxy enabled if=%s", uplink_name.data());
 #else
-                if (configuration_->server.ipv6.enabled) {
+                if (IsIPv6ServerEnabled()) {
                     DebugLog("server ipv6 neighbor proxy ignored reason=unsupported-platform");
                 }
 #endif
@@ -397,7 +395,7 @@ namespace ppp {
                 }
 
                 const auto& ipv6 = configuration_->server.ipv6;
-                if (!ipv6.enabled) {
+                if (!IsIPv6ServerEnabled()) {
                     return false;
                 }
 
@@ -428,7 +426,7 @@ namespace ppp {
                 }
 
                 const auto& ipv6 = configuration_->server.ipv6;
-                if (!ipv6.enabled) {
+                if (!IsIPv6ServerEnabled()) {
                     return false;
                 }
 
@@ -681,7 +679,7 @@ namespace ppp {
 
                 VirtualEthernetInformation fallback_information;
                 const VirtualEthernetInformation* established_information = i.get();
-                if (NULLPTR == established_information && configuration_->server.ipv6.enabled && configuration_->server.backend.empty()) {
+                if (NULLPTR == established_information && IsIPv6ServerEnabled() && configuration_->server.backend.empty()) {
                     fallback_information.Clear();
                     fallback_information.BandwidthQoS = 0;
                     fallback_information.IncomingTraffic = std::numeric_limits<UInt64>::max();
@@ -1046,7 +1044,7 @@ namespace ppp {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
                 ppp::string mode = ToLower(ipv6.mode);
-                bool enable_transit = ipv6.enabled && (mode == "nat" || mode == "prefix");
+                bool enable_transit = IsIPv6ServerEnabled() && (mode == "nat" || mode == "prefix");
                 if (!enable_transit) {
                     return true;
                 }
@@ -1128,7 +1126,7 @@ namespace ppp {
                 ipv6_transit_tap_ = tap;
                 DebugLog("server ipv6 transit tap opened name=%s address=%s/%d", tap->GetId().data(), transit_ip.data(), prefix_length);
 #else
-                if (configuration_->server.ipv6.enabled) {
+                if (IsIPv6ServerEnabled()) {
                     DebugLog("server ipv6 transit ignored reason=unsupported-platform");
                 }
 #endif

@@ -365,11 +365,13 @@
     <ClCompile Include="ppp\transmissions\ITransmissionQoS.cpp" />
     <ClCompile Include="ppp\transmissions\IWebsocketTransmission.cpp" />
     <ClCompile Include="ppp\transmissions\proxys\IForwarding.cpp" />
+    <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneConnection.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneController.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspX.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.cpp" />
+    <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp" />
     <ClCompile Include="windows\ppp\net\proxies\HttpProxy.cpp" />
     <ClCompile Include="windows\ppp\net\QoSS.cpp" />
     <ClCompile Include="windows\ppp\net\Win32SocketAcceptor.cpp" />
@@ -636,6 +638,7 @@
     <ClInclude Include="ppp\collections\Dictionary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetLinklayer.h" />
     <ClInclude Include="ppp\configurations\AppConfiguration.h" />
+    <ClInclude Include="ppp\ipv6\IPv6Auxiliary.h" />
     <ClInclude Include="ppp\coroutines\asio\asio.h" />
     <ClInclude Include="ppp\coroutines\YieldContext.h" />
     <ClInclude Include="ppp\cryptography\EVP.h" />
@@ -683,6 +686,7 @@
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneLspX.h" />
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.h" />
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.h" />
+    <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h" />
     <ClInclude Include="windows\ppp\net\proxies\HttpProxy.h" />
     <ClInclude Include="windows\ppp\net\QoSS.h" />
     <ClInclude Include="windows\ppp\tap\tap-windows.h" />

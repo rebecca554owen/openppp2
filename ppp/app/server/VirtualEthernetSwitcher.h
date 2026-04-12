@@ -158,6 +158,7 @@ namespace ppp {
                 void                                                    TickAllConnections(UInt64 now) noexcept;
                 bool                                                    OpenManagedServerIfNeed() noexcept;
                 bool                                                    SupportsIPv6DataPlane() noexcept;
+                bool                                                    IsIPv6ServerEnabled() noexcept;
                 bool                                                    OpenIPv6TransitIfNeed() noexcept;
                 bool                                                    OpenIPv6TransitSsmtIfNeed(const ITapPtr& tap) noexcept;
                 void                                                    CloseIPv6TransitSsmtContexts() noexcept;

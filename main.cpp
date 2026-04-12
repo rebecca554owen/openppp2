@@ -32,6 +32,7 @@
 #if defined(_MACOS)
 #include <darwin/ppp/tap/TapDarwin.h>
 #else
+#include <ppp/ipv6/IPv6Auxiliary.h>
 #include <linux/ppp/tap/TapLinux.h>
 #include <linux/ppp/diagnostics/UnixStackTrace.h>
 #endif
@@ -86,100 +87,6 @@ using ppp::Int128;
 static constexpr int PPP_VIRR_UPDATE_STRETCH  = 300;    // Retry interval in seconds if update fails
 static constexpr int PPP_VIRR_UPDATE_INTERVAL = 86400;  // Daily update interval in seconds
 static constexpr int PPP_VBGP_UPDATE_INTERVAL = 3600;   // Hourly vBGP update interval
-
-#if defined(_LINUX)
-static bool LinuxExecuteCommand(const ppp::string& command) noexcept
-{
-    if (command.empty())
-    {
-        return false;
-    }
-
-    int status = system(command.data());
-    return status == 0;
-}
-
-static int LinuxExecuteCommandWithStatus(const ppp::string& command) noexcept
-{
-    if (command.empty())
-    {
-        return -1;
-    }
-
-    return system(command.data());
-}
-
-static bool LinuxPrepareIpv6NatEnvironment(const std::shared_ptr<AppConfiguration>& configuration) noexcept
-{
-    if (NULLPTR == configuration)
-    {
-        return false;
-    }
-
-    const auto& ipv6 = configuration->server.ipv6;
-    if (!ipv6.enabled || ToLower(ipv6.mode) != "nat")
-    {
-        return true;
-    }
-
-    ppp::string prefix = ipv6.prefix;
-    if (prefix.empty())
-    {
-        prefix = "fd42:4242:4242::";
-    }
-
-    int prefix_length = std::max<int>(64, std::min<int>(128, ipv6.prefix_length));
-    char sysctl_command[256];
-    snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1");
-    if (!LinuxExecuteCommand(sysctl_command))
-    {
-        fprintf(stdout, "Linux IPv6 NAT prepare failed: cannot enable ipv6 forwarding.\r\n");
-        return false;
-    }
-    char nft_flush_command[256];
-    snprintf(nft_flush_command, sizeof(nft_flush_command), "nft list table ip6 openppp2 >/dev/null 2>&1 && nft flush table ip6 openppp2 >/dev/null 2>&1 || true");
-    LinuxExecuteCommand(nft_flush_command);
-
-    char nft_command[2048];
-    snprintf(nft_command, sizeof(nft_command),
-        "nft add table ip6 openppp2 >/dev/null 2>&1; "
-        "nft 'add chain ip6 openppp2 forward { type filter hook forward priority filter; policy accept; }' >/dev/null 2>&1; "
-        "nft 'add chain ip6 openppp2 postrouting { type nat hook postrouting priority srcnat; policy accept; }' >/dev/null 2>&1; "
-        "nft 'add rule ip6 openppp2 forward ip6 saddr %s/%d accept' >/dev/null 2>&1; "
-        "nft 'add rule ip6 openppp2 forward ip6 daddr %s/%d ct state related,established accept' >/dev/null 2>&1; "
-        "nft 'add rule ip6 openppp2 postrouting ip6 saddr %s/%d masquerade' >/dev/null 2>&1",
-        prefix.data(), prefix_length,
-        prefix.data(), prefix_length,
-        prefix.data(), prefix_length);
-
-    if (LinuxExecuteCommand(nft_command))
-    {
-        return true;
-    }
-
-    char ip6tables_command[2048];
-    snprintf(ip6tables_command, sizeof(ip6tables_command),
-        "ip6tables -C FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1 || "
-        "ip6tables -A FORWARD -s %s/%d -j ACCEPT >/dev/null 2>&1; "
-        "ip6tables -C FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || "
-        "ip6tables -A FORWARD -d %s/%d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; "
-        "ip6tables -t nat -C POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1 || "
-        "ip6tables -t nat -A POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1",
-        prefix.data(), prefix_length,
-        prefix.data(), prefix_length,
-        prefix.data(), prefix_length,
-        prefix.data(), prefix_length,
-        prefix.data(), prefix_length, prefix.data(), prefix_length);
-    int ip6tables_status = LinuxExecuteCommandWithStatus(ip6tables_command);
-    if (ip6tables_status == 0)
-    {
-        return true;
-    }
-
-    fprintf(stdout, "Linux IPv6 NAT prepare failed: nft and ip6tables rules both failed.\r\n");
-    return false;
-}
-#endif
 
 // Network interface configuration structure
 struct NetworkInterface final
@@ -1323,9 +1230,9 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
         do
         {
 #if defined(_LINUX)
-            if (!LinuxPrepareIpv6NatEnvironment(configuration))
+            if (!ppp::ipv6::auxiliary::PrepareServerEnvironment(configuration, network_interface->Nic))
             {
-                fprintf(stdout, "%s\r\n", "Failed to prepare Linux IPv6 NAT environment.");
+                fprintf(stdout, "%s\r\n", "Failed to prepare Linux IPv6 server environment.");
                 break;
             }
 #endif

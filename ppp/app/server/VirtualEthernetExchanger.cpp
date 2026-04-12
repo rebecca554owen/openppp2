@@ -325,7 +325,7 @@ namespace ppp {
                     forwarded = ForwardNatPacketToDestination(packet, packet_length, y);
                 }
 
-                if (!forwarded) {
+                if (!forwarded && switcher_->IsIPv6ServerEnabled()) {
                     ForwardIPv6PacketToDestination(packet, packet_length, y);
                 }
 
@@ -334,6 +334,10 @@ namespace ppp {
 
             bool VirtualEthernetExchanger::ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
                 if (disposed_) {
+                    return false;
+                }
+
+                if (!switcher_->IsIPv6ServerEnabled()) {
                     return false;
                 }
 
