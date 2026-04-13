@@ -1,6 +1,6 @@
-# Engineering Philosophy
+# Engineering Concepts
 
-[中文版本](ENGINEERING_PHILOSOPHY_CN.md)
+[中文版本](ENGINEERING_CONCEPTS_CN.md)
 
 ## Positioning
 
@@ -97,7 +97,7 @@ The code suggests the project is intended for operators who are willing to manag
 
 This is consistent with infrastructure software. Routers, firewalls, and overlay gateways are rarely useful because they are “simple”; they are useful because they are explicit and controllable.
 
-## Philosophy Of Tunnel Design
+## Tunnel Design Concepts
 
 The tunnel is not treated as a single opaque socket. It is divided into:
 
@@ -114,7 +114,7 @@ This separation is what allows the same runtime to support:
 - static UDP packet mode
 - MUX connection reuse
 
-## Philosophy Of Control
+## Control Plane Concepts
 
 OPENPPP2 keeps control close to the data plane.
 
@@ -126,7 +126,7 @@ Examples:
 
 That is important for infrastructure. Control-plane integration exists, but the local node still has to function as a networking system.
 
-## Philosophy Of Defense
+## Defense Concepts
 
 From the code, the practical security posture is based more on disciplined state management than on marketing language.
 

@@ -35,7 +35,9 @@ Tunnel and protocol documents:
 
 Engineering and operations documents:
 
-- Engineering philosophy: [`docs/ENGINEERING_PHILOSOPHY.md`](docs/ENGINEERING_PHILOSOPHY.md)
+- Engineering concepts: [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
+- User manual: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md)
+- CLI reference: [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)
 - Source reading guide: [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md)
 - Configuration reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
 - Deployment patterns: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
@@ -49,7 +51,7 @@ Chinese versions are provided in the same directory with `_CN` suffixes.
 Recommended path for architects and maintainers:
 
 1. [`docs/README.md`](docs/README.md)
-2. [`docs/ENGINEERING_PHILOSOPHY.md`](docs/ENGINEERING_PHILOSOPHY.md)
+2. [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
 3. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 4. [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md)
 5. [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
@@ -248,7 +250,7 @@ ppp --help
 - Separate transport, link-layer control, and platform networking concerns
 - Make route, DNS, and access control visible in configuration instead of hidden side effects
 
-For the full design stance, see [`docs/ENGINEERING_PHILOSOPHY.md`](docs/ENGINEERING_PHILOSOPHY.md).
+For the full design stance, see [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md).
 
 ## Notes
 

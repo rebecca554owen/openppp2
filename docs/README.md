@@ -21,7 +21,7 @@ Because of that, the documents are organized in layers, not as one monolithic ma
 ### If you want to understand the system as an infrastructure product
 
 1. [`../README.md`](../README.md)
-2. [`ENGINEERING_PHILOSOPHY.md`](ENGINEERING_PHILOSOPHY.md)
+2. [`ENGINEERING_CONCEPTS.md`](ENGINEERING_CONCEPTS.md)
 3. [`ARCHITECTURE.md`](ARCHITECTURE.md)
 4. [`STARTUP_AND_LIFECYCLE.md`](STARTUP_AND_LIFECYCLE.md)
 5. [`TUNNEL_DESIGN.md`](TUNNEL_DESIGN.md)
@@ -58,7 +58,12 @@ Because of that, the documents are organized in layers, not as one monolithic ma
 
 ### System documents
 
-- [`ENGINEERING_PHILOSOPHY.md`](ENGINEERING_PHILOSOPHY.md): why the project is shaped as infrastructure instead of a consumer VPN
+- [`ENGINEERING_CONCEPTS.md`](ENGINEERING_CONCEPTS.md): why the project is shaped as infrastructure instead of a consumer VPN
+
+### Product manuals
+
+- [`USER_MANUAL.md`](USER_MANUAL.md): operator-focused guide for running client and server roles on supported platforms
+- [`CLI_REFERENCE.md`](CLI_REFERENCE.md): command-line reference organized by common, role-specific, and platform-specific switches
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): overall structure, major modules, and data/control plane boundaries
 - [`STARTUP_AND_LIFECYCLE.md`](STARTUP_AND_LIFECYCLE.md): process startup, config loading, runtime ownership, and periodic maintenance
 - [`SOURCE_READING_GUIDE.md`](SOURCE_READING_GUIDE.md): practical reading path through the repository
