@@ -356,6 +356,8 @@ namespace ppp {
                     return false;
                 }
 
+                AppConfigurationPtr configuration = GetConfiguration();
+
                 if (!switcher_->IsIPv6ServerEnabled()) {
                     return false;
                 }
@@ -389,6 +391,13 @@ namespace ppp {
                 VirtualEthernetSwitcher::VirtualEthernetExchangerPtr exchanger = switcher_->FindIPv6Exchanger(destination);
                 if (NULLPTR == exchanger) {
                     return switcher_->SendIPv6TransitPacket(packet, packet_length);
+                }
+
+                if (!configuration->server.subnet) {
+                    DebugLog("server ipv6 peer delivery rejected session=%s destination=%s reason=subnet-disabled",
+                        auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(),
+                        destination.to_string().c_str());
+                    return false;
                 }
 
                 ITransmissionPtr transmission = exchanger->GetTransmission();

@@ -60,6 +60,7 @@ namespace ppp
             static bool                                                             AddRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept;
             static bool                                                             DeleteRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept;
             static bool                                                             EnableIPv6NeighborProxy(const ppp::string& ifrName) noexcept;
+            static bool                                                             QueryIPv6NeighborProxy(const ppp::string& ifrName, bool& enabled) noexcept;
             static bool                                                             DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept;
             static bool                                                             AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept;
             static bool                                                             DeleteIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept;

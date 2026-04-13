@@ -114,7 +114,7 @@ namespace {
             return preferred_nic;
         }
 
-        FILE* pipe = popen("ip -6 route show default 2>/dev/null", "r");
+        FILE* pipe = popen("ip -6 route show default", "r");
         if (NULLPTR != pipe) {
             char buffer[1024];
             while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
@@ -210,7 +210,7 @@ namespace ppp {
         namespace ipv6 {
             namespace auxiliary {
             ppp::string ReadDefaultRoute() noexcept {
-                FILE* pipe = popen("ip -6 route show default 2>/dev/null", "r");
+                FILE* pipe = popen("ip -6 route show default", "r");
                 if (NULLPTR == pipe) {
                     return ppp::string();
                 }

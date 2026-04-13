@@ -322,6 +322,41 @@ namespace ppp {
             return ExecuteIpCommand(command);
         }
 
+        bool TapLinux::QueryIPv6NeighborProxy(const ppp::string& ifrName, bool& enabled) noexcept {
+            enabled = false;
+            if (!IsSafeShellToken(ifrName)) {
+                return false;
+            }
+
+            char command[1200];
+            snprintf(command, sizeof(command), "sysctl -n net.ipv6.conf.%s.proxy_ndp", ifrName.data());
+
+            FILE* pipe = popen(command, "r");
+            if (NULLPTR == pipe) {
+                return false;
+            }
+
+            char buffer[64];
+            ppp::string value;
+            while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+                value = buffer;
+                while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) {
+                    value.pop_back();
+                }
+                if (!value.empty()) {
+                    break;
+                }
+            }
+
+            int status = pclose(pipe);
+            if (status != 0 || value.empty()) {
+                return false;
+            }
+
+            enabled = atoi(value.c_str()) > 0;
+            return true;
+        }
+
         bool TapLinux::DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
             if (!IsSafeShellToken(ifrName)) {
                 return false;

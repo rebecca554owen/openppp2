@@ -99,6 +99,11 @@ namespace {
         return false;
     }
 
+    static bool IsGlobalUnicastIPv6Prefix(const boost::asio::ip::address_v6& prefix) noexcept {
+        boost::asio::ip::address_v6::bytes_type bytes = prefix.to_bytes();
+        return (bytes[0] & 0xe0) == 0x20;
+    }
+
     static void DisableServerIPv6(ppp::configurations::AppConfiguration& config) noexcept {
         config.server.ipv6.mode = ppp::configurations::AppConfiguration::IPv6Mode_None;
         config.server.ipv6.cidr.clear();
@@ -532,6 +537,9 @@ namespace ppp {
                 }
 
                 bool invalid_server_prefix = cidr_ec || ipv6_prefix.empty() || cidr_prefix.is_unspecified() || cidr_prefix.is_multicast() || cidr_prefix.is_loopback();
+                if (!invalid_server_prefix && config.server.ipv6.mode == AppConfiguration::IPv6Mode_Gua) {
+                    invalid_server_prefix = !IsGlobalUnicastIPv6Prefix(cidr_prefix);
+                }
                 if (invalid_server_prefix) {
                     DisableServerIPv6(config);
                     ipv6_prefix.clear();
@@ -566,6 +574,7 @@ namespace ppp {
                 }
 
                 ppp::map<ppp::string, ppp::string> normalized_static_addresses;
+                ppp::unordered_set<ppp::string> used_static_addresses;
                 for (const auto& kv : config.server.ipv6.static_addresses) {
                     Int128 static_guid_id = auxiliary::StringAuxiliary::GuidStringToInt128(kv.first);
                     if (static_guid_id == 0) {
@@ -587,7 +596,11 @@ namespace ppp {
                         continue;
                     }
 
-                    normalized_static_addresses[auxiliary::StringAuxiliary::Int128ToGuidString(static_guid_id)] = static_v6.to_string();
+                    std::string normalized_address_std = static_v6.to_string();
+                    ppp::string normalized_address(normalized_address_std.data(), normalized_address_std.size());
+                    if (used_static_addresses.emplace(normalized_address).second) {
+                        normalized_static_addresses[auxiliary::StringAuxiliary::Int128ToGuidString(static_guid_id)] = normalized_address;
+                    }
                 }
                 config.server.ipv6.static_addresses = std::move(normalized_static_addresses);
             }

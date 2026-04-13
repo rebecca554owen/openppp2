@@ -52,7 +52,7 @@ namespace ppp {
                 interface_name.clear();
                 gateway.clear();
 
-                FILE* pipe = popen("route -n get -inet6 default 2>/dev/null", "r");
+                FILE* pipe = popen("route -n get -inet6 default", "r");
                 if (NULLPTR == pipe) {
                     return;
                 }
