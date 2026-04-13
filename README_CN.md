@@ -381,13 +381,14 @@
 | `!` | 不可用或禁用 |
 
 ### IPv6 模型
-- 服务端 IPv6 使用精简模型：`mode`、`cidr`、`gateway`、`dns1`、`dns2`、`lease-time`、`static-addresses`。
-- `mode` 支持 `none`、`nat66`、`gua`。
+- 服务端 IPv6 对外使用精简模型：`mode`、`cidr`、`gateway`、`dns1`、`dns2`、`lease-time`、`static-addresses`。
+- 对外公开的 `mode` 只有 `nat66` 和 `gua`；留空 `mode` 表示禁用托管 IPv6。
 - 每个客户端 GUID 只会获得一个 IPv6 `/128` 地址。
 - 不做前缀委派，不下发多个 IPv6 地址。
 - 客户端 IPv6 只有运行时入口：`--tun-ipv6=<ipv6>`。
 - `--tun-ipv6` 只是请求，服务端可以接受、替换，或者在配置的 CIDR 内自动分配其它地址。
-- 服务端会优先复用同一 GUID 的历史租约，并支持通过 `static-addresses` 做静态绑定。
+- 服务端始终是最终 IPv6 分配权威，会优先复用同一 GUID 的历史租约，并支持通过 `static-addresses` 做静态绑定。
+- `subnet=true` 只表示 VPN 内部 IPv6 对等可达，不会恢复前缀委派或 routed-prefix 旧语义。
 
 ### IPv6 服务端示例
 ```json
@@ -407,9 +408,8 @@
 ```
 
 ### IPv6 模式说明
-- `none`：禁用托管 IPv6。
 - `nat66`：从配置的 IPv6 CIDR 中为客户端分配一个 `/128`，并在服务端启用 NAT66 处理。
-- `gua`：从配置的 IPv6 CIDR 中为客户端分配一个 `/128`，并在服务端使用 neighbor proxy 处理。
+- `gua`：从配置的 IPv6 CIDR 中为客户端分配一个 `/128`，并在服务端使用 neighbor proxy 处理，同时不做 NAT，让客户端作为真实公网 IPv6 主机被访问。
 
 <a id="network-protocol-static-guide"></a>
 
@@ -669,7 +669,7 @@ _LARGEFILE64_SOURCE
 |--------------|--------|--------------------------------------|------------------------------|------------------|
 | log          | string | ./ppp.log                            | 日志文件路径                  | `server`         |
 | node         | int    | 1                                    | 服务器节点ID                  | `server`         |
-| subnet       | bool   | true                                 | 启用子网分配                  | `server`         |
+| subnet       | bool   | true                                 | 启用 VPN 内部对等可达         | `server`         |
 | mapping      | bool   | true                                 | 启用端口映射                  | `server`         |
 | backend      | string | ws://192.168.0.24/ppp/webhook        | 管理后台URL                   | `server`         |
 | backend-key  | string | HaEkTB55VcHovKtUPHmU9zn0NjFmC6tff   | 管理后台认证密钥              | `server`         |

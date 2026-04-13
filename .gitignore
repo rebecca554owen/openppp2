@@ -73,5 +73,5 @@ ppp.log
 /ppp/Release
 
 build-check/
-build-linux/
+build-linux*/
 builds/cmake-check/

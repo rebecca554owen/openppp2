@@ -381,13 +381,14 @@ Next-generation security network access technology, providing high-performance V
 | `!`    | Not available / Disabled |
 
 ### IPv6 Model
-- Server IPv6 uses a minimal model: `mode`, `cidr`, `gateway`, `dns1`, `dns2`, `lease-time`, `static-addresses`.
-- `mode` supports `none`, `nat66`, and `gua`.
+- Server IPv6 uses a minimal public model: `mode`, `cidr`, `gateway`, `dns1`, `dns2`, `lease-time`, `static-addresses`.
+- Public `mode` values are `nat66` and `gua`. Leaving `mode` empty disables managed IPv6.
 - Every client GUID receives exactly one IPv6 `/128` address.
 - Clients do not receive delegated prefixes or multiple IPv6 addresses.
 - Client-side IPv6 input is runtime-only: `--tun-ipv6=<ipv6>`.
 - `--tun-ipv6` is only a request. The server may accept it, replace it, or auto-assign another address inside the configured CIDR.
-- The server prefers reusing the last lease for the same GUID and supports static bindings through `static-addresses`.
+- The server is always the final IPv6 allocation authority, prefers reusing the last lease for the same GUID, and supports static bindings through `static-addresses`.
+- `subnet=true` only enables VPN-internal IPv6 peer reachability. It does not restore prefix delegation or routed-prefix behavior.
 
 ### IPv6 Server Example
 ```json
@@ -407,9 +408,8 @@ Next-generation security network access technology, providing high-performance V
 ```
 
 ### IPv6 Modes
-- `none`: disable managed IPv6.
 - `nat66`: assign one `/128` from the configured IPv6 CIDR and install server-side NAT66 handling.
-- `gua`: assign one `/128` from the configured IPv6 CIDR and use server-side neighbor-proxy handling.
+- `gua`: assign one `/128` from the configured IPv6 CIDR, use server-side neighbor-proxy handling, and expose the client as a real public IPv6 host without NAT.
 
 <a id="network-protocol-static-guide"></a>
 
@@ -671,7 +671,7 @@ Ensure musl-libc supports 64-bit file functions
 |------------------|--------|-------------------------------------------|--------------------------------------|------------------------|
 | log              | string | ./ppp.log                                | Log File Path                        | `server`               |
 | node             | int    | 1                                         | Server Node ID                       | `server`               |
-| subnet           | bool   | true                                      | Enable Subnet Allocation             | `server`               |
+| subnet           | bool   | true                                      | Enable intra-VPN peer reachability   | `server`               |
 | mapping          | bool   | true                                      | Enable Port Mapping                  | `server`               |
 | backend          | string | ws://192.168.0.24/ppp/webhook             | Management Backend URL               | `server`               |
 | backend-key      | string | HaEkTB55VcHovKtUPHmU9zn0NjFmC6tff        | Management Backend Authentication Key | `server`            |
