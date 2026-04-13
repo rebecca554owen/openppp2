@@ -1,237 +1,177 @@
-# 🌐 **In-Depth Analysis of PACK_SESSIONID Implementation Principles and Security Bypass Mechanisms**
+# Session And Control Plane Model
 
----
+[中文版本](TRANSMISSION_PACK_SESSIONID_CN.md)
 
-## 🖼️ **1. Complete Data Processing Workflow**
-```mermaid
-flowchart TD
-    A[Original SessionID] --> B[Pack_SessionId Processing]
-    subgraph Pack_SessionId
-        B --> C[Dynamic KFS Header Generation]
-        B --> D[Multi-layer Rolling XOR Obfuscation]
-        B --> E[Random Padding Injection]
-        C --> F[Binary Data Block]
-        D --> F
-        E --> F
-    end
-    F --> G[BASE94 Encoding]
-    subgraph BASE94
-        G --> H[Binary to Text Conversion]
-        H --> I[ASCII Normalization]
-        I --> J[Length Masking]
-    end
-    J --> K[Printable Text Output]
-    K --> L[Firewall Detection Layer]
-```
+## Why This Document Exists
 
----
+The old file name refers to `PACK_SESSIONID`, but the useful engineering topic is broader: how OPENPPP2 identifies a session, exchanges tunnel metadata, and drives control actions after the transport is up.
 
-## 🛡️ **2. Core Role of BASE94 Encoding**
+This document focuses on that control-plane model.
 
-### 🔑 2.1 Binary to Text Conversion
-- Converts obfuscated binary data into printable ASCII characters (32-126)
-- Evades firewall detection rules that target non-printable characters
+## Core Objects
 
-### 🔧 2.2 Protocol Simulation
-```python
-# Example of BASE94 encoded output
-"D>c@DfT!gH*jK<mN#pR;uV)zZ0|3~7_A+C-E/G=I?M"
-```
+The main types involved are:
 
-### 🎯 2.3 Entropy Level Secondary Adjustment
-- Transforms high-entropy binary data into uniformly distributed printable characters
-- **Entropy Range**: 4.5-5.2 bits/byte (simulating normal text)
+- `ppp/transmissions/ITransmission.*`
+- `ppp/app/protocol/VirtualEthernetInformation.*`
+- `ppp/app/protocol/VirtualEthernetLinklayer.*`
+- `ppp/app/server/VirtualEthernetSwitcher.*`
+- `ppp/app/client/VEthernetExchanger.*`
+- `ppp/app/server/VirtualEthernetManagedServer.*`
 
----
+## Session Identity
 
-## ⚠️ **3. Core Vulnerability Exploitation Principles**
+Session identity is centered on `Int128` values used across client, server, and management flows.
 
-### 🔑 3.1 Key Sequence Timing Vulnerability
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant F as Firewall
-    participant S as Server
-    
-    C->>F: Obfuscated Packet (kf0=0x8F)
-    C->>F: Obfuscated Packet (kf0=0xA2)
-    C->>F: Real Packet (kf0=0x3D)
-    Note right of F: State tracking fails
-    F-->>S: Allowed through
-    S->>C: Response packet
-    C->>S: Key update request
-    S->>C: New key confirmation
-    Note right of F: Key evolution not tracked
-```
-**Attack Principle**:
-1. Obfuscated packets pollute firewall’s session state table
-2. Dynamic key updates (`protocol_ = new Ciphertext(...)`)
-3. Firewall cannot track session key evolution
+That identifier is used to:
 
-### 🔐 3.2 Entropy Masking Vulnerability
+- bind one logical tunnel exchange to a transport session
+- locate the server-side exchanger
+- associate traffic accounting and authentication state
+- manage IPv6 requests, leases, and control callbacks
 
-**Entropy Evolution**:
-- Original data: ≈8 bits/byte
-- After Pack_SessionId: ≈4.2 bits/byte
-- After BASE94 encoding: 4.5-5.2 bits/byte
+The use of a wide identifier is consistent with the project design goal of long-lived sessions that should be globally distinct inside one deployment domain.
 
-### 📊 Risk Comparison of Entropy Detection
+## Information Exchange Object
 
-| Traffic Type          | Entropy Range (bits/byte) | Detection Risk |
-|-----------------------|---------------------------|----------------|
-| Encrypted VPN Traffic | 7.8-8.0                   | 🔴 High       |
-| Pack_SessionId Output | 4.0-4.5                   | 🟡 Medium     |
-| BASE94 Final Output   | 4.5-5.2                   | 🟢 Low        |
-| Normal Text Traffic   | 4.2-4.8                   | ✅ No Risk    |
+`VirtualEthernetInformation` carries the tunnel-side session envelope for quota and validity controls:
 
----
+- `BandwidthQoS`
+- `IncomingTraffic`
+- `OutgoingTraffic`
+- `ExpiredTime`
 
-## 🔄 **4. Security Countermeasure Chain**
+This is the minimum unit for telling a client what it is allowed to do and for how long.
 
-```mermaid
-graph LR
-    A[Firewall Detection Layer] --> B[Protocol Header Analysis]
-    A --> C[Entropy Analysis]
-    A --> D[State Tracking]
-    A --> E[Behavior Analysis]
-    
-    B --> F[Dynamic KFS Header] -->|Bypass| J(Pass)
-    C --> G[Entropy Masking] -->|Bypass| J
-    D --> H[Obfuscated Packet Pollution] -->|Bypass| J
-    E --> I[Random Padding Strategy] -->|Bypass| J
-```
+It is deliberately separate from raw packet forwarding, which keeps policy exchange lightweight.
 
----
+## IPv6 Extensions
 
-## ⏳ **5. Detailed Analysis of Key Timing Vulnerability**
+`VirtualEthernetInformationExtensions` extends the base information object with IPv6-specific state:
 
-### 🖼️ Key Evolution Process
-```mermaid
-timeline
-    title Key Evolution Timing Exploitation
-    section Handshake Phase
-     Client --> kf_v1 : Initial Key
-    section Transmission Phase
-     Client --> kf_v2 : Dynamic Key Update
-     Firewall : Tracking Failure
-```
+- assigned IPv6 mode
+- assigned IPv6 address and prefix length
+- assigned gateway and route prefix
+- assigned DNS servers
+- request/response status and status message
 
-### 🖼️ State Tracking Failure Mechanism
-```mermaid
-stateDiagram-v2
-    [*] --> Initial_Handshake
-    Initial_Handshake --> Key_Negotiation
-    Key_Negotiation --> Data_Transmission
-    
-    state Firewall_Tracking {
-        Initial_Handshake --> Record_Initial_Key
-        Data_Transmission --> Key_Update_Event
-        Key_Update_Event --> Tracking_Failure: Keys_Mismatch
-    }
-    
-    Data_Transmission --> Key_Update
-    Key_Update --> New_Key_Effective
-    New_Key_Effective --> Data_Transmission
-```
+This allows the same control-plane message family to carry both generic session policy and IPv6 provisioning results.
 
----
+## Control Actions After Handshake
 
-## 📊 **6. Security Boundary Breakthrough Capability Assessment**
+After the transport handshake, the link layer can exchange multiple control actions:
 
-| Detection Capability | Traditional Firewall | NGFW   | AI Firewall | Bypass Technique             |
-|------------------------|------------------------|--------|--------------|------------------------------|
-| **Protocol Header Detection** | 98%           | 90%    | 75%          | Dynamic kfs headers          |
-| **Entropy Analysis**            | 95%           | 85%    | 60%          | Multi-layer XOR + Padding    |
-| **State Tracking**              | 99%           | 92%    | 80%          | Obfuscated packet pollution  |
-| **Behavior Analysis**             | 90%           | 80%    | 50%          | Random padding strategy      |
-| **Key Tracking**                  | 100%          | 95%    | 40%          | Dynamic key updates          |
+- information sync
+- keepalive
+- TCP connect/push/disconnect
+- UDP sendto
+- echo / echo reply
+- static path setup
+- mux setup
+- FRP-style mapping registration and data forwarding
 
----
+The important point is that OPENPPP2 does not treat these as unrelated subsystems. They are all modeled as actions within one tunnel control plane.
 
-## 🔄 **7. Persistent Attack Workflow**
+## Client-Side Flow
 
-```mermaid
-flowchart TB
-    A[Initial Connection] --> B{Firewall Type Detection}
-    B -->|Traditional Firewall| C[Send 3-5 Obfuscated Packets]
-    B -->|NGFW| D[Send 8-10 Obfuscated Packets]
-    B -->|AI Firewall| E[Activate Timing Vulnerability]
-    C --> F[Establish Trust Channel]
-    D --> F
-    E --> F
-    F --> G[Data Transmission Phase]
-    G --> H[Periodic Key Updates]
-    H --> I[Bypass Continuous Monitoring]
-    I --> G
-```
+At a high level, the client path is:
 
----
+1. Build configuration and local network context
+2. Open the virtual adapter and route policy
+3. Create `VEthernetExchanger`
+4. Establish transport session to remote server
+5. Complete transmission handshake and obtain session identity
+6. Exchange `VirtualEthernetInformation`
+7. Apply routing, DNS, mux, proxy, mapping, and optional IPv6 state
+8. Enter steady-state packet forwarding and keepalive
 
-## 🎭 **8. Protocol Deep Disguise Techniques**
+`VEthernetExchanger` is the operational bridge between the transport session and the client virtual network state.
 
-### 🧩 8.1 Multi-layer Obfuscation Architecture
-```mermaid
-flowchart LR
-    subgraph Binary_Layer
-        A[kfs_Header] --> B[Rolling_XOR_Obfuscation]
-        B --> C[Random_Padding]
-    end
-    subgraph Text_Layer
-        D[BASE94_Encoding] --> E[Printable_Characters]
-        E --> F[Length_Normalization]
-    end
-    Binary_Layer --> Text_Layer
-```
+## Server-Side Flow
 
-### 🔑 8.2 Key Technical Points
-1. **Dynamic Header Switching**: Generate independent kfs headers per packet
-2. **Key Rolling Evolution**: `kf = kf ^ kfs[i]` (Four iterative rounds)
-3. **Padding Length Obfuscation**: `Padding Length = APP->key.kx % 0x100`
-4. **Entropy Adjustment**: Optimize BASE94 character distribution
-5. **Temporal Dimension**: Randomize key update intervals (10-60 seconds)
+At a high level, the server path is:
 
----
+1. Open listeners for enabled transports
+2. Accept a new transport connection
+3. Complete server-side handshake
+4. Create or attach a `VirtualEthernetExchanger`
+5. Admit the session and build information envelope
+6. Optionally verify or enrich state through the management backend
+7. Maintain tunnel traffic, IPv6 leases, NAT state, mappings, and statistics
 
-## 🔢 **9. Entropy Adjustment Model**
+`VirtualEthernetSwitcher` acts as the session switch and lifecycle coordinator.
 
-**Adjustment Formula**：
-```
-H_final = 0.35 * H_original + 0.45 * (1 - 0.8^n) + 0.2
-```
-**Adjustment Workflow**：
-```mermaid
-flowchart LR
-    A[Original Data H≈8.0] 
-    --> B[XOR Obfuscation ΔH=-3.5] 
-    --> C[Padding Enhancement ΔH=-0.3] 
-    --> D[BASE94 Encoding ΔH=+0.5] 
-    --> E[Final Output H≈4.7]
-```
+## Management Plane Role
 
----
+`VirtualEthernetManagedServer` is optional. It connects the tunnel server to an external control system over WebSocket or secure WebSocket.
 
-## 💣 **10. Vulnerability Exploitation Matrix**
+Its responsibilities include:
 
-| Vulnerability Type | Implementation | Firewall Impact | Exploitation Rate |
-|----------------------|------------------|-------------------|-------------------|
-| **State Pollution** | Obfuscated Packet (kf0>0x80) | Incorrect connection state | 98% |
-| **Entropy Masking**   | Multi-layer XOR + Padding     | Misjudged as normal text | 92% |
-| **Key Timing**        | Dynamic Key Update Post Handshake | Decrypt Failure | 85% |
-| **Length Obfuscation**| Variable Length Padding (kx driven) | Length analysis failure | 88% |
-| **Protocol Mimicry**   | BASE94 Output                 | Bypasses binary detection | 95% |
+- asynchronous authentication
+- traffic upload and accounting
+- backend reachability checks
+- reconnect behavior for the management link
 
----
+This keeps the data plane in the C++ process while allowing external policy or billing systems to remain outside it.
 
-## 📝 **Technical Summary**
+## Quota, Expiry, And Admission
 
-The Pack_SESSIONID combined with BASE94 encoding forms a multi-layered defensive penetration system:
+The session model has explicit hooks for:
 
-| Defensive Layer | Bypass Technique             | Effectiveness             |
-|------------------|------------------------------|---------------------------|
-| **Binary Layer** | Dynamic kfs headers + rolling XOR | Breaks fixed pattern recognition |
-| **Entropy Layer** | Four-level obfuscation + padding | Reduces entropy to text level |
-| **Protocol Layer** | BASE94 encoding             | Evades binary detection |
-| **Time Layer**    | Dynamic key updates          | Creates tracking gaps |
-| **Behavior Layer** | Random padding strategies   | Interferes with traffic analysis |
+- traffic quota
+- expiry time
+- bandwidth QoS limits
+- backend-mediated authentication
 
-**Core Advantage**: Five-layer defense working in concert, achieving deep penetration against modern firewalls through obfuscated packet pollution, entropy masking, and key timing vulnerabilities.
+This is important for SD-WAN and managed VPN deployments because the tunnel runtime needs to enforce policy locally even if the external backend becomes slow or temporarily unavailable.
+
+## Mappings And Reverse Access
+
+The control plane also carries mapping state. On the client side, `client.mappings` defines services to be exported. The corresponding FRP-style actions handle:
+
+- registration
+- connection setup
+- data push
+- disconnect
+- UDP sendto relay
+
+This lets the overlay do more than simple remote access. It can also work as a controlled reverse-exposure channel.
+
+## Static Echo Path
+
+The codebase includes a static echo mechanism in the client and server exchangers. Its purpose is operational rather than cosmetic:
+
+- maintain liveness on static UDP-style paths
+- verify reachability
+- keep datagram-oriented session state active
+
+It belongs to the control plane because it carries session-health intent, not just arbitrary payload.
+
+## Failure And Recovery Model
+
+The session design expects failure and includes explicit recovery hooks:
+
+- handshake timeout
+- reconnection timeout
+- transport disposal and cleanup
+- keepalive-driven health checks
+- session state transitions on the client exchanger
+- management-link reconnect behavior on the server side
+
+This fits the infrastructure requirement of autonomy and low operator surprise.
+
+## Design Philosophy
+
+The control plane reflects a few stable principles:
+
+- keep identity, policy, and packet forwarding related but not mixed together
+- make session state explicit in types, not hidden in ad hoc socket code
+- let one exchange object own lifecycle for one logical client/server relationship
+- keep external management optional instead of making the data plane dependent on it
+
+## Related Documents
+
+- [`TRANSMISSION.md`](TRANSMISSION.md)
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- [`CONFIGURATION.md`](CONFIGURATION.md)
+- [`SECURITY.md`](SECURITY.md)
