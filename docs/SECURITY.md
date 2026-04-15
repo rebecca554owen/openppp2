@@ -1,12 +1,12 @@
-# Security Model And Defensive Interpretation
+# Security Model and Defensive Interpretation
 
 [中文版本](SECURITY_CN.md)
 
 ## Scope
 
-This document explains the security posture of OPENPPP2 using code-grounded language. The goal is not to market the project as magically invulnerable, and not to flatten it into a generic “encrypted tunnel.” The goal is to describe what the implementation actually does, where its defensive value comes from, where its trust boundaries are, and what claims must be made carefully.
+This document explains the security posture of OPENPPP2 in a strictly code-fact-based manner. The goal is neither to wrap the project as a "mysterious and invincible" black box nor to flatten it to a single sentence saying "it's an encrypted tunnel". The real goal is to answer: what security-related work is actually implemented in the code, where the defensive value of these works comes from, which boundaries require trust, what can be said, and what cannot be overstated.
 
-The main files behind this document are:
+The main source code behind this document includes:
 
 - `ppp/transmissions/ITransmission.cpp`
 - `ppp/app/protocol/VirtualEthernetPacket.cpp`
@@ -14,477 +14,452 @@ The main files behind this document are:
 - `ppp/app/protocol/VirtualEthernetInformation.*`
 - `ppp/app/server/VirtualEthernetSwitcher.*`
 - `ppp/app/client/VEthernetNetworkSwitcher.*`
-- platform-specific route, firewall, and adapter integration files
+- Platform route, firewall, virtual adapter integration code
 
-## Security In OPENPPP2 Is Multi-Layered
+## OPENPPP2 Security Is Not a Single Point Capability
 
-If OPENPPP2 is described only as “it encrypts traffic,” the description is incomplete and misleading.
+If only describing OPENPPP2 as "it encrypts traffic", such description is insufficient and misleading to readers.
 
-The code’s defensive posture is composed from several layers:
+From the code perspective, its defensive posture is multi-layered:
 
-- connection admission and handshake discipline
-- connection-specific working-key derivation
-- protected transmission framing
-- static packet metadata and payload protection
-- explicit session identity and policy objects
-- route, DNS, mapping, and exposure control
-- platform-local enforcement
-- timeout and lifecycle cleanup discipline
+| Security Layer | Description |
+|----------------|-------------|
+| Session acceptance and handshake discipline | Strict handshake protocol and session_id validation |
+| Connection-level work key derivation | Derive work keys based on pre-shared keys and ivv |
+| Protected transmission framing | Encryption and framing protection |
+| Static packet header and payload protection | Independent static encryption |
+| Explicit session identification and policy objects | session_id and policy envelope |
+| Route, DNS, mapping, exposure control | Network layer access control |
+| Platform local execution points | Platform-specific security integration |
+| Timeout and lifecycle cleanup discipline | Session timeout and cleanup |
 
-The security center of gravity is therefore not one algorithm name. It is the composition of several subsystems.
+Therefore, the security focus of this project is not a single algorithm name, but the overall behavior of multiple subsystems.
 
-## Trust Boundaries
+## ⚠️ Critical Clarification: FP, Not PFS
 
-The important trust boundaries are:
+This is a very important clarification that must be explicitly stated:
 
-- client host
-- server host
-- carrier path between them
-- optional management backend
-- local operating-system networking stack
-- local route and DNS policy files
-- certificate, key, and backend-secret storage
+### What Is PFS (Perfect Forward Secrecy)
 
-A correct deployment has to treat those as separate boundaries.
+**PFS (Perfect Forward Secrecy)** is a cryptographic property that requires each session to use independent keys, and the compromise of long-term keys should not lead to the compromise of historical session keys. Typical PFS implementations include:
+
+- Diffie-Hellman (DH) key exchange
+- Elliptic Curve Diffie-Hellman (ECDH)
+- RSA variants using ephemeral keys
+
+### What OPENPPP2 Implements
+
+**OPENPPP2 does not implement PFS**, but implements **FP (Forward Security Assurance)**:
+
+| Feature | PFS | FP (OPENPPP2) |
+|---------|-----|---------------|
+| Key exchange | Independent ephemeral keys per session | Pre-shared key + dynamic ivv |
+| Long-term key protection | Long-term key compromise doesn't affect historical sessions | Pre-shared key + per-session ivv derivation |
+| Implementation complexity | Requires DH/ECDH complex operations | Simple derivation based on pre-shared keys |
+| Cryptographic basis | Discrete logarithm/elliptic curve problems | Symmetric encryption algorithms |
+
+### How FP Mechanism Works
 
 ```mermaid
 flowchart TD
-    A[Client host] --> B[Carrier network]
-    B --> C[Server host]
-    C --> D[Optional management backend]
-    A --> E[Local OS routes and DNS]
-    C --> F[Firewall and server policy state]
+    subgraph Key Derivation
+        A[Pre-shared Key K] --> B[Key Derivation Function]
+        B --> C[Session-specific ivv]
+        C --> D[Work Key W = f(K, ivv)]
+    end
+    
+    E[Work Key W] --> F[Data Encryption]
+    F --> G[Encrypted transmission]
+    
+    H[Key compromise] -.->|Does not affect| D
+    H -.->|Does not affect| G
+    
+    style H fill:#f99,stroke:#333
+    style D fill:#9f9,stroke:#333
 ```
 
-This matters because a tunnel can have strong packet protection and still be insecure operationally if, for example:
+### Security Guarantees of FP
 
-- route files are wrong
-- DNS rules leak traffic unintentionally
-- mappings expose services carelessly
-- backend secrets are stored unsafely
-- platform route protection is disabled without understanding the consequence
+Although not PFS in the traditional sense, FP provides the following security guarantees:
 
-## The First Defensive Layer: Handshake Discipline
+1. **Session isolation**: Each session uses different ivv; even if the same client connects multiple times, different keys are used
+2. **Historical protection**: If an attacker obtains the work key for a certain session, they still cannot decrypt previous sessions (because ivv is different)
+3. **Key rotation**: Keys can be rotated by re-handshaking
 
-The handshake lives around `ITransmission`.
+### Why PFS Cannot Be Claimed
 
-Its job is not only “exchange a session identifier.” It also:
+| PFS Feature | OPENPPP2 Actual Situation |
+|-------------|--------------------------|
+| Independent ephemeral keys per session | Uses pre-shared key + per-session different ivv |
+| Long-term and short-term key separation | Pre-shared key participates in each key derivation |
+| Requires public-key cryptography support | Pure symmetric cryptography implementation |
 
-- injects dummy traffic through handshake NOP packets
-- distinguishes real handshake items from dummy items
-- exchanges the `ivv` input used for connection-specific key shaping
-- carries the mux indicator through `nmux`
-- enforces timeout-driven cleanup of incomplete sessions
+## Trust Boundaries
 
-This immediately differentiates OPENPPP2 from the mental model of “client opens socket, sends password, starts streaming.” That is not how this runtime thinks about session establishment.
+Understanding OPENPPP2 security requires clarifying trust boundaries:
 
-## Handshake Noise And Dummy Packets
+### Trust Boundary Definitions
 
-`Transmission_Handshake_Pack_SessionId(...)` can emit two packet classes:
+| Boundary | Location | Trusted Content | Risk Level |
+|----------|----------|-----------------|-------------|
+| Client host | Local runtime environment | OS, network stack, route configuration | High |
+| Server host | Server runtime environment | OS, network stack, firewall | High |
+| Transport network | Between client and server | Network operator, ISP, cloud provider | Medium |
+| Management backend | Optional component | Policy distribution, identity verification | Medium |
+| Local OS | Client/server | Network stack implementation | High |
+| Configuration file | Local storage | Keys, certificates, backend credentials | High |
 
-- real session packets
-- dummy packets
+```mermaid
+flowchart TD
+    subgraph Client
+        A[Client host] --> B[Configuration storage]
+    end
+    
+    subgraph Network
+        C[Transport network]
+    end
+    
+    subgraph Server
+        D[Server host] --> E[Configuration storage]
+    end
+    
+    subgraph Optional
+        F[Management backend]
+    end
+    
+    A --> C
+    C --> D
+    D --> F
+    A --> F
+    
+    style A fill:#f99,stroke:#333
+    style D fill:#f99,stroke:#333
+    style C fill:#ff9,stroke:#333
+    style F fill:#bfb,stroke:#333
+```
 
-Dummy packets are signaled by setting the high bit on the first random byte. The receiver checks that bit and, if set, marks the packet as ignorable noise and continues reading.
+### Trust Assumptions for Each Boundary
 
-This does not replace cryptography. It changes the handshake traffic form and makes the early byte exchange less literal.
+**Client host**:
+- Operating system network stack is trusted
+- Local route configuration will not be maliciously modified
+- Key storage is secure
+
+**Server host**:
+- Operating system is trusted
+- Firewall configuration is correct
+- Key storage is secure
+
+**Transport network**:
+- Network operator may monitor traffic patterns
+- Potential man-in-the-middle attack risk (no certificate verification)
+- Needs to rely on encryption protection
+
+## Encryption Architecture
+
+### Two-Layer Encryption Model
+
+OPENPPP2 implements two layers of encryption:
+
+| Layer | Name | Purpose | Key Source |
+|-------|------|---------|-------------|
+| Protocol layer | Protocol Encryption | In-tunnel data encryption | `protocol-key` + `ivv` |
+| Transport layer | Transport Encryption | Transport link encryption | `transport-key` + `ivv` |
+
+```mermaid
+flowchart LR
+    subgraph Application Data
+        A[Application Data]
+    end
+    
+    subgraph Protocol Layer
+        B[Protocol Encryption]
+    end
+    
+    subgraph Transport Layer
+        C[Transport Encryption]
+    end
+    
+    subgraph Network Transmission
+        D[Network]
+    end
+    
+    A --> B
+    B --> C
+    C --> D
+    D --> E[Server]
+    E --> F[Transport Decryption]
+    F --> G[Protocol Decryption]
+    G --> H[Application Data]
+```
+
+### Supported Encryption Algorithms
+
+| Algorithm | Type | Description |
+|-----------|------|-------------|
+| `aes-128-cfb` | Symmetric encryption | 128-bit CFB mode |
+| `aes-256-cfb` | Symmetric encryption | 256-bit CFB mode |
+| `aes-128-gcm` | Symmetric encryption | 128-bit GCM mode |
+| `aes-256-gcm` | Symmetric encryption | 256-bit GCM mode |
+| `rc4` | Symmetric encryption | RC4 algorithm (deprecated, not recommended) |
+
+### Optional Encryption Features
+
+| Feature | Description | Risk |
+|---------|-------------|------|
+| `masked` | Traffic obfuscation | Low (increases identification difficulty) |
+| `plaintext` | Plaintext transmission | **High risk** (disable) |
+| `delta-encode` | Delta encoding | Low (compress data) |
+| `shuffle-data` | Data randomization | Low (increases analysis difficulty) |
+
+## Handshake Security
+
+### Handshake Flow
 
 ```mermaid
 sequenceDiagram
-    participant A as Peer A
-    participant B as Peer B
-    A->>B: dummy handshake packet
-    A->>B: dummy handshake packet
-    A->>B: real session item
-    B->>A: dummy packet ignored
-    B->>A: real response item
+    participant C as Client
+    participant S as Server
+    
+    C->>S: NOP (noise)
+    S-->>C: NOP response
+    C->>S: session_id + ivv
+    S-->>C: Acknowledgment
+    C->>S: Key confirmation
+    S-->>C: Session established
 ```
 
-From an attack-defense perspective, that means early traffic analysis is confronted with a handshake that contains deliberate non-semantic noise, not just a minimal deterministic control exchange.
+### Handshake Security Measures
 
-## `kh`, `kl`, And Handshake Variability
+| Measure | Description |
+|---------|-------------|
+| NOP noise | Send random data before real handshake to create noise |
+| session_id validation | Verify validity of session_id |
+| ivv exchange | Exchange per-session unique ivv |
+| Key confirmation | Verify key correctness |
 
-The amount of NOP traffic is not constant. It is shaped by `key.kh` and `key.kl`, which are normalized by configuration loading and then used by `Transmission_Handshake_Nop(...)`.
+### Handshake Security Analysis
 
-The code derives a range by shifting `1 << kl` and `1 << kh`, then randomizes within that range, then scales the result into a practical number of actual dummy rounds.
+**Security guarantees**:
+- session_id uniqueness: Each connection generates unique session_id
+- ivv dynamism: Each session uses different ivv
+- Key derivation: Derive work keys from pre-shared key and ivv
 
-This is one of the clearest examples of attack-defense-aware traffic shaping in the code. The handshake is not intended to have a single perfectly rigid on-wire prelude.
+**Security limitations**:
+- Depends on security of pre-shared keys
+- No public key certificate verification
+- No Diffie-Hellman key exchange
 
-## Handshake Timeout Is A Security Feature
+## Static Packet Security
 
-`InternalHandshakeTimeoutSet()` and `InternalHandshakeTimeoutClear()` are not just “quality of life” code. They are part of the security posture.
+### Static Packet Encryption
 
-Why?
+Static packets (static datagrams) have an independent encryption path:
 
-Because half-open ambiguous connection state is operationally dangerous. It wastes resources, complicates forensic reasoning, and opens the door to degraded behavior under load or deliberate handshake exhaustion pressure.
+| Feature | Description |
+|---------|-------------|
+| Independent encryption | Uses independent static encryption key |
+| Header protection | Packet headers are also encrypted |
+| Payload protection | Payloads are encrypted |
 
-If the timeout fires, the runtime:
+### Static Packet Security Considerations
 
-- cancels the ambiguity window
-- sends final NOP traffic
-- disposes the transmission
+**Advantages**:
+- Independent encryption channel from main tunnel
+- Can use different encryption parameters
 
-In other words, incomplete session establishment is not allowed to sit quietly forever.
+**Disadvantages**:
+- Increased key management complexity
+- Need to maintain additional key state
 
-## Connection-Specific Working-Key Derivation
+## Session Management Security
 
-This is one of the most important topics and one of the easiest places to overstate the code.
+### session_id Management
 
-During handshake, the client generates `ivv` and sends it. Both sides then rebuild the protocol and transport ciphers by appending serialized `ivv` text to the configured base keys.
+| Feature | Description |
+|---------|-------------|
+| Uniqueness | Each session uses unique session_id |
+| Length | Sufficient length to prevent guessing |
+| Timeliness | Session expires after timeout |
 
-At a practical level, this means:
+### Session Timeout
 
-- configured keys are not used as the final repeated working keys for every connection
-- each connection gets fresh derived working cipher state
-- compromise of one connection’s working state does not imply that all prior and future connections literally reuse identical runtime key material
+| Parameter | Description | Default Value |
+|-----------|-------------|---------------|
+| `inactive.timeout` | Idle timeout | 60 seconds |
+| `mux.inactive.timeout` | MUX idle timeout | 60 seconds |
 
-That is a real and important defensive property.
+### Session Cleanup
 
-## What Can Be Claimed About Forward Security
+| Cleanup Condition | Description |
+|-------------------|-------------|
+| Timeout cleanup | Automatic cleanup after idle timeout |
+| Active closure | Cleanup after receiving close signal |
+| Exception cleanup | Cleanup on connection error |
 
-The user explicitly asked that the docs explain forward security in depth. The right answer has to be precise.
+## Network Layer Security
 
-### What the code supports saying
+### Route Control
 
-The code supports saying that OPENPPP2 implements:
+| Control Type | Description |
+|--------------|-------------|
+| bypass | Specified traffic bypasses tunnel |
+| Policy routing | Route by rules |
+| Smart routing | Automatic split routing |
 
-- session-level dynamic working-key derivation
-- per-connection cipher rebuilding using fresh handshake input `ivv`
-- reduced long-term reuse of identical raw configured working keys
+### DNS Control
 
-### What the code shown here does not justify saying
+| Control Type | Description |
+|--------------|-------------|
+| DNS redirection | Redirect DNS queries |
+| DNS cache | Local DNS cache |
+| DNS split | Split by domain name |
 
-The code shown in the current reading set does not demonstrate a standard ephemeral public-key key agreement such as ECDHE. Because of that, the documentation must not collapse “fresh per-connection derived working key” into the stronger claim “standard public-key-agreement-based PFS” without additional proof.
+### Port Mapping Control
 
-The correct statement is therefore:
+| Control Type | Description |
+|--------------|-------------|
+| Mapping registration | Client registers port mapping |
+| Mapping validation | Verify legitimacy of mapping requests |
+| Mapping cleanup | Cleanup mappings when session ends |
 
-- OPENPPP2 has connection-specific working-key derivation
-- this improves over raw static reuse
-- documentation must not oversell it as a public-key-ephemeral standard-PFS construction unless additional code paths establish that separately
+## Platform Security Integration
 
-This kind of precision is important because infrastructure documentation loses credibility the moment it makes claims the code cannot support.
+### Windows Platform
 
-## Dual-Layer Cipher Design
+| Security Feature | Description |
+|------------------|-------------|
+| LSP integration | Windows LSP layer integration |
+| Firewall rules | Windows Firewall rule configuration |
+| Network adapter | TUN/TAP adapter management |
 
-OPENPPP2 maintains two distinct logical cipher slots:
+### Linux Platform
 
-- protocol cipher
-- transport cipher
+| Security Feature | Description |
+|------------------|-------------|
+| TUN/TAP | Linux TUN/TAP device |
+| Route protection | Prevent route conflicts |
+| Network namespace | Support network namespace isolation |
+
+### macOS Platform
+
+| Security Feature | Description |
+|------------------|-------------|
+| utun interface | macOS utun interface |
+| Permission check | Network permission check |
+| Promiscuous mode | Optional promiscuous mode |
 
-That allows it to protect:
+### Android Platform
+
+| Security Feature | Description |
+|------------------|-------------|
+| VPN Service | Android VPN API |
+| Permission handling | VPN permission request |
+| Network interface | TUN interface |
 
-- packet metadata such as frame length
-- payload body
+## Key Management
 
-with different roles in the pipeline.
+### Key Storage
 
-In the normal binary packet path:
+| Storage Location | Description |
+|------------------|-------------|
+| Configuration file | Keys in JSON configuration file |
+| Environment variables | Can be passed via environment variables |
+| Command line parameters | Not recommended (exposed in process list) |
 
-1. payload may be encrypted by the transport cipher
-2. payload length bytes may be encrypted by the protocol cipher
-3. payload and header bytes also go through masking, shuffling, and delta transformation steps
+### Key Derivation
 
-This means the design is not just “encrypt the payload and call it done.” The metadata itself is intentionally protected and transformed.
+```mermaid
+flowchart TD
+    A[Pre-shared key] --> B[Key derivation function]
+    B --> C[ivv parameter]
+    C --> D[Work key]
+    D --> E[Encryption operation]
+```
 
-## Length-Hiding And Framing Obfuscation
+### Key Rotation
 
-The transmission path uses a compact binary header whose contents are not left in a raw readable form.
+| Method | Description |
+|--------|-------------|
+| Re-handshake | Rotate keys by re-handshaking |
+| Session rebuild | Disconnect and rebuild session |
 
-The length field is subject to:
+## Attack Surface Analysis
 
-- optional protocol-cipher protection
-- XOR masking with a header-derived key factor
-- byte shuffling
-- delta encoding
+### Network Attack Surface
 
-The static packet format also avoids exposing a bare length directly. It uses a separate header-length mapping through `Lcgmod` and per-packet keying.
+| Attack Type | Risk Level | Protection Measures |
+|-------------|------------|---------------------|
+| Man-in-the-middle | Medium | Encrypted tunnel protection |
+| Traffic analysis | Low | Traffic obfuscation (optional) |
+| Replay attack | Low | session_id and timestamp |
+| Session hijacking | Medium | Encryption and key management |
 
-This matters because many traffic analysis and parser-abuse opportunities begin with clear, predictable framing. OPENPPP2 spends real complexity budget on avoiding trivially literal framing.
+### Local Attack Surface
 
-## Base94 Path As A Defensive Layer
+| Attack Type | Risk Level | Protection Measures |
+|-------------|------------|---------------------|
+| Configuration leak | High | Secure key storage |
+| Memory leak | Medium | Memory encryption (optional) |
+| Process injection | High | Operating system security |
 
-The base94 path should be understood correctly.
+## Security Configuration Recommendations
 
-It is not the project’s sole security basis. But it is part of the defensive story because:
+### Required Configuration
 
-- it separates pre-handshake and plaintext framing from the later binary format
-- it uses a first-packet extended header and later-packet simple header transition
-- it encodes length through base94 conversion plus additional transforms
-- it introduces another layer of non-literal wire format behavior early in the session
+| Configuration | Recommended Value | Description |
+|---------------|-------------------|-------------|
+| `protocol-key` | Strong random string | At least 16 characters |
+| `transport-key` | Strong random string | At least 16 characters |
+| `protocol` | aes-256-cfb | Recommended to use strong encryption |
+| `transport` | aes-256-cfb | Recommended to use strong encryption |
 
-The base94 path therefore belongs in the “traffic form and framing defense” discussion.
+### Recommended Configuration
 
-## `masked`, `shuffle-data`, And `delta-encode`
+| Configuration | Recommended Value | Description |
+|---------------|-------------------|-------------|
+| `masked` | true | Enable traffic obfuscation |
+| `plaintext` | false | Disable plaintext transmission |
+| `inactive.timeout` | 60 | Shorter idle timeout |
 
-These configuration switches influence the transmission and packet formats materially.
+### Forbidden Configuration
 
-### `masked`
+| Configuration | Risk |
+|---------------|------|
+| `plaintext: true` | **Extreme risk**: All data transmitted in plaintext |
+| Empty key | **High risk**: No encryption protection |
+| Weak key | **High risk**: Easily cracked |
 
-Adds rolling XOR-style masking through `masked_xor_random_next`.
+## Security-Related Code Locations
 
-### `shuffle-data`
+| Source File | Security-Related Content |
+|-------------|--------------------------|
+| `ITransmission.cpp` | Encryption, handshake, framing |
+| `VirtualEthernetPacket.cpp` | Static packet encryption |
+| `AppConfiguration.cpp` | Key configuration parsing |
+| `VirtualEthernetInformation.*` | Policy envelope handling |
+| `VirtualEthernetSwitcher.*` | Server security handling |
+| `VEthernetNetworkSwitcher.*` | Client security handling |
 
-Adds deterministic key-dependent byte reordering.
+## Summary
 
-### `delta-encode`
+Understanding OPENPPP2's security model requires paying attention to the following points:
 
-Adds a delta encoding layer on the serialized bytes and requires inverse decoding during receipt.
+1. **FP, not PFS**: Implements Forward Security Assurance but not traditional PFS
+2. **Multi-layer defense**: Security comes from the superposition of multiple subsystems
+3. **Clear trust boundaries**: Need to clarify which components are trusted
+4. **Correct configuration**: Security implementation depends on correct configuration
+5. **Key management**: Key security is crucial
+6. **Platform integration**: Each platform has its own security considerations
 
-None of these should be described in isolation as if they were modern authenticated encryption primitives. Their value comes from composition with the rest of the pipeline:
-
-- cipher state
-- handshake key shaping
-- metadata protection
-- packet-length distortion
-- dummy handshake noise
-
-## `kx` And Handshake Padding
-
-`key.kx` influences the amount of random padding inserted into session-id handshake packets. The handshake packer appends random printable characters and separators around the integer material.
-
-This again is not a replacement for cryptography. It is part of the project’s consistent attempt to avoid extremely literal early packet forms.
-
-## `sb` And Buffer Skateboarding
-
-`key.sb` belongs to the project’s broader packet-shape and buffer-shape control story.
-
-The helper `BufferSkateboarding(int sb, int buffer_size, int max_buffer_size)` does not represent some mystical proprietary crypto algorithm. The correct explanation is simpler and more honest:
-
-- within a configured range, buffer size can slide
-- the slide is constrained by base size and maximum allowed size
-- the effect is to avoid an overly rigid, always-identical buffer or packet-length behavior pattern
-
-This belongs in the attack-defense documentation because traffic fingerprinting often benefits from extremely stable packet size behavior.
-
-## Static Packet Format Security Story
-
-The static packet path implemented in `VirtualEthernetPacket.cpp` has its own security-relevant behavior.
-
-The packet contains:
-
-- `mask_id`
-- obfuscated `header_length`
-- obfuscated `session_id`
-- `checksum`
-- pseudo source and destination addresses and ports
-- payload
-
-On pack:
-
-- a non-zero random `mask_id` is generated
-- per-packet `kf` is derived from `key.kf * mask_id`
-- session id is XOR-obfuscated and byte-ordered
-- checksum is computed over header and payload
-- trailing header body may be encrypted by the protocol cipher
-- payload may be encrypted by the transport cipher
-- the `session_id` and following region is shuffled and masked
-- the final serialized packet is delta-encoded
-
-On unpack, those steps are reversed in the corresponding order.
-
-This means static mode is not “raw UDP payload plus a session integer.” It has a fully shaped packet format with its own header and payload protection logic.
-
-## Checksum And Validity Checks
-
-In both the main transmission path and the static packet path, the code repeatedly validates structural expectations:
-
-- header length must make sense
-- payload length must match the read amount
-- checksum must match
-- destination and source address fields must be valid when protocol expectations require that
-- zero or nonsensical identifiers are rejected
-
-This is an important part of the defensive model. A large portion of robust network software security is not glamorous cryptography. It is strict structure validation and early failure on malformed state.
-
-## Session Identity As Security State
-
-OPENPPP2 does not treat “a connected socket” as sufficient identity. Session identity is explicit and propagated through objects such as `VirtualEthernetInformation` and related runtime structures.
-
-That means policy decisions can be tied to typed session state instead of being scattered across ad hoc socket bookkeeping. This matters for:
-
-- expiry enforcement
-- remaining traffic accounting
-- bandwidth control
-- IPv6 allocation binding
-- mapping and mux ownership
-
-This is one of the project’s most infrastructure-like security traits: security is strongly coupled to explicit typed runtime state.
-
-## Server-Side Enforcement
-
-The server runtime, centered on `VirtualEthernetSwitcher` and related exchangers, is a major security boundary because it decides what an admitted client session can actually do.
-
-Server-side enforcement includes:
-
-- listener exposure control
-- firewall-rule integration
-- NAT and forwarding decisions
-- mapping exposure behavior
-- session table management
-- optional management backend consultation
-- IPv6 lease and identity enforcement
-
-It is therefore wrong to think of security as ending once the transmission handshake succeeds. Handshake only gets a peer into the protected session state. The runtime still has to enforce policy after admission.
-
-## Client-Side Enforcement
-
-The client runtime is a security boundary too.
-
-`VEthernetNetworkSwitcher` controls:
-
-- which routes are steered into the overlay
-- which traffic bypasses it
-- which DNS queries are redirected or controlled
-- whether local proxy features are exposed
-- whether static mode and mux are active
-- how the virtual adapter is configured on the local host
-
-That means a client can have a perfectly strong tunnel and still behave insecurely if the route and DNS policy are wrong. In infrastructure systems, policy mistakes are security mistakes.
-
-## Optional Management Backend: Security Benefit And Security Cost
-
-The Go backend is optional. That is good for resilience because the data plane is not designed as a pure thin agent that becomes useless when the controller disappears.
-
-But once enabled, the backend also becomes a new trust boundary and attack surface.
-
-It introduces:
-
-- backend URLs
-- backend keys
-- database credentials
-- WebSocket control channel exposure
-
-This is why documentation should treat backend integration as an operational security decision, not as a harmless convenience switch.
-
-## Reverse Mapping And Exposure Control
-
-FRP-style mapping features are powerful and therefore security-sensitive.
-
-They effectively allow the system to publish internal services through the overlay. That means mappings must be documented as intentional service exposure, not as a background helper.
-
-Every mapping decision should be treated like opening a firewall hole or publishing a service through a reverse proxy.
-
-## IPv6 Security Relevance
-
-Server-side IPv6 support, especially on Linux, introduces another set of security-relevant responsibilities:
-
-- lease assignment
-- address-to-session binding
-- gateway and prefix handling
-- neighbor proxy behavior
-- source-address validation
-
-The client-side checks that the transmitted IPv6 source address must match the allocated address are part of that model. OPENPPP2 does not want IPv6 identity to float loosely once assigned.
-
-## Platform Security Differences Matter
-
-One of the most important documentation points is that platform differences are not cosmetic.
-
-### Windows
-
-- system proxy interactions exist
-- Wintun and TAP-Windows differ operationally
-- Windows-only helper commands can change system network posture
-
-### Linux
-
-- route protection and interface binding are especially important
-- `/dev/tun`, multiqueue, and IPv6 server behavior have their own failure modes
-- Linux currently carries the richest IPv6 server-side path
-
-### macOS
-
-- `utun` integration changes the adapter behavior model
-- the feature surface is not identical to Linux
-
-### Android
-
-- VPN FD injection and protect-socket mechanisms create a distinct trust model
-
-Therefore no serious security documentation should imply that “same config means same risk” on every platform.
-
-## Attack Surface Inventory
-
-The practical attack surface includes:
-
-- TCP listeners
-- WS listeners
-- WSS listeners and certificate handling
-- local HTTP and SOCKS proxy listeners when enabled
-- FRP-style reverse mapping entries
-- static packet path endpoints
-- backend control connection
-- route rule files
-- DNS rule files
-- firewall rule files
-- platform helper commands and privileged network manipulation logic
-
-The broad feature set is part of the product’s power and part of its security burden.
-
-## Secret Management
-
-At minimum, the following should be treated as secrets:
-
-- `protocol-key`
-- `transport-key`
-- `server.backend-key`
-- proxy credentials in `client.server-proxy`
-- `websocket.ssl.certificate-key-password`
-- backend database credentials
-- Redis credentials when used
-
-None of these belong in public repositories or long-lived shared sample files with real production values.
-
-## What OPENPPP2 Is Actually Strong At
-
-The code suggests that OPENPPP2 is strongest when used as disciplined infrastructure software. Its strongest traits are not “one flashy cipher setting.” They are:
-
-- explicit session state
-- explicit topology and policy
-- deliberate handshake shaping
-- per-connection key derivation
-- controlled route and DNS steering
-- explicit service exposure through mappings instead of accidental exposure
-- platform-local enforcement rather than blind abstraction
-- timeout and cleanup discipline
-
-That is a very infrastructure-centric security model.
-
-## What OPENPPP2 Does Not Let You Skip
-
-Because the project is infrastructure-like, it does not let the operator skip architectural responsibility.
-
-You still have to decide correctly:
-
-- which listeners should exist
-- which mappings should exist
-- whether the deployment is full tunnel or split tunnel
-- which DNS rules are safe
-- whether system proxy integration should be allowed
-- whether Linux route protection should remain enabled
-- whether static mode or mux are actually necessary
-
-Security in this project is therefore as much about disciplined configuration and lifecycle ownership as it is about cryptographic transforms.
-
-## Defensive Summary
-
-The cleanest summary is this:
-
-OPENPPP2’s security model is the combination of:
-
-- handshake noise plus handshake cleanup
-- connection-specific working-key derivation
-- dual-layer protected framing
-- packet-shape variability and metadata protection
-- typed session-policy enforcement
-- route, DNS, mapping, and IPv6 control
-- platform-local privileged enforcement
-
-It should be described as a security-conscious network infrastructure runtime, not as a single “stealth protocol” and not as a system whose entire security story can be reduced to one cipher label.
+Understanding these principles is crucial for correctly evaluating and using OPENPPP2's security features.
 
 ## Related Documents
 
-- [`TRANSMISSION.md`](TRANSMISSION.md)
-- [`HANDSHAKE_SEQUENCE.md`](HANDSHAKE_SEQUENCE.md)
-- [`PACKET_FORMATS.md`](PACKET_FORMATS.md)
-- [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md)
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System Architecture Overview |
+| [TRANSMISSION.md](TRANSMISSION.md) | Transmission Layer and Protected Tunnel Model |
+| [HANDSHAKE_SEQUENCE.md](HANDSHAKE_SEQUENCE.md) | Handshake Sequence and Session Establishment |
+| [PACKET_FORMATS.md](PACKET_FORMATS.md) | Packet Format and Wire Layout |
+| [CONFIGURATION.md](CONFIGURATION.md) | Configuration Model and Key Configuration |

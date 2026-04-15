@@ -583,13 +583,21 @@ namespace ppp {
 
                 while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
                     int len = static_cast<int>(strlen(buffer));
-                    bool line_complete = len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r');
+                    bool line_complete = false;
+                    if (len > 0) {
+                        char& ch = buffer[len - 1];
+                        if (ch == '\n' || ch == '\r') {
+                            line_complete = true;
+                            ch = '\x0';
+                        }
+                    }
 
                     if (!accumulated.empty()) {
                         accumulated += buffer;
                         if (line_complete) {
                             ppp::string line;
                             line.swap(accumulated);
+                            
                             accumulated.clear();
                             handler.process_line(std::move(line));
                         }

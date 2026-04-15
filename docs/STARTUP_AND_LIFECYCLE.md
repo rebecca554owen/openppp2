@@ -1,475 +1,539 @@
-# Startup, Process Ownership, And Lifecycle Control
+# Startup, Process Ownership, and Lifecycle Control
 
 [中文版本](STARTUP_AND_LIFECYCLE_CN.md)
 
 ## Scope
 
-This document explains how the `ppp` process starts, how ownership is distributed across the major runtime objects, how the client and server branches diverge, and how periodic maintenance, shutdown, and restart behavior are implemented.
+This document explains how the `ppp` process starts, how ownership is distributed across the major runtime objects, how the client and server branches diverge, how periodic maintenance works, and how shutdown and restart controls are implemented. The primary implementation source is `main.cpp`, with supporting behavior from the client and server switchers and the transmission subsystem. This is one of the most important documents for readers who want to understand the project as a working system instead of as a pile of unrelated classes.
 
-The primary implementation source is `main.cpp`, with supporting behavior from the client and server switchers and the transmission subsystem.
-
-This is one of the most important documents for readers who want to understand the project as a working system instead of as a pile of unrelated classes.
+As a virtual Ethernet infrastructure product, OPENPPP2's startup process is far more complex than simply "read config, open socket, run event loop". It must simultaneously solve multiple dimensional problems including privilege validation, single-instance protection, configuration loading and normalization, local network-interface shaping through CLI, platform-specific environment preparation, client-side virtual adapter creation or server-side listener creation, periodic maintenance scheduling, and restart/shutdown control.
 
 ## Why Startup Matters So Much In OPENPPP2
 
-In smaller tools, startup can often be summarized as “parse config, open socket, run event loop.” That is not enough here.
+In smaller tools, startup can often be summarized as "parse config, open socket, run event loop." That is not enough here because this is a cross-platform network infrastructure runtime.
 
-OPENPPP2 startup has to solve:
+OPENPPP2 startup has to solve the following problems:
 
-- privilege validation
-- single-instance protection
-- configuration loading and normalization
-- local network-interface shaping through CLI
-- platform-specific environment preparation
-- client-side virtual adapter creation or server-side listener creation
-- periodic maintenance scheduling
-- restart and shutdown discipline
+| Startup Requirement | Description | Key Source Location |
+|---------------------|-------------|---------------------|
+| Privilege validation | Verify running privileges, ensure sufficient permissions to create virtual adapters or bind ports | `main.cpp` entry |
+| Single-instance protection | Prevent multiple instances on the same machine causing port conflicts | `main.cpp` single instance check |
+| Configuration loading and normalization | Normalize JSON config and CLI args to runtime model | `LoadConfiguration()`, `AppConfiguration.*` |
+| Local network shaping | Shape local network interface through CLI parameters | `GetNetworkInterface()` |
+| Platform environment preparation | Platform-specific environment preparation | `PreparedLoopbackEnvironment()` |
+| Virtual adapter creation | Client needs to create virtual adapter interface | `VEthernetNetworkSwitcher.*` |
+| Server listener creation | Server needs to create multi-protocol listeners | `VirtualEthernetSwitcher.*` |
+| Periodic maintenance scheduling | Tick loop executes various periodic tasks | `PppApplication::tick()` |
+| Restart and shutdown control | Graceful shutdown and auto-restart mechanism | `PppApplication` lifecycle management |
 
-That means startup is not a trivial preface. It is where the system turns from source code into a coherent infrastructure node.
+This means startup is not a trivial preface. It is where the system turns from source code into a coherent infrastructure node.
 
 ## `PppApplication` As The Process Owner
 
-`PppApplication` is the top-level owner of process lifecycle. It owns or coordinates:
+`PppApplication` is the top-level process lifecycle owner, the brain and coordination center of the entire runtime. It owns or coordinates the following core components:
 
-- loaded `AppConfiguration`
-- parsed `NetworkInterface` runtime shaping object
-- client runtime object or server runtime object
-- transmission statistics snapshots
-- tick timer lifecycle
-- restart and shutdown behavior
+### Primary Responsibilities
 
-A useful mental model is:
+| Responsibility | Description | Corresponding Source |
+|----------------|-------------|---------------------|
+| Configuration management | Holds loaded `AppConfiguration` | `PppApplication::configuration_` |
+| Network shaping | Holds parsed `NetworkInterface` local shaping object | `PppApplication::interface_` |
+| Runtime creation | Creates client runtime or server runtime objects | `PppApplication::CreateClient()`, `CreateServer()` |
+| Status snapshot | Holds transmission statistics snapshot | `PppApplication::statistics_` |
+| Timer scheduling | Manages tick timer lifecycle | `PppApplication::timer_` |
+| Lifecycle control | Manages restart and shutdown behavior | `PppApplication::Restart()`, `Shutdown()` |
 
-- `PppApplication` owns process lifecycle
-- switchers own environment lifecycle
-- exchangers own session lifecycle
-- transmissions own connection lifecycle
+### Mental Model
 
-If those boundaries are kept clear, the code becomes much easier to follow.
+The best way to understand OPENPPP2's runtime object hierarchy is to establish a clear mental model:
 
-## The High-Level Startup Pipeline
+```mermaid
+flowchart TB
+    subgraph Process Level
+        A[PppApplication<br/>Process Owner]
+    end
+    
+    subgraph Environment Level
+        B[VEthernetNetworkSwitcher<br/>Client Environment]
+        C[VirtualEthernetSwitcher<br/>Server Environment]
+    end
+    
+    subgraph Session Level
+        D[VEthernetExchanger<br/>Client Session]
+        E[VirtualEthernetExchanger<br/>Server Session]
+    end
+    
+    subgraph Connection Level
+        F[ITransmission<br/>Transmission Connection]
+    end
+    
+    A --> B
+    A --> C
+    B --> D
+    C --> E
+    D --> F
+    E --> F
+    
+    style A fill:#f9f,stroke:#333
+    style B fill:#bbf,stroke:#333
+    style D fill:#bbf,stroke:#333
+    style C fill:#bfb,stroke:#333
+    style E fill:#bfb,stroke:#333
+    style F fill:#fbb,stroke:#333
+```
 
-The startup path is best read as a pipeline.
+| Object Level | Responsible For | Key Types |
+|--------------|-----------------|-----------|
+| Process level | Process lifecycle management | `PppApplication` |
+| Environment level | Virtual adapter/listener lifecycle | `*Switcher` |
+| Session level | Remote connection lifecycle | `*Exchanger` |
+| Connection level | Transmission connection lifecycle | `ITransmission` |
+
+This layered design makes each layer's responsibility boundaries clear and easy to maintain and extend. As long as this boundary is maintained, the code remains clear.
+
+## High-Level Startup Pipeline
+
+The startup path is best understood as a pipeline, with each step building on the previous one:
 
 ```mermaid
 flowchart TD
-    A[process entry] --> B[prepare arguments and config]
-    B --> C[privilege and single-instance checks]
-    C --> D[platform preparation]
-    D --> E{client or server}
-    E -->|client| F[create adapter and client switcher]
-    E -->|server| G[create server switcher and listeners]
-    F --> H[start periodic tick]
-    G --> H
-    H --> I[event loop continues]
+    A[Process Entry main] --> B[PreparedArgumentEnvironment]
+    B --> C{Single Instance Check}
+    C -->|Failed| D[Exit with Error]
+    C -->|Success| E[Platform Preparation]
+    E --> F{Mode Selection}
+    F -->|client| G[Create Virtual Adapter]
+    F -->|server| H[Create Listener]
+    G --> I[Create VEthernetNetworkSwitcher]
+    H --> J[Create VirtualEthernetSwitcher]
+    I --> K[Start Tick Loop]
+    J --> K
+    K --> L[Event Loop Running]
+    L --> M{Shutdown Signal}
+    M --> N[Resource Cleanup]
+    N --> O[Process Exit]
+    
+    style A fill:#f9f,stroke:#333
+    style G fill:#bbf,stroke:#333
+    style H fill:#bfb,stroke:#333
+    style K fill:#ff9,stroke:#333
 ```
 
-This is a much better frame than “the program just starts.” Every later behavior depends on this pipeline having prepared a coherent environment.
+### Pipeline Stage Details
 
-## Prepared Argument Environment
+#### Stage 1: Argument Preparation and Configuration Loading
 
-`PreparedArgumentEnvironment(...)` is the first major preparation function.
+`PreparedArgumentEnvironment(...)` is the first important preparation function, performing the following operations:
 
-It performs several foundational steps:
+| Step | Operation | Description |
+|------|-----------|-------------|
+| 1 | Set socket flash TOS | Set Type of Service based on `--tun-flash` parameter |
+| 2 | Help command check | Exit early if help command is requested |
+| 3 | Load configuration file | Read `appsettings.json` or specified config file |
+| 4 | Mode determination | Decide client or server based on config or CLI args |
+| 5 | Thread pool adjustment | Adjust executor behavior based on `configuration->concurrent` |
+| 6 | Network parameter parsing | Parse local network-interface shaping parameters |
+| 7 | Save state | Save config path, config object, network interface object to `PppApplication` |
+| 8 | DNS helper | Set DNS helper state based on configuration |
 
-1. applies socket flash TOS behavior from `--tun-flash`
-2. short-circuits into help flow if help was requested
-3. loads configuration from file
-4. decides client versus server role
-5. adjusts thread-pool settings from `configuration->concurrent`
-6. parses local network-interface shaping options
-7. stores configuration path, configuration object, and network interface object
-8. applies DNS helper settings from configuration
+It is important because subsequent startup behaviors depend on the process-level state established here.
 
-This is one of the most important startup functions because it creates the process-level state that later startup code consumes.
+#### Stage 2: Single-Instance Protection
 
-## Why Mode Is Decided Early
+Single-instance protection is a key mechanism to prevent port conflicts and network chaos from running multiple OPENPPP2 instances on the same machine:
 
-The mode decision happens early because it changes too much of the later startup path to defer.
+| Check Method | Description |
+|--------------|-------------|
+| Named mutex | Use system-level named mutex to ensure only one instance runs |
+| Port check | Check if default port is already in use |
+| Error handling | Exit gracefully with error if existing instance detected |
 
-Client and server differ in:
+#### Stage 3: Platform Preparation
 
-- required local platform preparation
-- adapter versus listener creation
-- object construction paths
-- restart and periodic-task meaning
+`PreparedLoopbackEnvironment(...)` is the bridge from "generic startup" to "environment-level runtime landing". Before entering the client or server branch, it performs cross-branch platform preparation:
 
-Defaulting to server mode when mode is absent is therefore a structural design decision, not a cosmetic default.
+| Platform | Preparation Content |
+|----------|---------------------|
+| Windows | Configure firewall application rules, LSP-related preparation |
+| Linux | Kernel parameter check, routing table initialization |
+| macOS | Network interface initialization, permission check |
+| Android | VPN Service permission handling |
 
-## Thread Pool And Concurrency Preparation
+#### Stage 4: Role Selection and Object Creation
 
-After configuration loads, startup adjusts executor behavior from `configuration->concurrent`.
+Role must be determined early because too many subsequent logics depend on it. Client and server differ greatly in the following aspects:
 
-If concurrency is greater than one:
+| Dimension | Client | Server |
+|-----------|--------|--------|
+| Required platform preparation | Create virtual adapter | Create listener |
+| Virtual object creation path | `VEthernetNetworkSwitcher` | `VirtualEthernetSwitcher` |
+| Runtime object construction | `VEthernetExchanger` | `VirtualEthernetExchanger` |
+| Periodic tasks | Route/DNS maintenance, proxy services | Connection management, mapping exposure |
+| Restart and fault handling | Reconnection mechanism | Session recovery |
 
-- max schedulers are increased
-- in server mode, max threads can also be increased using the configuration’s buffer allocator
+## Configuration Loading and Normalization
 
-This is important because concurrency is treated as a node-level runtime property rather than as an afterthought hidden inside random subsystems.
+### Role of `LoadConfiguration`
 
-## `NetworkInterface` As Local Launch Shaping State
+The significance of `LoadConfiguration(...)` is not just finding a configuration file. It also decides whether to create a custom `BufferswapAllocator` based on `vmem`:
 
-The object returned by `GetNetworkInterface(...)` is not the durable configuration model. It is the launch-specific local shaping model.
+```mermaid
+flowchart TD
+    A[LoadConfiguration] --> B{Is vmem config valid?}
+    B -->|Yes| C[Create BufferswapAllocator]
+    B -->|No| D[Use Default Allocator]
+    C --> E[As transmission layer buffer backbone]
+    D --> F[Use system default memory management]
+    
+    style C fill:#bbf,stroke:#333
+    style E fill:#bbf,stroke:#333
+```
 
-It contains things such as:
+If `vmem` block is valid and the constructed allocator is valid, then subsequent transmission and packet processing paths will use it as the buffer backbone. Therefore, the startup phase not only reads strategy but also determines memory behavior infrastructure.
 
-- local DNS addresses
-- preferred NIC and gateway
-- tunnel IP, gateway, mask, and interface name
-- static-mode and host-network flags
-- mux and mux acceleration values
-- bypass lists and DNS/firewall rule file paths
-- Linux route-protection and SSMT state
-- Windows lease time and HTTP proxy integration flag
+### Configuration Parameter Categories
 
-This separation is elegant because it prevents long-lived node policy from being confused with “what this machine should do right now on this launch.”
+OPENPPP2's configuration parameters can be divided into the following categories:
 
-## Configuration Loading In Startup Context
+| Category | Parameter Examples | Affected Scope |
+|-----------|-------------------|----------------|
+| Global | `concurrent`, `cdn` | Entire runtime |
+| Encryption | `key.*`, `protocol`, `transport` | Transmission layer |
+| Network | `tcp.*`, `udp.*`, `mux.*` | Network connection |
+| Server | `server.listen.*`, `server.backend` | Server runtime |
+| Client | `client.server`, `client.guid` | Client runtime |
+| Virtual Adapter | `tun-ip`, `tun-gw`, `tun-mask` | Virtual interface |
+| Routing and DNS | `bypass`, `dns-rules`, `vbgp` | Routing policy |
+| Static and MUX | `static.*`, `mux.*` | Data plane |
 
-`LoadConfiguration(...)` does more than find a file. It also decides whether a custom `BufferswapAllocator` should be built from `vmem` settings.
+## NetworkInterface: Local Shaping State for This Startup
 
-The startup consequences are significant.
+The object returned by `GetNetworkInterface(...)` is not a long-term configuration model. It is the "local shaping model for this startup". This design avoids mixing "long-term node strategy" with "the local environment shaping for this machine's this startup".
 
-If a valid `vmem` block results in a valid allocator, that allocator becomes the buffer backbone for later subsystems.
+### Contents of NetworkInterface
 
-This means startup is not only loading policy; it is selecting memory-behavior infrastructure too.
+| Field | Type | Description |
+|-------|------|-------------|
+| dns_ | string | Local DNS address |
+| preferred_nic_ | string | Preferred physical adapter |
+| preferred_ngw_ | string | Preferred gateway |
+| tunnel_ip_ | string | Tunnel IP address |
+| tunnel_gw_ | string | Tunnel gateway |
+| tunnel_mask_ | string | Tunnel subnet mask |
+| tunnel_name_ | string | Virtual adapter name |
+| static_mode_ | bool | Whether to enable static mode |
+| host_network_ | bool | Whether as preferred network |
+| mux_ | int | MUX connection count |
+| mux_acceleration_ | int | MUX acceleration mode |
+| bypass_file_ | string | Bypass list file path |
+| dns_rules_file_ | string | DNS rules file path |
+| firewall_rules_file_ | string | Firewall rules file path |
+| linux_route_protect_ | bool | Linux route protection |
+| linux_ssmt_ | int | Linux SSMT thread count |
+| windows_lease_time_ | int | Windows DHCP lease time |
+| windows_http_proxy_ | bool | Windows system HTTP proxy |
 
-## Platform Preparation Before Client Or Server Branching
+## Client Startup Process
 
-`PreparedLoopbackEnvironment(...)` is where startup begins to become strongly role-specific and platform-specific.
-
-Before diving into client or server behavior, it also performs shared platform preparation such as:
-
-- obtaining the default `io_context`
-- configuring Windows firewall application rules
-- Windows-specific paper-airplane or LSP related behavior for clients
-
-That means this function is the bridge between generic startup and environment-specific runtime realization.
-
-## Client Branch In Detail
-
-When `client_mode_` is true, `PreparedLoopbackEnvironment(...)` enters the client branch.
-
-The high-level client startup path is:
-
-1. create TAP or TUN object
-2. open the virtual adapter
-3. construct `VEthernetNetworkSwitcher`
-4. inject requested IPv6 if present
-5. inject SSMT and Linux protect-mode pointers where relevant
-6. inject mux, static-mode, preferred gateway, and preferred NIC values
-7. load bypass IP lists
-8. load route-file IP lists from configuration
-9. load DNS rules
-10. open the client switcher on the adapter
-11. store the resulting client object into `client_`
+### Client Mode Startup Sequence
 
 ```mermaid
 sequenceDiagram
+    participant M as main.cpp
     participant P as PppApplication
-    participant T as ITap
     participant S as VEthernetNetworkSwitcher
-    participant X as VEthernetExchanger
-    P->>T: create virtual adapter
-    P->>T: open adapter
-    P->>S: create client switcher
-    P->>S: inject runtime shaping state
-    P->>S: load bypass route lists and DNS rules
-    P->>S: open on adapter
-    S->>X: maintain remote session asynchronously
+    participant E as VEthernetExchanger
+    participant T as ITransmission
+    participant V as Virtual Adapter (TUN/TAP)
+    
+    M->>P: Create PppApplication
+    P->>S: Create VEthernetNetworkSwitcher
+    S->>V: Create virtual adapter interface
+    V-->>S: Return interface handle
+    S->>E: Create VEthernetExchanger
+    E->>T: Establish transmission connection
+    T-->>E: Connection established
+    E-->>S: Session established
+    S->>S: Start route/DNS control
+    S->>S: Start proxy services (if configured)
+    P->>P: Start tick loop
 ```
 
-This is one of the clearest examples of process ownership layering in the code.
+### Client Core Component Creation
 
-- `PppApplication` owns client-start decision and cleanup
-- `ITap` owns adapter lifecycle
-- `VEthernetNetworkSwitcher` owns local network environment
-- `VEthernetExchanger` owns remote relationship maintenance
+The client creates the following core components in order during startup:
 
-## Why The Client Branch Loads So Much Local State
+| Order | Component | Responsibility |
+|-------|-----------|----------------|
+| 1 | Virtual Adapter | Create TUN/TAP interface, assign IP and routes |
+| 2 | VEthernetNetworkSwitcher | Manage virtual adapter, control route/DNS, traffic classification |
+| 3 | VEthernetExchanger | Establish and maintain connection to server |
+| 4 | Proxy Services | If HTTP/SOCKS proxy configured, start proxy services |
+| 5 | Static Path | If static mode enabled, create UDP port |
 
-The client branch has to do more than “connect to server” because OPENPPP2 client mode is a local network environment constructor.
+### Client Key Parameters
 
-It must decide:
+| Parameter | Description | Default Value |
+|-----------|-------------|---------------|
+| `--mode=client` | Specify client mode | server |
+| `--tun` | Virtual adapter name | Platform dependent |
+| `--tun-ip` | Virtual adapter IP | 10.0.0.2 |
+| `--tun-gw` | Virtual adapter gateway | 10.0.0.1 |
+| `--tun-mask` | Subnet mask bits | 30 |
+| `--server` | Server address | Required |
+| `--guid` | Client unique identifier | Auto-generated |
 
-- what adapter exists locally
-- what routes should be injected
-- what bypass lists should be loaded
-- what DNS rules should be applied
-- whether local proxy or mapping behavior exists
+## Server Startup Process
 
-That is why the client branch feels heavier than a typical proxy client startup path.
-
-## Server Branch In Detail
-
-When `client_mode_` is false, startup enters the server branch.
-
-The high-level server path is:
-
-1. on Linux, prepare IPv6 server environment when needed
-2. construct `VirtualEthernetSwitcher`
-3. inject preferred NIC
-4. open the switcher with firewall rules
-5. run listeners and auxiliary services
-6. store the resulting server object into `server_`
+### Server Mode Startup Sequence
 
 ```mermaid
 sequenceDiagram
+    participant M as main.cpp
     participant P as PppApplication
     participant S as VirtualEthernetSwitcher
-    P->>S: construct server switcher
-    P->>S: inject preferred NIC
-    P->>S: open with firewall rules
-    P->>S: run listeners and services
+    participant L as Listener
+    participant E as VirtualEthernetExchanger
+    participant T as ITransmission
+    
+    M->>P: Create PppApplication
+    P->>S: Create VirtualEthernetSwitcher
+    S->>L: Create TCP/WS/WSS listeners
+    L-->>S: Listener ready
+    S->>L: Create Static UDP listener (if configured)
+    L-->>S: UDP listener ready
+    P->>P: Start tick loop
+    L->>E: Accept new connection
+    E->>T: Create transmission object
+    T-->>E: Connection object ready
+    E-->>S: Register session
 ```
 
-This again reveals the project’s architecture.
+### Server Core Component Creation
 
-The server is not just an accept loop. It is the overlay node’s session switch and policy center.
+The server creates the following core components in order during startup:
 
-## Cleanup On Branch Failure
+| Order | Component | Responsibility |
+|-------|-----------|----------------|
+| 1 | VirtualEthernetSwitcher | Manage server environment, accept connections |
+| 2 | TCP Listener | Listen for PPP protocol connections (default 20000) |
+| 3 | WS Listener | Listen for WebSocket connections (default 20080) |
+| 4 | WSS Listener | Listen for WSS connections (default 20443) |
+| 5 | Static UDP | If enabled, create static UDP port |
+| 6 | Mapping Port | If port mapping configured, create mapping port |
+| 7 | Namespace Cache | If enabled, create namespace cache |
 
-Both client and server startup branches use explicit cleanup on failure.
+### Server Key Parameters
 
-Client-side cleanup includes:
+| Parameter | Description | Default Value |
+|-----------|-------------|---------------|
+| `--mode=server` | Specify server mode | - |
+| `--firewall-rules` | Firewall rules file | Optional |
+| `server.listen.tcp` | TCP listener port | 20000 |
+| `server.listen.ws` | WebSocket port | 20080 |
+| `server.listen.wss` | WSS port | 20443 |
+| `server.backend` | Management backend address | Optional |
 
-- resetting `client_`
-- disposing the switcher if it was created
-- disposing the virtual adapter if it was opened
+## Tick Loop and Periodic Maintenance
 
-Server-side cleanup includes:
+### Tick Mechanism Overview
 
-- resetting `server_`
-- disposing the switcher if it was created
-
-This is extremely important operationally because the process mutates host networking state. A failure path that leaked half-created network objects would be unacceptable in infrastructure software.
-
-## `Main(...)` As The Runtime Entry
-
-After preparation, `Main(...)` performs the top-level runtime entry behavior.
-
-It checks:
-
-- administrative privilege
-- repeat-run guard
-- Windows-specific adapter preparation for the client branch
-- loopback environment preparation
-- statistics initialization
-- client-specific QUIC and HTTP-proxy shaping
-- auto-update and vBGP global state
-- auto-restart and link-restart global state
-- starts the periodic tick timer
-
-This means `Main(...)` is where process preparation becomes “the node is now alive.”
-
-## Single-Instance Guard
-
-Before continuing into full runtime behavior, `Main(...)` builds a repeat-run name from:
-
-- the role string prefix `client://` or `server://`
-- the configuration path
-
-It then checks and opens the prevent-rerun guard.
-
-This is a concrete example of the runtime treating process identity as a real lifecycle concept rather than as something left to operator discipline alone.
-
-## Windows-Specific Main-Path Behavior
-
-On Windows, `Main(...)` includes several extra steps.
-
-For client mode it may:
-
-- prepare the Ethernet environment
-- save existing QUIC support state
-- later toggle QUIC support based on `--block-quic`
-- optionally set system HTTP proxy state
-
-This is operationally important because Windows startup is not merely “same as Linux plus another adapter API.” The Windows branch changes system-facing networking behavior more explicitly.
-
-## Global Runtime State In `Main(...)`
-
-`Main(...)` also sets several pieces of global state.
-
-Examples include:
-
-- whether `virr` automatic IP-list updates are enabled
-- the `virr` argument string
-- whether `vbgp` route-refresh behavior is active
-- `auto_restart`
-- `link_restart`
-
-This helps explain later periodic-tick behavior. Some of the tick logic is really process policy encoded in global state rather than in the client or server switchers themselves.
-
-## Periodic Tick Model
-
-The lifecycle model includes a visible periodic maintenance path through:
-
-- `OnTick(...)`
-- `NextTickAlwaysTimeout(...)`
-- `ClearTickAlwaysTimeout()`
-
-The timer fires every second and then re-arms itself by scheduling the next timeout.
-
-This is a very infrastructure-style design. Instead of scattering critical maintenance into many invisible timers, the process keeps an explicit top-level maintenance loop.
-
-## What Happens In `OnTick(...)`
-
-`OnTick(...)` performs a mixture of observability, housekeeping, and restart supervision.
-
-Its main behaviors include:
-
-- print environment information
-- optimize working-set size on Windows
-- enforce process auto-restart timeout
-- for clients, verify that a client switcher and exchanger exist
-- inspect network-state establishment
-- enforce link-restart threshold
-- refresh `virr` country IP-list updates when due
-- refresh vBGP route lists periodically
-
-This means `OnTick(...)` is not just a cosmetic status printer. It is a control loop.
+After startup completes, the system enters the tick loop to execute various periodic tasks. This is OPENPPP2's core mechanism for implementing various background maintenance:
 
 ```mermaid
 flowchart TD
-    A[1 second timer] --> B[PrintEnvironmentInformation]
-    B --> C[restart supervision]
-    C --> D[client session-state check]
-    D --> E[virr update check]
-    E --> F[vBGP refresh check]
+    A[Tick Trigger] --> B[Update Statistics]
+    B --> C{Is Client?}
+    C -->|Yes| D[Execute Client Periodic Tasks]
+    C -->|No| E[Execute Server Periodic Tasks]
+    D --> F[Connection Keepalive Check]
+    D --> G[Route Status Check]
+    D --> H[DNS Cache Refresh]
+    D --> I[Proxy Connection Cleanup]
+    E --> J[Connection Keepalive Check]
+    E --> K[Session Timeout Check]
+    E --> L[Mapping Port Refresh]
+    E --> M[Statistics Reporting]
+    F --> N[Wait for Next Tick]
+    G --> N
+    H --> N
+    I --> N
+    J --> N
+    K --> N
+    L --> N
+    M --> N
 ```
 
-## Auto-Restart And Link-Restart
+### Client Periodic Tasks
 
-The project contains two different restart ideas at the lifecycle layer.
+| Task | Period | Description |
+|------|--------|-------------|
+| Connection keepalive | 60s | Send keepalive packets to maintain connection |
+| Route status check | 30s | Check if routes need updating |
+| DNS cache refresh | 60s | Refresh DNS cache |
+| Proxy connection cleanup | 30s | Clean up timed-out proxy connections |
+| Statistics output | 10s | Output traffic statistics |
 
-### Auto restart
+### Server Periodic Tasks
 
-If `GLOBAL_.auto_restart` is set, the process compares elapsed runtime against the threshold and can restart the whole application when the threshold is exceeded.
+| Task | Period | Description |
+|------|--------|-------------|
+| Connection keepalive | 60s | Send keepalive packets to maintain connection |
+| Session timeout check | 30s | Check and clean up timed-out sessions |
+| Mapping port refresh | 60s | Refresh port mapping status |
+| Statistics output | 10s | Output traffic statistics |
+| Backend sync | 60s | Sync status with management backend |
 
-### Link restart threshold
+## Shutdown and Restart Control
 
-If the client exchanger has reconnected too many times and `GLOBAL_.link_restart` is set, the process may restart the application.
+### Graceful Shutdown Process
 
-This is important because the project treats resilience as a process-level concern, not merely as a socket retry concern.
+```mermaid
+flowchart TD
+    A[Receive Shutdown Signal] --> B[Set Shutdown Flag]
+    B --> C[Stop Accepting New Connections]
+    C --> D[Wait for Existing Connections]
+    D --> E{Timeout Check}
+    E -->|Timeout| F[Force Close Connections]
+    E -->|Not Timeout| G[Normal Close Connections]
+    F --> H[Cleanup Resources]
+    G --> H
+    H --> I[Output Statistics]
+    I --> J[Process Exit]
+    
+    style A fill:#f99,stroke:#333
+    style J fill:#9f9,stroke:#333
+```
 
-## `virr` And Route-List Refresh Lifecycle
+### Shutdown Flags
 
-The lifecycle model also includes route-list refresh behavior.
+| Flag | Description |
+|------|-------------|
+| `disposed_` | Main shutdown flag |
+| `closing_` | Currently closing |
+| `force_shutdown_` | Force shutdown flag |
 
-For `virr`:
+### Restart Mechanism
 
-- a next-update timestamp is tracked
-- when due, the process can pull updated IP-list data
+OPENPPP2 supports auto-restart mechanism, configurable via:
 
-For vBGP-style route lists:
+| Parameter | Description | Default Value |
+|-----------|-------------|---------------|
+| `--auto-restart` | Auto-restart interval (seconds) | 0 (disabled) |
 
-- a periodic interval is checked
-- the client’s vBGP route table is traversed
-- route lists may be re-downloaded
-- if contents changed, the file is rewritten and the application may restart to adopt the new policy cleanly
+When auto-restart is enabled, the system will automatically restart after the specified interval for fault recovery or config reload scenarios.
 
-This shows again how much OPENPPP2 is infrastructure software. Route material is not static decoration. It is part of supervised runtime policy.
+### Resource Cleanup Order
 
-## Disposal Path
+Resources are cleaned up in the following order during shutdown:
 
-`PppApplication::Dispose()` performs explicit teardown.
+| Order | Cleanup Content |
+|-------|-----------------|
+| 1 | Stop tick loop |
+| 2 | Close all client connections |
+| 3 | Close all server listeners |
+| 4 | Cleanup virtual adapter (client) |
+| 5 | Cleanup route and DNS changes |
+| 6 | Cleanup proxy services |
+| 7 | Cleanup MUX connections |
+| 8 | Free configuration memory |
 
-It:
+## Exception Handling and Fault Recovery
 
-- disposes the server switcher if present
-- restores Windows QUIC behavior if needed
-- clears system HTTP proxy state on Windows if the runtime set it earlier
-- disposes the client switcher if present
-- clears the tick timer
+### Client Exception Handling
 
-This matters because the process can change host networking state and should clean up after itself predictably.
+| Exception Type | Handling |
+|----------------|----------|
+| Connection disconnection | Auto-reconnect with exponential backoff |
+| Virtual adapter error | Attempt to recreate |
+| DNS resolution failure | Use backup DNS |
+| Proxy service error | Restart proxy service |
 
-## Statistics Snapshot Ownership
+### Server Exception Handling
 
-`GetTransmissionStatistics(...)` retrieves statistics from whichever active top-level switcher exists.
+| Exception Type | Handling |
+|----------------|----------|
+| Listen port conflict | Try backup port |
+| Session error | Close and cleanup session |
+| Backend communication failure | Degrade to local-only operation |
+| Out of memory | Reject new connections, cleanup idle sessions |
 
-That is important because it shows where observability ownership lives.
+## Platform-Specific Startup Differences
 
-- the process does not inspect raw sockets directly here
-- it asks the currently active environment owner for transport statistics
+### Windows Platform
 
-This is another sign of coherent ownership boundaries in the runtime.
+| Preparation | Description |
+|-------------|-------------|
+| Firewall rules | Configure Windows Firewall allow rules |
+| LSP preparation | PaperAirplane-related preparation |
+| Network adapter | Create TAP adapter |
+| DHCP lease | Configure IP lease time |
 
-## Shutdown And Restart Requests
+### Linux Platform
 
-`ShutdownApplication(...)` posts a shutdown or restart request into the main `io_context`.
+| Preparation | Description |
+|-------------|-------------|
+| TUN/TAP loading | Check and load tun module |
+| Routing table permissions | Check routing table modification permissions |
+| Network namespace | Support network namespace |
+| Route protection | Optional route protection |
 
-This means shutdown is coordinated inside the event-driven runtime rather than being treated as an arbitrary external kill signal only.
+### macOS Platform
 
-That is a better fit for a network process that needs to unwind internal state safely.
+| Preparation | Description |
+|-------------|-------------|
+| utun interface | Create utun virtual interface |
+| Permission check | Check network permissions |
+| Promiscuous mode | Optional enable promiscuous mode |
 
-## Utility Commands Bypass Full Runtime Startup
+### Android Platform
 
-Not every invocation path becomes a long-running tunnel process.
+| Preparation | Description |
+|-------------|-------------|
+| VPN Service | Use Android VPN API |
+| Permission handling | Handle VPN permission requests |
+| Network interface | Create TUN interface |
 
-`Run(...)` checks for helper commands first, including:
+## Startup Performance Considerations
 
-- `--pull-iplist`
-- Windows preferred network commands
-- `--no-lsp`
-- `--system-network-optimization`
+### Startup Time Breakdown
 
-If those are used, the process performs the helper action and exits without continuing into the full normal startup path.
+| Stage | Expected Time | Optimization Suggestion |
+|-------|---------------|-------------------------|
+| Configuration loading | < 100ms | Keep config file small |
+| Virtual adapter creation | 100-500ms | Platform dependent |
+| Connection establishment | 100-2000ms | Network dependent |
+| Route configuration | < 100ms | Keep route rules minimal |
 
-This is one reason CLI documentation has to distinguish:
+### Concurrency Configuration Impact
 
-- startup-shaping switches
-- one-shot utility commands
+The `concurrent` parameter has significant impact on startup performance:
 
-## Why Lifecycle Documentation Matters For Developers
+| concurrent Value | Applicable Scenario | Thread Pool Configuration |
+|-----------------|---------------------|---------------------------|
+| 1 | Single-core environment | Single-threaded executor |
+| Default (1) | Regular client | Standard thread pool |
+| > 1 | Multi-core server | Multi-threaded executor |
 
-Many confusing behaviors in OPENPPP2 become simpler once you know where they live in lifecycle ownership.
+## Summary
 
-If something is about:
+Understanding OPENPPP2's startup and lifecycle requires grasping the following core points:
 
-- reading files and choosing policy, look at configuration loading
-- local environment realization, look at switchers and adapter setup
-- remote relationship maintenance, look at exchangers
-- packet and connection state, look at transmissions
-- periodic supervision or restart, look at `OnTick(...)` and the lifecycle layer
+1. **Unified entry**: One binary supports client/server roles, unified management through `PppApplication`
+2. **Configuration as infrastructure**: Configuration loading not only reads files but also determines memory allocation strategy
+3. **Layered object model**: Clear separation of process level, environment level, session level, and connection level
+4. **Platform differences**: Different platforms have different environment preparation requirements
+5. **Tick-driven**: Periodic tasks are uniformly scheduled through tick loop
+6. **Graceful shutdown**: Complete resource cleanup mechanism during shutdown
 
-That is the map that keeps the project from becoming mentally tangled.
-
-## Reading Order For Source Study
-
-To study startup and lifecycle in the best order, read:
-
-1. `PppApplication::PreparedArgumentEnvironment(...)`
-2. `PppApplication::LoadConfiguration(...)`
-3. `PppApplication::GetNetworkInterface(...)`
-4. `PppApplication::PreparedLoopbackEnvironment(...)`
-5. `PppApplication::Main(...)`
-6. `PppApplication::OnTick(...)`
-7. `PppApplication::NextTickAlwaysTimeout(...)`
-8. `PppApplication::Dispose()`
-9. `PppApplication::ShutdownApplication(...)`
-
-This order makes the system read like a lifecycle narrative instead of a maze.
-
-## Final Interpretation
-
-OPENPPP2 startup and lifecycle are best understood as a layered ownership system.
-
-The process does not merely launch sockets. It:
-
-- validates privilege and identity
-- shapes stable policy from configuration
-- shapes local runtime behavior from CLI
-- realizes either a client network environment or a server policy environment
-- supervises itself continuously through a tick loop
-- handles restart, route refresh, and teardown explicitly
-
-That is exactly the kind of startup discipline expected from a serious network infrastructure runtime.
+Understanding these principles is crucial for correctly deploying and maintaining OPENPPP2.
 
 ## Related Documents
 
-- [`USER_MANUAL.md`](USER_MANUAL.md)
-- [`CONFIGURATION.md`](CONFIGURATION.md)
-- [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
-- [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
-- [`TRANSMISSION.md`](TRANSMISSION.md)
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System Architecture Overview |
+| [CLIENT_ARCHITECTURE.md](CLIENT_ARCHITECTURE.md) | Client Runtime Architecture |
+| [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md) | Server Runtime Architecture |
+| [CONFIGURATION.md](CONFIGURATION.md) | Configuration Model and Parameter Dictionary |
+| [PLATFORMS.md](PLATFORMS.md) | Platform Support and Differences |

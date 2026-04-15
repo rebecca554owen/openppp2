@@ -1,477 +1,575 @@
-# Architecture
+# System Architecture
 
 [中文版本](ARCHITECTURE_CN.md)
 
 ## Scope
 
-This document is the top-level architecture map for OPENPPP2. It is intentionally written after the deeper documents on transport, client runtime, server runtime, routing, platforms, deployment, and operations, because its job is different from theirs.
+This document serves as the top-level architecture map for OPENPPP2, providing readers with a comprehensive view of the system architecture. It is intentionally positioned after the deeper technical documents on transport, client, server, routing, platforms, deployment, and operations because its purpose differs from those documents. This document does not attempt to restate every mechanism in detail; rather, it aims to help readers understand how the entire system is layered, how main subsystems relate to each other, what boundaries are most important, and how to navigate the source code correctly without oversimplifying it as "a VPN".
 
-This document does not try to restate every mechanism in full detail. Its job is to explain how the whole system is partitioned, how the main subsystems relate to one another, what the important boundaries are, and how a reader should navigate the source tree without flattening the entire project into one vague idea of a VPN.
+OPENPPP2 is positioned as a virtual Ethernet infrastructure product, which is fundamentally different from most endpoint VPN products. It is not merely an encrypted tunnel but a comprehensive network infrastructure runtime that encompasses virtual interface integration, in-tunnel control and forwarding logic, routing and DNS steering, reverse service mapping, optional static packet and MUX paths, platform-specific host network changes, and an optional external management backend.
 
-The architecture described here is based on the actual code structure, especially:
+## Core Source Code Structure
 
-- `main.cpp`
-- `ppp/configurations/AppConfiguration.*`
-- `ppp/transmissions/*`
-- `ppp/app/protocol/*`
-- `ppp/app/client/*`
-- `ppp/app/server/*`
-- `windows/*`
-- `linux/*`
-- `darwin/*`
-- `android/*`
-- `go/*`
+This document is primarily based on the following code structure:
+
+```mermaid
+graph TD
+    subgraph "Entry Layer"
+        A[main.cpp]
+    end
+    
+    subgraph "Configuration Layer"
+        B[ppp/configurations/AppConfiguration.*]
+    end
+    
+    subgraph "Transmission Layer"
+        C[ppp/transmissions/*]
+    end
+    
+    subgraph "Protocol Layer"
+        D[ppp/app/protocol/*]
+    end
+    
+    subgraph "Client Runtime"
+        E[ppp/app/client/*]
+    end
+    
+    subgraph "Server Runtime"
+        F[ppp/app/server/*]
+    end
+    
+    subgraph "Platform Layer"
+        G[windows/*]
+        H[linux/*]
+        I[darwin/*]
+        J[android/*]
+    end
+    
+    subgraph "Management Backend"
+        K[go/*]
+    end
+    
+    A --> B
+    A --> C
+    A --> E
+    A --> F
+    B --> C
+    C --> D
+    E --> G
+    E --> H
+    E --> I
+    E --> J
+    F --> G
+    F --> H
+    F --> I
+    F --> J
+    F --> K
+```
 
 ## The Shortest Accurate Description
 
-OPENPPP2 is a cross-platform network runtime built around:
+OPENPPP2 is a cross-platform network runtime built around the following structure:
 
-- one C++ executable named `ppp`
-- one shared protected-transport and tunnel protocol core
-- one client runtime
-- one server runtime
-- one platform integration layer per host family
-- one optional Go management backend
+| Component | Description |
+|-----------|-------------|
+| **ppp executable** | C++ main program with client and server modes |
+| **Shared core** | Protected transport and tunnel protocol core, including protocol processing, encryption, and framing |
+| **Client runtime** | Virtual interface integration, route/DNS control, proxy services |
+| **Server runtime** | Connection acceptance, session management, forwarding and mapping |
+| **Platform integration** | Host network changes for Windows, Linux, macOS, Android |
+| **Management backend** | Optional Go-based management server |
 
-It is not best described as only a VPN client, only a VPN server, only a proxy, or only a custom transport. The code shows that it is a composed system containing all of those ideas in different layers.
+From an architectural perspective, OPENPPP2 cannot be simply described as a VPN client, VPN server, proxy, or custom transport. The source code shows it contains all these concepts at different layers, making it a comprehensive network infrastructure runtime.
 
-If a single sentence is required, the least misleading sentence is this:
+## The Most Important Architectural Division
 
-OPENPPP2 is a network infrastructure runtime that combines protected transport, virtual adapter integration, tunnel-side control and forwarding logic, route and DNS steering, reverse service mapping, optional static packet and MUX paths, platform-specific host mutation, and an optional external management backend.
+The most important architectural division in the entire repository is the separation between **shared protocol and runtime core** and **platform integration layer**.
 
-## The Main Architectural Split
+### Shared Core (Tunnel Semantics)
 
-The most important architectural split in the repository is between:
+The shared core owns tunnel semantics, responsible for network protocol processing and forwarding, including:
 
-- shared protocol and runtime core
-- platform integration layer
+| Module | Description | Key Source Files |
+|--------|-------------|------------------|
+| Configuration normalization | Normalize JSON config and CLI args to runtime model | `AppConfiguration.*` |
+| Handshake and transmission | Establish protected connections, perform key exchange | `ITransmission.*` |
+| Link-layer actions | In-tunnel control signaling and data forwarding protocol | `VirtualEthernetLinklayer.*` |
+| Client runtime | Virtual adapter management, route/DNS control, proxy services | `VEthernetNetworkSwitcher.*` |
+| Server runtime | Connection acceptance, session switching, forwarding/mapping | `VirtualEthernetSwitcher.*` |
+| Static packet and MUX | UDP static path and multiplexing logic | `VirtualEthernetDatagramPort*`, `vmux*` |
+| Policy envelope | Management backend policy distribution and IPv6 allocation | `VirtualEthernetInformation.*` |
 
-The shared core owns tunnel semantics.
+### Platform Layer (Host Consequences)
 
-The platform layer owns host consequences.
+The platform layer owns host consequences, responsible for interacting with the local operating system:
 
-Tunnel semantics include:
+| Module | Description | Key Source Files |
+|--------|-------------|------------------|
+| Virtual interface creation | Create or attach virtual network adapter | `windows/tap.*`, `linux/tun.*` |
+| Route modification | Modify system routing table | Platform-specific route code |
+| DNS modification | Modify system DNS configuration | Platform-specific DNS code |
+| Socket protection | Prevent traffic recursion into tunnel | `protect` and `bypass` logic |
+| IPv6 setup | Platform-specific IPv6 interface configuration | Platform-specific IPv6 code |
 
-- configuration normalization
-- handshake
-- framing
-- ciphertext state construction
-- tunnel control actions
-- session objects
-- NAT, mapping, static packet, MUX, and IPv6 assignment logic
-
-Host consequences include:
-
-- creating or attaching the virtual adapter
-- mutating route tables
-- mutating DNS behavior
-- protecting sockets from recursion
-- performing platform-specific IPv6 interface and transit setup
-
-This split matters because it explains why the project is both cross-platform and deeply platform-specific at the same time.
-
-```mermaid
-flowchart TD
-    A[Shared core] --> B[Configuration]
-    A --> C[Handshake and transmission]
-    A --> D[Link-layer tunnel actions]
-    A --> E[Client runtime]
-    A --> F[Server runtime]
-    A --> G[Static packet and MUX logic]
-    A --> H[Policy envelopes and IPv6 assignment logic]
-
-    I[Platform layer] --> J[Adapter creation or attachment]
-    I --> K[Route mutation]
-    I --> L[DNS mutation]
-    I --> M[Protect and bypass integration]
-    I --> N[Platform-specific IPv6 host setup]
-
-    E --> I
-    F --> I
-```
-
-## The Runtime Starts From One Entry Point
-
-`main.cpp` is the architectural root of the C++ side.
-
-That matters more than it may seem. The system does not scatter primary lifecycle across many binaries or many semi-independent launchers. The top-level program flow is centralized in one place.
-
-At startup, `main.cpp` is responsible for:
-
-- loading configuration
-- selecting role
-- parsing host-specific runtime flags
-- preparing client or server environment
-- creating the corresponding switcher object
-- arming the periodic tick loop
-- printing operational state
-- coordinating shutdown and restart
-
-Architecturally, this means OPENPPP2 is not a loose federation of tools. It is a single orchestrated runtime with role-specific branches.
-
-## One Binary, Two Main Roles, Several Optional Planes
-
-The C++ executable has two primary roles:
-
-- client mode
-- server mode
-
-But each role is not a single behavior. Each role is a composition of optional planes.
-
-Client role may include:
-
-- virtual adapter integration
-- route steering
-- DNS steering
-- local HTTP proxy
-- local SOCKS proxy
-- static packet path participation
-- MUX sub-link participation
-- reverse mapping registration
-- managed IPv6 apply and rollback
-
-Server role may include:
-
-- multiple stream listeners
-- static datagram listener
-- firewall policy
-- namespace cache
-- reverse mapping exposure
-- optional managed backend connectivity
-- optional IPv6 transit and neighbor proxy state
-
-So the binary role is only the first cut. The second cut is which optional planes are actually enabled.
+This division is crucial as it explains why OPENPPP2 is cross-platform on one hand, yet highly platform-dependent in many places.
 
 ```mermaid
 flowchart TD
-    A[ppp executable] --> B[Client mode]
-    A --> C[Server mode]
-
-    B --> B1[Adapter and host integration]
-    B --> B2[Exchanger and remote session]
-    B --> B3[Route and DNS steering]
-    B --> B4[Local proxy surface]
-    B --> B5[Static and MUX optional planes]
-    B --> B6[Managed IPv6 application]
-
-    C --> C1[Acceptors and handshake]
-    C --> C2[Session switch]
-    C --> C3[Forwarding and mapping]
-    C --> C4[Static datagram surface]
-    C --> C5[Firewall and namespace cache]
-    C --> C6[Managed backend integration]
-    C --> C7[IPv6 transit optional plane]
+    subgraph "Shared Core"
+        A[Configuration] --> B[Handshake & Transmission]
+        B --> C[Link-layer Protocol]
+        C --> D[Client Runtime]
+        C --> E[Server Runtime]
+        D --> F[Static Packet & MUX]
+        E --> F
+        F --> G[Policy & IPv6]
+    end
+    
+    subgraph "Platform Layer"
+        H[Virtual Interface] --> I[Route Modification]
+        I --> J[DNS Modification]
+        J --> K[Socket Protection]
+        K --> L[IPv6 Setup]
+    end
+    
+    D --> H
+    E --> H
 ```
 
-## The Configuration Object Is An Architectural Component, Not Just A File Parser
+## Runtime Entry and Lifecycle
 
-`AppConfiguration` is one of the central architectural components.
+`main.cpp` is the architectural root of the entire C++ side. The system does not scatter the main lifecycle across many binaries or semi-independent launchers, but uses a unified entry point to complete top-level orchestration.
 
-It defines:
+### Startup Pipeline
 
-- the vocabulary of the whole runtime
-- the default behaviors the runtime will assume
-- the normalization and validation rules that convert text config into operational intent
-
-This is important because many systems document configuration as a secondary concern. In OPENPPP2, configuration is part of the architecture itself. It does not merely select values. It selects major runtime behavior:
-
-- which transport listeners exist
-- whether WS/WSS are active
-- whether mappings exist
-- whether IPv6 mode is none, NAT66, or GUA
-- whether static mode or MUX exists
-- whether DNS redirect and cache exist
-- whether a management backend is in the design at all
-
-That is why the configuration document and the architecture document must be read together.
-
-## The Protected Transmission Layer Is Distinct From The Tunnel Action Layer
-
-One of the most important conceptual boundaries in the repository is between:
-
-- protected transmission
-- tunnel action protocol
-
-The protected transmission layer lives mainly in `ppp/transmissions/`.
-
-Its concerns are:
-
-- carrier transport choice such as TCP, WS, WSS
-- handshake sequencing
-- framing family selection
-- protocol and transport cipher state
-- payload transforms and protected packet boundaries
-
-The tunnel action layer lives mainly in `ppp/app/protocol/`.
-
-Its concerns are:
-
-- what a packet means to the overlay
-- whether a message is NAT, SENDTO, ECHO, INFO, CONNECT, static, MUX, or mapping-related
-- how client and server runtime objects react to those actions
-
-This separation is crucial. The transport layer is not the whole protocol. The tunnel action layer is not the same thing as the carrier. A reader who collapses both into one idea of “the protocol” will miss most of the design.
+At startup, `main.cpp` is responsible for the following steps:
 
 ```mermaid
 flowchart TD
-    A[Carrier] --> B[Transmission handshake]
-    B --> C[Transmission framing]
-    C --> D[Protected payload]
-    D --> E[Link-layer tunnel action]
-    E --> F[Client or server runtime action]
-    F --> G[Host networking effect]
+    A[Program Entry] --> B[Privilege Validation]
+    B --> C[Single Instance Check]
+    C --> D[Load Configuration]
+    D --> E[Normalize Configuration]
+    E --> F[Parse Network Parameters]
+    F --> G[Role Selection: client/server]
+    G --> H{Select Result}
+    H -->|client| I[Create Client Environment]
+    H -->|server| J[Create Server Environment]
+    I --> K[Create Switcher]
+    J --> K
+    K --> L[Start Tick Loop]
+    L --> M[Output Runtime Status]
+    M --> N[Wait for Shutdown Signal]
+    N --> O[Cleanup Resources]
 ```
 
-## The Tunnel Action Layer Is The Common Language Between Client And Server
+### Main Runtime Objects
 
-`VirtualEthernetLinklayer`, `VirtualEthernetInformation`, `VirtualEthernetPacket`, and related protocol types define the common language used by both sides of the tunnel.
+OPENPPP2 runtime objects are organized by lifecycle and responsibility:
 
-That language includes actions for:
+| Object Level | Responsible For | Key Types |
+|--------------|-----------------|-----------|
+| Process level | Process lifecycle management | `PppApplication` |
+| Environment level | Virtual adapter/listener lifecycle | `*Switcher` |
+| Session level | Remote connection lifecycle | `*Exchanger` |
+| Connection level | Transmission connection lifecycle | `ITransmission` |
 
-- information exchange
-- keepalive
-- NAT and LAN handling
-- TCP connect, push, connect-ok, disconnect
-- UDP sendto style forwarding
-- static packet handling
-- MUX setup and child connections
-- FRP-like mapping registration and forwarding
+This layered structure keeps the code clear with well-defined responsibility boundaries.
 
-But the language is shared only at the vocabulary level. Legality is still role-specific. Both client and server contain explicit defensive rejection paths for actions that should never arrive from that direction.
+## One Binary, Two Main Roles, Multiple Optional Planes
 
-Architecturally, this means OPENPPP2 uses one shared message vocabulary but not one symmetric peer model. The client and server are not equal peers in behavior, even when they recognize the same message names.
+The C++ main binary has two main roles: **client mode** and **server mode**. However, each role itself is not a single behavior but a combination of multiple planes.
 
-## The Client Architecture Boundary
+### Client Planes
 
-The client has one especially important internal split:
+The client mode may include the following planes:
 
-- `VEthernetNetworkSwitcher`
-- `VEthernetExchanger`
+| Plane | Description | Enable Condition |
+|-------|-------------|------------------|
+| Adapter and host integration | Virtual adapter creation and management | Enabled by default |
+| Exchanger and remote session | Connection and session with server | Enabled by default |
+| Route and DNS steering | Route control and DNS policy | Enabled by default |
+| Local proxy surface | HTTP/SOCKS proxy services | Configurable |
+| Static and MUX optional plane | UDP static path or multiplexing | Configurable |
+| Managed IPv6 apply | Receive and apply server IPv6 config | Configurable |
+| Reverse mapping registration | Register reverse mapping with server | Configurable |
 
-The switcher owns local host networking meaning.
+### Server Planes
 
-The exchanger owns remote session meaning.
+The server mode may include the following planes:
 
-This is not just a naming preference. It is one of the cleanest design decisions in the project.
-
-The switcher owns:
-
-- the virtual adapter
-- the underlying NIC relationship
-- route tables and bypass policy
-- DNS rules and DNS redirection behavior
-- local proxy surfaces
-- local packet admission and emission
-- managed IPv6 application to the host
-
-The exchanger owns:
-
-- transmission open and reconnect loop
-- handshake to the server
-- keepalive and liveness behavior
-- static path negotiation
-- MUX plane behavior
-- mapping registration
-- datagram state keyed by source endpoint
-
-Architecturally, this means the client is not "socket code plus some local routes." It is a host-edge runtime composed from a host-facing half and a remote-session-facing half.
-
-## The Server Architecture Boundary
-
-The server has a similar but not identical split:
-
-- `VirtualEthernetSwitcher`
-- `VirtualEthernetExchanger`
-
-The switcher is node-wide.
-
-The exchanger is per-session.
-
-The switcher owns:
-
-- listeners
-- accepted connection classification
-- session map
-- connection map
-- firewall policy
-- namespace cache
-- optional managed backend client
-- optional static datagram socket
-- optional IPv6 transit state
-- logger and node-wide statistics
-
-The exchanger owns:
-
-- one client session
-- per-session forwarding state
-- per-session mapping ports
-- per-session datagram ports
-- per-session MUX and static allocation state
-- action handlers for messages from that client
-
-Architecturally, the server is a session switch, not merely a packet forwarder. Its top-level object routes accepted connections into either:
-
-- main session establishment
-- auxiliary connection handling
-
-That split is one of the key reasons the code reads more like a network node than like a simple daemon.
-
-## Data Plane, Control Plane, And Management Plane
-
-The repository becomes easier to reason about when split into three planes.
-
-### Data Plane
-
-This is where actual forwarded traffic moves.
-
-Examples:
-
-- TUN/TAP packet I/O
-- NAT packet forwarding
-- TCP relay payload flow
-- UDP datagram payload flow
-- static packet payload flow
-- IPv6 transit payload flow
-
-### Control Plane
-
-This is where sessions are established and maintained.
-
-Examples:
-
-- handshake
-- information envelope exchange
-- keepalive
-- mapping registration
-- MUX connection setup
-- requested IPv6 configuration and assigned IPv6 response
-
-### Management Plane
-
-This is optional and externalized.
-
-Examples:
-
-- Go backend
-- Redis and MySQL state
-- node authentication and policy lookup
-
-The control plane exists even without the management plane. The management plane is an optional dependency layered above it.
+| Plane | Description | Enable Condition |
+|-------|-------------|------------------|
+| Acceptor and handshake | Accept and process client connections | Enabled by default |
+| Session switch | Session management and switching | Enabled by default |
+| Forwarding and mapping | Data forwarding and port mapping | Enabled by default |
+| Static datagram surface | UDP static path service | Configurable |
+| Firewall and namespace cache | Firewall rules and namespace cache | Configurable |
+| Managed backend integration | Management backend connection | Configurable |
+| IPv6 transit optional plane | IPv6 forwarding and neighbor proxy | Configurable |
 
 ```mermaid
 flowchart TD
-    A[Management plane] --> B[Node and user policy]
-    B --> C[Control plane envelopes and authentication]
-    C --> D[Session objects]
-    D --> E[Data plane forwarding]
-    E --> F[Host route, DNS, adapter, and network effects]
+    A[ppp executable] --> B[client mode]
+    A --> C[server mode]
+    
+    subgraph client
+        B --> B1[adapter and host integration]
+        B --> B2[exchanger and remote session]
+        B --> B3[route and DNS steering]
+        B --> B4[local proxy surface]
+        B --> B5[static and MUX optional plane]
+        B --> B6[managed IPv6 apply]
+        B --> B7[reverse mapping registration]
+    end
+    
+    subgraph server
+        C --> C1[acceptor and handshake]
+        C --> C2[session switch]
+        C --> C3[forwarding and mapping]
+        C --> C4[static datagram surface]
+        C --> C5[firewall and namespace cache]
+        C --> C6[managed backend integration]
+        C --> C7[IPv6 transit optional plane]
+    end
 ```
 
-## The Platform Layer Is Not A Thin Portability Wrapper
+## Configuration Object as Architecture Component
 
-The platform directories are not a decorative portability shell. They are where host-network reality lives.
+`AppConfiguration` is not just a configuration file parser but a very important architecture component in the entire system. It defines:
 
-Windows provides:
+- The configuration vocabulary for the entire runtime
+- Default runtime behavior when not specified
+- How text configuration is normalized to operational intent
 
-- Wintun or TAP integration
-- WMI-backed adapter configuration
-- native route and DNS mutation helpers
-- Windows-specific proxy and desktop client integration
+This is important because many systems treat configuration as supplementary content. In OPENPPP2, configuration itself is part of the architecture. It not only selects values but also selects major runtime behaviors:
 
-Linux provides:
+| Config Item | Affected Behavior |
+|-------------|------------------|
+| `server.listen.*` | Which listeners to open |
+| `server.backend` | Whether management backend is needed |
+| `ipv6.mode` | IPv6 mode: none, NAT66, GUA |
+| `static.*` | Whether to enable static mode |
+| `mux.*` | Whether to enable multiplexing |
+| `dns.*` | DNS redirection and caching |
+| `key.*` | Encryption key and algorithm selection |
 
-- tun integration
-- route and DNS mutation helpers
-- socket protect support
-- the richest server-side IPv6 transit implementation
+## Protected Transmission Layer vs. Tunnel Action Layer
 
-Darwin provides:
+One very important conceptual boundary in the entire repository is the separation between **protected transmission** and **tunnel action protocol**.
 
-- utun integration
-- route socket usage
-- Darwin-specific IPv6 apply and restore logic
+### Protected Transmission Layer
 
-Android provides:
+The protected transmission layer, located primarily in `ppp/transmissions/`, handles:
 
-- shared-library embedding
-- external VPN TUN fd attachment
-- JNI-based protect integration
+| Function | Description |
+|----------|-------------|
+| Carrier transport selection | TCP, WebSocket, WSS, etc. |
+| Handshake sequencing | Handshake sequence and key exchange |
+| Key derivation | Work key reconstruction based on `ivv` |
+| Framing and encryption | Data encryption encapsulation and decapsulation |
+| Read/write pipeline | Asynchronous IO operations |
 
-This is why the project can be honestly called cross-platform without pretending the host behavior is uniform.
+```mermaid
+flowchart LR
+    subgraph Client
+        A[Application Data] --> B[Encryption/Framing]
+        B --> C[TCP/WS/WSS]
+    end
+    
+    subgraph Transmission Channel
+        C -.->|Encrypted Tunnel| D[Network Transmission]
+    end
+    
+    subgraph Server
+        D --> E[TCP/WS/WSS]
+        E --> F[Decryption/Deframing]
+        F --> G[Application Data]
+    end
+```
 
-## The Optional Go Backend Is Architecturally Separate
+### Tunnel Action Layer
 
-The Go service under `go/` is not a peer replacement for the C++ runtime. It is an optional management subsystem.
+The tunnel action protocol, located primarily in `ppp/app/protocol/VirtualEthernetLinklayer.*`, handles:
 
-It owns concerns such as:
+| Function | Description |
+|----------|-------------|
+| Session information | INFO message delivery |
+| Keepalive | KEEPALIVED messages |
+| Virtual subnet forwarding | LAN, NAT messages |
+| UDP relay | SENDTO, ECHO messages |
+| TCP relay | SYN, SYNOK, PSH, FIN messages |
+| Reverse mapping | MAPPING messages |
+| Static path negotiation | STATIC messages |
 
-- persistent node metadata
-- user policy and quota state
-- Redis coordination
-- MySQL persistence
-- WebSocket and HTTP management endpoints
+This separation allows OPENPPP2 to flexibly support multiple transport carriers while maintaining unified tunnel control semantics.
 
-The C++ server owns the data plane even when the backend is enabled.
+## Core Types and Their Relationships
 
-This distinction is architecturally important because it prevents a common misunderstanding. OPENPPP2 is not one monolith split across C++ and Go. It is a C++ data-plane runtime that can optionally depend on a Go management plane.
+### Client Core Types
 
-## Architectural Reading Order
+| Type | Responsibility | Key Files |
+|------|---------------|-----------|
+| `VEthernetNetworkSwitcher` | Host network environment management | `VEthernetNetworkSwitcher.*` |
+| `VEthernetExchanger` | Remote session management | `VEthernetExchanger.*` |
+| `VEthernetNetworkTcpipStack` | TCP/IP protocol stack | `VEthernetNetworkTcpipStack.*` |
+| `VEthernetNetworkTcpipConnection` | TCP connection management | `VEthernetNetworkTcpipConnection.*` |
+| `VEthernetDatagramPort` | UDP datagram port | `VEthernetDatagramPort.*` |
+| `VEthernetHttpProxySwitcher` | HTTP proxy | `VEthernetHttpProxySwitcher.*` |
+| `VEthernetSocksProxySwitcher` | SOCKS proxy | `VEthernetSocksProxySwitcher.*` |
 
-For a new reader, the most effective reading order is this.
+### Server Core Types
 
-1. `main.cpp`
-2. `ppp/configurations/AppConfiguration.*`
-3. `ppp/transmissions/*`
-4. `ppp/app/protocol/*`
-5. `ppp/app/client/*`
-6. `ppp/app/server/*`
-7. platform tree for the target OS
-8. `go/*` only if managed deployment matters
+| Type | Responsibility | Key Files |
+|------|---------------|-----------|
+| `VirtualEthernetSwitcher` | Server environment management | `VirtualEthernetSwitcher.*` |
+| `VirtualEthernetExchanger` | Session exchange management | `VirtualEthernetExchanger.*` |
+| `VirtualEthernetNetworkTcpipConnection` | TCP connection management | `VirtualEthernetNetworkTcpipConnection.*` |
+| `VirtualEthernetManagedServer` | Managed server | `VirtualEthernetManagedServer.*` |
+| `VirtualEthernetDatagramPort` | UDP port management | `VirtualEthernetDatagramPort.*` |
+| `VirtualEthernetDatagramPortStatic` | Static UDP port | `VirtualEthernetDatagramPortStatic.*` |
+| `VirtualEthernetNamespaceCache` | Namespace cache | `VirtualEthernetNamespaceCache.*` |
+| `VirtualEthernetMappingPort` | Mapping port | `VirtualEthernetMappingPort.*` |
 
-This order mirrors the architecture from outside to inside, then from shared core to role-specific runtime, then from runtime to host-specific realization, then finally to optional management.
+```mermaid
+classDiagram
+    class VEthernetNetworkSwitcher {
+        +manage virtual adapter
+        +control route/DNS
+        +classify traffic
+    }
+    
+    class VEthernetExchanger {
+        +establish remote connection
+        +maintain session state
+        +handle reconnection
+    }
+    
+    class VirtualEthernetSwitcher {
+        +accept client connections
+        +manage sessions
+        +forward data
+    }
+    
+    class VirtualEthernetExchanger {
+        +handle single session
+        +forward TCP/UDP
+        +maintain connection state
+    }
+    
+    VEthernetNetworkSwitcher --> VEthernetExchanger
+    VirtualEthernetSwitcher --> VirtualEthernetExchanger
+```
 
-## The Most Important Boundaries To Preserve When Modifying The Code
+## Connection Protocols and Data Planes
 
-Several boundaries are worth preserving because they are carrying real architectural weight.
+OPENPPP2 supports multiple connection protocols, forming different data planes:
 
-Do not collapse transport concerns into tunnel action concerns.
+### Native TCP Direct (ppp://)
 
-Do not move host route and DNS mutation into the exchanger/session objects.
+| Attribute | Description |
+|-----------|-------------|
+| Protocol prefix | `ppp://` |
+| Transport | Native TCP direct |
+| Use case | Low latency, high throughput direct connection |
+| Port | Default 20000 |
 
-Do not treat client and server as symmetric peers just because they share a message vocabulary.
+### WebSocket Plain (ws://)
 
-Do not describe Linux-specific IPv6 server data-plane behavior as if it were uniformly implemented on every platform.
+| Attribute | Description |
+|-----------|-------------|
+| Protocol prefix | `ws://` |
+| Transport | WebSocket plain |
+| Use case | CDN forwarding, HTTP proxy environment |
+| Port | Default 80 |
 
-Do not confuse the Go backend with the primary data plane.
+### WebSocket SSL (wss://)
 
-These boundaries are already visible in the code. The architecture is stronger when the documentation states them plainly.
+| Attribute | Description |
+|-----------|-------------|
+| Protocol prefix | `wss://` |
+| Transport | SSL encrypted WebSocket |
+| Use case | CDN forwarding, HTTPS proxy environment |
+| Port | Default 443 |
 
-## Architectural Conclusion
+```mermaid
+flowchart LR
+    subgraph Client
+        A[Application Data]
+    end
+    
+    A --> B{Protocol Selection}
+    B -->|ppp://| C[Native TCP]
+    B -->|ws://| D[WebSocket]
+    B -->|wss://| E[WebSocket SSL]
+    
+    C --> F[Server]
+    D --> F
+    E --> F
+    
+    F --> G[Tunnel Processing]
+    G --> H[Virtual Adapter]
+```
 
-OPENPPP2 is architecturally interesting because it does not solve only one problem.
+## Data Flow Architecture
 
-It solves, in one system:
+### Client Data Flow
 
-- protected multi-carrier transport
-- a role-aware tunnel action protocol
-- client-side host integration for route, DNS, adapter, and proxy behavior
-- server-side session switching, forwarding, and publishing behavior
-- optional static and multiplexed auxiliary data paths
-- optional managed policy integration
-- platform-specific networking realization
+```mermaid
+flowchart TD
+    subgraph Client Host
+        A[Local Application] --> B[Virtual Adapter TUN/TAP]
+        B --> C[VEthernetNetworkSwitcher]
+        C --> D{Traffic Classification}
+        D -->|Need Tunnel| E[VEthernetExchanger]
+        D -->|Bypass Tunnel| F[Physical Adapter]
+        E --> G[Encryption/Transmission]
+        G --> H[Network]
+    end
+    
+    subgraph Network
+        H --> I[Server]
+    end
+    
+    subgraph Server
+        I --> J[Decryption/Receiving]
+        J --> K[VirtualEthernetSwitcher]
+        K --> L{Forwarding Decision}
+        L -->|UDP| M[VirtualEthernetDatagramPort]
+        L -->|TCP| N[VirtualEthernetTcpipConnection]
+        L -->|Mapping| O[VirtualEthernetMappingPort]
+    end
+```
 
-That is why the repository is larger and denser than a small VPN tool, but also why it supports more operational shapes than a single-purpose tunnel daemon.
+### Server Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Client
+        A[Local Application] --> B[Virtual Adapter]
+    end
+    
+    subgraph OPENPPP2 Tunnel
+        B --> C[Encryption Transmission]
+        C --> D[Server]
+    end
+    
+    subgraph Server
+        D --> E[VirtualEthernetSwitcher]
+        E --> F{Data Type}
+        F -->|TCP Forward| G[External TCP Server]
+        F -->|UDP Forward| H[External UDP Server]
+        F -->|Port Mapping| I[Mapping Port]
+        F -->|Static UDP| J[Static Datagram Port]
+    end
+```
+
+## Security Architecture Boundaries
+
+OPENPPP2's security model is multi-layered, requiring clear trust boundaries:
+
+### Trust Boundaries
+
+| Boundary | Location | Trusted Content |
+|----------|----------|-----------------|
+| Client host | Local runtime environment | Operating system, network stack, route configuration |
+| Server host | Server runtime environment | Operating system, network stack, firewall |
+| Transport network | Between client and server | Network operator, ISP, cloud provider |
+| Management backend | Optional component | Policy distribution, identity verification |
+| Configuration file | Local storage | Keys, certificates, backend credentials |
+
+### Security Features (Without PFS Claim)
+
+OPENPPP2 implements **Forward Security Assurance (FP)** through connection-level work key derivation, but it must be clarified:
+
+- **Not PFS**: The system does not implement traditional Perfect Forward Secrecy (PFS)
+- **FP Mechanism**: Each session uses dynamically derived keys; even if a key is obtained, historical traffic cannot be decrypted
+- **Key Exchange**: Work keys are derived from pre-shared keys and session-specific `ivv` parameters
+- **Key Rotation**: Keys can be re-negotiated during the session through handshake
+
+```mermaid
+flowchart TD
+    subgraph Security Layers
+        A[Pre-shared Key] --> B[Key Derivation Function]
+        B --> C[ivv Parameter]
+        C --> D[Work Key]
+        D --> E[Data Encryption]
+    end
+    
+    F[Key Derivation] -.->|Each Session| G[New Key]
+    G --> E
+    
+    style F fill:#f9f,stroke:#333
+    style G fill:#f9f,stroke:#333
+```
+
+## Platform Differentiation
+
+OPENPPP2 has implementation differences across different platforms:
+
+### Virtual Adapter Implementation
+
+| Platform | Interface Type | Driver Method |
+|----------|---------------|---------------|
+| Windows | TAP | Windows TUN/TAP driver |
+| Linux | TUN | tun/tap kernel module |
+| macOS | utun | utun interface |
+| Android | TUN | VPN Service API |
+
+### Network Feature Support
+
+| Feature | Windows | Linux | macOS | Android |
+|---------|---------|-------|-------|---------|
+| Route table modification | ✅ | ✅ | ✅ | ✅ |
+| DNS modification | ✅ | ✅ | ✅ | ✅ |
+| Promiscuous mode | N/A | ✅ | ✅ | N/A |
+| RAW socket | ✅ | ✅ | ✅ | ✅ |
+| IPv6 | ✅ | ✅ | ✅ | ✅ |
+
+## Essential Differences from Traditional VPNs
+
+OPENPPP2 is fundamentally different from traditional VPN products:
+
+| Feature | Traditional VPN | OPENPPP2 |
+|---------|-----------------|----------|
+| Architecture positioning | Endpoint secure connection | Virtual Ethernet infrastructure |
+| Network model | Point-to-point tunnel | Virtual switch/router |
+| Function scope | Encrypted channel | Complete network stack (routing/DNS/proxy/mapping) |
+| Extensibility | Limited | Supports static, MUX, IPv6 |
+| Platform integration | Plugin form | Kernel-level integration |
+| Management | Centralized | Distributed + optional management backend |
+
+## Source Code Navigation Recommendations
+
+For readers who want to deeply study OPENPPP2 source code, the recommended order is:
+
+1. **Start from entry**: `main.cpp` to understand the overall flow
+2. **Configuration model**: `AppConfiguration.*` to understand the configuration system
+3. **Transmission layer**: `ITransmission.*` to understand encryption and transmission
+4. **Client**: `VEthernetNetworkSwitcher.*` + `VEthernetExchanger.*`
+5. **Server**: `VirtualEthernetSwitcher.*` + `VirtualEthernetExchanger.*`
+6. **Platform code**: Select corresponding platform directory as needed
+
+## Summary
+
+OPENPPP2 is a complex multi-layer system whose architectural core lies in:
+
+1. **Unified entry**: One binary supports client/server roles
+2. **Core and platform separation**: Shared core handles protocol logic, platform layer handles OS integration
+3. **Multi-layer planes**: Each role consists of multiple optional planes
+4. **Configuration as architecture**: Configuration object is an architecture component
+5. **Protocol layering**: Protected transmission separated from tunnel action
+6. **FP, not PFS**: Implements Forward Security Assurance but not traditional PFS
+
+Understanding these architectural principles is crucial for correctly using and extending OPENPPP2.
 
 ## Related Documents
 
-- [`ENGINEERING_CONCEPTS.md`](ENGINEERING_CONCEPTS.md)
-- [`TRANSMISSION.md`](TRANSMISSION.md)
-- [`HANDSHAKE_SEQUENCE.md`](HANDSHAKE_SEQUENCE.md)
-- [`PACKET_FORMATS.md`](PACKET_FORMATS.md)
-- [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
-- [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
-- [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md)
-- [`PLATFORMS.md`](PLATFORMS.md)
-- [`DEPLOYMENT.md`](DEPLOYMENT.md)
-- [`OPERATIONS.md`](OPERATIONS.md)
-- [`MANAGEMENT_BACKEND.md`](MANAGEMENT_BACKEND.md)
+| Document | Description |
+|----------|-------------|
+| [STARTUP_AND_LIFECYCLE.md](STARTUP_AND_LIFECYCLE.md) | Startup, Process Ownership, and Lifecycle Control |
+| [CLIENT_ARCHITECTURE.md](CLIENT_ARCHITECTURE.md) | Client Runtime Architecture |
+| [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md) | Server Runtime Architecture |
+| [TRANSMISSION.md](TRANSMISSION.md) | Transmission Layer and Protected Tunnel Model |
+| [SECURITY.md](SECURITY.md) | Security Model and Defensive Interpretation |
+| [CONFIGURATION.md](CONFIGURATION.md) | Configuration Model and Parameter Dictionary |

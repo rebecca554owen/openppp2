@@ -2,172 +2,241 @@
 
 [English Version](ARCHITECTURE.md)
 
-## 范围
+## 文档范围
 
-本文是 OPENPPP2 的顶层架构地图。它之所以放在 transport、client、server、routing、platform、deployment、operations 等深度文档之后来重写，是因为它的任务和那些文档不同。
+本文档是 OPENPPP2 的顶层架构地图，旨在为读者提供一个全面的系统架构视图。它之所以放在 transport、client、server、routing、platform、deployment、operations 等深度技术文档之后，是因为它的任务与那些文档不同。本文不试图把每一个机制再详细重讲一遍，而是帮助读者理解：整个系统是如何分层的，主要子系统之间如何关联，哪些边界最重要，以及如何正确导航源码而不将其简单理解为“一个 VPN”。
 
-本文不试图把每一个机制再详细重讲一遍。它的任务是解释：整个系统是如何分层的，主要子系统之间如何关联，哪些边界最重要，以及如果不想把整个工程粗暴理解成“一个 VPN”，应该如何导航源码。
+OPENPPP2 定位为虚拟以太网基础设施产品，这与大多数终端 VPN 产品有本质区别。它不仅仅提供加密隧道，而是构建了一套完整的网络基础设施运行时，涵盖虚拟接口集成、隧道内控制与转发逻辑、路由与 DNS  steering、反向服务映射、可选 static packet 与 MUX 路径、平台特化宿主网络变更，以及可选外部管理后端。
 
-本文主要基于以下代码结构：
+## 核心源码结构
 
-- `main.cpp`
-- `ppp/configurations/AppConfiguration.*`
-- `ppp/transmissions/*`
-- `ppp/app/protocol/*`
-- `ppp/app/client/*`
-- `ppp/app/server/*`
-- `windows/*`
-- `linux/*`
-- `darwin/*`
-- `android/*`
-- `go/*`
+本文档主要基于以下代码结构进行描述：
+
+```mermaid
+graph TD
+    subgraph "入口层"
+        A[main.cpp]
+    end
+    
+    subgraph "配置层"
+        B[ppp/configurations/AppConfiguration.*]
+    end
+    
+    subgraph "传输层"
+        C[ppp/transmissions/*]
+    end
+    
+    subgraph "协议层"
+        D[ppp/app/protocol/*]
+    end
+    
+    subgraph "客户端运行时"
+        E[ppp/app/client/*]
+    end
+    
+    subgraph "服务端运行时"
+        F[ppp/app/server/*]
+    end
+    
+    subgraph "平台层"
+        G[windows/*]
+        H[linux/*]
+        I[darwin/*]
+        J[android/*]
+    end
+    
+    subgraph "管理后端"
+        K[go/*]
+    end
+    
+    A --> B
+    A --> C
+    A --> E
+    A --> F
+    B --> C
+    C --> D
+    E --> G
+    E --> H
+    E --> I
+    E --> J
+    F --> G
+    F --> H
+    F --> I
+    F --> J
+    F --> K
+```
 
 ## 最短但尽量准确的描述
 
 OPENPPP2 是一套跨平台网络运行时，围绕以下结构构建：
 
-- 一个名为 `ppp` 的 C++ 主可执行程序
-- 一套共享的 protected transport 与 tunnel protocol core
-- 一套 client runtime
-- 一套 server runtime
-- 每个平台各自的 host integration layer
-- 一个可选的 Go management backend
+| 组件 | 说明 |
+|------|------|
+| **ppp 可执行程序** | C++ 主程序，提供 client 和 server 两种运行模式 |
+| **共享核心** | protected transport 与 tunnel protocol core，包含协议处理、加密、帧化 |
+| **客户端运行时** | 虚拟接口集成、路由控制、DNS  steering、代理服务 |
+| **服务端运行时** | 连接接受、会话管理、转发与映射、策略消费 |
+| **平台集成层** | Windows、Linux、macOS、Android 各自的宿主网络变更 |
+| **管理后端** | 可选的 Go 语言实现的管理后台 |
 
-它不能只被描述成 VPN client、VPN server、proxy 或 custom transport 中的某一种。源码表明，它在不同层里同时包含了这些概念。
-
-如果必须用一句话概括，最不容易误导的表达是：
-
-OPENPPP2 是一套网络基础设施运行时，组合了 protected transport、虚拟接口集成、隧道内控制与转发逻辑、route 与 DNS steering、reverse service mapping、可选 static packet 与 MUX 路径、平台特化宿主网络变更，以及可选外部管理后端。
+从架构层面看，OPENPPP2 不能被简单描述为 VPN client、VPN server、proxy 或 custom transport 中的某一种。源码表明，它在不同层里同时包含了这些概念，是一个综合性的网络基础设施运行时。
 
 ## 最重要的架构分割
 
-整个仓库里，最重要的架构分割是：
+整个仓库里，最重要的架构分割是 **共享协议与运行时核心** 和 **平台集成层** 的分离。
 
-- 共享协议与运行时核心
-- 平台集成层
+### 共享核心（tunnel semantics）
 
-共享核心拥有 tunnel semantics。
+共享核心拥有 tunnel semantics，负责网络协议的处理和转发，主要包括：
 
-平台层拥有 host consequences。
+| 功能模块 | 说明 | 关键源码 |
+|----------|------|----------|
+| 配置规范化 | 将 JSON 配置和命令行参数规范化为运行时模型 | `AppConfiguration.*` |
+| 握手与传输 | 建立受保护的传输连接，完成密钥交换 | `ITransmission.*` |
+| 链路层动作 | 隧道内的控制信令与数据转发协议 | `VirtualEthernetLinklayer.*` |
+| 客户端运行时 | 虚拟网卡管理、路由 DNS 控制、代理服务 | `VEthernetNetworkSwitcher.*` |
+| 服务端运行时 | 连接接受、会话交换、转发映射 | `VirtualEthernetSwitcher.*` |
+| static packet 与 MUX | UDP static 路径和多路复用逻辑 | `VirtualEthernetDatagramPort*`, `vmux*` |
+| policy envelope | 管理后端策略下发与 IPv6 分配 | `VirtualEthernetInformation.*` |
 
-tunnel semantics 包括：
+### 平台层（host consequences）
 
-- 配置规范化
-- handshake
-- framing
-- ciphertext state 构造
-- tunnel control actions
-- session object
-- NAT、mapping、static packet、MUX、IPv6 assignment 逻辑
+平台层拥有 host consequences，负责与本地操作系统交互，主要包括：
 
-host consequences 包括：
+| 功能模块 | 说明 | 关键源码 |
+|----------|------|----------|
+| 虚拟接口创建 | 创建或接入虚拟网卡 | `windows/tap.*`, `linux/tun.*` |
+| 路由变更 | 修改系统路由表 | 各平台路由操作代码 |
+| DNS 变更 | 修改系统 DNS 配置 | 各平台 DNS 操作代码 |
+| socket 保护 | 避免流量递归进入隧道 | `protect` 与 `bypass` 逻辑 |
+| IPv6 设置 | 平台特化 IPv6 接口配置 | 各平台 IPv6 代码 |
 
-- 创建或接入虚拟接口
-- 修改 route table
-- 修改 DNS 行为
-- protect socket，避免 recursion
-- 执行平台特化 IPv6 interface 与 transit 设置
-
-这个分割非常重要，因为它解释了为什么这个项目一方面是 cross-platform 的，另一方面又在很多地方高度依赖平台实现。
+这个分割非常重要，它解释了为什么 OPENPPP2 一方面是跨平台的，另一方面在很多地方高度依赖平台实现。
 
 ```mermaid
 flowchart TD
-    A[共享核心] --> B[配置]
-    A --> C[握手与传输]
-    A --> D[链路层隧道动作]
-    A --> E[客户端运行时]
-    A --> F[服务端运行时]
-    A --> G[static packet 与 MUX 逻辑]
-    A --> H[policy envelope 与 IPv6 assignment 逻辑]
-
-    I[平台层] --> J[虚拟接口创建或接入]
-    I --> K[route mutation]
-    I --> L[DNS mutation]
-    I --> M[protect 与 bypass 集成]
-    I --> N[平台特化 IPv6 host setup]
-
-    E --> I
-    F --> I
+    subgraph 共享核心
+        A[配置模块] --> B[握手与传输]
+        B --> C[链路层协议]
+        C --> D[客户端运行时]
+        C --> E[服务端运行时]
+        D --> F[static packet 与 MUX]
+        E --> F
+        F --> G[policy 与 IPv6]
+    end
+    
+    subgraph 平台层
+        H[虚拟接口] --> I[路由变更]
+        I --> J[DNS 变更]
+        J --> K[socket 保护]
+        K --> L[IPv6 设置]
+    end
+    
+    D --> H
+    E --> H
 ```
 
-## 运行时从一个统一入口开始
+## 运行时入口与生命周期
 
-`main.cpp` 是整个 C++ 侧的架构根。
+`main.cpp` 是整个 C++ 侧的架构根。系统没有把主要生命周期拆散到许多二进制或半独立启动器里，而是集中在一个统一入口完成顶层 orchestration。
 
-这件事比看起来更重要。系统并没有把主要生命周期拆散到许多二进制或许多半独立启动器里，而是集中在一个统一入口里完成顶层 orchestration。
+### 启动流水线
 
-在启动时，`main.cpp` 负责：
+在启动时，`main.cpp` 负责以下步骤：
 
-- 加载配置
-- 选择角色
-- 解析宿主相关运行时参数
-- 准备 client 或 server 环境
-- 创建对应 switcher 对象
-- 启动周期性 tick loop
-- 输出运行状态
-- 协调 shutdown 与 restart
+```mermaid
+flowchart TD
+    A[程序入口] --> B[权限校验]
+    B --> C[单实例检测]
+    C --> D[加载配置]
+    D --> E[规范化配置]
+    E --> F[解析网络参数]
+    F --> G[角色选择 client/server]
+    G --> H{选择结果}
+    H -->|client| I[创建客户端环境]
+    H -->|server| J[创建服务端环境]
+    I --> K[创建 Switcher]
+    J --> K
+    K --> L[启动 Tick 循环]
+    L --> M[输出运行状态]
+    M --> N[等待关闭信号]
+    N --> O[清理资源]
+```
 
-从架构上说，这意味着 OPENPPP2 不是一堆松散工具的集合，而是一个统一 orchestrated runtime，在内部再按 role 分支。
+### 主要运行时对象
+
+OPENPPP2 的运行时对象按照生命周期和职责划分：
+
+| 对象层级 | 负责内容 | 关键类型 |
+|----------|----------|----------|
+| 进程级 | 进程生命周期管理 | `PppApplication` |
+| 环境级 | 虚拟网卡/监听器生命周期 | `*Switcher` |
+| 会话级 | 远端连接生命周期 | `*Exchanger` |
+| 连接级 | 传输连接生命周期 | `ITransmission` |
+
+这种分层使得代码结构清晰，职责边界明确。
 
 ## 一个二进制、两个主角色、若干可选平面
 
-C++ 主二进制有两个主角色：
+C++ 主二进制有两个主角色：**client mode** 和 **server mode**。但每个角色本身都不是单一行为，而是多个 plane 的组合。
 
-- client mode
-- server mode
+### 客户端平面
 
-但每个角色本身都不是单一行为，而是多个 plane 的组合。
+client 模式可能包含以下平面：
 
-client 可能包含：
+| 平面 | 说明 | 启用条件 |
+|------|------|----------|
+| adapter 与 host integration | 虚拟网卡创建与管理 | 默认启用 |
+| exchanger 与远端 session | 与服务端的连接与会话 | 默认启用 |
+| route 与 DNS steering | 路由控制和 DNS 策略 | 默认启用 |
+| 本地 proxy surface | HTTP/SOCKS 代理服务 | 配置启用 |
+| static 与 MUX optional plane | UDP static 路径或多路复用 | 配置启用 |
+| managed IPv6 apply | 接收并应用服务端 IPv6 配置 | 配置启用 |
+| reverse mapping 注册 | 向服务端注册反向映射 | 配置启用 |
 
-- 虚拟接口集成
-- route steering
-- DNS steering
-- 本地 HTTP proxy
-- 本地 SOCKS proxy
-- static packet path 参与
-- MUX 子链路参与
-- reverse mapping 注册
-- managed IPv6 apply 与 rollback
+### 服务端平面
 
-server 可能包含：
+server 模式可能包含以下平面：
 
-- 多种 stream listener
-- static datagram listener
-- firewall policy
-- namespace cache
-- reverse mapping exposure
-- 可选 managed backend connectivity
-- 可选 IPv6 transit 与 neighbor proxy
-
-所以，角色只是第一层切分；第二层切分是当前到底启用了哪些 plane。
+| 平面 | 说明 | 启用条件 |
+|------|------|----------|
+| acceptor 与 handshake | 接受并处理客户端连接 | 默认启用 |
+| session switch | 会话管理与交换 | 默认启用 |
+| forwarding 与 mapping | 数据转发与端口映射 | 默认启用 |
+| static datagram surface | UDP static 路径服务 | 配置启用 |
+| firewall 与 namespace cache | 防火墙规则与命名空间缓存 | 配置启用 |
+| managed backend integration | 管理后端连接 | 配置启用 |
+| IPv6 transit optional plane | IPv6 转发与邻居代理 | 配置启用 |
 
 ```mermaid
 flowchart TD
     A[ppp 可执行程序] --> B[client mode]
     A --> C[server mode]
-
-    B --> B1[adapter 与 host integration]
-    B --> B2[exchanger 与远端 session]
-    B --> B3[route 与 DNS steering]
-    B --> B4[本地 proxy surface]
-    B --> B5[static 与 MUX optional plane]
-    B --> B6[managed IPv6 apply]
-
-    C --> C1[acceptor 与 handshake]
-    C --> C2[session switch]
-    C --> C3[forwarding 与 mapping]
-    C --> C4[static datagram surface]
-    C --> C5[firewall 与 namespace cache]
-    C --> C6[managed backend integration]
-    C --> C7[IPv6 transit optional plane]
+    
+    subgraph client
+        B --> B1[adapter 与 host integration]
+        B --> B2[exchanger 与远端 session]
+        B --> B3[route 与 DNS steering]
+        B --> B4[本地 proxy surface]
+        B --> B5[static 与 MUX optional plane]
+        B --> B6[managed IPv6 apply]
+        B --> B7[reverse mapping 注册]
+    end
+    
+    subgraph server
+        C --> C1[acceptor 与 handshake]
+        C --> C2[session switch]
+        C --> C3[forwarding 与 mapping]
+        C --> C4[static datagram surface]
+        C --> C5[firewall 与 namespace cache]
+        C --> C6[managed backend integration]
+        C --> C7[IPv6 transit optional plane]
+    end
 ```
 
-## 配置对象本身就是架构组件
+## 配置对象作为架构组件
 
-`AppConfiguration` 不是一个普通“配置文件解析器”，而是整个系统中非常核心的架构组件。
-
-它定义了：
+`AppConfiguration` 不仅仅是配置文件解析器，而是整个系统中非常核心的架构组件。它定义了：
 
 - 整个 runtime 的配置词汇表
 - runtime 在未指定时的默认行为
@@ -175,303 +244,332 @@ flowchart TD
 
 这很重要，因为很多系统把配置文档当成附属内容。而在 OPENPPP2 中，配置本身就是架构的一部分。它不仅仅选择数值，也选择重大运行时行为：
 
-- 开哪些 listener
-- WS/WSS 是否存在
-- mapping 是否存在
-- IPv6 mode 是 none、NAT66 还是 GUA
-- static mode 和 MUX 是否存在
-- DNS redirect 与 cache 是否存在
-- 是否需要 management backend
+| 配置项 | 影响的行为 |
+|--------|------------|
+| `server.listen.*` | 开哪些 listener |
+| `server.backend` | 是否需要管理后端 |
+| `ipv6.mode` | IPv6 模式：none、NAT66、GUA |
+| `static.*` | 是否启用 static 模式 |
+| `mux.*` | 是否启用多路复用 |
+| `dns.*` | DNS 重定向与缓存 |
+| `key.*` | 加密密钥与算法选择 |
 
-这也是为什么配置文档和架构文档必须配套阅读。
+## Protected Transmission 层与 Tunnel Action 层
 
-## Protected Transmission 层与 Tunnel Action 层是分开的
+整个仓库里，一个非常重要的概念边界是 **protected transmission** 和 **tunnel action protocol** 的分离。
 
-整个仓库里，一个非常重要的概念边界是：
+### Protected Transmission 层
 
-- protected transmission
-- tunnel action protocol
+protected transmission 主要位于 `ppp/transmissions/`，关心：
 
-protected transmission 主要位于 `ppp/transmissions/`。
+| 功能 | 说明 |
+|------|------|
+| carrier transport 选择 | TCP、WebSocket、WSS 等 |
+| handshake sequencing | 握手顺序和密钥交换 |
+| 密钥派生 | 基于 `ivv` 的工作密钥重建 |
+| 帧化与加密 | 数据的加密封装和解封装 |
+| 读写流水线 | 异步 IO 操作 |
 
-它关心：
+```mermaid
+flowchart LR
+    subgraph 客户端
+        A[应用数据] --> B[加密/帧化]
+        B --> C[TCP/WS/WSS]
+    end
+    
+    subgraph 传输通道
+        C -.->|加密隧道| D[网络传输]
+    end
+    
+    subgraph 服务端
+        D --> E[TCP/WS/WSS]
+        E --> F[解密/解帧]
+        F --> G[应用数据]
+    end
+```
 
-- carrier transport 选择，如 TCP、WS、WSS
-- handshake sequencing
-- framing family
-- protocol/transport cipher state
-- payload transform 与 protected packet boundary
+### Tunnel Action 层
 
-tunnel action layer 主要位于 `ppp/app/protocol/`。
+tunnel action protocol 主要位于 `ppp/app/protocol/VirtualEthernetLinklayer.*`，关心：
 
-它关心：
+| 功能 | 说明 |
+|------|------|
+| 会话信息 | INFO 消息传递 |
+| 保活 | KEEPALIVED 消息 |
+| 虚拟子网转发 | LAN、NAT 消息 |
+| UDP 中继 | SENDTO、ECHO 消息 |
+| TCP 中继 | SYN、SYNOK、PSH、FIN 消息 |
+| 反向映射 | MAPPING 消息 |
+| static 路径协商 | STATIC 消息 |
 
-- 一个 packet 对 overlay 来说意味着什么
-- 一个消息到底是 NAT、SENDTO、ECHO、INFO、CONNECT、static、MUX 还是 mapping 相关动作
-- client/server 运行时对象该如何响应这些动作
+这两种协议的分离使得 OPENPPP2 能够灵活支持多种传输载体，同时保持统一的隧道控制语义。
 
-这个边界非常关键。transport layer 不是整个协议，tunnel action layer 也不等同于 carrier。若把二者笼统压成一个“协议”，会误读大量设计。
+## 核心类型及其关系
+
+### 客户端核心类型
+
+| 类型 | 职责 | 关键文件 |
+|------|------|----------|
+| `VEthernetNetworkSwitcher` | 宿主机网络环境管理 | `VEthernetNetworkSwitcher.*` |
+| `VEthernetExchanger` | 远端会话管理 | `VEthernetExchanger.*` |
+| `VEthernetNetworkTcpipStack` | TCP/IP 协议栈 | `VEthernetNetworkTcpipStack.*` |
+| `VEthernetNetworkTcpipConnection` | TCP 连接管理 | `VEthernetNetworkTcpipConnection.*` |
+| `VEthernetDatagramPort` | UDP 数据报端口 | `VEthernetDatagramPort.*` |
+| `VEthernetHttpProxySwitcher` | HTTP 代理 | `VEthernetHttpProxySwitcher.*` |
+| `VEthernetSocksProxySwitcher` | SOCKS 代理 | `VEthernetSocksProxySwitcher.*` |
+
+### 服务端核心类型
+
+| 类型 | 职责 | 关键文件 |
+|------|------|----------|
+| `VirtualEthernetSwitcher` | 服务端环境管理 | `VirtualEthernetSwitcher.*` |
+| `VirtualEthernetExchanger` | 会话交换管理 | `VirtualEthernetExchanger.*` |
+| `VirtualEthernetNetworkTcpipConnection` | TCP 连接管理 | `VirtualEthernetNetworkTcpipConnection.*` |
+| `VirtualEthernetManagedServer` | 管理服务端 | `VirtualEthernetManagedServer.*` |
+| `VirtualEthernetDatagramPort` | UDP 端口管理 | `VirtualEthernetDatagramPort.*` |
+| `VirtualEthernetDatagramPortStatic` | static UDP 端口 | `VirtualEthernetDatagramPortStatic.*` |
+| `VirtualEthernetNamespaceCache` | 命名空间缓存 | `VirtualEthernetNamespaceCache.*` |
+| `VirtualEthernetMappingPort` | 映射端口 | `VirtualEthernetMappingPort.*` |
+
+```mermaid
+classDiagram
+    class VEthernetNetworkSwitcher {
+        +管理虚拟网卡
+        +控制路由/DNS
+        +流量分类
+    }
+    
+    class VEthernetExchanger {
+        +建立远端连接
+        +维护会话状态
+        +处理重连
+    }
+    
+    class VirtualEthernetSwitcher {
+        +接受客户端连接
+        +管理会话
+        +转发数据
+    }
+    
+    class VirtualEthernetExchanger {
+        +处理单个会话
+        +转发 TCP/UDP
+        +维护连接状态
+    }
+    
+    VEthernetNetworkSwitcher --> VEthernetExchanger
+    VirtualEthernetSwitcher --> VirtualEthernetExchanger
+```
+
+## 连接协议与数据平面
+
+OPENPPP2 支持多种连接协议，形成不同的数据平面：
+
+### 原生 TCP 直连（ppp://）
+
+| 特性 | 说明 |
+|------|------|
+| 协议前缀 | `ppp://` |
+| 传输方式 | 原生 TCP 直连 |
+| 适用场景 | 低延迟、高吞吐量直接连接 |
+| 端口 | 默认 20000 |
+
+### WebSocket 明文（ws://）
+
+| 特性 | 说明 |
+|------|------|
+| 协议前缀 | `ws://` |
+| 传输方式 | WebSocket 明文 |
+| 适用场景 | CDN 转发、HTTP 代理环境 |
+| 端口 | 默认 80 |
+
+### WebSocket SSL（wss://）
+
+| 特性 | 说明 |
+|------|------|
+| 协议前缀 | `wss://` |
+| 传输方式 | SSL 加密 WebSocket |
+| 适用场景 | CDN 转发、HTTPS 代理环境 |
+| 端口 | 默认 443 |
+
+```mermaid
+flowchart LR
+    subgraph 客户端
+        A[应用数据]
+    end
+    
+    A --> B{协议选择}
+    B -->|ppp://| C[原生 TCP]
+    B -->|ws://| D[WebSocket]
+    B -->|wss://| E[WebSocket SSL]
+    
+    C --> F[服务端]
+    D --> F
+    E --> F
+    
+    F --> G[隧道处理]
+    G --> H[虚拟网卡]
+```
+
+## 数据流向架构
+
+### 客户端数据流向
 
 ```mermaid
 flowchart TD
-    A[Carrier] --> B[Transmission handshake]
-    B --> C[Transmission framing]
-    C --> D[Protected payload]
-    D --> E[Link-layer tunnel action]
-    E --> F[Client 或 server runtime action]
-    F --> G[Host networking effect]
+    subgraph 客户端主机
+        A[本地应用] --> B[虚拟网卡 TUN/TAP]
+        B --> C[VEthernetNetworkSwitcher]
+        C --> D{流量分类}
+        D -->|需要隧道| E[VEthernetExchanger]
+        D -->|绕过隧道| F[物理网卡]
+        E --> G[加密/传输]
+        G --> H[网络]
+    end
+    
+    subgraph 网络
+        H --> I[服务端]
+    end
+    
+    subgraph 服务端
+        I --> J[解密/接收]
+        J --> K[VirtualEthernetSwitcher]
+        K --> L{转发决策}
+        L -->|UDP| M[VirtualEthernetDatagramPort]
+        L -->|TCP| N[VirtualEthernetTcpipConnection]
+        L -->|映射| O[VirtualEthernetMappingPort]
+    end
 ```
 
-## Tunnel Action Layer 是 client 与 server 的共同语言
-
-`VirtualEthernetLinklayer`、`VirtualEthernetInformation`、`VirtualEthernetPacket` 等协议类型定义了 client 与 server 共用的一套消息语言。
-
-这套语言包括：
-
-- information exchange
-- keepalive
-- NAT 与 LAN 处理
-- TCP connect、push、connect-ok、disconnect
-- UDP sendto 风格转发
-- static packet 处理
-- MUX 建立与子连接
-- FRP-like mapping 注册与转发
-
-但“共用语言”只表示 vocabulary 共享，不表示双方行为完全对称。client 和 server 都包含明确的 defensive reject path，会拒绝那些不应从该方向打来的动作。
-
-从架构上说，这意味着 OPENPPP2 使用的是**共享消息词汇，但非对称角色模型**。client 和 server 并不是两个完全等价的 peer，即使它们识别相同的消息名。
-
-## Client 架构边界
-
-client 内部有一个特别重要的边界：
-
-- `VEthernetNetworkSwitcher`
-- `VEthernetExchanger`
-
-switcher 拥有本地主机网络语义。
-
-exchanger 拥有远端 session 语义。
-
-这不是命名偏好，而是整个项目中最清晰的设计决策之一。
-
-switcher 拥有：
-
-- 虚拟接口
-- 底层 NIC 关系
-- route table 与 bypass policy
-- DNS rule 与 DNS redirection 行为
-- 本地 proxy surface
-- 本地 packet 的 admission 与 emission
-- managed IPv6 下发到宿主系统的 apply 行为
-
-exchanger 拥有：
-
-- transmission open 与 reconnect loop
-- 到 server 的 handshake
-- keepalive 与 liveness
-- static path negotiation
-- MUX plane 行为
-- mapping 注册
-- 以 source endpoint 为键的 datagram 状态
-
-从架构上说，client 不是“socket code 加一些 route”，而是由 host-facing 一半和 remote-session-facing 一半组成的宿主边缘运行时。
-
-## Server 架构边界
-
-server 内部也有类似但不完全相同的分割：
-
-- `VirtualEthernetSwitcher`
-- `VirtualEthernetExchanger`
-
-switcher 是 node-wide 的。
-
-exchanger 是 per-session 的。
-
-switcher 拥有：
-
-- listener
-- accepted connection 分类
-- session map
-- connection map
-- firewall policy
-- namespace cache
-- 可选 managed backend client
-- 可选 static datagram socket
-- 可选 IPv6 transit state
-- logger 与 node-wide statistics
-
-exchanger 拥有：
-
-- 一个 client session
-- per-session forwarding state
-- per-session mapping port
-- per-session datagram port
-- per-session MUX 与 static allocation state
-- 来自该 client 的 action handler
-
-从架构上说，server 是一个 session switch，而不只是 packet forwarder。它的顶层对象会把 accepted connection 分成：
-
-- main session establishment
-- auxiliary connection handling
-
-这也是为什么这套代码读起来更像 network node，而不是一个简单 daemon。
-
-## 数据面、控制面与管理面
-
-如果把整个仓库再进一步抽象，最有帮助的做法是分成三种 plane。
-
-### 数据面
-
-真正承载转发流量的地方。
-
-例如：
-
-- TUN/TAP packet I/O
-- NAT packet forwarding
-- TCP relay payload flow
-- UDP datagram payload flow
-- static packet payload flow
-- IPv6 transit payload flow
-
-### 控制面
-
-建立与维持 session 的地方。
-
-例如：
-
-- handshake
-- information envelope exchange
-- keepalive
-- mapping registration
-- MUX connection setup
-- requested IPv6 configuration 与 assigned IPv6 response
-
-### 管理面
-
-这是可选且外置的一层。
-
-例如：
-
-- Go backend
-- Redis 与 MySQL state
-- node authentication 与 policy lookup
-
-控制面即使没有管理面也存在；管理面是附着在其上的可选外部依赖。
+### 服务端数据流向
 
 ```mermaid
 flowchart TD
-    A[管理面] --> B[node 与 user policy]
-    B --> C[控制面 envelope 与 authentication]
-    C --> D[session object]
-    D --> E[数据面 forwarding]
-    E --> F[宿主 route、DNS、adapter 与网络副作用]
+    subgraph 客户端
+        A[本地应用] --> B[虚拟网卡]
+    end
+    
+    subgraph OPENPPP2 隧道
+        B --> C[加密传输]
+        C --> D[服务端]
+    end
+    
+    subgraph 服务端
+        D --> E[VirtualEthernetSwitcher]
+        E --> F{数据类型}
+        F -->|TCP 转发| G[外部 TCP 服务器]
+        F -->|UDP 转发| H[外部 UDP 服务器]
+        F -->|端口映射| I[映射端口]
+        F -->|static UDP| J[Static Datagram Port]
+    end
 ```
 
-## 平台层不是一个薄薄的可移植性外壳
+## 安全架构边界
 
-平台目录并不是装饰性的 portability shell，而是真正承载 host-network reality 的地方。
+OPENPPP2 的安全模型是多层组成的，需要明确信任边界：
 
-Windows 提供：
+### 信任边界
 
-- Wintun 或 TAP 集成
-- 基于 WMI 的 adapter 配置
-- 原生 route 与 DNS helper
-- Windows 专用 proxy 与桌面 client 集成
+| 边界 | 位置 | 信任内容 |
+|------|------|----------|
+| 客户端主机 | 本地运行环境 | 操作系统、网络栈、路由配置 |
+| 服务端主机 | 服务端运行环境 | 操作系统、网络栈、防火墙 |
+| 传输网络 | 客户端与服务端之间 | 网络运营商、ISP、云服务商 |
+| 管理后端 | 可选组件 | 策略下发、身份验证 |
+| 配置文件 | 本地存储 | 密钥、证书、后端凭证 |
 
-Linux 提供：
+### 安全特性（不含 PFS 声明）
 
-- tun 集成
-- route 与 DNS helper
-- socket protect 支持
-- 当前最完整的 server-side IPv6 transit 实现
+OPENPPP2 实现了连接级工作密钥派生的 **前向安全保证（Forward Security Assurance, FP）**，但需要明确：
 
-Darwin 提供：
+- **不是 PFS**：系统没有实现传统意义上的 Perfect Forward Secrecy（PFS）
+- **FP 机制**：每次会话使用动态派生的密钥，即使密钥被获取，也无法解密历史流量
+- **密钥交换**：基于预共享密钥和会话特定的 `ivv` 参数派生工作密钥
+- **密钥轮换**：会话期间可通过握手重新协商密钥
 
-- utun 集成
-- route socket 使用
-- Darwin 专用 IPv6 apply/restore 逻辑
+```mermaid
+flowchart TD
+    subgraph 安全层次
+        A[预共享密钥] --> B[密钥派生函数]
+        B --> C[ivv 参数]
+        C --> D[工作密钥]
+        D --> E[数据加密]
+    end
+    
+    F[密钥派生] -.->|每次会话| G[新密钥]
+    G --> E
+    
+    style F fill:#f9f,stroke:#333
+    style G fill:#f9f,stroke:#333
+```
 
-Android 提供：
+## 平台差异化
 
-- shared-library embedding
-- 外部 VPN TUN fd 接入
-- 基于 JNI 的 protect 集成
+OPENPPP2 在不同平台上存在实现差异，主要体现在：
 
-正因为平台层是真实的，项目才能一边诚实地说自己是跨平台的，一边又不假装各平台行为完全一致。
+### 虚拟网卡实现
 
-## 可选 Go Backend 在架构上是独立的一层
+| 平台 | 接口类型 | 驱动方式 |
+|------|----------|----------|
+| Windows | TAP | Windows TUN/TAP driver |
+| Linux | TUN | tun/tap kernel module |
+| macOS | utun | utun interface |
+| Android | TUN | VPN Service API |
 
-`go/` 下的 Go 服务并不是 C++ runtime 的“对等替代品”，而是一个可选 management subsystem。
+### 网络特性支持
 
-它拥有的关注点包括：
+| 特性 | Windows | Linux | macOS | Android |
+|------|---------|-------|-------|---------|
+| 路由表修改 | ✅ | ✅ | ✅ | ✅ |
+| DNS 修改 | ✅ | ✅ | ✅ | ✅ |
+| 混杂模式 | N/A | ✅ | ✅ | N/A |
+| RAW socket | ✅ | ✅ | ✅ | ✅ |
+| IPv6 | ✅ | ✅ | ✅ | ✅ |
 
-- 持久化 node metadata
-- user policy 与 quota state
-- Redis 协调
-- MySQL 持久化
-- WebSocket 与 HTTP 管理接口
+## 与传统 VPN 的本质区别
 
-即使 backend 开启，C++ server 依然拥有 data plane。
+OPENPPP2 与传统 VPN 产品有本质区别：
 
-这个区分在架构上非常重要，因为它能避免一个常见误解：OPENPPP2 不是一个被拆成 C++ 和 Go 两半的单体系统，而是一个 **C++ data-plane runtime + 可选 Go management plane** 的组合。
+| 特性 | 传统 VPN | OPENPPP2 |
+|------|----------|----------|
+| 架构定位 | 终端安全连接 | 虚拟以太网基础设施 |
+| 网络模型 | 点对点隧道 | 虚拟交换机/路由器 |
+| 功能范围 | 加密通道 | 完整网络栈（路由/DNS/代理/映射） |
+| 扩展性 | 有限 | 支持 static、MUX、IPv6 |
+| 平台集成 | 插件形式 | 内核级集成 |
+| 管理方式 | 集中式 | 分布式+可选管理后端 |
 
-## 建议的架构阅读顺序
+## 源码导航建议
 
-对于新读者，最有效的阅读顺序是：
+对于想深入阅读 OPENPPP2 源码的读者，建议按以下顺序：
 
-1. `main.cpp`
-2. `ppp/configurations/AppConfiguration.*`
-3. `ppp/transmissions/*`
-4. `ppp/app/protocol/*`
-5. `ppp/app/client/*`
-6. `ppp/app/server/*`
-7. 目标平台对应的目录
-8. 仅当 managed deployment 重要时，再看 `go/*`
+1. **从入口开始**：`main.cpp` 理解整体流程
+2. **配置模型**：`AppConfiguration.*` 理解配置系统
+3. **传输层**：`ITransmission.*` 理解加密和传输
+4. **客户端**：`VEthernetNetworkSwitcher.*` + `VEthernetExchanger.*`
+5. **服务端**：`VirtualEthernetSwitcher.*` + `VirtualEthernetExchanger.*`
+6. **平台代码**：根据需要选择对应平台目录
 
-这个顺序对应的是：从外到内，从 shared core 到 role-specific runtime，再到 host-specific realization，最后才到 optional management。
+## 总结
 
-## 修改代码时最值得保留的架构边界
+OPENPPP2 是一个复杂的多层系统，其架构核心在于：
 
-有几条边界值得尽量保留，因为它们在代码中承载了真实架构重量。
+1. **统一入口**：一个二进制支持 client/server 两种角色
+2. **核心与平台分离**：共享核心处理协议逻辑，平台层处理 OS 集成
+3. **多层平面**：每个角色由多个可选平面组成
+4. **配置即架构**：配置对象本身就是架构组件
+5. **协议分层**：protected transmission 与 tunnel action 分离
+6. **FP 而非 PFS**：实现了前向安全保证但不是传统 PFS
 
-不要把 transport concern 和 tunnel action concern 混在一起。
-
-不要把 host route/DNS mutation 下沉进 exchanger/session object。
-
-不要因为 client 与 server 共享消息词汇，就把它们当作对称 peer。
-
-不要把 Linux-specific 的 server IPv6 data-plane 行为写成“所有平台都一样”。
-
-不要把 Go backend 和 primary data plane 混为一谈。
-
-这些边界已经在代码里存在。文档若明确说出来，架构就更不容易被误读。
-
-## 架构结论
-
-OPENPPP2 在架构上有意思，正是因为它并不只解决一个问题。
-
-它在同一个系统里同时处理了：
-
-- protected multi-carrier transport
-- role-aware tunnel action protocol
-- client-side host integration，包括 route、DNS、adapter、proxy
-- server-side session switching、forwarding、publishing
-- 可选 static 与 multiplexed 辅助路径
-- 可选 managed policy integration
-- 平台特化宿主网络实现
-
-这就是为什么它比“小型 VPN 工具”更大、更密，也正因为如此，它支持的运行形态和部署形态远超单一用途的 tunnel daemon。
+理解这些架构原则对于正确使用和扩展 OPENPPP2 至关重要。
 
 ## 相关文档
 
-- [`ENGINEERING_CONCEPTS_CN.md`](ENGINEERING_CONCEPTS_CN.md)
-- [`TRANSMISSION_CN.md`](TRANSMISSION_CN.md)
-- [`HANDSHAKE_SEQUENCE_CN.md`](HANDSHAKE_SEQUENCE_CN.md)
-- [`PACKET_FORMATS_CN.md`](PACKET_FORMATS_CN.md)
-- [`CLIENT_ARCHITECTURE_CN.md`](CLIENT_ARCHITECTURE_CN.md)
-- [`SERVER_ARCHITECTURE_CN.md`](SERVER_ARCHITECTURE_CN.md)
-- [`ROUTING_AND_DNS_CN.md`](ROUTING_AND_DNS_CN.md)
-- [`PLATFORMS_CN.md`](PLATFORMS_CN.md)
-- [`DEPLOYMENT_CN.md`](DEPLOYMENT_CN.md)
-- [`OPERATIONS_CN.md`](OPERATIONS_CN.md)
-- [`MANAGEMENT_BACKEND_CN.md`](MANAGEMENT_BACKEND_CN.md)
+| 文档 | 说明 |
+|------|------|
+| [STARTUP_AND_LIFECYCLE_CN.md](STARTUP_AND_LIFECYCLE_CN.md) | 启动、进程所有权与生命周期控制 |
+| [CLIENT_ARCHITECTURE_CN.md](CLIENT_ARCHITECTURE_CN.md) | 客户端运行时架构 |
+| [SERVER_ARCHITECTURE_CN.md](SERVER_ARCHITECTURE_CN.md) | 服务端运行时架构 |
+| [TRANSMISSION_CN.md](TRANSMISSION_CN.md) | 传输层与受保护隧道模型 |
+| [SECURITY_CN.md](SECURITY_CN.md) | 安全模型与防御性解读 |
+| [CONFIGURATION_CN.md](CONFIGURATION_CN.md) | 配置模型与参数字典 |

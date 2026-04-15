@@ -2,439 +2,577 @@
 
 [English Version](CLIENT_ARCHITECTURE.md)
 
-本文档基于 `ppp/app/client/` 下的 C++ 实现，解释 OPENPPP2 客户端运行时到底是如何组织的。这里不写理想化描述，不把它当成一个抽象意义上的“VPN 客户端”。这里只描述代码里真实存在的对象边界、控制路径、数据路径、重连机制、宿主机集成行为，以及客户端主动拒绝哪些不合法的协议方向。
+## 文档范围
 
-本文档主要依据以下源码文件：
+本文档基于 `ppp/app/client/` 下的 C++ 实现，详细解释 OPENPPP2 客户端运行时的架构设计。这里不写理想化描述，不把它当成一个抽象意义上的"VPN 客户端"。这里只描述代码里真实存在的对象边界、控制路径、数据路径、重连机制、宿主机集成行为，以及客户端主动拒绝哪些不合法的协议方向。
 
-- `ppp/app/client/VEthernetNetworkSwitcher.cpp`
-- `ppp/app/client/VEthernetExchanger.cpp`
-- `ppp/app/client/VEthernetNetworkTcpipStack.cpp`
-- `ppp/app/client/VEthernetNetworkTcpipConnection.cpp`
-- `ppp/app/client/VEthernetDatagramPort.cpp`
-- `ppp/app/client/proxys/*`
+OPENPPP2 客户端不仅仅是一个"拨号端"，它在运行时扮演的是宿主机侧覆盖网络边缘节点。这是一个虚拟以太网基础设施产品的重要组成部分，与传统 VPN 客户端有本质区别。
 
 ## 运行时定位
 
-从代码事实看，客户端绝不只是一个“拨号端”。它在运行时扮演的是宿主机侧覆盖网络边缘节点。
+从代码事实看，客户端绝不只是一个"拨号端"。它在运行时扮演的是宿主机侧覆盖网络边缘节点。
 
-它要负责：
+### 核心职责
 
-- 持有并驱动本地虚拟网卡
-- 管理宿主机路由与 DNS 状态
-- 判断哪些流量应进入隧道
-- 维持与服务端的长连接会话关系
-- 暴露本地 HTTP 和 SOCKS 代理
-- 注册反向 mapping
-- 按服务端下发结果应用 IPv6
-- 在需要时切换到 static 数据报路径
+| 职责 | 说明 | 对应组件 |
+|------|------|----------|
+| 持有并驱动本地虚拟网卡 | 创建和管理 TUN/TAP 虚拟接口 | `VEthernetNetworkSwitcher` |
+| 管理宿主机路由与 DNS 状态 | 修改系统路由表和 DNS 配置 | `VEthernetNetworkSwitcher` |
+| 判断哪些流量应进入隧道 | 流量分类和 bypass 策略 | `VEthernetNetworkSwitcher` |
+| 维持与服务端的长连接会话关系 | 保持与服务器的持久连接 | `VEthernetExchanger` |
+| 暴露本地 HTTP 和 SOCKS 代理 | 提供本地代理服务 | `VEthernetHttpProxySwitcher`, `VEthernetSocksProxySwitcher` |
+| 注册反向 mapping | 向服务端注册端口映射 | `VEthernetExchanger` |
+| 按服务端下发结果应用 IPv6 | 应用服务端分配的 IPv6 地址 | `VEthernetExchanger` |
+| 在需要时切换到 static 数据报路径 | 支持 UDP static 路径 | `VEthernetDatagramPort` |
 
-所以这个客户端的真实形态，不是“一个套接字 + 一个加密隧道”这么简单，而是“宿主网络集成层 + 远端会话层”的组合。
+所以这个客户端的真实形态，不是"一个套接字 + 一个加密隧道"这么简单，而是"宿主网络集成层 + 远端会话层"的组合。
+
+```mermaid
+flowchart TD
+    subgraph 客户端运行时
+        A[宿主机网络环境] --> B[VEthernetNetworkSwitcher]
+        B --> C{流量分类}
+        C -->|需要隧道| D[VEthernetExchanger]
+        C -->|绕过隧道| E[物理网卡]
+        D --> F[远端服务器]
+        B --> G[HTTP 代理]
+        B --> H[SOCKS 代理]
+        D --> I[UDP Static]
+    end
+    
+    subgraph 宿主机
+        J[本地应用] --> A
+        A --> K[虚拟网卡 TUN/TAP]
+    end
+```
 
 ## 核心拆分
 
-客户端最核心的几个类型是：
+客户端最核心的几个类型构成了整个运行时：
 
-- `VEthernetNetworkSwitcher`
-- `VEthernetExchanger`
-- `VEthernetNetworkTcpipStack`
-- `VEthernetNetworkTcpipConnection`
-- `VEthernetDatagramPort`
-- `VEthernetHttpProxySwitcher`
-- `VEthernetSocksProxySwitcher`
+### 核心类型列表
+
+| 类型 | 职责 | 源码位置 |
+|------|------|----------|
+| `VEthernetNetworkSwitcher` | 宿主机网络环境管理 | `VEthernetNetworkSwitcher.*` |
+| `VEthernetExchanger` | 远端会话关系管理 | `VEthernetExchanger.*` |
+| `VEthernetNetworkTcpipStack` | TCP/IP 协议栈 | `VEthernetNetworkTcpipStack.*` |
+| `VEthernetNetworkTcpipConnection` | TCP 连接管理 | `VEthernetNetworkTcpipConnection.*` |
+| `VEthernetDatagramPort` | UDP 数据报端口 | `VEthernetDatagramPort.*` |
+| `VEthernetHttpProxySwitcher` | HTTP 代理 | `VEthernetHttpProxySwitcher.*` |
+| `VEthernetSocksProxySwitcher` | SOCKS 代理 | `VEthernetSocksProxySwitcher.*` |
 
 这里最重要的边界，是 `VEthernetNetworkSwitcher` 和 `VEthernetExchanger` 的拆分。
 
-`VEthernetNetworkSwitcher` 负责宿主机网络环境。它工作在 `ITap` 之上，知道底层物理网卡是谁，知道虚拟网卡是谁，负责加载 bypass 和 route-list，负责把路由写进操作系统，负责 DNS 行为，负责把从 TUN 或 TAP 收到的包分类处理，也负责把服务端回来的数据重新注入本地网络环境。
-
-`VEthernetExchanger` 负责远端会话关系。它打开真正的传输层连接，做客户端侧握手，维持 keepalive，创建 datagram port，注册 mapping，维护 static 模式状态，维护 MUX，接收服务端信息信封并把变化回送给 switcher。
-
-这种拆分非常关键。因为宿主机路由和 DNS 策略的生命周期，通常比某一次具体的 TCP 或 WebSocket 连接更长。会话可以断开重连，但宿主机集成模型不能因此被打散。
-
-## 启动对象图
-
-客户端从 `main.cpp` 进入，之后主路径落到 `VEthernetNetworkSwitcher::Open(...)` 和 `VEthernetExchanger::Open()`。
-
-整体对象装配图可以概括为：
-
-```mermaid
-flowchart TD
-    A[main.cpp client mode] --> B[Create ITap]
-    B --> C[Construct VEthernetNetworkSwitcher]
-    C --> D[Inject runtime flags and preferences]
-    D --> E[Load bypass lists and route lists]
-    E --> F[Load DNS rules]
-    F --> G[VEthernetNetworkSwitcher::Open(tap)]
-    G --> H[Resolve underlying NIC]
-    G --> I[Open VEthernet base]
-    G --> J[Resolve TUN or TAP NIC]
-    G --> K[Create QoS]
-    G --> L[Create VEthernetExchanger]
-    L --> M[VEthernetExchanger::Open()]
-    G --> N[Open local HTTP proxy if configured]
-    G --> O[Open local SOCKS proxy if configured]
-    G --> P[Prepare aggregator if static mode requires it]
-    G --> Q[Load route tables into FIB]
-    G --> R[Install OS routes and DNS behavior]
-```
-
-## Open 阶段到底做了什么
-
-`VEthernetNetworkSwitcher::Open(...)` 是客户端把“配置”变成“运行时”的核心函数。
-
-这个函数的实际职责非常重。
-
-第一步，在桌面平台上解析当前承载 VPN 的底层物理网卡。代码会找到 underlying NIC，并在有 preferred NIC 或 preferred gateway 配置时把偏好应用进去。随后调用 `FixUnderlyingNgw()`，尽早修补物理网卡默认网关相关路由，因为后续整个 overlay 都假设宿主机仍然能通过真实网络到达远端服务端。
-
-第二步，调用 `VEthernet::Open(tap)` 打开虚拟以太网基础层。这一步之后，switcher 才真正具备对虚拟网卡收发包的所有权。随后代码继续解析虚拟网卡在操作系统里的接口对象，因为后面的路由与 DNS 修改并不能只依赖 `ITap` 抽象。
-
-第三步，创建统计对象和 QoS 对象。Linux 上如果启用了 protect mode，还可能额外创建 `ProtectorNetwork`。这个对象的目的不是“增强功能”，而是避免客户端自己的承载流量被错误吸进 VPN 造成环路。
-
-第四步，构造 `VEthernetExchanger` 并立即 `Open()`。也在这个阶段创建本地 HTTP 代理与 SOCKS 代理 switcher。这里能看出代理能力并不是后挂的附属组件，而是客户端主运行时的一部分。
-
-第五步，如果启用了 static UDP 模式且配置要求 aggregator，则在这里准备聚合器对象。这说明 static 模式不是一个简单开关，而是客户端上单独的一条数据路径。
-
-第六步，把 bypass 和 route-list 加载进客户端路由结构里，构造 route information table，再在可用时构造 forwarding information table。
-
-最后，在 hosted network 模式下，把路由和 DNS 真正写进操作系统。Windows 和 Unix 分支行为不同。Windows 还会额外刷新系统 DNS 缓存，并尝试删除物理网卡默认路由。Unix 则通过平台辅助逻辑写 DNS 配置。两边最后都会进入默认路由保护逻辑。
-
-## 为什么宿主网络一定要归 Switcher 管
-
-从职责边界看，宿主机集成只能由 switcher 管理。
-
-它实际持有或直接驱动：
-
-- `underlying_ni_`
-- `tun_ni_`
-- 路由安装与回收
-- bypass 与 route-list 加载
-- DNS 规则与 DNS 服务器行为
-- 报文重新注入 TUN 或 TAP
-- IPv6 应用与恢复
-- 平台辅助逻辑，例如 Windows 的 paper-airplane 控制器
-
-这些事情如果放到 exchanger，会导致会话重连与宿主机状态搅在一起。当前这种结构保证了 transmission 可以重连，而宿主网络模型继续保留。
-
-## 客户端会话生命周期
-
-`VEthernetExchanger::Open()` 本身很薄，它只是把真正逻辑投递到协程环境中。核心生命周期在 `VEthernetExchanger::Loopback(...)`。
-
-这个循环明确做了下面这些动作：
-
-1. 切换到 connecting 状态
-2. 打开 transmission
-3. 执行 `HandshakeServer(y, GetId(), true)`
-4. 通过 `EchoLanToRemoteExchanger(...)` 把本地 LAN 上下文告诉服务端
-5. 切换到 established 状态
-6. 发送请求的 IPv6 配置
-7. 注册全部 mapping
-8. 申请 static 模式分配
-9. 进入 `Run(...)` 主循环
-10. 清理 static 状态
-11. 注销 mapping
-12. 释放 transmission 并等待重连超时后重试
-
-所以客户端不是“连接成功后就完了”。它是围绕一个显式的重连生命周期构建的。
-
-```mermaid
-stateDiagram-v2
-    [*] --> Connecting
-    Connecting --> Handshaking
-    Handshaking --> Establishing
-    Establishing --> Established
-    Established --> Reconnecting: transport closed or keepalive failed
-    Reconnecting --> Connecting: after timeout
-```
-
-## 宿主平面与控制平面
-
-理解客户端最好的方式，是把它拆成两个循环。
-
-宿主平面由虚拟网卡回调驱动，入口主要在 switcher。
-
-控制平面由远端 transmission 的链路层动作驱动，主要由 exchanger 响应。
-
-switcher 负责决定哪些本地流量值得进入 overlay。exchanger 负责把这些决定编码成链路层动作，例如 `NAT`、`SENDTO`、`ECHO`、static packet、mapping 注册、MUX 子连接等。
-
-## 来自虚拟网卡的 IPv4 报文准入
-
-`VEthernetNetworkSwitcher::OnPacketInput(ip_hdr* ...)` 很有选择性，不是随便来个 IPv4 包都送进 tunnel。
-
-进入 `exchanger->Nat(...)` 之前，它要求：
-
-- 这个包来自 virtual network 路径
-- 协议必须是 TCP、UDP 或 ICMP
-- 当前存在 exchanger
-- 当前存在 tap
-- 目标地址不能是虚拟网卡自己的 IPv4
-- 源地址必须等于虚拟网卡 IPv4
-- 目标地址不能是 gateway
-- 除广播外，目标地址必须落在预期子网里
-
-这说明客户端转发的是“符合 overlay 语义的包”，而不是一个毫无限制的原始报文泵。
-
-## 来自虚拟网卡的 IPv6 报文准入
-
-IPv6 路径比 IPv4 更严格。
-
-`VEthernetNetworkSwitcher::OnPacketInput(Byte* ...)` 一开始就调用 `IsApprovedIPv6Packet(...)`。而这个检查的条件非常明确：
-
-- 客户端已经成功应用过 IPv6
-- 分配模式必须是 `Nat66` 或 `Gua`
-- 分配前缀长度必须正好是 `128`
-- 分配地址必须是合法 IPv6
-- 报文源地址必须严格等于已分配地址
-
-任一条件不满足，就拒绝该包，并写 debug log 说明原因。
-
-这是一个非常重要的架构信号。客户端并不是拿到 IPv6 后就当作透明通道使用，而是在本地边缘上强制执行“源地址身份必须等于受管分配地址”的约束。
-
-## UDP 路径
-
-UDP 入口在 `VEthernetNetworkSwitcher::OnUdpPacketInput(...)`。
-
-这段逻辑的决策链是：
-
-第一，如果目标端口是 DNS，则优先尝试 `RedirectDnsServer(...)`。DNS 被特殊处理，不是因为它是 UDP，而是因为在整个 overlay 模型里，DNS 本身就是一类流量分流与策略控制能力。
-
-第二，如果启用了 `block_quic_`，并且目标端口是 UDP 443，则直接丢弃。代码注释明确说明这是一个简单直接的 QUIC 阻断路径，用于避免不必要的远端 UDP 负担。
-
-第三，如果启用了 static 模式，则根据配置决定 DNS、QUIC 或更泛化的 UDP 流量是否走 static echo 路径。只有 static 已完成分配，相关流量才会进入 `StaticEchoPacketToRemoteExchanger(...)`。
-
-第四，如果不走 DNS redirect，不走 QUIC drop，不走 static 路径，则把源和目标转成 UDP endpoint，交给 `VEthernetExchanger::SendTo(...)`。
-
-```mermaid
-flowchart TD
-    A[UDP packet from TUN] --> B[Parse UdpFrame]
-    B --> C{Destination port 53}
-    C -- yes --> D[Try DNS redirect]
-    D -->|handled| E[Return]
-    D -->|not handled| F
-    C -- no --> F{block_quic and port 443}
-    F -- yes --> G[Drop packet]
-    F -- no --> H{static mode ready}
-    H -- yes --> I[StaticEchoPacketToRemoteExchanger]
-    H -- no --> J[VEthernetExchanger::SendTo]
-    J --> K[Create or reuse VEthernetDatagramPort]
-```
-
-## DatagramPort 为什么存在
-
-`VEthernetDatagramPort` 的存在说明客户端 UDP 不是简单的“发一下就完”。
-
-客户端需要按源 endpoint 持有状态。这样它才能：
-
-- 复用本地 UDP socket
-- 让回包能重新映射回正确的源语义
-- 在 datagram 对象已经释放时仍能直接把包交回 switcher 输出
-
-服务端回来的 UDP 数据在 `VEthernetExchanger::OnSendTo(...)` 中进入 `ReceiveFromDestination(...)`。如果源 endpoint 对应的 datagram port 还在，就交给 datagram 对象；如果已经不存在，但包仍有效，也可以让 switcher 用 `DatagramOutput(...)` 直接回注本地网络。
-
-因此客户端 UDP 架构既有状态，又允许部分无状态回落。
-
-## ICMP 路径
-
-`VEthernetNetworkSwitcher::OnIcmpPacketInput(...)` 的复杂度明显高于很多简化 VPN 实现。
-
-它会检查 exchanger、tap、allocator、ICMP frame、TTL 等条件，然后区分：
-
-- 发往 gateway 的报文
-- TTL 已经接近耗尽的报文
-- 需要正常送入远端或本地回显逻辑的报文
-
-辅助函数 `ER(...)`、`TE(...)`、`ERORTE(...)` 表明客户端可以合成 ICMP 相关应答或错误，而不是只做透明透传。
-
-这对运维排障很重要。一个 overlay 边缘如果不能给出合理 ICMP 反馈，实际使用时会非常难诊断。
-
-## TCP 路径
-
-TCP 没有复用 UDP 的简单模型，而是单独拆成：
-
-- `VEthernetNetworkTcpipStack`
-- `VEthernetNetworkTcpipConnection`
-
-原因很直接。TCP 需要处理连接建立、流式 payload、关闭语义、连接生命周期，以及在某些情况下参与 MUX。这些行为都不适合用单纯的数据报 endpoint 模型来表达。
-
-因此整个客户端运行时形成了三层不同粒度：
-
-- switcher 负责报文层决策
-- datagram port 负责 UDP 源端点级状态
-- tcpip connection 负责 TCP 连接级状态
-
-这是客户端在复杂度上还能维持可读性的关键原因之一。
-
-## Information Envelope 与运行时重配置
-
-服务端可以给客户端下发 `VirtualEthernetInformation` 或 `InformationEnvelope`。客户端入口在 `VEthernetExchanger::OnInformation(...)`。
-
-这个处理器会把任务投递回客户端 io context，保存最新的信息对象，记录原始 extended JSON 和解析后的 IPv6 字段，然后调用 `switcher_->OnInformation(...)`。
-
-真正把服务端信息变成本地动作的地方，是 `VEthernetNetworkSwitcher::OnInformation(...)`。这里会：
-
-- 保存最新信息
-- 在 IPv6 变化时先恢复旧配置
-- 尝试应用新 IPv6 分配
-- 按 `BandwidthQoS` 调整 QoS
-- 如果信息不再有效，则主动释放 transmission
-
-这说明客户端并不把服务端信息当成“展示型元数据”，而是把它当成实时运行配置。
-
-## IPv6 应用与恢复
-
-`VEthernetNetworkSwitcher::ApplyAssignedIPv6(...)` 是客户端里最“基础设施化”的函数之一。
-
-它会把服务端给出的 IPv6 分配真正应用到本地环境，包括：
-
-- 地址
-- 网关
-- 路由前缀
-- DNS 服务器
-
-而且失败处理非常谨慎。应用失败时会调用 restore 逻辑回滚宿主机状态。如果服务端后来下发了不同的 IPv6 assignment，switcher 会先恢复旧状态，再应用新状态。
-
-这意味着客户端把 IPv6 当成一份受管租约，而不是一段穿过 tunnel 的静态文本。
-
-```mermaid
-flowchart TD
-    A[InformationEnvelope received] --> B[Switcher stores latest info]
-    B --> C{IPv6 assignment changed}
-    C -- yes --> D[Restore previous client IPv6 state]
-    D --> E[ApplyAssignedIPv6]
-    E --> F{apply ok}
-    F -- yes --> G[ipv6_applied = true]
-    F -- no --> H[RestoreClientConfiguration]
-    C -- no --> I[Keep current assignment]
-```
-
-## 本地代理
-
-客户端可以开启本地 HTTP 代理和 SOCKS 代理。它们在 switcher 的 `Open(...)` 阶段创建并打开，远端转发则依赖 exchanger。
-
-这带来两个架构结论。
-
-第一，本地应用并不一定要直接走虚拟网卡，也可以通过代理接入 overlay。
-
-第二，本地代理与 tunnel 并不属于两个互相独立的运行时。它们共享同一套 exchanger 和会话状态，因此也共享同一故障域。
-
-## 反向 Mapping 注册
-
-在会话建立完成后，客户端会调用 `RegisterAllMappingPorts()`。连接结束时又会调用 `UnregisterAllMappingPorts()`。
-
-这说明反向 mapping 是会话绑定的，不是“注册一次永久生效”。客户端暴露出去的服务入口，依赖当前会话身份与控制面关系。
-
-从架构上看，这是合理的，因为 mapping 本身就是 tunnel 控制面的一部分。
-
-## 客户端上的 Static 模式
-
-static 模式虽然由主会话协商，但真正承载数据时走的是单独的数据报路径。
-
-客户端在 established 状态里调用 `StaticEchoAllocatedToRemoteExchanger(y)`。服务端回到 `OnStatic(... fsid, session_id, remote_port ...)` 后，客户端要么清理预分配资源，要么保存 static 所需标识，并调用 `VirtualEthernetPacket::Ciphertext(...)` 派生 static 用的 protocol 和 transport cipher。
-
-之后，配置允许的 UDP、DNS、QUIC、ICMP 都可能切到 static 路径，而不再走常规流式传输链路。
-
-因此 static 模式不是一个小优化，而是客户端里一套独立的第二数据平面。
-
-```mermaid
-sequenceDiagram
-    participant C as Client Exchanger
-    participant S as Server Exchanger
-    participant U as UDP Static Socket
-    C->>S: request static allocation on control link
-    S-->>C: fsid, allocated_id, remote_port
-    C->>C: derive static protocol and transport ciphers
-    C->>U: send selected UDP or ICMP packets as VirtualEthernetPacket
-    U-->>S: static datagrams
-```
-
-## 客户端上的 MUX
-
-MUX 维护逻辑集中在 `VEthernetExchanger::DoMuxEvents()`。
-
-代码表明，只有在以下条件成立时客户端才会创建 `vmux::vmux_net`：
-
-- `mux_` 连接数不是 0
-- 当前网络状态已经 established
-- 现有 `vmux_net` 不存在或者已经不健康
-
-之后客户端会选择 scheduler，创建 `vmux_net`，注入配置和 allocator，并在需要时通过 `ConnectTransmission(...)` 建立额外传输连接。这些额外连接用的是 `HandshakeServer(y, GetId(), false)`，而不是主会话建立时的那条路径。这正是代码层面证明：MUX 子连接是附属于既有 session identity 的额外连接，而不是新的主会话。
-
-同时，一旦 VLAN、连接数或者健康状态不再匹配，客户端也会主动拆掉 MUX。
-
-## 周期维护
-
-客户端运行时不是一个“连上就放着不管”的系统。`VEthernetExchanger::Update()` 定期执行：
-
-- echo keepalive 发送
-- MUX 维护
-- 链路 keepalive 检查
-- datagram 超时更新
-- mapping 超时更新
-
-这是很好的结构化设计。会话对象负责维护它自己拥有的资源，而不是把所有周期逻辑塞进一个全局定时器函数里。
-
-## 防御性拒绝路径
-
-客户端架构最值得注意的地方之一，是它明确拒绝某些入站动作。
-
-以下方法在客户端侧会直接 `return false`，并且注释里明确写着 suspected malicious attack：
-
-- `OnPush(...)`
-- `OnConnect(...)`
-- `OnConnectOK(...)`
-- `OnDisconnect(...)`
-- `OnStatic(...)` 无参数版本
-
-这说明虽然客户端与服务端共享一套链路层动作词汇，但并不是每个动作在任意方向上都合法。客户端只接受那些符合自己角色的方向。方向不合法，不是被当成无害噪音，而是被当成潜在攻击。
-
-这是一个非常重要的安全边界。
-
-## 数据路径总览
-
-客户端的数据平面可以概括为：
+### Switcher 与 Exchanger 的职责分离
 
 ```mermaid
 flowchart LR
-    A[Host app traffic] --> B[OS sends packet into TUN or TAP]
-    B --> C[VEthernetNetworkSwitcher]
-    C --> D{TCP UDP ICMP IPv6 approved}
-    D -- no --> E[Drop or local handling]
-    D -- yes --> F[VEthernetExchanger]
-    F --> G{normal link static path mux sublink}
-    G --> H[Remote server]
-    H --> I[reply action or packet]
-    I --> F
-    F --> C
-    C --> J[Output back to virtual adapter or proxy path]
+    subgraph VEthernetNetworkSwitcher
+        A[虚拟网卡管理]
+        B[路由控制]
+        C[DNS 控制]
+        D[流量分类]
+        E[bypass 策略]
+    end
+    
+    subgraph VEthernetExchanger
+        F[远端连接]
+        G[握手处理]
+        H[会话保活]
+        I[密钥管理]
+        J[static 路径]
+        K[IPv6 应用]
+    end
+    
+    A --> F
+    B --> F
+    C --> F
+    D --> F
+    E --> F
 ```
 
-## 架构层面的直接结论
+**VEthernetNetworkSwitcher** 负责宿主机网络环境。它工作在 `ITap` 之上，知道底层物理网卡是谁，知道虚拟网卡是谁，负责加载 bypass 和 route-list，负责把路由写进操作系统，负责 DNS 行为，负责把从 TUN 或 TAP 收到的包分类处理，也负责把服务端回来的数据重新注入本地网络环境。
 
-从源码结构可以直接得到几个结论。
+**VEthernetExchanger** 负责远端会话关系。它打开真正的传输层连接，做客户端侧握手，维持 keepalive，创建 datagram port，注册 mapping，维护 static 模式状态，维护 MUX，接收服务端信息信封并把变化回送给 switcher。
 
-第一，客户端在多个层面上都是强状态化的。它同时维护宿主机状态、传输状态、datagram 状态、TCP 连接状态、mapping 状态、static 状态、IPv6 assignment 状态。
+这种拆分使得：
+- 网络层策略（路由、DNS、bypass）与传输层逻辑（连接、会话、密钥）分离
+- 便于独立测试和维护
+- 支持灵活的扩展机制
 
-第二，客户端是强策略感知的。DNS、bypass、route-list、preferred NIC、preferred gateway、QUIC block、IPv6 源地址约束，这些都不是外部附加策略，而是直接写进了运行时代码。
+## VEthernetNetworkSwitcher 详解
 
-第三，客户端与服务端虽然协议词汇共享，但行为并不完全对称。那些拒绝路径已经足以证明角色合法性是协议的一部分。
+### 功能概述
 
-第四，重连是设计中心，不是补丁逻辑。exchanger 天生就是要在不重建整个 switcher 的前提下反复断线重连。
+`VEthernetNetworkSwitcher` 是客户端网络环境管理的核心，负责：
 
-## 建议源码阅读顺序
+| 功能 | 说明 |
+|------|------|
+| 虚拟网卡创建 | 创建 TUN/TAP 接口，配置 IP 地址 |
+| 路由管理 | 添加、删除路由表项 |
+| DNS 配置 | 修改系统 DNS 服务器 |
+| 流量分类 | 决定哪些流量走隧道，哪些 bypass |
+| 代理服务 | 启动和管理 HTTP/SOCKS 代理 |
+| 数据转发 | 将本地流量转发到隧道 |
 
-如果要继续沿着源码往下读，最有效的顺序是：
+### 虚拟网卡配置
 
-1. `VEthernetNetworkSwitcher::Open(...)`
-2. `VEthernetExchanger::Loopback(...)`
-3. `VEthernetNetworkSwitcher::OnPacketInput(...)`
-4. `VEthernetNetworkSwitcher::OnUdpPacketInput(...)`
-5. `VEthernetNetworkSwitcher::OnIcmpPacketInput(...)`
-6. `VEthernetExchanger::OnInformation(...)`
-7. `VEthernetNetworkSwitcher::ApplyAssignedIPv6(...)`
-8. `VEthernetExchanger::DoMuxEvents()`
-9. `VEthernetExchanger::SendTo(...)` 与 `ReceiveFromDestination(...)`
-10. `ppp/app/client/proxys/` 下各代理类
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--tun` | 虚拟网卡名称 | 平台相关 |
+| `--tun-ip` | 虚拟网卡 IP 地址 | 10.0.0.2 |
+| `--tun-gw` | 虚拟网卡网关 | 10.0.0.1 |
+| `--tun-mask` | 子网掩码 | 30 位 |
+| `--tun-host` | 是否作为首选网络 | yes |
 
-## 结论
+### 平台差异
 
-客户端架构最准确的理解方式，是把它看成“宿主机集成的 overlay 边缘节点”。
+| 平台 | 接口类型 | 驱动方式 | 默认名称 |
+|------|----------|----------|----------|
+| Windows | TAP | Windows TUN/TAP driver | PPP |
+| Linux | TUN | tun/tap kernel module | ppp |
+| macOS | utun | utun interface | utun0 |
+| Android | TUN | VPN Service API | tun0 |
 
-它不是只负责连上服务端。它负责把本地报文、本地 socket、本地路由、本地 DNS 策略、本地代理流量、本地 IPv6 状态，统一翻译成一个可重连、可管控、可分流、可附带 static 和 MUX 子路径的远端覆盖网络关系。而 `switcher + exchanger` 这一核心拆分，正是让这个复杂运行时仍然可理解、可维护的关键设计。
+### 流量分类逻辑
+
+```mermaid
+flowchart TD
+    A[收到本地数据包] --> B{检查目标地址}
+    B -->|内网地址| C[直接通过物理网卡]
+    B -->|公网地址| D{检查 bypass 列表}
+    D -->|命中 bypass| C
+    D -->|未命中| E{检查路由规则}
+    E -->|走隧道| F[发送到 Exchanger]
+    E -->|直连| C
+    F --> G[加密并发送到服务端]
+```
+
+### bypass 机制
+
+bypass 机制允许特定流量绕过隧道，常见用途：
+
+| bypass 类型 | 说明 | 配置方式 |
+|-------------|------|----------|
+| IP bypass | 指定 IP 或 IP 段直连 | `--bypass` 参数 |
+| 域名 bypass | 指定域名直连 | DNS 规则文件 |
+| 进程 bypass | 指定进程流量直连 | 平台特定实现 |
+
+## VEthernetExchanger 详解
+
+### 功能概述
+
+`VEthernetExchanger` 是客户端与服务端之间的会话管理层，负责：
+
+| 功能 | 说明 |
+|------|------|
+| 建立连接 | 建立与服务器的传输层连接 |
+| 握手处理 | 完成客户端侧握手和密钥交换 |
+| 会话保活 | 维持长连接的 keepalive |
+| 密钥管理 | 管理会话密钥 |
+| static 路径 | 管理 UDP static 数据路径 |
+| IPv6 管理 | 应用服务端下发的 IPv6 配置 |
+| 端口映射 | 向服务端注册反向映射 |
+
+### 连接建立流程
+
+```mermaid
+sequenceDiagram
+    participant C as VEthernetExchanger
+    participant T as ITransmission
+    participant S as 服务端
+    
+    C->>T: 创建传输连接
+    T->>S: TCP/WS/WSS 连接
+    S-->>T: 连接响应
+    T-->>C: 连接建立
+    C->>T: 发送握手请求
+    T->>S: 握手数据
+    S-->>T: 握手响应
+    T-->>C: 会话建立
+    C->>C: 启动 keepalive
+```
+
+### keepalive 机制
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `keep-alived` | keepalive 间隔范围 | [1, 20] 秒 |
+| `inactive.timeout` | 空闲超时 | 60 秒 |
+
+### 密钥交换
+
+客户端使用预共享密钥与 `ivv` 参数派生会话密钥：
+
+| 参数 | 说明 |
+|------|------|
+| `protocol-key` | 协议层加密密钥 |
+| `transport-key` | 传输层加密密钥 |
+| `ivv` | 每次会话动态生成 |
+
+### static 路径
+
+当启用 static 模式时，`VEthernetExchanger` 会创建 `VEthernetDatagramPort` 用于 UDP 数据传输：
+
+```mermaid
+flowchart TD
+    A[应用数据] --> B{选择路径}
+    B -->|TCP 数据| C[主隧道 TCP]
+    B -->|UDP 数据| D[static UDP]
+    C --> E[服务端]
+    D --> E
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--tun-static` | 启用 static 模式 |
+| `static.keep-alived` | static 保活间隔 |
+| `static.dns` | 启用 static DNS |
+| `static.quic` | 启用 QUIC 支持 |
+| `static.icmp` | 启用 ICMP 支持 |
+
+## VEthernetNetworkTcpipStack 详解
+
+### TCP/IP 协议栈
+
+`VEthernetNetworkTcpipStack` 实现了客户端的 TCP/IP 协议栈，处理隧道内的 TCP 数据：
+
+| 功能 | 说明 |
+|------|------|
+| TCP 连接管理 | 处理 TCP 连接的建立和维护 |
+| 数据缓冲 | 管理发送和接收缓冲区 |
+| 流量控制 | 实现 TCP 流量控制 |
+| 拥塞控制 | 实现拥塞避免算法 |
+
+### 连接处理流程
+
+```mermaid
+flowchart TD
+    A[收到服务端 TCP 数据] --> B[解析 TCP 头]
+    B --> C{连接状态}
+    C -->|新连接| D[创建新连接对象]
+    C -->|已有连接| E[更新连接状态]
+    D --> F[建立本地连接]
+    E --> G[数据传输]
+    F --> G
+```
+
+## HTTP 和 SOCKS 代理
+
+### HTTP 代理
+
+`VEthernetHttpProxySwitcher` 提供 HTTP 代理服务：
+
+| 参数 | 说明 |
+|------|------|
+| `http-proxy.bind` | 绑定地址 |
+| `http-proxy.port` | 端口 |
+
+```mermaid
+flowchart LR
+    A[浏览器] -->|HTTP 请求| B[VEthernetHttpProxySwitcher]
+    B --> C{目标地址}
+    C -->|代理请求| D[转发到目标服务器]
+    C -->|直连请求| E[通过 Exchanger 发送]
+    D --> F[服务器响应]
+    F --> B
+    E --> B
+    B --> A
+```
+
+### SOCKS 代理
+
+`VEthernetSocksProxySwitcher` 提供 SOCKS 代理服务：
+
+| 参数 | 说明 |
+|------|------|
+| `socks-proxy.bind` | 绑定地址 |
+| `socks-proxy.port` | 端口 |
+| `socks-proxy.username` | 认证用户名 |
+| `socks-proxy.password` | 认证密码 |
+
+### 代理认证
+
+| 方法 | 支持 | 说明 |
+|------|------|------|
+| 无认证 | ✅ | 不需要认证 |
+| 基本认证 | ✅ | 用户名/密码 |
+| GSSAPI | ❌ | 不支持 |
+
+## 端口映射（Reverse Mapping）
+
+### 功能说明
+
+客户端可以向服务端注册端口映射，将本地服务暴露到公网：
+
+```mermaid
+flowchart LR
+    A[本地服务] -->|注册映射| B[VEthernetExchanger]
+    B -->|MAPPING 消息| C[服务端]
+    C -->|外部请求| D[公网用户]
+    D --> C
+    C --> B
+    B --> A
+```
+
+### 配置参数
+
+| 参数 | 说明 |
+|------|------|
+| `mappings[].local-ip` | 本地 IP |
+| `mappings[].local-port` | 本地端口 |
+| `mappings[].protocol` | 协议类型 |
+| `mappings[].remote-port` | 远程端口 |
+
+### 使用场景
+
+| 场景 | 说明 |
+|------|------|
+| 暴露本地 Web 服务 | 将本地 80 端口映射到公网 |
+| 远程桌面 | 将本地 3389 端口映射到公网 |
+| 游戏服务器 | 将本地游戏端口映射到公网 |
+
+## IPv6 支持
+
+### IPv6 模式
+
+| 模式 | 说明 |
+|------|------|
+| none | 不分配 IPv6 |
+| NAT66 | NAT66 模式 |
+| GUA | 全局单播地址 |
+
+### IPv6 配置流程
+
+```mermaid
+sequenceDiagram
+    participant E as VEthernetExchanger
+    participant S as 服务端
+    participant A as 系统 IPv6 栈
+    
+    E->>S: 请求 IPv6 配置
+    S-->>E: 下发 IPv6 配置
+    E->>A: 配置 IPv6 地址
+    A-->>E: 配置完成
+```
+
+### IPv6 地址格式
+
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| GUA | 全局单播地址 | 2001:db8::1 |
+| ULA | 唯一本地地址 | fd00::/8 |
+| Link-local | 链路本地地址 | fe80::/10 |
+
+## MUX 多路复用
+
+### 功能说明
+
+MUX 允许在单个连接上复用多个数据流：
+
+| 参数 | 说明 |
+|------|------|
+| `mux.connect.timeout` | 连接超时 |
+| `mux.inactive.timeout` | 空闲超时 |
+| `mux.congestions` | 拥塞窗口大小 |
+| `mux.keep-alived` | keepalive 间隔 |
+
+### MUX 数据流
+
+```mermaid
+flowchart LR
+    subgraph 客户端
+        A[数据流 1] --> B[MUX 复用层]
+        C[数据流 2] --> B
+        D[数据流 3] --> B
+    end
+    
+    B --> E[单连接]
+    
+    subgraph 服务端
+        E --> F[MUX 解复用层]
+        F --> G[数据流 1]
+        F --> H[数据流 2]
+        F --> I[数据流 3]
+    end
+```
+
+## 路由与 DNS 控制
+
+### 路由策略
+
+客户端支持灵活的路由策略：
+
+| 策略 | 说明 | 配置 |
+|------|------|------|
+| 全局路由 | 所有流量通过隧道 | 默认 |
+| 策略路由 | 按规则路由 | `--bypass` |
+| 智能路由 | 国内直连国外走隧道 | `--vbgp` |
+
+### DNS 策略
+
+| 策略 | 说明 |
+|------|------|
+| 隧道 DNS | 所有 DNS 查询通过隧道 |
+| 分流 DNS | 按域名分流 |
+| 直连 DNS | 直接查询本地 DNS |
+
+### DNS 规则文件格式
+
+```
+# 格式：域名 [direct|tunnel]
+example.com direct
+google.com tunnel
+* tunnel
+```
+
+## 重连机制
+
+### 重连策略
+
+当连接断开时，客户端会自动重连：
+
+```mermaid
+flowchart TD
+    A[连接断开] --> B[等待重连]
+    B --> C{重连次数 < 最大}
+    C -->|是| D[指数退避等待]
+    D --> E[尝试重新连接]
+    E --> F{连接成功?}
+    F -->|是| G[恢复正常]
+    F -->|否| B
+    C -->|否| H[放弃重连]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `reconnections.timeout` | 重连超时时间 |
+| `link-restart` | 链路重连次数 |
+
+### 指数退避
+
+重连使用指数退避策略：
+
+| 重连次数 | 等待时间 |
+|----------|----------|
+| 1 | 1 秒 |
+| 2 | 2 秒 |
+| 3 | 4 秒 |
+| 4 | 8 秒 |
+| ... | 最大 60 秒 |
+
+## 数据流向完整图
+
+```mermaid
+flowchart TD
+    subgraph 本地应用层
+        A[本地应用]
+        B[浏览器]
+        C[其他服务]
+    end
+    
+    subgraph 虚拟网卡层
+        D[虚拟网卡 TUN]
+    end
+    
+    subgraph Switcher 层
+        E[VEthernetNetworkSwitcher]
+        F[流量分类]
+        G[路由控制]
+        H[DNS 控制]
+    end
+    
+    subgraph Exchanger 层
+        I[VEthernetExchanger]
+        J[握手/密钥]
+        K[keepalive]
+    end
+    
+    subgraph 代理层
+        L[HTTP 代理]
+        M[SOCKS 代理]
+    end
+    
+    subgraph 传输层
+        N[ITransmission]
+    end
+    
+    A --> D
+    B --> L
+    C --> D
+    D --> E
+    E --> F
+    F -->|隧道| I
+    F -->|bypass| O[物理网卡]
+    I --> J
+    I --> K
+    J --> N
+    K --> N
+    L --> I
+    M --> I
+    N --> P[网络]
+    P --> Q[服务端]
+```
+
+## 错误处理
+
+### 常见错误及处理
+
+| 错误类型 | 原因 | 处理方式 |
+|----------|------|----------|
+| 连接超时 | 网络不可达 | 重连 |
+| 握手失败 | 密钥错误 | 报告错误 |
+| 虚拟网卡错误 | 权限不足 | 尝试重新创建 |
+| DNS 解析失败 | DNS 服务器问题 | 使用备用 DNS |
+| 代理服务错误 | 端口被占用 | 尝试备用端口 |
+
+### 日志级别
+
+| 级别 | 说明 |
+|------|------|
+| ERROR | 错误信息 |
+| WARN | 警告信息 |
+| INFO | 一般信息 |
+| DEBUG | 调试信息 |
+
+## 性能优化
+
+### 性能参数
+
+| 参数 | 说明 | 推荐值 |
+|------|------|--------|
+| `concurrent` | 并发线程数 | CPU 核心数 |
+| `--tun-ssmt` | SSMT 线程数 | 4 或 CPU 核心数 |
+| `tcp.turbo` | TCP 加速 | 启用 |
+| `tcp.fast-open` | TCP Fast Open | 启用 |
+
+### 优化建议
+
+1. **网络优化**：启用 TCP Turbo 和 Fast Open
+2. **内存优化**：配置 vmem 大小
+3. **并发优化**：根据 CPU 核心数调整并发数
+4. **MUX 优化**：在高延迟场景启用 MUX
+
+## 总结
+
+OPENPPP2 客户端是一个复杂的网络系统，核心架构特点包括：
+
+1. **Switcher/Exchanger 分离**：网络环境管理与会话管理分离
+2. **多平面支持**：同时支持 TCP 隧道、UDP static、HTTP/SOCKS 代理
+3. **灵活的路由和 DNS 控制**：支持多种 bypass 策略
+4. **完整的重连机制**：自动重连和指数退避
+5. **IPv6 支持**：支持多种 IPv6 模式
+6. **MUX 多路复用**：支持连接复用
+
+理解这些架构特点对于正确使用和调试客户端至关重要。
+
+## 相关文档
+
+| 文档 | 说明 |
+|------|------|
+| [ARCHITECTURE_CN.md](ARCHITECTURE_CN.md) | 系统架构总览 |
+| [SERVER_ARCHITECTURE_CN.md](SERVER_ARCHITECTURE_CN.md) | 服务端运行时架构 |
+| [TRANSMISSION_CN.md](TRANSMISSION_CN.md) | 传输层与受保护隧道模型 |
+| [ROUTING_AND_DNS_CN.md](ROUTING_AND_DNS_CN.md) | 路由与 DNS 控制 |
+| [PLATFORMS_CN.md](PLATFORMS_CN.md) | 平台支持与差异 |

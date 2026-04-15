@@ -1,564 +1,772 @@
-# Configuration Model, Normalization, And Runtime Shaping
+# Configuration Model, Parameter Dictionary, Normalization Rules, And Runtime Shaping
 
 [中文版本](CONFIGURATION_CN.md)
 
-## Scope
+## Document Position
 
-This document explains how OPENPPP2 loads, normalizes, and uses configuration. It is not only a field list. The purpose is to show how configuration behaves as a runtime model in code, what gets defaulted, what gets clamped, what gets disabled when invalid, and how JSON configuration interacts with command-line shaping.
+This document is the master configuration guide for OPENPPP2. It is not merely a field list, and it is not satisfied by showing one example `appsettings.json` and stopping there. Its purpose is to explain the whole configuration system as a real engineering subsystem, so that readers understand:
 
-The core implementation is centered on:
+- what configuration means in this system
+- how configuration objects move from JSON into runtime state
+- which fields are only raw input and which fields are defaulted, clamped, disabled, or cleared
+- how JSON configuration and command-line parameters work together
+- how different configuration blocks correspond to client, server, transport, routing, DNS, static mode, MUX, IPv6, and backend planes
+- which parameters are cross-platform and which have strong platform-dependent behavior
+- how the runtime reacts to bad configuration: repair, fallback, disablement, or rejection
+
+The main implementation anchors are:
 
 - `ppp/configurations/AppConfiguration.h`
 - `ppp/configurations/AppConfiguration.cpp`
 - `main.cpp::LoadConfiguration(...)`
 - `main.cpp::PreparedArgumentEnvironment(...)`
 - `main.cpp::GetNetworkInterface(...)`
+- `ppp/transmissions/ITransmission.cpp`
+- `ppp/app/client/VEthernetNetworkSwitcher.cpp`
+- `ppp/app/server/VirtualEthernetSwitcher.cpp`
 
-This matters because OPENPPP2 does not treat configuration as a passive blob. The loader actively reshapes configuration into something the runtime can trust more than raw input.
+If one sentence must summarize the central conclusion of this document, it is this: **OPENPPP2 configuration is not just JSON parsing. It is a configuration admission and shaping system that actively repairs, clamps, defaults, or disables values before runtime depends on them.**
 
-## Why Configuration Is So Important In OPENPPP2
+## Why Configuration Is So Central In OPENPPP2
 
-In many smaller tunnel tools, configuration is little more than a collection of endpoint strings, keys, and a handful of toggles. In OPENPPP2, the configuration object is much more central.
+Many smaller VPN, proxy, or tunnel tools use configuration mainly for:
 
-It defines or strongly influences:
+- one remote endpoint
+- one authentication block
+- a handful of booleans
 
-- transport and listener behavior
+OPENPPP2 is fundamentally broader. Its configuration model directly controls or strongly influences:
+
+- transport and listeners
 - handshake and framing behavior
-- cipher selection and key material
-- route and DNS steering
-- static packet mode behavior
-- mux behavior
-- server-side policy and IPv6 service
-- client-side mappings, proxies, and route-file policy
-- virtual memory buffer allocator behavior
+- key material and cipher selection
+- client-side adapter, route, and DNS behavior
+- server-side admission, mapping, IPv6, and backend behavior
+- static packet path
+- MUX plane
+- local proxies
+- route files, vBGP-style route inputs, and DNS rules
+- virtual memory and buffer allocator behavior
 
-This is one reason the project behaves more like an infrastructure runtime than like a narrowly scoped proxy executable. The configuration model is effectively the durable contract between operator intent and runtime behavior.
-
-## The Two-Stage Configuration Story
-
-OPENPPP2 has two major configuration stages.
-
-### Stage 1: JSON model loading
-
-The JSON file is loaded into `AppConfiguration`.
-
-### Stage 2: runtime shaping
-
-Command-line arguments then shape local runtime state through `NetworkInterface` and other startup logic.
+That is one reason OPENPPP2 behaves more like an infrastructure runtime than like a small tunnel executable.
 
 ```mermaid
 flowchart TD
-    A[JSON file] --> B[AppConfiguration Load]
-    B --> C[Loaded normalization]
-    D[CLI arguments] --> E[NetworkInterface parse]
-    C --> F[stable runtime policy]
-    E --> G[local launch shaping]
-    F --> H[startup branch]
+    A[Configuration system] --> B[Transport and listeners]
+    A --> C[Handshake and framing]
+    A --> D[Key and cipher behavior]
+    A --> E[Client local-network shaping]
+    A --> F[Server node policy]
+    A --> G[Route and DNS policy]
+    A --> H[Static and mux]
+    A --> I[IPv6 service model]
+    A --> J[Backend integration]
+    A --> K[Allocator and resource behavior]
+```
+
+## The Two-Stage Configuration Story
+
+One of the most useful ways to understand configuration in OPENPPP2 is to split it into two stages instead of mixing JSON and CLI together.
+
+### Stage One: JSON Configuration Loading And Normalization
+
+This stage is handled by `AppConfiguration`. It:
+
+- constructs a full baseline model with defaults
+- merges JSON values into it
+- runs `Loaded()` normalization
+
+### Stage Two: Launch-Time Local Shaping Through CLI
+
+This stage is handled mainly by `GetNetworkInterface(...)` and surrounding startup logic in `main.cpp`. It:
+
+- parses `--mode`
+- parses `--config`
+- parses `--dns`
+- parses NIC, gateway, virtual adapter, route, DNS-rule, and local network shaping inputs
+- applies them to this particular launch
+
+### The Correct Relationship Between The Two Stages
+
+- JSON defines durable node intent and durable capability model
+- CLI defines the host-specific realization details of the current run
+
+```mermaid
+flowchart TD
+    A[JSON configuration] --> B[AppConfiguration::Load]
+    B --> C[AppConfiguration::Loaded normalization]
+    D[CLI arguments] --> E[GetNetworkInterface parse]
+    C --> F[Durable runtime model]
+    E --> G[Per-launch local shaping]
+    F --> H[Role-specific startup branch]
     G --> H
 ```
 
-This separation is crucial. JSON defines durable node intent. CLI defines how this specific launch should shape local environment details.
-
-## Loader Entry And Search Paths
+## Configuration Search Paths And Entry
 
 `main.cpp::LoadConfiguration(...)` searches for configuration in this order:
 
-1. any command-line path supplied through config aliases
+1. an explicitly supplied configuration path
 2. `./config.json`
 3. `./appsettings.json`
 
-The parser accepts multiple CLI aliases for configuration path selection:
+The parser accepts these aliases for configuration path selection:
 
 - `-c`
 - `--c`
 - `-config`
 - `--config`
 
-Once a candidate path is found, the loader:
+This means:
 
-- rewrites the path
-- resolves it to a full path
-- checks readability
-- constructs `AppConfiguration`
-- calls `configuration->Load(configuration_path)`
+- `--config` is the most visible form
+- but the code preserves several alias forms for compatibility and convenience
 
-That means configuration loading is intentionally resilient to a few operator path styles while still normalizing them into an absolute path for the runtime.
+### Recommended Operational Practice
 
-## The `Clear()` Baseline
+Even though the code can search multiple default locations, production and formal testing should almost always use an explicit path:
 
-Every load starts from `AppConfiguration::Clear()`.
+```bash
+ppp --mode=server --config=/etc/openppp2/server.json
+```
 
-This is important because it shows that the project always has a known baseline model before it merges JSON into it.
+Depending on the current working directory to contain the right `appsettings.json` is not a good long-term operating model.
+
+## `Clear()`: The Baseline World Before JSON Is Merged
+
+`AppConfiguration::Clear()` establishes the baseline for the entire configuration system. Before any JSON values are merged, the runtime creates a full default model.
+
+This matters because it means: **missing fields do not usually mean missing behavior. They usually mean fallback to `Clear()` defaults.**
+
+### Large Default Categories Set By `Clear()`
 
 The baseline includes:
 
 - processor-count-derived concurrency
-- empty public and interface IP hints
-- UDP DNS defaults
-- TCP connect and inactive timeout defaults
-- mux timeout defaults
-- WebSocket disabled by default
-- key defaults such as `kf`, `kh`, `kl`, `kx`, `sb`
-- default protocol and transport key names
-- server defaults such as `subnet`, `mapping`, and IPv6 disabled
-- client defaults such as generated GUID-like sentinel, zero bandwidth, and default proxy ports
+- baseline TCP, UDP, and MUX timeouts
+- WebSocket listeners disabled by default
+- baseline key block values
+- `server.subnet = true`
+- `server.mapping = true`
+- server IPv6 disabled by default
+- a sentinel client GUID
+- zero bandwidth limit by default
+- on Windows, `paper_airplane.tcp = true`
 
-This matters because the absence of a JSON field rarely means “there is no behavior.” It usually means “fall back to a baseline behavior from `Clear()`.”
+### What `Clear()` Really Means
 
-## Default Key And Framing Baseline
+It is not just “construct an empty object.” It constructs a known-safe model that can be merged and normalized in a predictable way.
 
-Some of the most important defaults are in the `key` block.
+## High-Level Parameter Map
 
-The baseline loader sets:
+Structurally, `AppConfiguration` is organized around these major blocks:
 
-- `kf = 154543927`
-- `kh = 12`
-- `kl = 10`
-- `kx = 128`
-- `sb = 0`
-- `protocol = PPP_DEFAULT_KEY_PROTOCOL`
-- `protocol-key = BOOST_BEAST_VERSION_STRING`
-- `transport = PPP_DEFAULT_KEY_TRANSPORT`
-- `transport-key = BOOST_BEAST_VERSION_STRING`
-- `masked = true`
-- `plaintext = true`
-- `delta-encode = true`
-- `shuffle-data = true`
+- `concurrent`
+- `cdn`
+- `ip`
+- `udp`
+- `tcp`
+- `mux`
+- `websocket`
+- `key`
+- `vmem`
+- `server`
+- `client`
 
-The default of `plaintext = true` often surprises readers if they only skim the project. But this makes sense when read with the transport code. The project explicitly supports base94 and plaintext-oriented early-session framing behavior, and the full runtime model is more nuanced than “always post-handshake binary encrypted records from byte one.”
+```mermaid
+mindmap
+  root((AppConfiguration))
+    concurrent
+    cdn
+    ip
+    key
+    tcp
+    udp
+      dns
+      static
+    mux
+    websocket
+      ssl
+      http
+    vmem
+    server
+      ipv6
+    client
+      mappings
+      routes
+      http-proxy
+      socks-proxy
+      paper-airplane
+```
+
+## Top-Level Parameters
+
+### `concurrent`
+
+This sets global runtime concurrency intent.
+
+#### Default
+
+- `Thread::GetProcessorCount()`
+
+#### Normalization
+
+- values `< 1` are corrected back to the processor count
+
+#### Recommended Interpretation
+
+It is not merely a “thread count” knob. It is a top-level concurrency scale hint used by the runtime.
+
+#### Parameter Table
+
+| Parameter | Type | Default | Normalization | Scope | Platform Difference |
+|---|---|---|---|---|---|
+| `concurrent` | `int` | processor count | `<1` resets to processor count | global execution scale | no explicit platform split |
+
+### `cdn`
+
+This stores two CDN-related port hints.
+
+#### Default
+
+- both entries start at `IPEndPoint::MinPort`
+
+#### Normalization
+
+- invalid ports are reset back to `MinPort`
+
+#### Recommended Interpretation
+
+This is an auxiliary input for server listener classification and CDN-like ingress handling, not a fully separate subsystem by itself.
+
+| Parameter | Type | Default | Normalization | Scope |
+|---|---|---|---|---|
+| `cdn[0]` | `int` | `MinPort` | invalid ports zeroed | server ingress classification |
+| `cdn[1]` | `int` | `MinPort` | invalid ports zeroed | server ingress classification |
+
+## The `ip` Block
+
+The `ip` block provides public-address and local-interface hints.
+
+### Fields
+
+| Field | Type | Intended Role | Meaning | Normalization |
+|---|---|---|---|---|
+| `ip.public` | `string` | server | public address hint | invalid address cleared, valid address rewritten canonically |
+| `ip.interface` | `string` | server | local listening-interface hint | invalid address cleared, valid address rewritten canonically |
+
+### Usage Advice
+
+- these are best read as node address hints, not as magic directives that override all listener binding behavior
+- if set, the address string must be genuinely valid
+
+## The `key` Block
+
+The `key` block is one of the most important configuration groups because it shapes transport protection, framing behavior, NOP disturbance, and parts of static packet derivation.
+
+### Baseline Defaults
+
+| Field | Type | `Clear()` Default | Normalization | Main Layer |
+|---|---|---|---|---|
+| `kf` | `int` | `154543927` | preserved | transmission and static derivation |
+| `kh` | `int` | `12` | clamped to `0..16` | handshake NOP upper bound |
+| `kl` | `int` | `10` | clamped to `0..16` | handshake NOP lower bound |
+| `kx` | `int` | `128` | `<0` resets to `0` | framing/disturbance factor |
+| `sb` | `int` | `0` | clamped to legal skateboarding range | buffer skateboarding |
+| `protocol` | `string` | `PPP_DEFAULT_KEY_PROTOCOL` | unsupported values reset to default | protocol cipher |
+| `protocol-key` | `string` | `BOOST_BEAST_VERSION_STRING` | empty value reset to default | protocol key |
+| `transport` | `string` | `PPP_DEFAULT_KEY_TRANSPORT` | unsupported values reset to default | transport cipher |
+| `transport-key` | `string` | `BOOST_BEAST_VERSION_STRING` | empty value reset to default | transport key |
+| `masked` | `bool` | `true` | preserved | masking behavior |
+| `plaintext` | `bool` | `true` | preserved | plaintext/base94-related path behavior |
+| `delta-encode` | `bool` | `true` | preserved | delta encoding |
+| `shuffle-data` | `bool` | `true` | preserved | data shuffle |
+
+### Why `plaintext = true` Does Not Mean “No Protection”
+
+If this field is read in isolation, it is easy to misunderstand. But when read alongside `ITransmission.cpp`, it is better understood as a switch that permits plaintext-oriented and base94-oriented framing families in certain phases or configurations. It does not, by itself, imply that the system is wholly unprotected.
+
+### Derived Behavior And Validation
+
+`Loaded()` additionally:
+
+- checks `Ciphertext::Support(config.key.protocol)`
+- checks `Ciphertext::Support(config.key.transport)`
+- repairs unsupported cipher names
+- fills empty key strings
+- computes `_lcgmods` derived values
+
+So the `key` block is not only stored. It is actively transformed into a safer runtime model for later transmission code.
+
+## The `tcp` Block
+
+The `tcp` block defines native TCP carrier behavior.
+
+### Parameter Table
+
+| Field | Type | Default | Normalization | Intended Roles | Meaning |
+|---|---|---|---|---|---|
+| `tcp.inactive.timeout` | `int` | `PPP_TCP_INACTIVE_TIMEOUT` | `<1` resets to default | client/server | TCP idle timeout |
+| `tcp.connect.timeout` | `int` | `PPP_TCP_CONNECT_TIMEOUT` | `<1` resets to default | client/server | connect timeout |
+| `tcp.connect.nexcept` | `int` | `PPP_TCP_CONNECT_NEXCEPT` | `<0` resets to default | client/server | connect jitter extension |
+| `tcp.listen.port` | `int` | `MinPort` | invalid ports zeroed | server | TCP listener port |
+| `tcp.cwnd` | `int` | `0` | preserved | client/server | send-window hint |
+| `tcp.rwnd` | `int` | `0` | preserved | client/server | receive-window hint |
+| `tcp.turbo` | `bool` | `false` | preserved | client/server | TCP turbo behavior |
+| `tcp.backlog` | `int` | `PPP_LISTEN_BACKLOG` | `<1` resets to default | server | backlog |
+| `tcp.fast-open` | `bool` | `false` | preserved | client/server | TCP Fast Open |
+
+### Usage Advice
+
+- for initial deployment, do not rush to tune `cwnd` and `rwnd`
+- if the listener port is invalid, the runtime does not keep it as a maybe-working value; it zeroes it and disables the listener path
+- `tcp.turbo` and `fast-open` should be treated as performance-layer options to revisit only after base reachability is stable
+
+## The `udp` Block
+
+The `udp` block does not mean merely “enable UDP.” It simultaneously controls:
+
+- ordinary UDP data plane behavior
+- DNS helper behavior
+- static packet path behavior
+
+### Top-Level UDP Table
+
+| Field | Type | Default | Normalization | Intended Roles | Meaning |
+|---|---|---|---|---|---|
+| `udp.cwnd` | `int` | `0` | preserved | client/server | UDP send-window hint |
+| `udp.rwnd` | `int` | `0` | preserved | client/server | UDP receive-window hint |
+| `udp.inactive.timeout` | `int` | `PPP_UDP_INACTIVE_TIMEOUT` | `<1` resets to default | client/server | UDP idle timeout |
+| `udp.listen.port` | `int` | `MinPort` | invalid ports zeroed | server | UDP listener port |
+
+### The `udp.dns` Sub-Block
+
+| Field | Type | Default | Normalization | Intended Roles | Meaning |
+|---|---|---|---|---|---|
+| `udp.dns.timeout` | `int` | `PPP_DEFAULT_DNS_TIMEOUT` | `<1` resets to default | client/server | DNS query timeout |
+| `udp.dns.ttl` | `int` | `PPP_DEFAULT_DNS_TTL` | `<0` corrected upward | client/server | DNS TTL |
+| `udp.dns.cache` | `bool` | `true` | preserved | client/server | DNS cache switch |
+| `udp.dns.turbo` | `bool` | `false` | preserved | client/server | DNS turbo behavior |
+| `udp.dns.redirect` | `string` | empty | cleared if invalid endpoint/domain | server | DNS redirect target |
+
+### The `udp.static` Sub-Block
+
+| Field | Type | Default | Normalization | Intended Roles | Meaning |
+|---|---|---|---|---|---|
+| `udp.static.keep-alived[0]` | `int` | `PPP_UDP_KEEP_ALIVED_MIN_TIMEOUT` | `<0` corrected upward | client | minimum keepalive interval |
+| `udp.static.keep-alived[1]` | `int` | `PPP_UDP_KEEP_ALIVED_MAX_TIMEOUT` | `<0` corrected upward | client | maximum keepalive interval |
+| `udp.static.dns` | `bool` | `true` | preserved | client | whether static path allows DNS |
+| `udp.static.quic` | `bool` | `true` | preserved | client | whether static path allows QUIC |
+| `udp.static.icmp` | `bool` | `true` | preserved | client | whether static path allows ICMP |
+| `udp.static.aggligator` | `int` | `0` | `<0` resets to `0` | client | aggregator link count |
+| `udp.static.servers` | `set<string>` | empty | preserved plus parse-time cleaning | client | static upstream server list |
+
+### Important Practical Note
+
+- the defaults inside `udp.static` are intentionally permissive, but that does not mean static mode is automatically active
+- `udp.dns.redirect` is cleared if invalid; it is not allowed to survive as a broken string input
+
+## The `mux` Block
+
+The `mux` block defines the auxiliary subconnection plane, not the main session itself.
+
+### Parameter Table
+
+| Field | Type | Default | Normalization | Intended Roles | Meaning |
+|---|---|---|---|---|---|
+| `mux.connect.timeout` | `int` | `PPP_MUX_CONNECT_TIMEOUT` | `<1` resets to default | client/server | mux connect timeout |
+| `mux.inactive.timeout` | `int` | `PPP_MUX_INACTIVE_TIMEOUT` | `<1` resets to default | client/server | mux idle timeout |
+| `mux.congestions` | `int` | `PPP_MUX_DEFAULT_CONGESTIONS` | negative or too-small values reset to default | client/server | max congestion window |
+| `mux.keep-alived[0]` | `int` | `PPP_TCP_CONNECT_TIMEOUT` | `<0` corrected upward | client/server | minimum mux keepalive |
+| `mux.keep-alived[1]` | `int` | `PPP_MUX_CONNECT_TIMEOUT` | `<0` corrected upward | client/server | maximum mux keepalive |
+
+### Usage Advice
+
+- MUX is not a replacement for the base session
+- do not begin by tuning MUX aggressively before the underlying session is understood
+
+## The `websocket` Block
+
+The `websocket` block defines the WS/WSS-facing ingress personality of the node. In practice it behaves almost like a small subsystem of its own.
+
+### Top-Level Fields
+
+| Field | Type | Default | Normalization | Intended Roles | Meaning |
+|---|---|---|---|---|---|
+| `websocket.host` | `string` | empty | invalid domain disables WS/WSS and clears related fields | server | WebSocket host |
+| `websocket.path` | `string` | empty | empty or non-`/` path disables WS/WSS | server | WebSocket path |
+| `websocket.listen.ws` | `int` | `MinPort` | invalid port zeroed | server | WS listener port |
+| `websocket.listen.wss` | `int` | `MinPort` | invalid port zeroed | server | WSS listener port |
+
+### The `websocket.ssl` Sub-Block
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `certificate-file` | `string` | empty | cleared if WSS is invalid | certificate file |
+| `certificate-key-file` | `string` | empty | cleared if WSS is invalid | private key file |
+| `certificate-chain-file` | `string` | empty | cleared if WSS is invalid | chain file |
+| `certificate-key-password` | `string` | empty | cleared if WSS is invalid | private key password |
+| `ciphersuites` | `string` | `GetDefaultCipherSuites()` | empty value resets to default | TLS suite selection |
+| `verify-peer` | `bool` | `true` | preserved | peer verification |
+
+### The `websocket.http` Sub-Block
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `http.error` | `string` | empty | cleared if WS is disabled | HTTP error body |
+| `http.request` | `map<string,string>` | empty | cleared if WS is disabled | client request-header decoration |
+| `http.response` | `map<string,string>` | empty | cleared if WS is disabled | server response-header decoration |
+
+### Admission-Control Rules
+
+`Loaded()` applies this sequence:
+
+1. validate `host` as a domain name
+2. validate `path` as a non-empty slash-prefixed path
+3. if either is invalid, disable both WS and WSS
+4. if the WSS certificate set fails verification, disable WSS only
+5. if WSS is disabled, clear certificate-related fields
+6. if WS is disabled, clear `host`, `path`, and `http.*`
+
+That means WebSocket configuration is not “whatever the file said.” It must pass a structural admission pass.
+
+## The `vmem` Block
+
+The `vmem` block controls `BufferswapAllocator` behavior.
+
+### Parameter Table
+
+| Field | Type | Default | Normalization | Platform Difference | Meaning |
+|---|---|---|---|---|---|
+| `vmem.size` | `int64` | `0` unless supplied | `<1` disables the whole block | all | size |
+| `vmem.path` | `string` | empty | empty path disables the whole block | Windows and non-Windows differ later | storage path |
+
+### Actual Allocator Creation Behavior
+
+In `main.cpp::LoadConfiguration(...)`:
+
+- on Windows, allocator creation depends mainly on `size > 0`
+- on non-Windows, both `path` and `size` must be valid
+
+### Usage Advice
+
+- if allocator behavior is not yet understood, leave `vmem` disabled first
+- when enabling it, define path, capacity, and platform expectations explicitly
+
+## The `server` Block
+
+The `server` block defines node identity and server capability posture.
+
+### Top-Level Server Fields
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `server.log` | `string` | empty | rewritten to full path | log path |
+| `server.node` | `int` | `0` | `<0` corrected to `0` | node identifier |
+| `server.subnet` | `bool` | `true` | preserved | subnet forwarding enabled |
+| `server.mapping` | `bool` | `true` | preserved | mappings enabled |
+| `server.backend` | `string` | empty | trimmed | managed backend URL |
+| `server.backend-key` | `string` | empty | trimmed | backend authentication key |
+
+### The `server.ipv6` Sub-Block
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `mode` | `string/enum` | `None` | normalized through `NormalizeIPv6Mode(...)` | IPv6 mode |
+| `cidr` | `string` | empty | parsed as CIDR | prefix input |
+| `prefix-length` | `int` | `128` | clamped to `0..128`, may disable service if invalid | prefix width |
+| `gateway` | `string` | empty | must sit inside prefix or be cleared/derived | IPv6 gateway |
+| `dns1` | `string` | empty | trimmed and validated | IPv6 DNS1 |
+| `dns2` | `string` | empty | trimmed and validated | IPv6 DNS2 |
+| `lease-time` | `int` | `300` | corrected upward from invalid values | lease time |
+| `static-addresses` | `map<string,string>` | empty | GUID, address, prefix-match, and dedupe validation | static bindings |
+
+### IPv6 Mode Enumeration
+
+| Value | Meaning | Current Code Support | Notes |
+|---|---|---|---|
+| empty or unset | None | supported | no server-side IPv6 service |
+| `nat66` | NAT66 | supported | default ULA `/64` may be derived |
+| `gua` | Global Unicast Assignment | supported | requires a genuine GUA prefix |
+
+### Key IPv6 Admission Rules
+
+| Rule | Behavior | Result |
+|---|---|---|
+| 1 | current platform lacks server IPv6 data plane support | IPv6 service disabled |
+| 2 | `nat66` with no prefix | default `fd42:4242:4242::/64` derived |
+| 3 | `gua` but prefix is not global-unicast | IPv6 service disabled |
+| 4 | invalid prefix length | IPv6 service disabled |
+| 5 | gateway outside prefix | gateway cleared or re-derived |
+| 6 | static address outside prefix or colliding with gateway | static entry discarded |
+
+## The `client` Block
+
+The `client` block is a composite model of client identity, attachment, local services, mapping behavior, and routing inputs.
+
+### Top-Level Client Fields
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `client.guid` | `string` | all-ones sentinel GUID | empty value reset to sentinel | client identity |
+| `client.server` | `string` | empty | trimmed | remote server address |
+| `client.server-proxy` | `string` | empty | trimmed | upstream proxy used to reach the server |
+| `client.bandwidth` | `int64` | `0` | preserved | bandwidth hint or limit |
+| `client.reconnections.timeout` | `int` | `PPP_TCP_CONNECT_TIMEOUT` | `<1` resets to default | reconnect wait time |
+
+### The `client.http-proxy` Sub-Block
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `bind` | `string` | empty | invalid address cleared | bind address |
+| `port` | `int` | `PPP_DEFAULT_HTTP_PROXY_PORT` | invalid port zeroed | local HTTP proxy port |
+
+### The `client.socks-proxy` Sub-Block
+
+| Field | Type | Default | Normalization | Meaning |
+|---|---|---|---|---|
+| `bind` | `string` | empty | invalid address cleared | bind address |
+| `port` | `int` | `PPP_DEFAULT_SOCKS_PROXY_PORT` | invalid port zeroed | local SOCKS port |
+| `username` | `string` | empty | trimmed | SOCKS username |
+| `password` | `string` | empty | trimmed | SOCKS password |
+
+### Windows-Only `paper-airplane`
+
+| Field | Type | Default | Platform | Meaning |
+|---|---|---|---|---|
+| `client.paper-airplane.tcp` | `bool` | `true` | Windows | PaperAirplane TCP behavior |
+
+### `client.mappings`
+
+| Field | Type | Required | Normalization | Meaning |
+|---|---|---|---|---|
+| `local-ip` | `string` | yes | invalid values discard the whole entry | local service address |
+| `local-port` | `int` | yes | invalid values discard the whole entry | local service port |
+| `protocol` | `string` | yes | anything other than `udp` becomes TCP semantics | protocol |
+| `remote-ip` | `string` | yes | invalid values discard the whole entry | externally visible address |
+| `remote-port` | `int` | yes | invalid values discard the whole entry | externally visible port |
+
+### `client.routes`
+
+| Field | Type | Platform Difference | Meaning |
+|---|---|---|---|
+| `name` | `string` | general | route rule name |
+| `nic` | `string` | especially relevant on Linux | interface selection |
+| `ngw` | `string` | general | gateway selection |
+| `path` | `string` | general | local route file |
+| `vbgp` | `string` | general | online route source |
+
+### `LoadAllMappings(...)` Admission Behavior
+
+For each mapping, the loader checks:
+
+- protocol legality
+- local and remote port ranges
+- local and remote IP parsing
+- non-multicast requirement
+- address validity
+
+It also deduplicates mappings using endpoint-keyed maps. In other words: **mappings are not blindly accepted just because they appear in JSON.**
 
 ## Trimming And String Normalization
 
-`AppConfiguration.cpp` contains `LRTrim(...)` helpers which normalize many strings after loading.
+The load path performs significant `LTrim` and `RTrim` normalization. This is not glamorous, but it is part of why the runtime is predictable.
 
-These functions trim:
+### Typical Fields That Are Trimmed
 
-- address hints
-- backend URLs and keys
-- log path
-- IPv6 strings
-- client GUID and server strings
-- proxy bind strings and credentials
-- WebSocket host and path
-- cipher names and key strings
-- SSL certificate paths and ciphersuite text
+| Category | Example Fields |
+|---|---|
+| address hints | `ip.public`, `ip.interface` |
+| backend | `server.backend`, `server.backend-key` |
+| IPv6 | `server.ipv6.cidr`, `gateway`, `dns1`, `dns2` |
+| client identity and reachability | `client.guid`, `client.server`, `client.server-proxy` |
+| proxies | `client.http-proxy.bind`, `client.socks-proxy.*` |
+| WebSocket | `host`, `path`, certificate paths, cipher suites |
+| key data | `protocol`, `protocol-key`, `transport`, `transport-key` |
 
-This is not glamorous logic, but it is one of the reasons the runtime is more predictable than a raw JSON-to-struct system. Many future failures are reduced simply by ensuring the strings are normalized before deeper validation begins.
+### Practical Meaning For Operators
 
-## Mapping Loading Is Not Blind Copying
+This makes it much less likely that leading or trailing whitespace from copy-paste accidents becomes a hidden runtime problem.
 
-`LoadAllMappings(...)` is a good example of the configuration model being actively validated.
+## Port Normalization Summary
 
-For each client mapping entry, the loader checks:
+The following ports are all actively validated and zeroed when invalid:
 
-- whether the protocol is TCP or UDP
-- whether local and remote ports are valid
-- whether local and remote IP strings exist
-- whether those IP strings parse successfully
-- whether the addresses are valid and non-multicast
+| Field | Role Or Plane |
+|---|---|
+| `tcp.listen.port` | native TCP listener |
+| `websocket.listen.ws` | WS listener |
+| `websocket.listen.wss` | WSS listener |
+| `client.http-proxy.port` | client local HTTP proxy |
+| `client.socks-proxy.port` | client local SOCKS proxy |
+| `udp.listen.port` | UDP listener |
+| `cdn[0]`, `cdn[1]` | CDN ingress hints |
 
-It also deduplicates mappings by storing them through endpoint-keyed maps before moving them into the final `client.mappings` vector.
+This means an invalid port does not survive as a maybe-working configuration. The runtime removes the corresponding service surface.
 
-This tells us something important about the configuration philosophy of the project: invalid entries are not treated as sacred user intention. The loader will ignore what it cannot normalize into a coherent runtime rule.
+## Configuration Repair Versus Configuration Disablement
 
-## The Purpose Of `Loaded()`
+One of the most important ways to read `Loaded()` is to distinguish two normalization strategies.
 
-After raw JSON ingestion, `AppConfiguration::Loaded()` performs the real normalization pass.
+### Strategy One: Repair And Fall Back To Defaults
 
-This function is one of the most important configuration functions in the project because it transforms raw loaded values into a runtime-safe configuration model.
+Used when a value is wrong but can safely return to a baseline.
 
-Its work can be grouped into several classes.
+Examples:
 
-### 1. Numeric defaulting and clamping
+- `concurrent < 1`
+- TCP backlog too small
+- invalid timeout values
+- unsupported cipher names
+- empty key strings
 
-The loader corrects:
+### Strategy Two: Disable The Feature
 
-- `concurrent`
-- `server.node`
-- `server.ipv6.prefix_length`
-- DNS timeout and TTL
-- TCP backlog, connect timeout, connect jitter, inactive timeout
-- mux connect timeout, inactive timeout, congestion window configuration
-- static aggreglator value
-- keepalive arrays
+Used when the configuration does not form a coherent feature model and guessing would be riskier than turning it off.
 
-This makes the runtime much less sensitive to malformed or under-specified numeric input.
+Examples:
 
-### 2. String normalization
+- invalid WebSocket host/path disables WS/WSS
+- invalid WSS certificate disables WSS
+- no server IPv6 data-plane support on the platform disables IPv6 service
+- invalid listener ports zero the listener path
 
-The trim pass runs before later parsing, reducing accidental whitespace-based invalidation or silent mismatch.
+This distinction is critical during troubleshooting because some bad input is silently repaired while other bad input removes entire features.
 
-### 3. Port sanitization
+## Platform Difference Notes
 
-Port fields across TCP, WS, WSS, proxy listeners, and UDP are checked to ensure they fall into valid ranges. Invalid ports are zeroed to `IPEndPoint::MinPort`, effectively disabling the corresponding listener or local service path.
+### Windows
 
-### 4. Address sanitization
+Windows has one explicit additional configuration field:
 
-Several IP-like strings are parsed and normalized:
+- `client.paper-airplane.tcp`
 
-- `ip.public`
-- `ip.interface`
-- client HTTP proxy bind address
-- client SOCKS proxy bind address
+It defaults to `true` in `Clear()` on Windows builds.
 
-If parsing fails or the resulting address is invalid in project terms, the string is cleared.
+That shows that the configuration model is not perfectly flattened across all platforms. The project permits platform-native long-lived fields where the runtime actually needs them.
 
-This means invalid address text does not remain as a latent string bug waiting to explode later.
+### Linux
 
-## IPv6 Configuration Is Heavily Normalized
+On Linux, many local host-network shaping decisions are expressed through CLI more than through `AppConfiguration` itself. But server IPv6 data-plane support still affects configuration admission directly. In practice, the same JSON file can produce different effective runtime results on Linux and non-Linux platforms.
 
-The IPv6 block deserves special attention because it is one of the richest examples of active configuration shaping in the project.
+### Non-Linux Server IPv6 Behavior
 
-The normalization logic includes:
+`SupportsServerIPv6DataPlane()` currently makes the platform distinction explicit:
 
-- mode normalization through `NormalizeIPv6Mode(...)`
-- disabling IPv6 entirely if the platform does not support the server data plane
-- parsing the configured CIDR string into prefix plus prefix length
-- providing a default NAT66 prefix if NAT66 mode is enabled but no prefix is supplied
-- rejecting prefix lengths `<= 0` or `>= 128`
-- validating that GUA mode actually uses a global-unicast prefix
-- validating the configured gateway and clearing it if it falls outside the prefix
-- computing a first-host gateway automatically if a valid gateway is not explicitly supplied
-- validating static addresses against the prefix
-- rejecting static addresses that collide with the effective gateway
-- deduplicating normalized static IPv6 addresses
+- Linux returns `true`
+- other platforms return `false`
 
-This is far more than a field list. The runtime is actively turning IPv6 configuration into a coherent, enforceable service model.
+For server IPv6, this is not a small performance difference. It is a question of whether the feature can enter the final effective runtime model at all.
 
-```mermaid
-flowchart TD
-    A[server.ipv6 raw input] --> B[normalize mode]
-    B --> C{platform supports server IPv6?}
-    C -->|no| D[disable IPv6 service]
-    C -->|yes| E[parse CIDR]
-    E --> F[validate prefix length and prefix type]
-    F --> G[validate or derive gateway]
-    G --> H[normalize static addresses]
-    H --> I[final IPv6 server model]
+## Recommended Configuration Practices
+
+### Practice One: Separate Configuration By Role
+
+Do not keep a permanently mixed client/server file and expect CLI to cleanly sort out all intent.
+
+Recommended:
+
+- `server.json`
+- `client.json`
+- `backend.json`
+
+### Practice Two: Treat Route And DNS Inputs As Configuration Assets
+
+For example:
+
+- `ip.txt`
+- `dns-rules.txt`
+- route list files
+- `virr` input sources
+
+They should not be loose temporary files. They should be versioned and owned.
+
+### Practice Three: Stabilize Basic Configuration Before Tuning Advanced Blocks
+
+Recommended order:
+
+1. define the carrier and listener surface
+2. define route and DNS behavior
+3. then decide local proxies and mappings
+4. only then decide static mode, MUX, IPv6, and backend integration
+
+## The Three Most Common Outcomes Of Bad Configuration
+
+### Outcome One: Automatic Fallback To Defaults
+
+Examples include timeout values, backlog values, and unsupported cipher names.
+
+### Outcome Two: Field Clearing
+
+Examples include invalid addresses, invalid DNS redirect targets, and broken WebSocket certificate state.
+
+### Outcome Three: Whole-Feature Disablement
+
+Examples include:
+
+- WS/WSS entirely disabled
+- WSS disabled
+- IPv6 service entirely disabled
+
+## Minimal Skeleton Examples
+
+### Minimal Server Configuration Skeleton
+
+```json
+{
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
+  "server": {
+    "subnet": true,
+    "mapping": true,
+    "backend": "",
+    "backend-key": ""
+  }
+}
 ```
 
-## Why IPv6 Can Be Disabled Even When Configured
-
-This is a subtle but important operator point.
-
-A user may configure IPv6, but the loader can still disable it if:
-
-- the current platform does not support the server-side IPv6 data plane
-- the prefix is invalid
-- GUA mode does not actually use a global-unicast prefix
-- the prefix length is outside the valid operating range
-
-This means “configured” does not automatically mean “accepted.” The configuration layer in OPENPPP2 behaves more like an admission system than a passive parser.
-
-## Cipher Selection Normalization
-
-The loader explicitly validates whether the configured protocol and transport cipher names are supported.
-
-If not:
-
-- `config.key.protocol` is reset to `PPP_DEFAULT_KEY_PROTOCOL`
-- `config.key.transport` is reset to `PPP_DEFAULT_KEY_TRANSPORT`
-
-It also ensures that empty key strings are replaced with defaults.
-
-This is important because the transmission layer assumes these fields correspond to real supported cipher implementations. Rather than letting an invalid cipher name survive until runtime I/O fails later, the configuration loader repairs the configuration upfront.
-
-## WebSocket Configuration Is Also Admission-Controlled
-
-The WebSocket block is another place where configuration is actively accepted or denied.
-
-The loader checks:
-
-- whether `websocket.host` is a domain address
-- whether `websocket.path` exists and begins with `/`
-- whether the SSL certificate triplet verifies successfully for WSS
-
-If host or path are invalid:
-
-- both WS and WSS listeners are disabled
-
-If the certificate material is invalid:
-
-- WSS listener is disabled
-
-Then, depending on which listeners remain enabled, the loader clears related fields:
-
-- if WSS is disabled, certificate files and password are cleared
-- if WS is disabled, host, path, and HTTP decoration fields are cleared
-
-This means the WebSocket block behaves almost like a little self-normalizing subsystem rather than a dumb JSON object.
-
-## DNS Redirect Normalization
-
-The loader validates `udp.dns.redirect` by parsing it as an endpoint-like value.
-
-If parsing fails, or if the destination is neither a valid IP nor a valid domain according to project rules, the redirect string is cleared.
-
-That means DNS redirect behavior is enabled only when the configured target survives a structured validation pass.
-
-## Virtual Memory Buffer Configuration
-
-The `vmem` block controls whether a `BufferswapAllocator` backed by virtual-memory workspace is created.
-
-The normalization rule is simple but important:
-
-- if path is empty or size is less than one, virtual-memory workspace is disabled by clearing both path and size
-
-Then in `main.cpp::LoadConfiguration(...)`, allocator creation occurs only if:
-
-- on Windows: `vmem.size > 0`
-- on non-Windows: both `vmem.path` and `vmem.size` are present
-
-The allocator size is then expanded into bytes with a minimum threshold.
-
-This means `vmem` is not purely declarative. It directly influences the buffer allocation strategy used later by transport and packet code.
-
-## `kf`, `kh`, `kl`, `kx`, And `sb` Are Not Left Untouched
-
-The loader corrects several key-behavior values.
-
-- `kh` is clamped into `0..16`
-- `kl` is clamped into `0..16`
-- `kx` is clamped to at least zero
-- `sb` is clamped into the legal skateboarding range derived from buffer constants
-
-Then the loader computes two LCG modulus values:
-
-- `LCGMOD_TYPE_TRANSMISSION`
-- `LCGMOD_TYPE_STATIC`
-
-These later drive header-length and packet-format mapping behavior in the transmission and static packet code.
-
-This is one of the best examples of the configuration system not just storing numbers, but preparing derived state that the runtime depends on heavily.
-
-## Defaulting Versus Disabling
-
-When reading the configuration code, it helps to distinguish two different normalization strategies.
-
-### Defaulting
-
-Used when an absent or invalid value should fall back to a safe or conventional baseline.
-
-Examples:
-
-- TCP backlog
-- timeouts
-- default key strings
-- NAT66 default prefix when mode is enabled but CIDR is absent
-
-### Disabling
-
-Used when an invalid configuration should turn the feature off rather than guess.
-
-Examples:
-
-- invalid WS host or path disables WS and WSS listeners
-- invalid WSS certificates disable WSS
-- unsupported platform IPv6 server path disables IPv6 server mode
-- invalid ports are zeroed to effectively disable listeners
-
-This distinction is important for operators because it affects debugging expectations. Some bad inputs are repaired. Some bad inputs cause the feature to disappear.
-
-## Client Block: What It Really Means
-
-The `client` block is not only “where the remote server address lives.” It is actually a packed description of the client-side environment and behavior.
-
-It includes:
-
-- client identity through `guid`
-- server address and optional upstream proxy behavior
-- bandwidth shaping hints
-- reconnection timeout behavior
-- local HTTP proxy bind and port
-- local SOCKS proxy bind, port, and credentials
-- mapping declarations
-- route-file declarations
-- Windows-specific paper-airplane behavior
-
-That means the client block is partly transport, partly identity, partly local service exposure, and partly route policy input.
-
-## Server Block: What It Really Means
-
-The `server` block is the declarative shell around server-side node behavior.
-
-It includes:
-
-- node identity or node number
-- local log path
-- subnet forwarding capability
-- whether mappings are allowed
-- backend URL and backend key
-- IPv6 server behavior
-
-A good mental model is that the server block defines how much of the server behaves as a pure tunnel acceptor and how much behaves as a policy node with external backend cooperation and IPv6 service features.
-
-## WebSocket Block: More Than A Port List
-
-The WebSocket block often gets underestimated. It actually describes an HTTP-facing edge personality for the node.
-
-It includes:
-
-- WS and WSS listen ports
-- required host name
-- required path
-- TLS certificate files and ciphersuite behavior
-- request and response header decoration
-- HTTP error response content
-
-That means the WebSocket block is not merely “open a WebSocket server.” It is how OPENPPP2 adapts itself to HTTP-facing edge infrastructure.
-
-## UDP Block: More Than Datagram Enablement
-
-The UDP block covers several distinct concepts:
-
-- UDP listener behavior
-- UDP inactivity behavior
-- DNS helper behavior
-- static UDP path behavior
-
-The static subsection includes:
-
-- keepalive range
-- whether DNS, QUIC, and ICMP behaviors participate
-- aggligator behavior
-- static upstream server list
-
-This means the UDP block is really a family of related but not identical concerns.
-
-## MUX Block
-
-The `mux` block is small, but it shapes a feature that should not be underestimated.
-
-It controls:
-
-- mux connect timeout
-- mux inactivity timeout
-- congestion behavior
-- mux keepalive window
-
-Because MUX is an additional logical-channel structure rather than just a boolean, these values can materially influence how stable and aggressive mux behavior is in real deployments.
-
-## `ip.public` And `ip.interface`
-
-These two fields are easy to gloss over, but they are useful deployment hints rather than core protocol mechanics.
-
-They are normalized as addresses where possible and cleared when invalid.
-
-In practice, these fields are part of deployment identity and address-hinting behavior, not part of the protected transmission logic.
-
-## Command-Line Overrides Are Not Random
-
-The CLI does not override everything. It focuses heavily on local launch shaping.
-
-Typical override areas include:
-
-- role selection
-- config path selection
-- local DNS list
-- preferred NIC and gateway
-- TUN name and addresses
-- static and mux enablement
-- bypass files and DNS rules
-- firewall-rules file
-
-This supports a useful operational pattern:
-
-- stable node identity and policy in JSON
-- deployment-specific local shaping through CLI
-
-## Minimal Viable Configuration: Server
-
-A truly minimal usable server configuration still needs several coherent elements.
-
-At minimum, think in terms of:
-
-- one active carrier listener path such as TCP, UDP, WS, or WSS
-- a coherent `key` block
-- a meaningful `server.node`
-- any required backend integration or firewall policy
-
-Even if the file is syntactically valid, the runtime is not operationally useful unless those elements form a consistent server role.
-
-## Minimal Viable Configuration: Client
-
-At minimum, the client side needs:
-
-- a stable `client.guid`
-- a usable `client.server` target
-- local tunnel address behavior via JSON or CLI
-- any route or DNS policy inputs needed for the actual deployment style
-
-Again, this is a good example of why OPENPPP2 should be documented as infrastructure software. Minimal syntax validity is not the same thing as minimal deployability.
-
-## Secret Handling
-
-Several configuration items should be treated as secrets or sensitive operational material.
-
-These include:
-
-- `protocol-key`
-- `transport-key`
-- `server.backend-key`
-- proxy credentials in `client.server-proxy`
-- TLS private-key password
-- backend database credentials when the Go backend is in use
-
-Configuration guidance should therefore always distinguish:
-
-- example values for demonstration
-- real production secret material
-
-## Practical Operator Recommendations
-
-The most robust operator habits for OPENPPP2 are:
-
-1. keep one configuration per role and per environment
-2. do not mix test secrets with production secrets
-3. validate WebSocket host, path, and certificate material together
-4. validate IPv6 mode, prefix, and gateway as a set, not as isolated fields
-5. treat route files and DNS rules as policy artifacts
-6. let the configuration loader’s disable behavior guide debugging when a feature silently vanishes
-
-## Reading Guidance For Developers
-
-If you want to understand the configuration subsystem deeply, read the code in this order:
-
-1. `AppConfiguration::Clear()`
-2. string trimming helpers
-3. mapping loader helpers
-4. `AppConfiguration::Loaded()`
-5. `AppConfiguration::Load(const string&)`
-6. `main.cpp::LoadConfiguration(...)`
-7. `main.cpp::PreparedArgumentEnvironment(...)`
-8. `main.cpp::GetNetworkInterface(...)`
-
-That order lets you see:
-
-- raw defaults
-- normalization
-- derived-state computation
-- runtime-local shaping
-
-## Final Interpretation
-
-The configuration model of OPENPPP2 should be understood as an active normalization layer between operator intent and runtime behavior. It is not a passive struct dump.
-
-It does all of the following:
-
-- fills defaults
-- trims and canonicalizes strings
-- validates addresses and ports
-- rejects or disables invalid feature blocks
-- computes derived framing constants
-- normalizes IPv6 service state
-- prepares the runtime to start with coherent policy instead of raw JSON text
-
-That is exactly the kind of behavior expected from infrastructure software that wants to remain debuggable and operable under complex deployment conditions.
+### Minimal Client Configuration Skeleton
+
+```json
+{
+  "client": {
+    "guid": "{F4569208-BB45-4DEB-B115-0FEA1D91B85B}",
+    "server": "ppp://127.0.0.1:20000/",
+    "server-proxy": "",
+    "bandwidth": 0,
+    "reconnections": { "timeout": 5 }
+  }
+}
+```
+
+### WebSocket-Oriented Server Skeleton
+
+```json
+{
+  "websocket": {
+    "host": "vpn.example.com",
+    "path": "/tun",
+    "listen": {
+      "ws": 20080,
+      "wss": 20443
+    },
+    "ssl": {
+      "certificate-file": "server.pem",
+      "certificate-key-file": "server.key",
+      "certificate-chain-file": "chain.pem",
+      "certificate-key-password": "secret"
+    }
+  }
+}
+```
 
 ## Related Documents
 
-- [`USER_MANUAL.md`](USER_MANUAL.md)
 - [`CLI_REFERENCE.md`](CLI_REFERENCE.md)
+- [`USER_MANUAL.md`](USER_MANUAL.md)
 - [`TRANSMISSION.md`](TRANSMISSION.md)
 - [`SECURITY.md`](SECURITY.md)
+- [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
+- [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
 - [`DEPLOYMENT.md`](DEPLOYMENT.md)

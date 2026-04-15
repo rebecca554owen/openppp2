@@ -515,6 +515,114 @@ Third, do not enable every optional plane at once unless the site actually needs
 
 is not merely feature-rich. It is operationally complex, and should be introduced in layers.
 
+## Detailed Architecture Considerations
+
+### Understanding The Data Plane Flow
+
+The data plane in OPENPPP2 represents the core forwarding engine that moves packets between the virtual network interface and the transport tunnel. When operating in client mode, packets arriving at the virtual adapter are encrypted and transmitted to the server through the established tunnel. Conversely, encrypted packets received from the server are decrypted and injected back into the local network through the virtual adapter. This bidirectional flow requires careful coordination between multiple components including the packet encoder/decoder, session manager, and the underlying transport mechanism. The efficiency and reliability of this data plane directly impacts the user experience, making it essential to understand how these components interact during normal operation and failure scenarios.
+
+In server mode, the data plane expands to handle multiple concurrent client sessions, each with its own encrypted tunnel. The server must maintain per-session state including encryption keys, sequence numbers, and routing information. The `VirtualEthernetSwitcher` component serves as the central orchestrator, managing acceptors for incoming connections, maintaining the mapping between client sessions and their respective virtual network segments, and coordinating the static packet path when enabled. This multi-session architecture places significant demands on CPU and memory resources, particularly when serving large numbers of simultaneous clients.
+
+### Session Management And Lifecycle
+
+Each tunnel session follows a well-defined lifecycle from establishment through graceful shutdown or unexpected disconnection. Upon initial connection, the client and server perform a handshake involving protocol negotiation, key exchange, and capability advertisement. The successful completion of this handshake results in an active session with associated state. During the active phase, the session handles bidirectional packet flow while maintaining liveness through keepalive mechanisms. When the session terminates, whether intentionally or due to network failure, cleanup procedures release all associated resources including memory allocations, network handles, and any registered mappings.
+
+The session lifecycle has direct implications for deployment reliability. Network interruptions that exceed the configured timeout result in session expiration, requiring clients to re-establish connections. For production deployments, this behavior necessitates proper reconnection logic in client applications or network infrastructure designed to minimize disruptive events. Additionally, the handling of partial states, such as sessions that crash without proper cleanup, requires configuration of appropriate garbage collection intervals to prevent resource leaks.
+
+### Network Namespace And Isolation
+
+On Linux servers, OPENPPP2 can leverage network namespaces to provide enhanced isolation between different routing domains. The namespace cache functionality allows the server to maintain separate network contexts for different client groups, enabling scenarios where clients from distinct organizations or security domains are prevented from directly communicating with each other. This isolation is particularly valuable in managed deployment scenarios where the operator serves multiple tenants from a single infrastructure.
+
+The namespace implementation involves creating isolated network stacks with their own routing tables, firewall rules, and network interfaces. When a client connects, the server assigns it to an appropriate namespace based on authentication credentials or configuration policy. Packets from clients in different namespaces are processed independently, with the namespace boundaries enforced at both the routing and firewall layers. This architecture supports multi-tenant deployments where strong isolation guarantees are required.
+
+### Transport Protocol Considerations
+
+The choice of transport protocol significantly impacts deployment characteristics and operational requirements. TCP-based transport provides reliable, ordered delivery but introduces overhead from the TCP header and may suffer from head-of-line blocking when packet loss occurs. WebSocket (WS) transport adds an additional framing layer on top of TCP, enabling deployment behind HTTP-aware intermediaries such as load balancers and web proxies. WebSocket Secure (WSS) adds TLS encryption, providing transport security and the ability to traverse most corporate firewalls that permit HTTPS traffic.
+
+UDP-based transport, particularly when used with the static packet mode, offers lower latency and better resistance to head-of-line blocking. However, UDP transport requires application-level handling for packet ordering, loss detection, and retransmission. The static packet mode addresses these concerns by implementing a simplified reliability mechanism suitable for scenarios where timely delivery takes precedence over perfect reliability. Understanding these tradeoffs is essential for selecting the appropriate transport configuration for a given deployment scenario.
+
+### Firewall Integration Patterns
+
+OPENPPP2 integrates with platform-specific firewall mechanisms to enforce policy and protect the server infrastructure. On Windows, the server can leverage the Windows Firewall API to create and manage rules that control access to listener ports and virtual adapter interfaces. On Linux, iptables and ip6tables provide the foundation for packet filtering, with OPENPPP2 capable of automatically installing rules for port forwarding, NAT, and connection tracking.
+
+The firewall integration extends beyond simple access control to include advanced scenarios such as traffic shaping and intrusion detection. For deployments requiring fine-grained control, custom firewall rule files can be provided to implement organization-specific policies. However, the complexity of firewall configuration management increases operational burden, and misconfigured rules can result in either overly permissive security postures or unintended service disruptions. Production deployments should establish clear processes for firewall rule changes and maintain documentation of the rationale behind each rule.
+
+### High Availability Considerations
+
+Deployments requiring high availability must address multiple potential failure points including server process crashes, machine failures, network partitions, and backend service unavailability. For the C++ server component, process supervision frameworks such as systemd on Linux or Windows Service Manager provide automatic restart capabilities. At the infrastructure level, redundant server deployments with load balancing enable continued service during individual server outages. The selection between active-active and active-passive configurations depends on requirements for capacity, consistency, and operational complexity.
+
+The managed backend introduces additional HA considerations due to its external dependencies on Redis and MySQL. Redis provides fast state distribution and session caching but supports different replication topologies with varying consistency guarantees. MySQL serves as the authoritative data store for user accounts, configuration, and accounting records, requiring appropriate replication and backup strategies. The deployment architecture must account for backend maintenance windows and failure scenarios, with clear procedures for failover and recovery documented and tested.
+
+### Monitoring And Observability
+
+Effective operational management requires comprehensive monitoring covering server health, session statistics, resource utilization, and security events. OPENPPP2 exports various metrics through its logging system, which can be integrated with popular monitoring platforms through log aggregation and analysis tools. Key metrics include active session counts, packet throughput, latency distributions, error rates, and authentication failures.
+
+Beyond basic metrics, production deployments benefit from distributed tracing capabilities that enable correlation of events across client and server components. Tracing information proves invaluable for diagnosing performance issues and understanding the flow of requests through complex multi-tier deployments. The logging system supports configurable verbosity levels, allowing operators to balance storage requirements against diagnostic needs. Audit logging for security-relevant events such as authentication attempts and configuration changes supports compliance requirements in regulated environments.
+
+## Security Deployment Considerations
+
+### Transport Security
+
+All production deployments should enable TLS encryption for transport security. The WSS listener provides encrypted communication between clients and servers, protecting data confidentiality and integrity against network eavesdropping and tampering. Certificate management becomes a critical operational task, requiring procedures for certificate issuance, renewal, and revocation. The deployment must address certificate validation to prevent man-in-the-middle attacks, including proper configuration of trusted certificate authorities and certificate hostname validation.
+
+For deployments requiring additional security layers, certificate client authentication can be configured to require clients to present valid certificates during the TLS handshake. This provides strong authentication guarantees and eliminates the risk of credential theft through network observation. However, certificate client authentication introduces operational complexity for client provisioning and certificate lifecycle management. The appropriate balance depends on the threat model and operational capabilities of the deployment.
+
+### Secrets Management
+
+The configuration file contains sensitive material including transport keys, backend credentials, and TLS private keys. Production deployments must implement proper secrets management practices to protect this information. This includes filesystem permissions restricting access to authorized administrators and deployment processes, encryption at rest for configuration files stored in backups or version control, and secure transmission when configuration files are provisioned to target hosts.
+
+Environment-specific configuration should be generated from templates during deployment rather than storing multiple variants in version control. Secret injection mechanisms such as environment variables or external secrets services can be integrated with the configuration loading process to minimize the exposure of sensitive values. Regular rotation of secrets including transport keys and backend credentials reduces the impact of potential credential compromise.
+
+### Network Isolation
+
+Beyond transport security, network isolation through firewall rules and network segmentation provides defense in depth. The server should be deployed in a network zone with controlled access, with firewall rules permitting only necessary traffic flows. Listener ports should be restricted to expected client source networks, preventing enumeration and unauthorized access attempts. The managed backend components should be placed in separate network zones with access controls limiting communication to authorized server infrastructure.
+
+For multi-tenant deployments, network namespace isolation ensures that traffic from different tenants does not intersect inappropriately. Combined with encryption and authentication, network isolation provides multiple layers of protection against both external attackers and internal threats from compromised tenant systems.
+
+### Access Control And Authentication
+
+The authentication mechanism determines how clients prove their identity to the server. OPENPPP2 supports multiple authentication methods with different security properties. Token-based authentication uses shared secrets configured in the configuration file, providing simplicity but requiring secure distribution and storage of the token values. Certificate-based authentication offers stronger guarantees through cryptographic key pairs, but requires public key infrastructure for certificate issuance and validation.
+
+The managed backend provides additional authentication capabilities through integration with user databases and external identity providers. This enables scenarios requiring centralized access control, audit trails, and integration with enterprise identity management systems. The choice of authentication mechanism should align with the overall security architecture and operational capabilities of the deployment.
+
+## Performance Optimization
+
+### Resource Allocation
+
+Proper resource allocation ensures consistent performance under load. The server requires sufficient CPU resources to handle encryption, packet processing, and session management for expected client loads. Memory requirements scale with the number of concurrent sessions and the configured buffer sizes. Network bandwidth must accommodate the expected traffic volume plus protocol overhead, with headroom for traffic bursts.
+
+For high-capacity deployments, horizontal scaling through multiple server instances behind load balancers provides additional capacity. The load balancing strategy should consider session persistence requirements to ensure clients maintain consistent paths through the infrastructure. Connection draining during server maintenance prevents disruption to active sessions during deployments and upgrades.
+
+### Protocol Optimization
+
+Protocol parameters can be tuned to optimize performance for specific network conditions and traffic patterns. TCP buffer sizes affect throughput and latency, with larger buffers enabling higher throughput at the cost of increased memory usage and latency variance. Keepalive intervals balance between quick detection of failed connections and the overhead of unnecessary keepalive traffic. The static packet mode parameters including retry counts and timeouts should be tuned for the expected network characteristics.
+
+For latency-sensitive deployments, the UDP-based static packet mode may provide better performance than TCP transport. The tradeoffs between reliability and latency depend on the application requirements. Testing under realistic conditions identifies optimal parameter values before production deployment.
+
+### Monitoring And Capacity Planning
+
+Ongoing monitoring supports capacity planning and early detection of performance degradation. Tracking session counts, throughput, latency percentiles, and resource utilization over time reveals trends that inform capacity expansion decisions. Alerting on threshold violations enables proactive response before user-impacting performance degradation occurs.
+
+Capacity planning should account for expected growth and seasonal traffic patterns. Regular review of utilization trends identifies when additional server capacity or infrastructure upgrades are needed. The monitoring system should capture sufficient historical data to support trend analysis while managing storage requirements.
+
+## Disaster Recovery And Business Continuity
+
+### Backup And Restore
+
+Configuration and state backup protects against data loss from infrastructure failures or operational errors. Configuration files should be backed up as part of the deployment process, with version history enabling rollback to known-good states. The managed backend databases require regular backups with tested restore procedures. Redis state can be recovered from database snapshots or reconstructed from authoritative sources.
+
+Testing backup and restore procedures validates that backups are complete and restorable. Regular restore tests should be performed to ensure that backup media are functional and that personnel are familiar with restoration procedures. Documentation of restore procedures reduces stress and error rates during actual recovery events.
+
+### Failure Scenarios And Procedures
+
+Documented procedures for common failure scenarios enable rapid, consistent recovery. Server process failures typically resolve through automatic restart by the supervisor, with investigation of root cause following service restoration. Network connectivity failures may require investigation of network infrastructure and potential configuration changes to restore connectivity.
+
+More significant incidents such as complete server loss require deployment of replacement infrastructure. Deployment automation through configuration management tools enables rapid provisioning of replacement servers. Runbooks documenting the steps required to recover from various failure scenarios reduce mean time to recovery and prevent errors during incident response.
+
+### Communication Plans
+
+Incident communication plans ensure that stakeholders receive timely, accurate information during outages. Designation of incident commanders and communication responsibilities before incidents occur enables organized response. Regular updates during incidents keep stakeholders informed of progress and expected resolution times. Post-incident reviews identify improvement opportunities and drive process refinement.
+
 ## Related Documents
 
 - [`CONFIGURATION.md`](CONFIGURATION.md)
