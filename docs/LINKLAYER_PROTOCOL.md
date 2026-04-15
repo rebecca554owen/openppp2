@@ -8,149 +8,52 @@ This document describes the internal tunnel opcode protocol implemented by `Virt
 
 ## Why This Layer Exists
 
-OPENPPP2 needs one shared protocol vocabulary for:
+OPENPPP2 needs one shared vocabulary for session information, keepalive, LAN/NAT signaling, TCP relay, UDP relay, reverse mappings, static path negotiation, and mux negotiation.
 
-- session information
-- keepalive
-- virtual subnet forwarding
-- UDP relay
-- TCP relay
-- reverse mappings
-- static path negotiation
-- mux negotiation
+## Opcode Families
 
-`VirtualEthernetLinklayer` is that vocabulary.
+`VirtualEthernetLinklayer` defines these action families:
 
-## Main Action Families
+- `INFO`, `KEEPALIVED`
+- `FRP_ENTRY`, `FRP_CONNECT`, `FRP_CONNECTOK`, `FRP_PUSH`, `FRP_DISCONNECT`, `FRP_SENDTO`
+- `LAN`, `NAT`, `SYN`, `SYNOK`, `PSH`, `FIN`, `SENDTO`, `ECHO`, `ECHOACK`, `STATIC`, `STATICACK`
+- `MUX`, `MUXON`
 
-### Information and keepalive
+The actual opcode values in code are:
 
-- `INFO`
-- `KEEPALIVED`
+- `INFO = 0x7E`
+- `KEEPALIVED = 0x7F`
+- `FRP_ENTRY = 0x20` through `FRP_SENDTO = 0x25`
+- `LAN = 0x28` through `STATICACK = 0x32`
+- `MUX = 0x35`
+- `MUXON = 0x36`
 
-Used for session information, health, and session maintenance.
+## What Each Family Means
 
-### Data and forwarding actions
+- `INFO` carries session information and optional extension data
+- `KEEPALIVED` is the heartbeat path
+- `LAN` and `NAT` carry subnet and traversal signaling
+- `SYN` / `SYNOK` / `PSH` / `FIN` model logical TCP relay inside the tunnel
+- `SENDTO` carries UDP relay traffic
+- `ECHO` / `ECHOACK` support echo-style health behavior
+- `STATIC` / `STATICACK` negotiate the static packet path
+- `MUX` / `MUXON` negotiate multiplexing
+- `FRP_*` carry reverse-mapping control and data
 
-- `LAN`
-- `NAT`
-- `SENDTO`
-- `ECHO`
-- `ECHOACK`
+## `INFO` Payload
 
-Used for subnet signaling, packet forwarding, UDP relay, and ICMP-related behavior.
+`INFO` carries a base `VirtualEthernetInformation` object plus optional extension JSON. The extension path is used for things like IPv6 assignment and status fields.
 
-### TCP relay actions
+## Directionality
 
-- `SYN`
-- `SYNOK`
-- `PSH`
-- `FIN`
+The code does not accept every action in every direction. Client and server handlers enforce role legality, so unexpected directions are rejected.
 
-Used to create logical TCP connections over the tunnel.
+## Why This Protocol Is Separate
 
-### Static path actions
+This layer is the semantic center of the tunnel. It lets the runtime model control actions explicitly instead of hiding them inside a flat byte stream.
 
-- `STATIC`
-- `STATICACK`
+## Related Documents
 
-Used to allocate and confirm the static UDP-oriented path.
-
-### MUX actions
-
-- `MUX`
-- `MUXON`
-
-Used to negotiate and acknowledge multiplexed logical channels.
-
-### FRP-style reverse mapping actions
-
-- `FRP_ENTRY`
-- `FRP_CONNECT`
-- `FRP_CONNECTOK`
-- `FRP_PUSH`
-- `FRP_DISCONNECT`
-- `FRP_SENDTO`
-
-Used to expose client-side services through the server side.
-
-## Information Payload
-
-`INFO` carries:
-
-- a packed `VirtualEthernetInformation` base object
-- optional extension JSON string
-
-The extension JSON is mainly used for IPv6 assignment and status fields.
-
-This is a useful design because the stable binary part remains compact while the extensible part can grow without breaking the fixed base layout.
-
-## TCP Relay Semantics
-
-The logical TCP relay behaves like a mini control protocol inside the tunnel:
-
-1. requester sends `SYN`
-2. responder tries to connect the destination
-3. responder replies `SYNOK`
-4. stream data flows with `PSH`
-5. teardown uses `FIN`
-
-This is why TCP relay is implemented as its own session-aware subsystem rather than as plain packet copy.
-
-## UDP Relay Semantics
-
-UDP relay is endpoint-oriented:
-
-- source and destination endpoints are encoded in the action payload
-- datagram state is tracked by dedicated datagram-port objects
-- replies can be routed back either to a stored tunnel state object or reconstructed for TUN output
-
-## ICMP Semantics
-
-`ECHO` and `ECHOACK` give the tunnel a way to support echo-style health and synthetic response behavior.
-
-This is operationally useful because it lets the virtual network behave more like a routable network and less like an opaque user-space socket tunnel.
-
-## FRP Mapping Semantics
-
-FRP-style mapping actions let the tunnel do controlled reverse exposure.
-
-At a high level:
-
-1. client registers a mapping with `FRP_ENTRY`
-2. server accepts external access for that mapping
-3. connection setup uses `FRP_CONNECT` and `FRP_CONNECTOK`
-4. payload moves with `FRP_PUSH` or `FRP_SENDTO`
-5. teardown uses `FRP_DISCONNECT`
-
-## Static Path Semantics
-
-The static path is negotiated in the opcode protocol, but the actual packet carriage later moves through `VirtualEthernetPacket`.
-
-This split is intentional:
-
-- `STATIC` / `STATICACK` belong to control
-- `VirtualEthernetPacket` belongs to packet transport on that allocated path
-
-## MUX Semantics
-
-MUX is explicitly negotiated rather than assumed.
-
-That matters because mux is not just an optimization toggle. It introduces a different logical flow model that both peers must agree on.
-
-## Defensive Directionality
-
-One important property of the implementation is that both sides do not accept every action in every direction.
-
-Examples visible in code:
-
-- the server rejects unexpected client-side TCP control directions
-- the client rejects unexpected server-side connect/push directions
-
-This makes the shared protocol safer to operate because role legality is enforced in handlers.
-
-## Why This Protocol Is Worth Documenting Separately
-
-Without understanding `VirtualEthernetLinklayer`, it is hard to understand why the rest of the runtime is split into so many classes.
-
-This protocol is the center of the system’s control/data semantics.
+- `TRANSMISSION.md`
+- `TUNNEL_DESIGN.md`
+- `PACKET_FORMATS.md`

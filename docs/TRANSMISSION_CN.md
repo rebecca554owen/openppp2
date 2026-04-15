@@ -2,414 +2,271 @@
 
 [English Version](TRANSMISSION.md)
 
-## 文档范围
+## 范围
 
-本文从代码实现出发，而不是从产品宣传语言出发，解释 OPENPPP2 的传输与帧化核心。目标不是笼统地说"它有一层加密"，而是让读者真正理解：这个传输子系统到底在做什么、它和整个工程如何配合、为什么实现方式和常见的"一个 socket 加一层简单加密"设计不同。
+本文从代码实现出发解释 OPENPPP2 的传输核心。目标不是笼统地说“它有一层加密”，而是说明这个传输子系统到底在做什么，以及为什么它比常见的“一个 socket 加一层密文”设计更复杂。
 
-本文的核心代码入口是：
+核心源码是 `ppp/transmissions/ITransmission.*`、`ppp/transmissions/ITcpipTransmission.*`、`ppp/transmissions/IWebsocketTransmission.*`，以及 `ppp/app/protocol/*` 中消费这些字节的协议逻辑。
 
-- `ppp/transmissions/ITransmission.h`
-- `ppp/transmissions/ITransmission.cpp`
-- `ppp/transmissions/ITcpipTransmission.*`
-- `ppp/transmissions/IWebsocketTransmission.*`
-- `ppp/app/protocol/VirtualEthernetLinklayer.*`
-- `ppp/app/protocol/VirtualEthernetPacket.*`
+## 传输层解决什么
 
-建议配合以下文档一起阅读：
+传输子系统需要同时解决多个问题：
 
-- [HANDSHAKE_SEQUENCE_CN.md](HANDSHAKE_SEQUENCE_CN.md)
-- [PACKET_FORMATS_CN.md](PACKET_FORMATS_CN.md)
-- [SECURITY_CN.md](SECURITY_CN.md)
-- [STARTUP_AND_LIFECYCLE_CN.md](STARTUP_AND_LIFECYCLE_CN.md)
-
-## OPENPPP2 想在传输层解决什么问题
-
-OPENPPP2 不是把传输层当作一个单纯的字节管道。它要求这个子系统同时解决多个问题：
-
-| 需求 | 说明 |
+| 需求 | 含义 |
 |------|------|
-| 多载体支持 | 支持 TCP、WS、WSS 等多种承载协议 |
-| 受保护通道 | 在上层虚拟以太网动作开始正常工作前，先建立一条有状态的受保护通道 |
-| 强帧化处理 | 相比简单的明文长度前缀帧，做更强的包长和帧形态处理 |
-| 载体独立性 | 让上层链路协议尽量独立于 carrier 类型 |
-| 多模式支持 | 同时支持预握手阶段或 plaintext 模式下的 base94 帧族 |
-| 密钥派生 | 用长期配置密钥材料加握手期随机量，派生连接级工作密钥 |
-
-正因为它在一个文件里同时承担这些工作，所以 `ITransmission.cpp` 看起来会比普通 socket 包装器复杂得多。
+| 多承载支持 | 能在 TCP、WebSocket、WSS 等承载上工作 |
+| 受保护通道 | 在正常隧道流量开始前先建立受保护状态 |
+| 帧化纪律 | 保护包边界和包长元数据 |
+| 承载独立性 | 上层隧道语义不要被 carrier 类型绑定死 |
+| 预握手模式 | 支持 base94 风格的预握手或 plaintext 兼容流量 |
+| 会话级工作密钥 | 通过配置密钥与握手随机量派生每条连接的工作密钥 |
 
 ## 分层模型
 
-如果要读懂 OPENPPP2，必须把几个层次拆开理解：
-
 ```mermaid
 flowchart TD
-    subgraph 承载层
-        A[TCP/WS/WSS]
-    end
-    
-    subgraph 传输握手层
-        B[Handshake]
-    end
-    
-    subgraph 传输帧化层
-        C[Framing]
-    end
-    
-    subgraph 负载变换层
-        D[Encryption/Compression]
-    end
-    
-    subgraph 链路层
-        E[VirtualEthernetLinklayer]
-    end
-    
-    subgraph 运行时层
-        F[Client/Server Runtime]
-    end
-    
-    subgraph 平台层
-        G[Platform Integration]
-    end
-    
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
-    F --> G
+    A[TCP / WS / WSS 承载] --> B[Handshake]
+    B --> C[Framing]
+    C --> D[元数据保护]
+    D --> E[负载保护]
+    E --> F[VirtualEthernetLinklayer]
+    F --> G[客户端 / 服务端运行时]
 ```
 
 ### 各层职责
 
-| 层次 | 负责内容 | 关键源码 |
-|------|----------|----------|
-| 承载层 | TCP/WebSocket/WSS 连接管理 | `ITcpipTransmission.*`, `IWebsocketTransmission.*` |
-| 传输握手层 | 密钥交换和 session_id 协商 | `ITransmission.cpp::Handshake` |
-| 传输帧化层 | 数据帧的组装和解析 | `ITransmission.cpp::Write`, `Read` |
-| 负载变换层 | 加密、压缩、混淆 | `ITransmission.cpp::Encrypt`, `Decrypt` |
-| 链路层 | 隧道内控制信令 | `VirtualEthernetLinklayer.*` |
-| 运行时层 | 客户端/服务端逻辑 | `VEthernetExchanger.*`, `VirtualEthernetExchanger.*` |
-| 平台层 | 虚拟网卡和路由集成 | 各平台相关代码 |
+| 层次 | 负责内容 |
+|------|----------|
+| 承载层 | socket I/O 和传输选择 |
+| 握手层 | 会话建立、dummy 流量、工作密钥输入交换 |
+| 帧化层 | 长度保护和包边界处理 |
+| 元数据保护 | 头部 masking、shuffling、delta encoding 和 cipher |
+| 负载保护 | 正文加密与变换流水线 |
+| 链路层 | 隧道动作语义 |
 
-## ITransmission 接口
+## `ITransmission`
 
-### 核心接口定义
+`ITransmission` 不只是一个接口。它集中处理了受保护传输行为：
 
-`ITransmission` 是整个传输层的抽象接口，定义了所有传输操作：
+- 握手顺序
+- 超时处理
+- 预握手与握手后帧化模式
+- cipher 对象所有权
+- carrier-specific 读写分发
 
 ```mermaid
 classDiagram
     class ITransmission {
-        <<interface>>
-        +Connect() 连接
-        +Handshake() 握手
-        +Write() 写入数据
-        +Read() 读取数据
-        +Close() 关闭
-        +GetSessionId() 获取会话ID
-        +GetStatistics() 获取统计
+        +HandshakeClient()
+        +HandshakeServer()
+        +Read()
+        +Write()
+        +Encrypt()
+        +Decrypt()
     }
-    
-    class ITcpipTransmission {
-        +TCP 连接实现
-    }
-    
-    class IWebsocketTransmission {
-        +WebSocket 连接实现
-    }
-    
-    ITransmission <|.. ITcpipTransmission
-    ITransmission <|.. IWebsocketTransmission
+    class ITcpipTransmission
+    class IWebsocketTransmission
+    ITransmission <|-- ITcpipTransmission
+    ITransmission <|-- IWebsocketTransmission
 ```
 
-### 接口方法详解
+## 承载类型
 
-| 方法 | 功能 | 说明 |
-|------|------|------|
-| `Connect()` | 建立连接 | 建立与服务端的传输层连接 |
-| `Handshake()` | 握手 | 完成密钥交换和 session_id 协商 |
-| `Write()` | 写入 | 加密并发送数据 |
-| `Read()` | 读取 | 接收并解密数据 |
-| `Close()` | 关闭 | 关闭传输连接 |
-| `GetSessionId()` | 获取会话ID | 返回当前会话的 session_id |
-| `GetStatistics()` | 统计信息 | 返回传输统计 |
+### TCP
 
-## 传输类型
+TCP 是最直接的承载路径。
 
-### TCP 传输
-
-TCP 传输是最基本的传输方式，使用原生 TCP 连接：
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `tcp.listen.port` | 监听端口 | 20000 |
-| `tcp.connect.timeout` | 连接超时 | 5 秒 |
-| `tcp.inactive.timeout` | 空闲超时 | 300 秒 |
-| `tcp.turbo` | TCP 加速 | true |
-| `tcp.fast-open` | TCP Fast Open | true |
-| `tcp.backlog` | 连接队列 | 511 |
-
-```mermaid
-flowchart LR
-    A[客户端] -->|TCP 连接| B[服务端]
-    B --> C[建立隧道]
-    C --> D[数据交换]
-```
-
-### WebSocket 传输
-
-WebSocket 传输支持在 HTTP 环境下使用：
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `ws.listen.port` | WS 监听端口 | 20080 |
-| `wss.listen.port` | WSS 监听端口 | 20443 |
-| `ws.path` | WebSocket 路径 | /tun |
-| `ws.verify-peer` | 验证证书 | true |
-
-```mermaid
-flowchart LR
-    A[客户端] -->|HTTP Upgrade| B[WebSocket 服务器]
-    B --> C[WS 连接建立]
-    C --> D[数据交换]
-```
-
-### WSS 加密传输
-
-WSS（WebSocket Secure）提供加密的 WebSocket 传输：
-
-| 参数 | 说明 |
+| 配置 | 含义 |
 |------|------|
-| `ssl.certificate-file` | SSL 证书文件 |
-| `ssl.certificate-key-file` | SSL 私钥文件 |
-| `ssl.ciphersuites` | 加密套件列表 |
+| `tcp.listen.port` | 监听端口 |
+| `tcp.connect.timeout` | 连接超时 |
+| `tcp.inactive.timeout` | 空闲超时 |
+| `tcp.turbo` | 承载侧优化 |
+| `tcp.fast-open` | TCP Fast Open 支持 |
+| `tcp.backlog` | 监听队列 |
 
-## 帧化机制
+### WebSocket
 
-### 帧结构
+WebSocket 用于需要 HTTP 兼容承载的场景。
 
-OPENPPP2 使用自定义帧结构，包含长度前缀和负载：
-
-| 字段 | 长度 | 说明 |
-|------|------|------|
-| 长度前缀 | 2-4 字节 | 负载长度 |
-| 负载 | 变长 | 加密数据 |
-
-### 帧类型
-
-| 帧类型 | 说明 | 用途 |
-|--------|------|------|
-| 数据帧 | 普通数据 | 传输应用数据 |
-| 控制帧 | 控制信息 | 握手、保活等 |
-| 心跳帧 | keepalive | 维持连接 |
-
-```mermaid
-flowchart TD
-    A[应用数据] --> B[添加长度前缀]
-    B --> C[加密]
-    C --> D[发送]
-```
-
-## 加密层
-
-### 两层加密
-
-OPENPPP2 实现了两层加密：
-
-| 层次 | 密钥 | 说明 |
-|------|------|------|
-| 协议层 | `protocol-key` + `ivv` | 隧道内数据加密 |
-| 传输层 | `transport-key` + `ivv` | 传输链路加密 |
-
-### 支持的加密算法
-
-| 算法 | 密钥长度 | 模式 | 推荐程度 |
-|------|----------|------|----------|
-| aes-128-cfb | 128 位 | CFB | 推荐 |
-| aes-256-cfb | 256 位 | CFB | 强烈推荐 |
-| aes-128-gcm | 128 位 | GCM | 推荐 |
-| aes-256-gcm | 256 位 | GCM | 强烈推荐 |
-| rc4 | 可变 | RC4 | 不推荐（已废弃） |
-
-### 密钥派生
-
-```mermaid
-flowchart TD
-    A[预共享密钥 K] --> B[密钥派生函数]
-    B --> C[会话 ivv]
-    C --> D[工作密钥 W]
-    D --> E[加密操作]
-```
-
-## 读写流水线
-
-### 写入流程
-
-```mermaid
-sequenceDiagram
-    participant A as 上层应用
-    participant B as ITransmission
-    participant C as 加密层
-    participant D as 网络
-    
-    A->>B: Write(data)
-    B->>C: Encrypt(data)
-    C->>B: encrypted_data
-    B->>D: Send(encrypted_data)
-```
-
-### 读取流程
-
-```mermaid
-sequenceDiagram
-    participant D as 网络
-    participant B as ITransmission
-    participant C as 加密层
-    participant A as 上层应用
-    
-    D->>B: Receive(data)
-    B->>C: Decrypt(data)
-    C->>B: decrypted_data
-    B->>A: Read(data)
-```
-
-## 状态机
-
-### 连接状态
-
-| 状态 | 说明 |
+| 配置 | 含义 |
 |------|------|
-| Disconnected | 未连接 |
-| Connecting | 正在连接 |
-| Handshake | 握手中 |
-| Connected | 已连接 |
-| Closing | 正在关闭 |
-| Closed | 已关闭 |
+| `ws.listen.port` | 普通 WebSocket 监听端口 |
+| `wss.listen.port` | 安全 WebSocket 监听端口 |
+| `ws.path` | upgrade 路径 |
+| `ws.verify-peer` | 是否验证对端证书 |
+
+### WSS
+
+WSS 在承载层增加 TLS。它不会替代 OPENPPP2 内层的传输逻辑，只是改变承载保护层。
+
+## 两个帧族
+
+OPENPPP2 的传输分成两种家族。
+
+### Base94 家族
+
+以下条件任一成立时使用：
+
+- 握手尚未完成
+- 启用了 plaintext 兼容模式
+
+它又分两种形态：
+
+- 初始扩展头形态
+- 后续简化头形态
+
+首包更重，因为它要建立初始解析状态。后续包则使用更简化的形式。
+
+### 二进制受保护家族
+
+握手完成后正常路径下使用。
+
+它使用紧凑的受保护头部和单独变换的负载正文。
+
+## Base94 头部行为
+
+Base94 头不是简单的字面长度前缀。
+
+它使用：
+
+- 随机 key byte
+- filler byte
+- 基于变换后长度数据得到的 base94 数字
+- 在首个包中还会有一个额外验证字段
+
+首包解析成功后，包状态会从扩展头切换成简化头。
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Disconnected
-    Disconnected --> Connecting : Connect()
-    Connecting --> Handshake : 连接成功
-    Handshake --> Connected : 握手完成
-    Connected --> Closing : Close()
-    Closing --> Closed : 关闭完成
-    Closed --> [*]
-    Connecting --> Disconnected : 连接失败
-    Handshake --> Disconnected : 握手失败
-    Connected --> Disconnected : 连接断开
+    [*] --> 扩展态
+    扩展态 --> 简化态: 首包验证成功
+    简化态 --> 简化态: 后续包
 ```
 
-## 多路复用 (MUX)
+## 二进制头部行为
 
-### MUX 功能
+在二进制路径中，头部存储的是受保护元数据，而不是裸 length prefix。
 
-MUX 允许在单个连接上复用多个数据流：
+发送侧大致过程：
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `mux.connect.timeout` | 连接超时 | 20 秒 |
-| `mux.inactive.timeout` | 空闲超时 | 60 秒 |
-| `mux.congestions` | 拥塞窗口 | 134217728 字节 |
-| `mux.keep-alived` | keepalive | [1, 20] 秒 |
+1. 调整 payload 长度，避免零长度歧义
+2. 如果配置了 protocol cipher，则对长度字节加密
+3. 用包级因子做 XOR 掩码
+4. 交换字节顺序
+5. 对最终头部做 delta encoding
 
-### MUX 数据流
+接收侧按相反顺序恢复。
+
+## 为什么要调整长度
+
+代码会在头部保护前把长度减一，解码后再加一。这是为了避免受保护帧路径中的零长度歧义。
+
+这是一种很小但很重要的归一化选择。它把零变成明显的错误状态，而不是合法包长度。
+
+## 负载变换流水线
+
+负载路径可以包含：
+
+- 滚动 XOR masking
+- 确定性 shuffling
+- delta encoding
+- 可选 transport cipher 加密
+
+运行时会在握手前使用更保守的行为，在握手后使用更常规的行为。
+
+## 两个 cipher 槽位
+
+OPENPPP2 保留两个 cipher 槽位：
+
+| 槽位 | 作用 |
+|------|------|
+| `protocol_` | 保护头部元数据和 protocol-facing 字节 |
+| `transport_` | 保护负载正文字节 |
+
+这不是装饰性的分层。因为元数据泄露在很多情况下和正文泄露一样重要。
+
+## 传输中的握手
+
+传输握手并不只是认证对端，它还会制造流量形态，并生成连接级工作密钥输入。
+
+客户端：
+
+1. 发送 NOP 前奏
+2. 接收真实 `session_id`
+3. 生成新的 `ivv`
+4. 发送 `ivv`
+5. 接收 `nmux`
+6. 设置 `handshaked_ = true`
+7. 用 `ivv` 重建 cipher 状态
+
+服务端：
+
+1. 发送 NOP 前奏
+2. 发送真实 `session_id`
+3. 生成并发送 `nmux`
+4. 接收 `ivv`
+5. 设置 `handshaked_ = true`
+6. 用 `ivv` 重建 cipher 状态
 
 ```mermaid
-flowchart LR
-    subgraph 客户端
-        A[数据流1] --> B[MUX层]
-        C[数据流2] --> B
-        D[数据流3] --> B
-    end
-    
-    B --> E[单TCP连接]
-    
-    subgraph 服务端
-        E --> F[MUX层]
-        F --> G[数据流1]
-        F --> H[数据流2]
-        F --> I[数据流3]
-    end
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: NOP 前奏
+    S->>C: NOP 前奏
+    S->>C: session_id
+    C->>S: ivv
+    S->>C: nmux
+    Note over C,S: 使用 base key + ivv 重建 protocol_ 和 transport_
+    Note over C,S: 设置 handshaked_ = true
 ```
 
-## Static 路径
+## Dummy 握手包
 
-### Static UDP
+NOP 前奏不是空流量，而是结构化的 dummy 流量。
 
-Static 路径提供独立的 UDP 数据通道：
+当 `session_id == 0` 时，打包器会把第一个字节的高位置 1，并生成 dummy payload。接收侧根据这个 bit 识别并忽略。
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `static.keep-alived` | 保活间隔 | [1, 5] 秒 |
-| `static.dns` | DNS 服务 | true |
-| `static.quic` | QUIC 支持 | true |
-| `static.icmp` | ICMP 支持 | true |
-| `static.aggligator` | 聚合器数量 | 0 |
-| `static.servers` | 服务器列表 | [] |
+这意味着前奏在外观上像正常握手流量，但在逻辑上不携带真实 session 身份。
 
-### 数据路径选择
+## 连接级密钥派生
 
-```mermaid
-flowchart TD
-    A[应用数据] --> B{数据类型}
-    B -->|TCP| C[主隧道]
-    B -->|UDP 普通| D[UDP 端口]
-    B -->|UDP Static| E[Static 端口]
-    C --> F[服务端]
-    D --> F
-    E --> F
-```
+客户端生成 `ivv`，服务端用它重建连接级 cipher 状态。
 
-## 统计信息
+代码层面的准确说法是：
 
-### 传输统计
+- OPENPPP2 进行连接级动态工作密钥派生
+- 这减少了跨会话的静态密钥复用
+- 除非代码其他部分给出更强证明，否则不能直接把它说成标准 PFS
 
-| 指标 | 说明 |
-|------|------|
-| bytes_sent | 发送字节数 |
-| bytes_received | 接收字节数 |
-| packets_sent | 发送包数 |
-| packets_received | 接收包数 |
-| errors | 错误数 |
-| last_active | 最后活动时间 |
+## 握手超时
 
-## 错误处理
+握手受一个计时器约束，超时时间来自连接超时配置。
 
-### 常见错误
+如果计时器先触发，运行时会销毁 transmission，不会让它无限停留在握手态。
 
-| 错误 | 原因 | 处理 |
-|------|------|------|
-| 连接超时 | 网络不可达 | 重连 |
-| 握手失败 | 密钥错误 | 报告错误 |
-| 加密错误 | 密钥问题 | 关闭连接 |
-| 帧错误 | 数据损坏 | 断开连接 |
+这是安全控制，也是运维控制。
 
-## 性能优化
+## 为什么会有 Base94
 
-### 优化参数
+Base94 不是偶然的历史遗留。
 
-| 参数 | 说明 | 推荐值 |
-|------|------|--------|
-| `tcp.turbo` | TCP 加速 | 启用 |
-| `tcp.fast-open` | TCP Fast Open | 启用 |
-| `tcp.cwnd` | 拥塞窗口 | 0（自动） |
-| `tcp.rwnd` | 接收窗口 | 0（自动） |
-| `concurrent` | 并发线程 | CPU 核心数 |
+它提供：
 
-### 优化建议
+- 预握手帧族
+- plaintext 兼容回退路径
+- 早期流量的不同形态
+- 某些无法立即使用正常受保护二进制形态的部署兼容性
 
-1. **启用 TCP Turbo**：减少数据传输延迟
-2. **启用 TCP Fast Open**：减少连接建立时间
-3. **配置 MUX**：在高延迟网络上提高效率
-4. **调整拥塞窗口**：根据网络条件优化
+## 为什么 `ITransmission` 很关键
 
-## 相关文档
+这个文件是仓库里最重要的文件之一，因为它把很多别的系统会分散到多个库里处理的行为集中起来：
 
-| 文档 | 说明 |
-|------|------|
-| [HANDSHAKE_SEQUENCE_CN.md](HANDSHAKE_SEQUENCE_CN.md) | 握手序列与会话建立 |
-| [PACKET_FORMATS_CN.md](PACKET_FORMATS_CN.md) | 包格式与线上布局 |
-| [SECURITY_CN.md](SECURITY_CN.md) | 安全模型与密钥管理 |
-| [CLIENT_ARCHITECTURE_CN.md](CLIENT_ARCHITECTURE_CN.md) | 客户端架构 |
-| [SERVER_ARCHITECTURE_CN.md](SERVER_ARCHITECTURE_CN.md) | 服务端架构 |
+- 握手和超时控制
+- 早期流量形态控制
+- 元数据保护
+- 负载保护
+- 承载无关的 I/O 分发
+
+这种密度是设计结果，不只是实现偶然。

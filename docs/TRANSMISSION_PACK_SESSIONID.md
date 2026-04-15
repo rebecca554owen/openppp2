@@ -2,15 +2,11 @@
 
 [中文版本](TRANSMISSION_PACK_SESSIONID_CN.md)
 
-## Why This Document Exists
+## Why This Exists
 
-The old file name refers to `PACK_SESSIONID`, but the useful engineering topic is broader: how OPENPPP2 identifies a session, exchanges tunnel metadata, and drives control actions after the transport is up.
+The old file name is historical. The useful topic is how OPENPPP2 carries session identity and control actions after the transport handshake is complete.
 
-This document focuses on that control-plane model.
-
-## Core Objects
-
-The main types involved are:
+## Main Types
 
 - `ppp/transmissions/ITransmission.*`
 - `ppp/app/protocol/VirtualEthernetInformation.*`
@@ -21,157 +17,78 @@ The main types involved are:
 
 ## Session Identity
 
-Session identity is centered on `Int128` values used across client, server, and management flows.
+Session identity is centered on `Int128`. It is used to bind one logical tunnel exchange to one transport session and to track server-side exchanger state, accounting, and control callbacks.
 
-That identifier is used to:
+## Information Exchange
 
-- bind one logical tunnel exchange to a transport session
-- locate the server-side exchanger
-- associate traffic accounting and authentication state
-- manage IPv6 requests, leases, and control callbacks
-
-The use of a wide identifier is consistent with the project design goal of long-lived sessions that should be globally distinct inside one deployment domain.
-
-## Information Exchange Object
-
-`VirtualEthernetInformation` carries the tunnel-side session envelope for quota and validity controls:
+`VirtualEthernetInformation` carries the session envelope used for policy and lifetime data, including:
 
 - `BandwidthQoS`
 - `IncomingTraffic`
 - `OutgoingTraffic`
 - `ExpiredTime`
 
-This is the minimum unit for telling a client what it is allowed to do and for how long.
+The point is to keep policy exchange separate from raw forwarding.
 
-It is deliberately separate from raw packet forwarding, which keeps policy exchange lightweight.
+## IPv6 Extension Data
 
-## IPv6 Extensions
-
-`VirtualEthernetInformationExtensions` extends the base information object with IPv6-specific state:
-
-- assigned IPv6 mode
-- assigned IPv6 address and prefix length
-- assigned gateway and route prefix
-- assigned DNS servers
-- request/response status and status message
-
-This allows the same control-plane message family to carry both generic session policy and IPv6 provisioning results.
+The IPv6 extension adds assigned mode, address, prefix length, gateway, DNS, and result status. The same message family can therefore carry both generic policy and IPv6 provisioning results.
 
 ## Control Actions After Handshake
 
-After the transport handshake, the link layer can exchange multiple control actions:
+After transport setup, the link layer can carry actions such as:
 
 - information sync
 - keepalive
-- TCP connect/push/disconnect
+- TCP connect / push / disconnect
 - UDP sendto
 - echo / echo reply
 - static path setup
 - mux setup
-- FRP-style mapping registration and data forwarding
+- FRP-style mapping registration and forwarding
 
-The important point is that OPENPPP2 does not treat these as unrelated subsystems. They are all modeled as actions within one tunnel control plane.
+## Client Flow
 
-## Client-Side Flow
-
-At a high level, the client path is:
-
-1. Build configuration and local network context
+1. Build config and local network context
 2. Open the virtual adapter and route policy
 3. Create `VEthernetExchanger`
-4. Establish transport session to remote server
-5. Complete transmission handshake and obtain session identity
+4. Establish transport
+5. Complete handshake and obtain session identity
 6. Exchange `VirtualEthernetInformation`
 7. Apply routing, DNS, mux, proxy, mapping, and optional IPv6 state
-8. Enter steady-state packet forwarding and keepalive
+8. Enter steady-state forwarding and keepalive
 
-`VEthernetExchanger` is the operational bridge between the transport session and the client virtual network state.
-
-## Server-Side Flow
-
-At a high level, the server path is:
+## Server Flow
 
 1. Open listeners for enabled transports
-2. Accept a new transport connection
-3. Complete server-side handshake
-4. Create or attach a `VirtualEthernetExchanger`
-5. Admit the session and build information envelope
-6. Optionally verify or enrich state through the management backend
-7. Maintain tunnel traffic, IPv6 leases, NAT state, mappings, and statistics
+2. Accept a new connection
+3. Complete handshake
+4. Create or attach `VEthernetExchanger`
+5. Build the information envelope
+6. Optionally consult the management backend
+7. Maintain traffic, leases, mappings, and statistics
 
-`VirtualEthernetSwitcher` acts as the session switch and lifecycle coordinator.
+`VirtualEthernetSwitcher` coordinates this lifecycle on the server side.
 
-## Management Plane Role
+## Management Plane
 
-`VirtualEthernetManagedServer` is optional. It connects the tunnel server to an external control system over WebSocket or secure WebSocket.
+`VirtualEthernetManagedServer` is optional. It links the tunnel server to an external control system over WebSocket or secure WebSocket for authentication, accounting, reachability checks, and reconnect handling.
 
-Its responsibilities include:
+## Quota and Expiry
 
-- asynchronous authentication
-- traffic upload and accounting
-- backend reachability checks
-- reconnect behavior for the management link
+The session model has explicit hooks for quota, expiry, bandwidth limits, and backend-mediated authentication. That lets the runtime enforce policy locally even if the backend is slow or unavailable.
 
-This keeps the data plane in the C++ process while allowing external policy or billing systems to remain outside it.
+## Mappings and Reverse Access
 
-## Quota, Expiry, And Admission
+Client `mappings` drive FRP-style registration, connection setup, data push, disconnect, and UDP relay actions. So the overlay is not only for remote access; it can also expose services in a controlled reverse direction.
 
-The session model has explicit hooks for:
+## Failure Model
 
-- traffic quota
-- expiry time
-- bandwidth QoS limits
-- backend-mediated authentication
-
-This is important for SD-WAN and managed VPN deployments because the tunnel runtime needs to enforce policy locally even if the external backend becomes slow or temporarily unavailable.
-
-## Mappings And Reverse Access
-
-The control plane also carries mapping state. On the client side, `client.mappings` defines services to be exported. The corresponding FRP-style actions handle:
-
-- registration
-- connection setup
-- data push
-- disconnect
-- UDP sendto relay
-
-This lets the overlay do more than simple remote access. It can also work as a controlled reverse-exposure channel.
-
-## Static Echo Path
-
-The codebase includes a static echo mechanism in the client and server exchangers. Its purpose is operational rather than cosmetic:
-
-- maintain liveness on static UDP-style paths
-- verify reachability
-- keep datagram-oriented session state active
-
-It belongs to the control plane because it carries session-health intent, not just arbitrary payload.
-
-## Failure And Recovery Model
-
-The session design expects failure and includes explicit recovery hooks:
-
-- handshake timeout
-- reconnection timeout
-- transport disposal and cleanup
-- keepalive-driven health checks
-- session state transitions on the client exchanger
-- management-link reconnect behavior on the server side
-
-This fits the infrastructure requirement of autonomy and low operator surprise.
-
-## Design Philosophy
-
-The control plane reflects a few stable principles:
-
-- keep identity, policy, and packet forwarding related but not mixed together
-- make session state explicit in types, not hidden in ad hoc socket code
-- let one exchange object own lifecycle for one logical client/server relationship
-- keep external management optional instead of making the data plane dependent on it
+The design expects failures and includes hooks for handshake timeout, reconnection timeout, cleanup, keepalive checks, and management-link reconnects.
 
 ## Related Documents
 
-- [`TRANSMISSION.md`](TRANSMISSION.md)
-- [`ARCHITECTURE.md`](ARCHITECTURE.md)
-- [`CONFIGURATION.md`](CONFIGURATION.md)
-- [`SECURITY.md`](SECURITY.md)
+- `TRANSMISSION.md`
+- `ARCHITECTURE.md`
+- `CONFIGURATION.md`
+- `SECURITY.md`
