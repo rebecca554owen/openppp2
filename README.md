@@ -2,65 +2,45 @@
 
 English | [简体中文](README_CN.md)
 
-OPENPPP2 is a C++17 virtual Ethernet VPN/SD-WAN system. It builds a Layer 2 / Layer 3 overlay around a unified packet, session, and transport model, with platform specializations for Windows, Linux, macOS, and Android.
+OPENPPP2 is a source-driven, cross-platform network runtime centered on one C++ executable named `ppp`, with an optional Go management backend.
 
-The project is organized around one executable, `ppp`, with two operating modes:
+It should not be read as only a VPN client, only a VPN server, or only a custom transport. The codebase combines:
 
-- Server mode: accepts tunnel sessions, allocates virtual network state, enforces policy, and optionally connects to a management backend.
-- Client mode: creates a virtual adapter, selects routes and DNS handling, connects to a remote server, and can expose local proxy and mapping functions.
+- protected transport over multiple carriers
+- a role-aware tunnel action protocol
+- client-side virtual adapter, route, and DNS integration
+- server-side session switching, forwarding, mapping, and IPv6 logic
+- optional static packet and MUX paths
+- platform-specific host networking behavior on Windows, Linux, macOS, and Android
+- an optional Go management backend for managed deployments
 
-## Documentation
+The documentation in this repository was rewritten to explain the system from the code upward rather than from product slogans downward.
 
-Documentation center:
+## Start Here
 
-- Main index: [`docs/README.md`](docs/README.md)
-- Chinese index: [`docs/README_CN.md`](docs/README_CN.md)
-
-Core architecture documents:
-
-- System architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Startup and lifecycle: [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md)
-- Client architecture: [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
-- Server architecture: [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
-- Platform architecture: [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
-- Management backend: [`docs/MANAGEMENT_BACKEND.md`](docs/MANAGEMENT_BACKEND.md)
-
-Tunnel and protocol documents:
-
-- Tunnel design: [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
-- Transport and tunnel model: [`docs/TRANSMISSION.md`](docs/TRANSMISSION.md)
-- Session and control plane: [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/TRANSMISSION_PACK_SESSIONID.md)
-- Link-layer protocol: [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
-- Routing and DNS: [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
-
-Engineering and operations documents:
-
-- Engineering concepts: [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
-- User manual: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md)
-- CLI reference: [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)
+- Documentation index: [`docs/README.md`](docs/README.md)
+- Chinese documentation index: [`docs/README_CN.md`](docs/README_CN.md)
+- Top-level architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Source reading guide: [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md)
-- Configuration reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-- Deployment patterns: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-- Operations and troubleshooting: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-- Security model: [`docs/SECURITY.md`](docs/SECURITY.md)
 
-Chinese versions are provided in the same directory with `_CN` suffixes.
+## Recommended Reading Paths
 
-## Reading Paths
+### If you want to understand the whole system
 
-Recommended path for architects and maintainers:
+1. [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
+2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+3. [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md)
+4. [`docs/TRANSMISSION.md`](docs/TRANSMISSION.md)
+5. [`docs/HANDSHAKE_SEQUENCE.md`](docs/HANDSHAKE_SEQUENCE.md)
+6. [`docs/PACKET_FORMATS.md`](docs/PACKET_FORMATS.md)
+7. [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
+8. [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
+9. [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
+10. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
+11. [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+12. [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 
-1. [`docs/README.md`](docs/README.md)
-2. [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
-3. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-4. [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md)
-5. [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
-6. [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
-7. [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
-8. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
-9. [`docs/MANAGEMENT_BACKEND.md`](docs/MANAGEMENT_BACKEND.md)
-
-Recommended path for source readers:
+### If you want to read the code efficiently
 
 1. [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md)
 2. `main.cpp`
@@ -70,66 +50,69 @@ Recommended path for source readers:
 6. `ppp/app/client/*`
 7. `ppp/app/server/*`
 8. platform directories
-9. `go/*`
+9. `go/*` if managed deployment matters
 
-## What The Codebase Implements
+### If you want deployment and runtime guidance
 
-- Layer 2 / Layer 3 virtual Ethernet overlay
-- Client/server runtime in a single binary
-- TCP, UDP, WebSocket, and WebSocket over TLS transports
-- Dual-layer payload protection through protocol and transport ciphers
-- TUN/TAP based virtual interface integration
-- Split tunnel and route steering using bypass lists, route files, and DNS rules
-- Reverse access and port mapping through mapping and FRP-style control actions
-- Optional multiplexing, static UDP mode, and bandwidth aggregation hooks
-- IPv6 assignment extensions for server-managed IPv6 service
-- Optional Go management backend for node, user, and traffic control
+1. [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+2. [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)
+3. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
+4. [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
+5. [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+6. [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+7. [`docs/SECURITY.md`](docs/SECURITY.md)
+
+## Core Documents
+
+### Architecture and runtime
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): top-level system map, main boundaries, planes, and runtime relationships
+- [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md): process startup, configuration load, role selection, tick loop, cleanup
+- [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md): client switcher, exchanger, routes, DNS, proxies, mappings, MUX, static path, IPv6 apply
+- [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md): listeners, session switch, exchangers, mappings, static path, IPv6, backend integration
+- [`docs/PLATFORMS.md`](docs/PLATFORMS.md): Windows, Linux, macOS, Android host integration and build/deployment differences
+
+### Transport and protocol
+
+- [`docs/TRANSMISSION.md`](docs/TRANSMISSION.md): protected transport, framing families, ciphertext layering, runtime transport model
+- [`docs/HANDSHAKE_SEQUENCE.md`](docs/HANDSHAKE_SEQUENCE.md): actual client/server handshake order and connection-level key shaping
+- [`docs/PACKET_FORMATS.md`](docs/PACKET_FORMATS.md): wire-level packet forms, headers, framing, static packet structure
+- [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/TRANSMISSION_PACK_SESSIONID.md): session identity, control-plane meaning, session envelope interpretation
+- [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md): tunnel action vocabulary and opcode-level runtime behavior
+- [`docs/SECURITY.md`](docs/SECURITY.md): trust boundaries, local enforcement, realistic security claims and limits
+
+### Configuration, deployment, and operations
+
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md): configuration model, defaults, normalization, and important groups
+- [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md): command-line switches by role and platform
+- [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md): route steering, bypass, DNS redirect, namespace cache, vBGP-style inputs
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md): actual deployment model, host requirements, optional management backend, Linux IPv6 server requirements
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md): runtime evidence, restart logic, cleanup, failure classes, troubleshooting order
+
+### Engineering and source study
+
+- [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md): engineering concepts and design stance
+- [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md): practical order for reading the repository
+- [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md): operator-oriented usage guide
+- [`docs/MANAGEMENT_BACKEND.md`](docs/MANAGEMENT_BACKEND.md): Go backend role, dependencies, and interaction model
 
 ## Repository Layout
 
-- `ppp/`: core protocol, session, tunnel, crypto, routing, client, and server logic
-- `common/`: shared libraries and embedded third-party components
-- `windows/`: Windows TAP/Wintun, Win32 routing, firewall, and proxy integration
-- `linux/`: Linux TAP, route protection, diagnostics, and system networking helpers
-- `darwin/`: macOS `utun` support and platform adaptations
-- `android/`: Android-specific specializations
-- `go/`: management backend and persistence-facing service code
-- `docs/`: bilingual engineering documentation
+- `main.cpp`: unified entry point and top-level lifecycle
+- `ppp/`: shared configuration, transport, protocol, client, and server runtime code
+- `windows/`: Windows adapter, route, DNS, proxy, and host integration code
+- `linux/`: Linux adapter, protect, route, IPv6, and system-integration code
+- `darwin/`: macOS `utun` and Darwin-specific integration code
+- `android/`: Android shared-library and VPN-host integration code
+- `go/`: optional management backend and persistence-facing service code
+- `docs/`: bilingual system documentation
 
-## Architecture Summary
-
-The core runtime is built around a small set of central types:
-
-- `main.cpp`: unified entry point, mode selection, CLI parsing, runtime startup
-- `ppp/configurations/AppConfiguration.*`: JSON configuration model and normalization
-- `ppp/transmissions/ITransmission.*`: handshake, framed I/O, protocol cipher, transport cipher
-- `ppp/app/protocol/VirtualEthernetLinklayer.*`: tunnel action set for NAT, TCP, UDP, info, echo, mux, and mapping
-- `ppp/app/server/VirtualEthernetSwitcher.*`: server session switch, acceptors, firewall, IPv6 lease management
-- `ppp/app/client/VEthernetNetworkSwitcher.*`: client virtual NIC, routing, DNS, proxy, and forwarding logic
-- `ppp/app/client/VEthernetExchanger.*`: client session establishment, reconnection, mapping, static echo, and mux control
-- `ppp/app/server/VirtualEthernetManagedServer.*`: optional management-plane WebSocket client
-
-## What This Project Is
-
-- A network infrastructure runtime
-- A virtual Ethernet overlay engine
-- A programmable VPN / SD-WAN foundation
-- A system that prioritizes explicit topology, explicit policy, and deterministic runtime control
-
-## What This Project Is Not
-
-- Not a consumer VPN application focused on one-click usability
-- Not only a tunnel binary with no routing, DNS, or session policy model
-- Not a thin wrapper over a single OS VPN API
-- Not a management backend first and data plane second system
-
-## Supported Build Environments
+## Build Notes
 
 ### Windows
 
-- Toolchain: Visual Studio 2022, CMake, Ninja, vcpkg
-- Build script: `build_windows.bat`
-- Project files: `ppp.sln`, `ppp.vcxproj`
+- main script: `build_windows.bat`
+- expected toolchain: Visual Studio 2022, Ninja, vcpkg
 
 Example:
 
@@ -139,8 +122,8 @@ build_windows.bat Release x64
 
 ### Linux / WSL
 
-- Toolchain: GCC 7.5+ or compatible Clang, CMake, Make
-- Third-party default path in `CMakeLists.txt`: `/root/dev`
+- root build uses normal CMake flow
+- extra packaging and cross-build helpers exist in `build-openppp2-by-builds.sh` and `build-openppp2-by-cross.sh`
 
 Example:
 
@@ -149,110 +132,21 @@ cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
 cmake --build build-linux -j32
 ```
 
-Cross-build helpers are included in:
-
-- `build-openppp2-by-builds.sh`
-- `build-openppp2-by-cross.sh`
-
 ### macOS and Android
 
-- Platform code exists in-tree.
-- Treat them as normal CMake / NDK integration targets and verify in the platform toolchain before release.
+- platform code exists in-tree
+- Android is built as a shared library and embedded into an application host
+- verify platform-specific changes in the corresponding toolchain before release
 
-## Runtime Modes
+## Important Boundaries
 
-### Server
-
-Typical responsibilities:
-
-- Listen on TCP, UDP, WS, or WSS
-- Authenticate or admit sessions
-- Allocate tunnel-side addressing and optional IPv6 state
-- Apply firewall, subnet, and mapping policy
-- Report to the management backend when enabled
-
-### Client
-
-Typical responsibilities:
-
-- Create and configure a virtual adapter
-- Connect to the remote tunnel endpoint
-- Maintain routes, bypass sets, DNS steering, and optional host-network preference
-- Expose local HTTP or SOCKS proxy services if configured
-- Register reverse mappings and optional static / mux data paths
-
-## Common Deployment Patterns
-
-- Full-tunnel remote access
-- Split-tunnel enterprise access
-- Branch-to-branch overlay with subnet forwarding
-- Local proxy gateway on the client edge
-- Reverse exposure of internal services through mappings
-- WebSocket or WSS tunnel behind reverse proxy or CDN edge
-- IPv6-capable overlay using server-managed prefixes
-
-Detailed deployment analysis is in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
-
-## Configuration Entry Points
-
-Default configuration file:
-
-```text
-./appsettings.json
-```
-
-The major configuration groups are:
-
-- `key`: cryptographic and framing behavior
-- `tcp`, `udp`, `mux`, `websocket`: transport behavior
-- `server`: node behavior, management backend, IPv6 service
-- `client`: remote endpoint, reconnection, local proxy, mappings, route files
-- `vmem`: virtual memory workspace
-- `ip`: public and interface address hints
-
-See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for details.
-
-## CLI Entry Points
-
-The binary exposes a large command-line surface. The most important options are:
-
-- `--mode=[client|server]`
-- `--config=<path>`
-- `--dns=<ip-list>`
-- `--nic=<interface>`
-- `--ngw=<ip>`
-- `--tun=<name>`
-- `--tun-ip=<ip>`
-- `--tun-ipv6=<ip>`
-- `--tun-gw=<ip>`
-- `--tun-mask=<bits>`
-- `--tun-vnet=[yes|no]`
-- `--tun-host=[yes|no]`
-- `--tun-static=[yes|no]`
-- `--tun-mux=<connections>`
-- `--tun-mux-acceleration=<mode>`
-- `--bypass=<file>`
-- `--bypass-ngw=<ip>`
-- `--dns-rules=<file>`
-- `--firewall-rules=<file>`
-
-For the full runtime help:
-
-```bash
-ppp --help
-```
-
-## Engineering Principles
-
-- One binary, two roles, shared protocol core
-- Favor explicit local policy over heavy external orchestration
-- Keep packet processing deterministic and recoverable
-- Separate transport, link-layer control, and platform networking concerns
-- Make route, DNS, and access control visible in configuration instead of hidden side effects
-
-For the full design stance, see [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md).
+- This project is not a consumer one-click VPN application.
+- The Go backend is optional and is not the primary data plane.
+- The most complete server-side IPv6 data-plane implementation is Linux-centric.
+- Client and server share a message vocabulary but do not behave as symmetric peers.
+- Route, DNS, adapter, and platform side effects are part of the real system behavior, not incidental details.
 
 ## Notes
 
-- Existing sample configuration files contain environment-specific addresses and credentials. Treat them as local examples, not reusable production defaults.
-- Documentation was rewritten to reflect the codebase structure and operational intent, and to remove non-technical or misleading material.
+- Example configuration values in the repository may contain local addresses, ports, or credentials and should be treated as examples, not production defaults.
+- The current documentation set is intentionally long-form, implementation-driven, and bilingual.

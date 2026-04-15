@@ -1,224 +1,526 @@
-# Deployment Patterns
+# Deployment Model
 
 [中文版本](DEPLOYMENT_CN.md)
 
 ## Scope
 
-This document summarizes practical ways to deploy OPENPPP2 as a VPN or SD-WAN component.
+This document explains how OPENPPP2 is actually deployed according to the current source tree. It is not a list of vague deployment ideas. It is a runtime-oriented description of what components exist, how they are started, what they require from the host, how client and server roles differ, how the optional Go managed backend fits in, and which deployment assumptions are real versus merely possible in theory.
 
-## Pattern 1: Basic Remote Access VPN
+The relevant implementation anchors are mainly:
 
-Topology:
+- `main.cpp`
+- `appsettings.json`
+- `ppp/app/client/VEthernetNetworkSwitcher.cpp`
+- `ppp/app/server/VirtualEthernetSwitcher.cpp`
+- `linux/ppp/ipv6/LINUX_IPv6Auxiliary.cpp`
+- root `CMakeLists.txt`
+- `build_windows.bat`
+- `build-openppp2-by-builds.sh`
+- `build-openppp2-by-cross.sh`
+- `go/main.go`
+- `go/ppp/ManagedServer.go`
+- `go/ppp/Configuration.go`
+- `go/ppp/Server.go`
 
-- one server node
-- multiple clients
-- each client gets a virtual adapter and sends selected or full traffic to the server
+## Deployment Is Built Around One Binary And One Optional Backend
 
-Use when:
+The C++ runtime is built around a single executable named `ppp`. That binary can run in either:
 
-- users need access to remote internal networks
-- you want one operationally simple entry point
+- client mode
+- server mode
 
-Minimum ingredients:
+The role is chosen by command line parsing in `main.cpp`, with server mode as the default if `--mode=client` is not supplied.
 
-- server listener on TCP, UDP, WS, or WSS
-- client `client.server`
-- TUN settings
+There is also an optional Go management service under `go/`. It is not part of the transport data plane itself. It is a separate managed-control backend that a C++ server can connect to when `server.backend` is configured.
 
-## Pattern 2: Split-Tunnel Enterprise Access
+So the deployment model is not "many binaries with many independent roles." It is closer to this:
 
-Topology:
+- one C++ runtime executable for data plane and local orchestration
+- one optional Go service for managed policy and state distribution
 
-- client keeps public traffic local
-- only private prefixes, route files, or DNS-selected destinations enter the overlay
+```mermaid
+flowchart TD
+    A[ppp executable] --> B[Client mode]
+    A --> C[Server mode]
 
-Key features:
+    C --> D[Optional managed backend link]
+    D --> E[Go managed service]
 
-- `client.routes`
-- `--bypass`
-- `--bypass-ngw`
-- `--dns-rules`
-- `--virr` and route-list refresh workflows
+    B --> F[Virtual adapter and local route or proxy integration]
+    C --> G[Acceptors, switchers, sessions, mappings, static path, IPv6 transit]
+```
 
-Use when:
+## First Deployment Fact: Administrator Or Root Privilege Is Required
 
-- you want lower bandwidth cost
-- only some business systems must traverse the tunnel
+`PppApplication::Main(...)` in `main.cpp` explicitly checks `ppp::IsUserAnAdministrator()` and refuses to run if the process lacks administrator or root privilege.
 
-## Pattern 3: Site-To-Site Overlay
+This is one of the most important real deployment constraints in the project. OPENPPP2 is not designed as an unprivileged user-space tunnel process. It expects to:
 
-Topology:
+- create or attach virtual interfaces
+- mutate routes
+- mutate DNS state
+- open listeners on server ports
+- in some modes configure firewall or system networking state
+- on Linux server, enable IPv6 forwarding and install `ip6tables` rules
 
-- fixed clients or branch nodes connect to a central server
-- subnet forwarding is enabled
-- route policy determines which remote subnets are reachable
+Any serious deployment guide must begin with that fact.
 
-Key features:
+## Second Deployment Fact: The Process Must Have A Real Configuration File
 
-- `server.subnet`
-- `--tun-vnet=yes`
-- client route lists
+`LoadConfiguration(...)` in `main.cpp` looks for configuration in this order:
 
-Use when:
+- explicit `-c` / `--c` / `-config` / `--config`
+- `./config.json`
+- `./appsettings.json`
 
-- branch offices need stable interconnect
-- the tunnel should behave more like a routed overlay than an end-user VPN
+The file is not optional in any practical sense. If no readable configuration file is found, startup stops.
 
-## Pattern 4: Proxy Gateway Edge
+The configuration is also not treated as a passive bag of values. `AppConfiguration::Load(...)` and `Loaded()` normalize and constrain many values before runtime begins. So deployment should always think in terms of:
 
-Topology:
+- a checked-in or provisioned configuration file
+- role-specific overlays or environment-specific variants
+- careful handling of secrets inside that file
 
-- client establishes tunnel
-- local applications do not use the virtual NIC directly
-- they connect to the local HTTP or SOCKS proxy exposed by the client runtime
+## Deployment Surfaces
 
-Key features:
+A useful way to read OPENPPP2 deployment is to split it into four surfaces.
 
-- `client.http-proxy.*`
-- `client.socks-proxy.*`
-- optional `server-proxy` when outbound connection itself must traverse an upstream proxy
+### 1. Host Surface
 
-Use when:
+This is the local operating system and network environment that the process mutates or depends on.
 
-- application-level redirection is easier than route changes
-- only selected apps should use the overlay
+Examples:
 
-## Pattern 5: Reverse Service Exposure
+- tun/tap or utun availability
+- route tools or native route APIs
+- DNS resolver ownership
+- Windows firewall and adapter APIs
+- Linux `ip`, `sysctl`, `ip6tables`
+- Android VPN host application and pre-opened TUN fd
 
-Topology:
+### 2. Listener Surface
 
-- a client behind NAT connects outward to the server
-- the client registers mappings
-- outside users or systems reach the mapped service through the server side
+This is how a server accepts incoming transport sessions.
 
-Key features:
+Examples:
 
-- `client.mappings`
-- server `mapping`
-- FRP-style control actions in the tunnel protocol
+- TCP listener
+- UDP listener
+- WS listener
+- WSS listener
+- CDN-style or SNI-related fronting paths where configured
 
-Use when:
+### 3. Data Plane Surface
 
-- internal services must be published without inbound access to the client site
+This is where packets, sessions, mappings, static packets, NAT forwarding, IPv6 forwarding, and MUX connections actually move.
 
-## Pattern 6: WebSocket / WSS Tunnel Behind HTTP Infrastructure
+Examples:
 
-Topology:
+- `VirtualEthernetSwitcher`
+- `VEthernetNetworkSwitcher`
+- static datagram socket
+- mapping ports
+- IPv6 transit interface on Linux server
 
-- server listens on WS or WSS
-- reverse proxy or TLS edge fronts the service
-- clients connect through HTTP-friendly paths
+### 4. Management Surface
 
-Key features:
+This is optional. It exists only if the server is configured to use a managed backend.
 
-- `websocket.listen.ws`
-- `websocket.listen.wss`
-- `websocket.host`
-- `websocket.path`
-- `websocket.http.request`
-- `websocket.http.response`
-
-Use when:
-
-- the deployment must fit existing web ingress infrastructure
-- TLS termination or L7 routing is already standardized
-
-## Pattern 7: Multiplexed Multi-Flow Tunnel
-
-Topology:
-
-- one healthy session carries multiple logical channels
-- repeated setup cost is reduced
-
-Key features:
-
-- `--tun-mux`
-- `--tun-mux-acceleration`
-- `mux.*`
-
-Use when:
-
-- many logical flows share one remote endpoint
-- setup efficiency matters more than strict isolation between flows
-
-## Pattern 8: Static UDP Path With Multi-Server Support
-
-Topology:
-
-- client uses static UDP-oriented behavior
-- one or more upstream UDP servers are configured
-- keepalive maintains path health
-
-Key features:
-
-- `--tun-static=yes`
-- `udp.static.keep-alived`
-- `udp.static.servers`
-- `udp.static.aggligator`
-
-Use when:
-
-- you need datagram-oriented behavior
-- the environment favors persistent UDP reachability
-
-## Pattern 9: Managed Node With External Backend
-
-Topology:
-
-- server keeps the data plane locally
-- server also connects to a Go backend over WebSocket/webhook style APIs
-
-Key features:
+Examples:
 
 - `server.backend`
 - `server.backend-key`
-- `go/` service
+- Go managed service WebSocket and HTTP endpoints
+- Redis and MySQL dependencies of the Go backend
 
-Use when:
+```mermaid
+flowchart TD
+    A[Deployment] --> B[Host surface]
+    A --> C[Listener surface]
+    A --> D[Data plane surface]
+    A --> E[Management surface]
 
-- user policy, node policy, and traffic accounting must be centralized
+    B --> B1[Privileges]
+    B --> B2[Virtual adapter support]
+    B --> B3[Route and DNS ownership]
 
-## Pattern 10: IPv6-Capable Overlay
+    C --> C1[TCP or UDP]
+    C --> C2[WS or WSS]
 
-Topology:
+    D --> D1[Sessions and tunnel packets]
+    D --> D2[Mappings or static path]
+    D --> D3[IPv6 transit if supported]
 
-- server allocates IPv6 state
-- client requests or applies assigned IPv6 values
-- Linux server side handles most complete IPv6 data-plane behavior
+    E --> E1[Go managed backend]
+    E --> E2[Redis and MySQL]
+```
 
-Key features:
+## Client Deployment
 
-- `server.ipv6.mode`
-- `server.ipv6.cidr`
-- `server.ipv6.gateway`
-- `server.ipv6.dns1`
-- `server.ipv6.dns2`
-- `--tun-ipv6`
+### What Client Startup Actually Does
 
-Use when:
+In `PreparedLoopbackEnvironment(...)`, client mode startup does not stop at "connect to server". It performs a concrete deployment sequence:
 
-- the overlay must carry IPv6 natively or present IPv6 service to clients
+1. create a virtual adapter through `ITap::Create(...)`
+2. open that adapter
+3. instantiate `VEthernetNetworkSwitcher`
+4. inject runtime flags such as requested IPv6, SSMT, protect mode, mux, static mode, preferred gateway, preferred NIC
+5. load bypass IP lists and configured client route lists
+6. load DNS rules
+7. open the switcher, which then opens the client exchanger and surrounding client runtime pieces
 
-## Selection Guidance
+That means a deployed client node is not simply a socket endpoint. It is a local network mutator plus a tunnel session endpoint.
 
-Choose transport and topology by operational need:
+### What A Client Host Must Provide
 
-- simplest deployment: TCP server + standard client mode
-- easiest web integration: WSS
-- strongest route control: split-tunnel with route lists and DNS rules
-- service publishing: mappings
-- best reuse of one session: MUX
-- managed service model: backend integration
+Depending on platform, a client deployment needs:
 
-## Deployment Discipline
+- Windows: Wintun or TAP-Windows compatibility, route and DNS mutation permissions, optionally PaperAirplane/LSP related behavior
+- Linux: tun device availability, route tools, optional protect mode support, DNS resolver mutation support
+- macOS: utun support and route mutation capability
+- Android: an application host that provides a VPN TUN fd and the JNI `protect(int)` bridge
 
-- Keep server and client configs separate
-- Version route lists and DNS rules alongside deployment config
-- Treat certificates, backend keys, proxy credentials, and DB secrets as environment secrets
-- Do not enable IPv6, mappings, mux, static mode, and proxies all at once unless the site really needs them
+### Client Deployment Shapes
+
+The code supports several practical client-side deployment shapes.
+
+#### Routed Overlay Client
+
+This is the classic client deployment shape.
+
+The client:
+
+- creates a virtual interface
+- installs steering routes
+- optionally modifies DNS behavior
+- forwards selected or default traffic into the overlay
+
+This is the natural shape when the user wants OPENPPP2 to act like a VPN or routed overlay endpoint.
+
+#### Proxy Edge Client
+
+The client runtime can also expose local HTTP or SOCKS proxies. In that shape, local applications may use the proxy endpoint while the client still owns tunnel connectivity underneath.
+
+This is operationally useful when route mutation is undesirable for the whole host or when only selected applications should use the overlay.
+
+#### Static UDP-Oriented Client
+
+If static mode is enabled, the client also becomes a participant in the static packet path using configured UDP servers and keepalive behavior.
+
+This should be treated as a deployment specialization, not merely a feature toggle, because it changes how the client exercises UDP and static packet transport behavior.
+
+#### Android Embedded Client
+
+On Android, the deployment unit is not the native binary alone. The deployment unit is the Android application plus its VPN host integration plus the native library. The C++ runtime is embedded into the host lifecycle.
+
+## Server Deployment
+
+### What Server Startup Actually Does
+
+In `PreparedLoopbackEnvironment(...)`, server mode does the following:
+
+1. on Linux, pre-run `PrepareServerEnvironment(...)` for IPv6 server prerequisites if IPv6 mode needs it
+2. instantiate `VirtualEthernetSwitcher`
+3. inject preferred NIC
+4. call `ethernet->Open(firewall_rules)`
+5. call `ethernet->Run()`
+
+`VirtualEthernetSwitcher::Open(...)` in turn performs a more revealing sequence:
+
+- `CreateAllAcceptors()`
+- `CreateAlwaysTimeout()`
+- `CreateFirewall(firewall_rules)`
+- `OpenManagedServerIfNeed()`
+- `OpenIPv6TransitIfNeed()`
+- `OpenNamespaceCacheIfNeed()`
+- `OpenDatagramSocket()`
+- `OpenIPv6NeighborProxyIfNeed()`
+- `OpenLogger()` if the above succeeded
+
+This is a very strong hint about real server deployment structure. A deployed server node may contain all of these planes at once:
+
+- transport listeners
+- firewall policy
+- managed-backend connectivity
+- static UDP socket
+- DNS namespace cache
+- IPv6 transit and neighbor-proxy integration on Linux
+- session logger
+
+```mermaid
+flowchart TD
+    A[ppp server mode] --> B[PreparedLoopbackEnvironment]
+    B --> C{Linux and IPv6 server mode}
+    C -->|yes| D[PrepareServerEnvironment]
+    C -->|no| E[Skip Linux IPv6 preflight]
+    D --> F[Create VirtualEthernetSwitcher]
+    E --> F
+    F --> G[Open firewall rules]
+    G --> H[Open managed backend if configured]
+    H --> I[Open IPv6 transit if needed]
+    I --> J[Open namespace cache]
+    J --> K[Open static datagram socket]
+    K --> L[Open IPv6 neighbor proxy if needed]
+    L --> M[Run accept loops]
+```
+
+### What A Server Host Must Provide
+
+At minimum, a server host needs:
+
+- privilege to bind listeners and manage network state
+- a valid configuration file with listener configuration
+- reachable public or internal interfaces depending on topology
+
+If more advanced features are enabled, it additionally needs:
+
+- firewall rules file if local firewall filtering is intended
+- Linux IPv6 prerequisites if using NAT66 or GUA server IPv6 mode
+- route and interface ownership sufficient to install transit and proxy behavior
+- stable time and database/cache connectivity if using the Go backend
+
+### Linux Is The Reference Server Platform For Rich IPv6 Deployment
+
+The source makes this point clearly.
+
+In `LINUX_IPv6Auxiliary.cpp`, `PrepareServerEnvironment(...)` can:
+
+- clean up existing IPv6 server rules
+- enable IPv6 forwarding via `sysctl`
+- choose the uplink interface
+- in GUA mode, adjust `accept_ra`
+- build and apply IPv6 forwarding rules
+- in NAT66 mode, install `ip6tables` NAT postrouting rules
+
+Then in `VirtualEthernetSwitcher.cpp`, server runtime can:
+
+- create a transit tap
+- set transit IPv6 address
+- receive IPv6 packets from that transit interface
+- map IPv6 destinations to client sessions
+- maintain neighbor-proxy entries
+
+This is not merely an optional helper script pattern. It is integrated startup logic. Therefore, if a deployment requires full server-side IPv6 overlay routing, Linux should be treated as the reference deployment platform.
+
+### Static Packet Server Surface
+
+`OpenDatagramSocket()` creates the static packet receive surface. This matters for deployment because enabling static mode is not only a client-side choice. The server host also needs a reachable datagram listener and enough network policy to let that path function.
+
+### Mapping Server Surface
+
+If `server.mapping` is enabled and clients register mapping entries, the server becomes a publishing point for services behind client NAT. That changes the deployment role of the server from "just tunnel concentrator" to "tunnel concentrator plus service exposure gateway."
+
+This should affect firewall design, public interface placement, and monitoring.
+
+## Managed Backend Deployment
+
+### What It Is
+
+The Go service under `go/` is not a replacement for the C++ server. It is an optional management backend that the C++ server can query or authenticate against.
+
+`ManagedServer.go` shows that the backend process:
+
+- loads its own configuration from `os.Args[1]` or `appsettings.json`
+- connects to Redis
+- connects to MySQL master and slave databases
+- auto-migrates server and user tables
+- starts a WebSocket server
+- exposes HTTP endpoints for server and consumer management
+
+### What It Requires
+
+`Configuration.go` makes several requirements explicit. The managed backend configuration must include:
+
+- Redis addresses and master name
+- database master configuration
+- concurrency-control configuration
+- interface path configuration
+- prefixes and path values
+
+Without these, the managed service will not start.
+
+So the management surface deployment implies dependencies that do not exist in the standalone C++ server deployment:
+
+- Redis availability
+- MySQL availability
+- Go service process management
+- network reachability between C++ server and Go backend
+
+### Deployment Meaning
+
+When `server.backend` is configured on the C++ server, the server becomes a hybrid node:
+
+- data plane remains in the C++ runtime
+- user or node policy can come from the backend
+- the deployment now has an external control-plane dependency
+
+That means high availability and failure modeling should treat backend reachability as part of the service model when managed mode is enabled.
+
+## Configuration And Secret Placement In Deployment
+
+`appsettings.json` shows what a realistic deployment file can contain. It may include:
+
+- transport keys
+- WebSocket TLS certificate paths and passwords
+- backend key
+- server listener ports
+- IPv6 prefixes and static bindings
+- client upstream server or upstream proxy settings
+- local HTTP and SOCKS proxy bind addresses
+- mapping definitions
+
+This has two direct deployment implications.
+
+First, the configuration file is both topology and secret material. It should be treated accordingly.
+
+Second, a single example file can contain both client and server blocks, but a real deployment should usually separate role-specific files or rendered templates so that nodes only receive the settings they actually need.
+
+## Deployment Patterns That Match The Source
+
+The old shorthand list of deployment patterns is still valid, but it is more useful to restate them in runtime terms.
+
+### 1. Standalone Client To Standalone Server
+
+This is the simplest deployment:
+
+- one `ppp` server process with configured listeners
+- one or more `ppp` client processes with virtual adapter integration
+
+Use this when no managed backend is needed and policy can live in config files.
+
+### 2. Client With Route Steering And DNS Steering
+
+This is the most common deployment for remote-access or split-tunnel use.
+
+The important operational fact is that the client host becomes part of the deployment. Route files, bypass lists, DNS rules, and local DNS ownership are all part of what must be provisioned correctly.
+
+### 3. Server With Static Datagram Surface
+
+Enable this when the static packet path is required. The deployment must include reachable UDP ingress, not just the main TCP or WS surface.
+
+### 4. Server With Reverse Mapping Exposure
+
+Enable this when clients publish internal services through the server. Treat the server as a service-exposure edge, not just a tunnel concentrator.
+
+### 5. Linux Server With IPv6 Overlay Transit
+
+This is the deployment shape for NAT66 or GUA IPv6 service to clients. It should be treated as Linux-specific infrastructure deployment, with kernel forwarding and `ip6tables` expectations built in.
+
+### 6. Managed Service Deployment
+
+This combines:
+
+- C++ `ppp` server nodes
+- Go managed backend
+- Redis
+- MySQL
+
+This is the richest deployment form in the repository, but also the one with the most moving pieces.
+
+### 7. Android Embedded Client Deployment
+
+This is not a standard CLI rollout. The deployment artifact is the Android application package plus the embedded native library plus the Java-side VPN integration.
+
+## Operational Preconditions By Feature
+
+Before enabling a feature in production deployment, verify the corresponding host precondition.
+
+If enabling WSS:
+
+- certificate file paths must be valid
+- WSS listener ports must be reachable
+- host/path values must be consistent with the ingress layer
+
+If enabling mappings:
+
+- server public exposure policy must allow mapped ports
+- clients must have valid local target services
+- firewall stance must account for the published surface
+
+If enabling static mode:
+
+- UDP reachability must exist between peers
+- keepalive behavior must fit the network environment
+
+If enabling managed backend:
+
+- backend URL and backend key must be valid
+- Go service, Redis, and MySQL must all be reachable and healthy
+
+If enabling server IPv6 NAT66 or GUA:
+
+- host platform should be Linux
+- IPv6 forwarding and `ip6tables` must be available
+- uplink interface selection must be correct
+- public or delegated IPv6 design must already make sense outside OPENPPP2 itself
+
+## Packaging And Delivery By Platform
+
+### Windows
+
+The intended Windows build and packaging flow is described in `build_windows.bat`.
+
+Important deployment-adjacent facts:
+
+- the build expects Visual Studio tooling
+- vcpkg toolchain discovery is mandatory
+- artifacts are produced per architecture and per build type
+
+For deployment, that means Windows delivery is expected to come from a prepared build pipeline, not from ad hoc local compilation on the target host.
+
+### Linux And Unix
+
+The root CMake build is the normal native build path. The `build-openppp2-by-builds.sh` script additionally packages multiple configuration variants into zip files. The cross-build script shows intended multi-architecture Linux delivery.
+
+For deployment, that implies Linux is the most natural platform for building dedicated server artifacts for different architectures.
+
+### Android
+
+Android delivery is a shared-library delivery workflow. The native artifact is only one part of the deployable system; the application host is the actual deployment container.
+
+## Engineering Boundaries To State Explicitly
+
+Several boundaries should be documented plainly in any deployment guide.
+
+OPENPPP2 can be deployed as a client or server from one binary, but client and server hosts have materially different system responsibilities.
+
+The optional Go backend is a management dependency, not a substitute data plane.
+
+The richest server-side IPv6 deployment path is Linux-specific in the current source.
+
+Android deployment is application-hosted, not standalone CLI-hosted.
+
+Privileges are mandatory. This is not a non-privileged tunnel product.
+
+## Recommended Deployment Discipline
+
+Treat deployment as three separate concerns even if the repository can store them together.
+
+First, keep role-specific configs separate:
+
+- client configs
+- server configs
+- managed-backend configs
+
+Second, keep generated or environment-specific files separate from source-controlled defaults.
+
+Third, do not enable every optional plane at once unless the site actually needs them. A deployment that simultaneously enables:
+
+- mappings
+- static mode
+- WSS
+- managed backend
+- IPv6 transit
+- local HTTP and SOCKS proxies
+
+is not merely feature-rich. It is operationally complex, and should be introduced in layers.
 
 ## Related Documents
 
 - [`CONFIGURATION.md`](CONFIGURATION.md)
+- [`CLI_REFERENCE.md`](CLI_REFERENCE.md)
+- [`PLATFORMS.md`](PLATFORMS.md)
+- [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
+- [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
 - [`OPERATIONS.md`](OPERATIONS.md)
-- [`SECURITY.md`](SECURITY.md)
+- [`MANAGEMENT_BACKEND.md`](MANAGEMENT_BACKEND.md)

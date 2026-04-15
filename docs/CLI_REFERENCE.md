@@ -2,796 +2,938 @@
 
 [中文版本](CLI_REFERENCE_CN.md)
 
-## Scope
+## Document Position
 
-This document explains the command-line surface of `ppp` in a code-grounded way. It is based primarily on:
+This document is a user-facing and operator-facing reference for the `ppp` command-line interface. It does not simply restate the help output. Instead, it places command-line parsing logic, runtime defaults, role-branch behavior, local host-network shaping effects, and platform-specific helper commands into one explanation so that a user can understand what each option actually means in the real system.
+
+The main implementation anchors are:
 
 - `main.cpp::PrintHelpInformation()`
 - `main.cpp::GetNetworkInterface()`
 - `main.cpp::IsModeClientOrServer()`
-- Windows helper command handlers in `main.cpp`
+- helper command branches in `main.cpp`
+- `VEthernetNetworkSwitcher.cpp`
+- `VEthernetExchanger.cpp`
 
-This is important because the help output and the parser are close to each other but not perfectly identical. The authoritative source is the parser and the runtime behavior, not the terminal banner text alone.
+One principle matters throughout this document: `ppp --help` tells you what the help banner says. It does not fully tell you how the runtime parses the option, where the default actually comes from, or which runtime layer a given switch influences. The real authority is the parser and the later runtime behavior.
 
-This document therefore distinguishes four things clearly:
+## First Correct Understanding: The CLI Is Not The Entire Configuration Model
 
-- options printed in the help output
-- options parsed directly in code
-- defaults that come from runtime logic rather than literal help text
-- helper commands that perform a system action and then exit
+OPENPPP2 is not a pure CLI tool. Its long-lived behavior is still defined primarily by the JSON configuration model. The command line is better understood as:
 
-## How To Read This Document
+- a role selector
+- a host-network shaping override layer
+- a startup-time auxiliary input layer
+- a one-shot system action surface
 
-Do not read the CLI as if it were a flat list of switches. OPENPPP2 exposes several different classes of command-line behavior:
+That means users should not treat the CLI as a complete replacement for configuration files. The better model is:
 
-- process startup shaping
-- client-local network shaping
-- server-local policy shaping
-- route and DNS helper inputs
-- platform-specific helper commands
-
-These are not interchangeable. Some options define how the `ppp` process runs. Some influence how the client adapter and route environment are created. Some are one-shot administrative commands and do not start the long-running tunnel process at all.
+- JSON defines long-lived node identity
+- CLI shapes how the current host run is realized
 
 ## Invocation Form
 
-The executable form is:
+The minimal executable form is:
 
 ```text
 ppp [OPTIONS]
 ```
 
-The runtime requires administrative privileges.
+It requires administrative privilege. Without that privilege, `main.cpp` refuses to continue.
 
-If the process is started without sufficient privilege, `main.cpp` rejects it immediately.
+It also creates duplicate-run protection based on:
 
-The runtime also prevents duplicate execution of the same role against the same configuration path by creating a repeat-run lock.
+- current role
+- current configuration path
 
-## CLI Roles In The Whole System
+So users should not start the same role against the same configuration path repeatedly and expect that to be a normal testing pattern.
 
-The command line is not the only configuration source. OPENPPP2 combines:
+## How To Read The Whole CLI Surface
 
-- JSON configuration in `appsettings.json` or another supplied file
-- command-line arguments
-
-The JSON file defines the persistent model of the system. The command line is used to:
-
-- pick the runtime role
-- override local interface and route behavior
-- supply operational helper inputs
-- run one-shot utility commands
-
-That means the CLI is a control surface layered on top of the configuration model, not a complete replacement for it.
-
-## Role Selection
-
-The most important CLI decision is the role.
-
-`ppp` defaults to server mode if no role is explicitly supplied.
-
-The main parser checks these keys for mode selection:
-
-- `--mode`
-- `--m`
-- `-mode`
-- `-m`
-
-The help text only presents `--mode`, but the code accepts the other aliases.
-
-If the resulting mode string begins with `c`, the runtime treats the process as client mode. Otherwise it remains in server mode.
-
-That means `client` is explicit, but `server` is also the implicit fallback.
-
-## Command Classes
-
-The full CLI surface is easier to understand if organized as a hierarchy.
+Do not read the `ppp` CLI as one flat list of switches. The better approach is to divide it into several classes.
 
 ```mermaid
 flowchart TD
     A[ppp CLI] --> B[General runtime options]
-    A --> C[Server-start options]
-    A --> D[Client-start options]
-    A --> E[Routing and DNS options]
-    A --> F[Windows helper commands]
-    A --> G[Cross-platform helper commands]
-    A --> H[Undocumented but implemented switches]
+    A --> C[Role-selection options]
+    A --> D[Client local-network shaping options]
+    A --> E[Routing and DNS input options]
+    A --> F[Server policy input options]
+    A --> G[Platform-specific helper commands]
+    A --> H[Utility commands]
 ```
 
-## General Runtime Options
+These classes are not interchangeable:
 
-These options apply to overall process behavior, regardless of whether the process later acts as client or server.
+- some determine whether the process is client or server
+- some determine how the virtual adapter and local route environment are realized
+- some determine how DNS, bypass lists, and route inputs are loaded
+- some do not start a long-running tunnel process at all and only perform a one-shot system action
 
-### `--rt=[yes|no]`
+## Role Selection Options
 
-Meaning:
-
-- enables real-time mode according to the help text
-
-Important note:
-
-- this option appears in the help output, but the deeper runtime implications should be interpreted in the rest of the scheduling and platform behavior, not from the help sentence alone
+Role selection is the most important decision in the CLI.
 
 ### `--mode=[client|server]`
 
-Meaning:
+This is the most visible role parameter in the help output.
 
-- selects whether the process runs as tunnel client or tunnel server
+#### Meaning
 
-Default:
+- run the process as `client` or `server`
+
+#### Default
 
 - `server`
 
-Operational consequence:
+#### Why The Default Is `server`
 
-- this changes the entire startup branch in `PppApplication`
-- client mode builds a virtual adapter and client switcher
-- server mode opens listeners and the server session switch
+The real parsing logic in `IsModeClientOrServer()` does this:
 
-### `--config=<path>`
+- obtain the mode value from the accepted keys
+- if it begins with `c`, enter client mode
+- otherwise stay in server mode
 
-Meaning:
+That means “not supplied” becomes server mode, and only an explicit client-like value moves the program into client mode.
 
-- path to the JSON configuration file
+#### Aliases
 
-Default:
-
-- `./appsettings.json`
-
-Operational consequence:
-
-- this determines which persistent configuration model is loaded before most runtime decisions are made
-
-### `--dns=<ip-list>`
-
-Meaning:
-
-- override DNS server list for runtime network behavior
-
-Help default:
-
-- `8.8.8.8,8.8.4.4`
-
-Operational consequence:
-
-- the parser populates `NetworkInterface::DnsAddresses`
-- if the resulting list is non-empty, it rewrites the asynchronous DNS server list used by the runtime
-
-### `--tun-flash=[yes|no]`
-
-Meaning:
-
-- enables the advanced QoS or flash type-of-service behavior shown in help
-
-Code path:
-
-- this is applied very early through `Socket::SetDefaultFlashTypeOfService(...)`
-
-Default:
-
-- `no`
-
-### `--auto-restart=<seconds>`
-
-Meaning:
-
-- configures process-level auto-restart interval
-
-Default:
-
-- `0`, meaning disabled
-
-Operational consequence:
-
-- stored into global runtime state after argument preparation
-- belongs to lifecycle behavior rather than packet behavior
-
-### `--link-restart=<count>`
-
-Meaning:
-
-- configures link restart attempts
-
-Default:
-
-- `0`
-
-Operational consequence:
-
-- influences reconnection tolerance rather than initial configuration loading
-
-### `--block-quic=[yes|no]`
-
-Meaning:
-
-- disable QUIC support where the client-side platform logic implements that behavior
-
-Default:
-
-- `no`
-
-Operational consequence:
-
-- on Windows, client-side helper logic can use this to toggle support for experimental QUIC-related behavior in the system-proxy-related code path
-
-## Server Startup Options
-
-Server-specific startup options are much fewer at the CLI surface because most server behavior lives in the JSON configuration.
-
-### `--firewall-rules=<file>`
-
-Meaning:
-
-- path to a firewall-rules file used when the server opens
-
-Parser default:
-
-- `./firewall-rules.txt`
-
-Operational consequence:
-
-- passed into `VirtualEthernetSwitcher::Open(...)`
-- belongs to server admission and policy enforcement rather than transport handshake logic
-
-Practical interpretation:
-
-- if server mode is selected, and the deployment requires explicit firewall gating, this file is part of the security boundary
-
-## Client Startup Options
-
-Client CLI behavior is much richer because the client has to create and shape a local network environment.
-
-### `--lwip=[yes|no]`
-
-Meaning:
-
-- selects the client-side network stack behavior
-
-Important nuance:
-
-- the default is platform-sensitive
-- on Windows the runtime checks Wintun availability and uses that to shape the default
-- on non-Windows platforms the default path is different
-
-Why this matters:
-
-- this is not a cosmetic option; it changes how the client networking stack is realized locally
-
-### `--vbgp=[yes|no]`
-
-Meaning:
-
-- enables the virtual-BGP-style route loading helper behavior
-
-Runtime default:
-
-- if not explicitly set, runtime logic later treats it as enabled
-
-Why this matters:
-
-- operators who rely on route files and route steering should understand that silence here does not mean “off”
-
-### `--nic=<interface>`
-
-Meaning:
-
-- preferred physical network interface
-
-Default:
-
-- auto-select
-
-Why this matters:
-
-- in multi-homed systems, choosing the wrong egress or preferred local interface can change route behavior materially
-
-### `--ngw=<ip>`
-
-Meaning:
-
-- preferred gateway
-
-Default:
-
-- auto-detect
-
-Why this matters:
-
-- this directly affects how the client interprets local network reachability and route injection behavior
-
-### `--tun=<name>`
-
-Meaning:
-
-- virtual adapter name
-
-Default:
-
-- `NetworkInterface::GetDefaultTun()`
-
-Why this matters:
-
-- adapter naming affects local operator observability and, on some platforms, practical coexistence with other tunnel software
-
-### `--tun-ip=<ip>`
-
-Meaning:
-
-- client virtual IPv4 address
-
-Default:
-
-- `10.0.0.2`
-
-Important nuance:
-
-- the code later normalizes this through `Ipep::FixedIPAddress(...)` together with gateway and subnet mask
-
-### `--tun-ipv6=<ip>`
-
-Meaning:
-
-- requested client IPv6 address
-
-Default behavior:
-
-- empty or server-assigned flow unless explicitly provided
-
-Why this matters:
-
-- client-side IPv6 should only be used when the server-side IPv6 service is intentionally configured
-
-### `--tun-gw=<ip>`
-
-Meaning:
-
-- virtual adapter gateway
-
-Default:
-
-- `10.0.0.1`
-
-### `--tun-mask=<bits>`
-
-Meaning:
-
-- subnet mask bits according to the help text
-
-Displayed default:
-
-- `30`
-
-Implementation nuance:
-
-- the parser runs this through address helper logic, so the operator should think of this as part of the local tunnel subnet shaping, not merely a raw string literal
-
-### `--tun-vnet=[yes|no]`
-
-Meaning:
-
-- enable subnet forwarding
-
-Default:
-
-- `yes`
-
-Why this matters:
-
-- this influences whether the client behaves more like a host tunnel or a more forwarding-aware edge node
-
-### `--tun-host=[yes|no]`
-
-Meaning:
-
-- prefer host network
-
-Default:
-
-- `yes`
-
-Why this matters:
-
-- this affects local route preference and how overlay behavior coexists with the host network
-
-### `--tun-static=[yes|no]`
-
-Meaning:
-
-- enable the static packet path
-
-Default:
-
-- `no`
-
-Why this matters:
-
-- this is not a cosmetic acceleration toggle
-- it selects a materially different data-path style described in `VirtualEthernetPacket.cpp`
-
-### `--tun-mux=<connections>`
-
-Meaning:
-
-- number of mux sub-links or mux connections to create
-
-Default:
-
-- `0`, meaning disabled
-
-Why this matters:
-
-- MUX is an additional connection model, not merely a throughput checkbox
-
-### `--tun-mux-acceleration=<mode>`
-
-Meaning:
-
-- mux acceleration mode
-
-Default:
-
-- `0`
-
-Implementation nuance:
-
-- the parser clamps the value to a supported range and resets to `0` when the supplied value exceeds the project maximum
-
-## Linux And macOS Client Options
-
-### `--tun-promisc=[yes|no]`
-
-Meaning:
-
-- enable promiscuous behavior on the virtual Ethernet path
-
-Default:
-
-- `yes`
-
-Why this matters:
-
-- this option changes how the client-side virtual interface participates in the local network environment
-- it should be chosen according to the deployment model, not by habit
-
-## Linux-Specific Client Options
-
-Linux has the richest platform-specific CLI surface because Linux networking integration in OPENPPP2 is deeper and more varied.
-
-### `--tun-ssmt=<N>[/<mode>]`
-
-Meaning:
-
-- configure worker count and optional mode
-
-Help interpretation:
-
-- `mq` means multiqueue behavior, where one Linux tun queue can be opened per worker
-
-Default:
-
-- `0/st`
-
-Why this matters:
-
-- this directly changes how the Linux-side tun I/O path is parallelized
-
-### `--tun-route=[yes|no]`
-
-Meaning:
-
-- enable route compatibility mode
-
-Default:
-
-- `no`
-
-Code path:
-
-- when enabled, this switches `TapLinux::CompatibleRoute(true)`
-
-Why this matters:
-
-- this is not a generic feature toggle but a Linux route-behavior compatibility switch
-
-### `--tun-protect=[yes|no]`
-
-Meaning:
-
-- enable route protection behavior
-
-Default:
-
-- `yes`
-
-Why this matters:
-
-- on Linux this belongs to the project’s core safety and survivability story and should not be disabled casually
-
-### `--bypass-nic=<interface>`
-
-Meaning:
-
-- choose the interface bound to bypass route-file behavior
-
-Default:
-
-- auto-select
-
-Why this matters:
-
-- multi-interface Linux deployments can route very differently depending on the bypass interface choice
-
-## macOS-Specific Client Option
-
-### `--tun-ssmt=<threads>`
-
-Meaning:
-
-- SSMT thread optimization count on macOS
-
-Default:
-
-- `0`
-
-Why this matters:
-
-- although the macOS platform surface is smaller than Linux, this still influences local tun-side concurrency behavior
-
-## Windows-Specific Client Option
-
-### `--tun-lease-time-in-seconds=<sec>`
-
-Meaning:
-
-- DHCP-style lease time used by the Windows virtual adapter behavior
-
-Default:
-
-- `7200`
-
-Parser nuance:
-
-- values less than `1` are reset to `7200`
-
-Why this matters:
-
-- this belongs to the Windows adapter-lifecycle model rather than the cross-platform protocol model
-
-## Routing And DNS Options
-
-These options are among the most operationally sensitive because they determine what enters the overlay and what remains local.
-
-### `--bypass=<file1|file2>`
-
-Meaning:
-
-- load one or more bypass IP list files
-
-Parser default:
-
-- `./ip.txt`
-
-Implementation nuance:
-
-- the parser rewrites and resolves the path and then loads it into the `NetworkInterface` bypass set
-
-Why this matters:
-
-- a bypass file is not a convenience hint; it is part of policy
-
-### `--bypass-ngw=<ip>`
-
-Meaning:
-
-- gateway used for bypass routes
-
-Default:
-
-- auto-detect
-
-### `--virr=[file/country]`
-
-Meaning:
-
-- pull and periodically refresh APNIC-style country IP list data into a route file workflow
-
-Displayed default:
-
-- `./ip.txt/CN`
-
-Why this matters:
-
-- this option is part of the project’s route-list automation story and should be treated as policy input, not merely a downloader switch
-
-### `--dns-rules=<file>`
-
-Meaning:
-
-- DNS rules file
-
-Parser default:
-
-- `./dns-rules.txt`
-
-Why this matters:
-
-- DNS rules are part of traffic steering and leak control
-
-## Windows Helper Commands
-
-These commands do not primarily start the long-running tunnel runtime. They perform a system operation and then exit.
-
-### `--system-network-reset`
-
-Meaning:
-
-- reset the Windows network environment
-
-Operational behavior:
-
-- handled in a dedicated Windows helper path and returns `OK` or `FAIL`
-
-### `--system-network-optimization`
-
-Meaning:
-
-- apply a Windows system-network optimization routine
-
-Operational behavior:
-
-- also handled before normal runtime startup and exits after performing the action
-
-### `--system-network-preferred-ipv4`
-
-Meaning:
-
-- set IPv4 as preferred protocol through the Windows helper path
-
-### `--system-network-preferred-ipv6`
-
-Meaning:
-
-- set IPv6 as preferred protocol through the Windows helper path
-
-### `--no-lsp <program>`
-
-Meaning:
-
-- instruct the Windows helper code to exclude a specific program path from the LSP loading path
-
-Why this matters:
-
-- this exists because certain programs, including environments such as WSL-related workflows, can be disrupted by the wrong LSP behavior
-
-## Cross-Platform Utility Commands
-
-### `--help`
-
-Meaning:
-
-- print the runtime help banner and exit
-
-Practical note:
-
-- this is the user-facing summary, but it is not the entire truth of the parser surface
-
-### `--pull-iplist [file/country]`
-
-Meaning:
-
-- download a country IP list from APNIC and exit
-
-Displayed default:
-
-- `./ip.txt/CN`
-
-Why this matters:
-
-- this is both a utility command and a route-policy preparation aid
-
-## Implemented But Not Fully Advertised In Help
-
-The codebase includes behavior that is parsed even when it is not fully represented in the formatted help table.
-
-### `--set-http-proxy`
-
-This switch is accepted by the Windows parser path.
-
-If client mode is active and the switch is set, the client later calls `SetHttpProxyToSystemEnv()`.
-
-Why this matters:
-
-- operators should know this is real runtime behavior even though the main help banner does not present it in the same way as the printed options
-
-### Mode aliases
-
-The role parser accepts:
+The parser also accepts these aliases:
 
 - `--m`
 - `-mode`
 - `-m`
 
-The help text only presents `--mode`.
+The help output does not expand them fully, but the code does accept them.
 
-## Defaults: What To Trust
+#### Practical Impact
 
-When there is tension between a help-table phrase and a code path, trust the code path.
+Once the role is decided, the entire startup branch changes:
 
-The most important default nuances are:
+- the client branch creates or attaches the virtual adapter and opens `VEthernetNetworkSwitcher`
+- the server branch opens `VirtualEthernetSwitcher` and listener state
 
-- `server` is the real default role
-- `--lwip` default differs by platform and Windows adapter path
-- `--vbgp` behaves as enabled by default if not explicitly turned off
-- `--tun-lease-time-in-seconds` is corrected upward on Windows when a bad value is supplied
-- several route and DNS file paths have parser defaults even if operators usually think of them as “external assets”
+### Examples
 
-## Safe Operational Reading Of The CLI
-
-The safest way to operate this CLI is:
-
-1. choose role first
-2. choose configuration file second
-3. decide whether this run is a long-running tunnel process or a one-shot helper command
-4. only then add interface, route, DNS, static, mux, or platform-specific shaping options
-
-That order reduces accidental misuse.
-
-## Example Patterns
-
-### Minimal server start
+Minimal server:
 
 ```bash
-ppp --mode=server --config=./appsettings.json
+ppp --mode=server --config=./server.json
 ```
 
-### Server start with explicit firewall rules
+Minimal client:
 
 ```bash
-ppp --mode=server --config=./appsettings.json --firewall-rules=./firewall-rules.txt
+ppp --mode=client --config=./client.json
 ```
 
-### Minimal client start
+## Configuration File Option
+
+### `--config=<path>`
+
+#### Meaning
+
+- path to the JSON configuration file
+
+#### Real Lookup Behavior
+
+The runtime first uses the CLI-supplied path if present. If not, it continues trying:
+
+- `./config.json`
+- `./appsettings.json`
+
+#### Recommended Use
+
+In production or in formal testing, it is strongly recommended to always specify the path explicitly. For example:
 
 ```bash
-ppp --mode=client --config=./appsettings.json
+ppp --mode=server --config=/etc/openppp2/server.json
 ```
 
-### Client start with explicit local adapter shaping
+It is not good practice to depend on startup correctness merely because the current directory happens to contain `appsettings.json`.
+
+#### Actual Impact
+
+This option determines:
+
+- which persistent configuration model is loaded
+- which path participates in duplicate-run identification
+- which file becomes the basis for all later normalization and defaults
+
+## General Runtime Options
+
+These options influence overall process behavior rather than only a small local client or server concern.
+
+### `--rt=[yes|no]`
+
+#### Meaning
+
+- described by the help output as a real-time mode switch
+
+#### How Users Should Read It
+
+From the help text it looks like a process-level runtime preference. Users should not treat it as a protocol feature. It is better understood as a process scheduling or runtime behavior preference.
+
+#### When To Consider It
+
+- after the base behavior is already stable
+- when the environment truly requires changes to process runtime posture
+
+#### When Not To Touch It Yet
+
+- before basic client/server behavior is already understood
+
+### `--dns=<ip-list>`
+
+#### Meaning
+
+- override the DNS server list used by the current run
+
+#### Example Input
 
 ```bash
-ppp --mode=client --config=./appsettings.json --tun=openppp2 --tun-ip=10.0.0.2 --tun-gw=10.0.0.1 --tun-mask=30
+ppp --mode=client --config=./client.json --dns=1.1.1.1,8.8.8.8
 ```
 
-### Client start with route and DNS policy inputs
+#### Real Meaning
+
+This is not “send a remote DNS preference to the tunnel server.” It is part of the local runtime network input. The code writes it into `NetworkInterface::DnsAddresses`, and the later environment-preparation logic uses it.
+
+#### Appropriate Use Cases
+
+- temporarily override the default DNS list
+- test current route and DNS steering behavior
+- avoid rewriting JSON just to change startup-time resolver input once
+
+#### Common Misunderstanding
+
+- assuming this replaces all DNS rule, redirect, and server-side namespace-cache logic
+
+It does not. DNS rules, DNS redirect, and server-side namespace cache are still separate behaviors.
+
+### `--tun-flash=[yes|no]`
+
+#### Meaning
+
+- control default flash type-of-service or advanced QoS tendency
+
+#### Real Code Path
+
+It is applied very early during argument-environment preparation through `Socket::SetDefaultFlashTypeOfService(...)`.
+
+#### How Users Should Read It
+
+This belongs to process network I/O shaping, not to tunnel policy or client/server business semantics.
+
+#### When To Consider It
+
+- after the base tunnel is stable
+- when the environment is known to be sensitive to QoS or TOS behavior
+
+### `--auto-restart=<seconds>`
+
+#### Meaning
+
+- set a process-level automatic restart interval
+
+#### Default
+
+- `0`, meaning disabled
+
+#### Real Runtime Effect
+
+This option does not affect the initial session establishment path. It enters top-level tick logic, and when uptime reaches the threshold, the whole process is restarted.
+
+#### Appropriate Use Cases
+
+- when a deployment intentionally wants periodic full-process renewal
+- when long-lived nodes are expected to re-enter a clean state on a timer
+
+#### Inappropriate Use Cases
+
+- when the base runtime is not yet stable enough to interpret restart behavior correctly
+
+### `--link-restart=<count>`
+
+#### Meaning
+
+- set a reconnection-count threshold after which the process escalates recovery to a full restart
+
+#### Default
+
+- `0`
+
+#### Real Runtime Effect
+
+Once a client has reached established state, if later reconnection churn crosses the configured threshold, top-level lifecycle logic may restart the whole process.
+
+#### Appropriate Use Case
+
+- when repeated link-level recovery should eventually become process-level recovery
+
+#### Usage Advice
+
+Do not read it as “smaller is always more stable.” It defines a tolerance boundary, not link quality by itself.
+
+### `--block-quic=[yes|no]`
+
+#### Meaning
+
+- block client-side QUIC-related traffic or behavior where supported by platform logic
+
+#### Default
+
+- `no`
+
+#### Real Impact
+
+It influences both client-side UDP 443 handling and, on Windows, can interact with system-proxy or browser-related behavior.
+
+#### Appropriate Use Cases
+
+- when QUIC should not bypass the intended proxy or tunnel model
+- when the operator wants to reduce path ambiguity caused by QUIC-capable applications or browsers
+
+## Server-Specific Options
+
+The server-side CLI surface is small because much server behavior is defined in JSON configuration rather than at startup-time CLI level.
+
+### `--firewall-rules=<file>`
+
+#### Meaning
+
+- path to the firewall rules file used when the server opens
+
+#### Default
+
+- if not supplied, parsing logic falls back to `./firewall-rules.txt`
+
+#### Real Impact
+
+The path is passed into `VirtualEthernetSwitcher::Open(...)`, so it belongs to the server's admission and policy surface rather than to the transport handshake surface.
+
+#### Appropriate Use Cases
+
+- the server needs explicit port, domain, or segment gating
+- the server is being operated as a public or semi-public publication edge rather than as a minimal tunnel concentrator
+
+#### Example
 
 ```bash
-ppp --mode=client --config=./appsettings.json --bypass=./ip.txt --dns-rules=./dns-rules.txt --vbgp=yes
+ppp --mode=server --config=./server.json --firewall-rules=./firewall-rules.txt
 ```
 
-### Linux client start with route protection and multiqueue tuning
+#### Usage Advice
+
+- treat this file as a policy asset
+- keep it under change control instead of hand-editing it ad hoc on target hosts
+
+## Client Local-Network Shaping Options
+
+Client-side options are the richest part of the CLI because the client must really construct a local overlay edge on the host.
+
+### `--lwip=[yes|no]`
+
+#### Meaning
+
+- select the client-side local stack realization path
+
+#### Important Detail
+
+The default is platform-sensitive. On Windows it is also influenced by Wintun availability.
+
+#### How Users Should Read It
+
+This is not a cosmetic setting. It changes how the local client networking stack path is realized.
+
+#### Usage Advice
+
+- unless you already know why the current platform requires manual override, accept the default first
+- when comparing environments, explicitly record whether this option was forced
+
+### `--vbgp=[yes|no]`
+
+#### Meaning
+
+- enable vBGP-style route input behavior
+
+#### Important Detail
+
+If not explicitly disabled, the later runtime tends to proceed as if it is enabled. Users should not assume “not supplied” means “disabled.”
+
+#### Appropriate Use Cases
+
+- route files or online route inputs are part of the deployment
+- route datasets are expected to participate in refresh logic
+
+### `--nic=<interface>`
+
+#### Meaning
+
+- choose the preferred physical interface
+
+#### Appropriate Use Cases
+
+- multi-NIC hosts
+- multi-uplink environments
+- cases where automatic interface choice is frequently wrong
+
+#### Usage Advice
+
+Once you force it, you should also understand:
+
+- which path the remote server will remain reachable over
+- whether bypass and default route behavior should follow that choice
+
+### `--ngw=<ip>`
+
+#### Meaning
+
+- choose the preferred gateway
+
+#### Appropriate Use Cases
+
+- automatic gateway discovery is unstable
+- the host has several competing default routes
+- the operator wants startup to shape the host around one explicit gateway reference
+
+### `--tun=<name>`
+
+#### Meaning
+
+- set the virtual adapter name
+
+#### Appropriate Use Cases
+
+- easier observability on the host
+- coexistence with multiple tunnel products or multiple logical overlay contexts
+
+### `--tun-ip=<ip>`
+
+#### Meaning
+
+- set the client virtual IPv4 address
+
+#### Default
+
+- parsing falls back to `10.0.0.2`
+
+#### Usage Advice
+
+- if there is no special topology need, let defaults or JSON define this
+- only override it when overlay IPv4 planning is deliberate and explicit
+
+### `--tun-ipv6=<ip>`
+
+#### Meaning
+
+- provide the requested client IPv6 input
+
+#### How Users Should Read It
+
+It does not force the client to receive that exact IPv6 result. The final result still depends on:
+
+- whether the server offers IPv6 service
+- whether the server accepts the request
+- whether the host platform can apply the assigned state successfully
+
+### `--tun-gw=<ip>`
+
+#### Meaning
+
+- set the virtual IPv4 gateway
+
+#### Default
+
+- parsing falls back to `10.0.0.1`
+
+#### Usage Advice
+
+- always think about it together with `--tun-ip` and `--tun-mask`
+- do not change it in isolation
+
+### `--tun-mask=<bits>`
+
+#### Meaning
+
+- set the virtual subnet mask width
+
+#### Default
+
+- the practical combined behavior corresponds to `/30`
+
+#### Usage Advice
+
+- it is normalized together with address and gateway behavior
+- do not treat it as a purely cosmetic string
+
+### `--tun-vnet=[yes|no]`
+
+#### Meaning
+
+- enable or disable virtual-subnet forwarding tendency
+
+#### Default
+
+- `yes`
+
+#### How Users Should Read It
+
+It changes whether the client behaves more like a single-host access point or like a subnet-capable forwarding edge.
+
+### `--tun-host=[yes|no]`
+
+#### Meaning
+
+- control whether host-network preference behavior remains enabled
+
+#### Default
+
+- `yes`
+
+#### How Users Should Read It
+
+This affects how route installation, default-path protection, and host/overlay coexistence are shaped. It is not merely descriptive.
+
+### `--tun-static=[yes|no]`
+
+#### Meaning
+
+- enable static packet path behavior
+
+#### Default
+
+- `no`
+
+#### Usage Advice
+
+Only enable it when the deployment really intends to use the static packet model. Do not treat it as a generally superior setting.
+
+### `--tun-mux=<connections>`
+
+#### Meaning
+
+- set the number of MUX subconnections
+
+#### Default
+
+- `0`
+
+#### Usage Advice
+
+- stabilize the main session first
+- then introduce MUX gradually
+- higher values are not automatically better
+
+### `--tun-mux-acceleration=<mode>`
+
+#### Meaning
+
+- choose the MUX acceleration mode
+
+#### Important Detail
+
+- values above the supported range are normalized back to `0`
+
+#### Usage Advice
+
+- start from `0`
+- only then explore acceleration modes after the base MUX plane is understood
+
+## Linux And macOS Related Client Options
+
+### `--tun-promisc=[yes|no]`
+
+#### Platforms
+
+- Linux
+- macOS
+
+#### Meaning
+
+- control whether the virtual interface is used in promiscuous mode
+
+#### Default
+
+- parser-side defaults on these platform branches lean toward `yes`
+
+#### Usage Advice
+
+- only override if the operational implications of promiscuous behavior are already understood on that host
+
+### `--tun-ssmt=<N>[/<mode>]`
+
+#### Platform
+
+- Linux
+
+#### Meaning
+
+- set SSMT thread count and optional mode
+
+#### Parsing Detail
+
+- the Linux help output shows `--tun-ssmt=<N>[/<mode>]`
+- parser logic splits thread count and optional mode internally
+
+#### Usage Advice
+
+- only relevant when doing real Linux edge-performance tuning
+
+### `--tun-route=[yes|no]`
+
+#### Platform
+
+- Linux
+
+#### Meaning
+
+- adjust Linux route compatibility behavior
+
+#### Usage Advice
+
+- read it as a Linux compatibility surface, not as a universal optimization knob
+
+### `--tun-protect=[yes|no]`
+
+#### Platform
+
+- Linux
+
+#### Meaning
+
+- control protect-network behavior
+
+#### Default
+
+- `yes`
+
+#### How Users Should Read It
+
+This is not merely a generic “security hardening” checkbox. It belongs to the host-network logic that prevents critical local sockets or control paths from being pulled back into the overlay incorrectly.
+
+### `--bypass-nic=<interface>`
+
+#### Platform
+
+- Linux
+
+#### Meaning
+
+- choose the interface associated with bypass behavior
+
+#### Appropriate Use Case
+
+- multi-NIC Linux systems with multiple egress and explicit route-control intent
+
+## Windows-Related Options
+
+Windows exposes not only tunnel behavior but also several helper-style system commands and preference-shaping actions.
+
+### `--tun-lease-time-in-seconds=<sec>`
+
+#### Meaning
+
+- control Windows-side lease behavior related to the virtual interface
+
+#### Important Detail
+
+- if the supplied value is smaller than `1`, runtime logic normalizes it to `7200`
+
+#### Usage Advice
+
+- only change it when the Windows-side host behavior is intentionally being shaped
+
+### `--system-network-reset`
+
+#### Meaning
+
+- perform a system network reset style helper action
+
+#### How Users Should Read It
+
+This belongs to the helper-command surface rather than to long-running tunnel mode. It is closer to a one-shot administrative action.
+
+### `--system-network-optimization`
+
+#### Meaning
+
+- trigger a Windows network optimization helper path
+
+### `--system-network-preferred-ipv4`
+
+#### Meaning
+
+- shape system preference toward IPv4
+
+### `--system-network-preferred-ipv6`
+
+#### Meaning
+
+- shape system preference toward IPv6
+
+### `--no-lsp <program>`
+
+#### Meaning
+
+- enter Windows helper logic related to LSP-associated behavior
+
+### `--set-http-proxy`
+
+#### Important Note
+
+The code contains this path even though the help output does not fully expose the full related syntax. Users should therefore know that Windows does carry a system HTTP proxy command and runtime surface.
+
+## Routing And DNS Input Options
+
+This category is one of the most important from the user perspective because it defines traffic boundaries.
+
+### `--bypass=<file>`
+
+#### Meaning
+
+- path to the bypass list file
+
+#### Default
+
+- if not supplied, parsing falls back to `./ip.txt`
+
+#### Usage Advice
+
+- treat it as route policy input
+- keep it under change control
+
+### `--bypass-ngw=<ip>`
+
+#### Meaning
+
+- set the next-hop gateway associated with bypass behavior
+
+#### Default
+
+- `0.0.0.0`
+
+### `--virr=[file/country]`
+
+#### Meaning
+
+- automatically fetch and apply a country IP list
+
+#### Real Impact
+
+- this is not a passive parse-only input
+- it participates in later update logic driven by the tick lifecycle
+
+#### Usage Advice
+
+- enable it only when the operator is comfortable controlling update source and change timing
+
+### `--dns-rules=<file>`
+
+#### Meaning
+
+- path to the DNS rules file
+
+#### Default
+
+- `./dns-rules.txt`
+
+#### Usage Advice
+
+- this file has major influence over DNS steering behavior
+- do not modify it casually without tracking changes
+
+## Utility Commands
+
+### `--help`
+
+#### Meaning
+
+- print help information and exit
+
+#### Appropriate Use Case
+
+- quick confirmation of the help-surface option set
+
+### `--pull-iplist [file/country]`
+
+#### Meaning
+
+- download a country or source IP list
+
+#### How Users Should Read It
+
+This is a utility command, not part of the long-running tunnel session model. It is an operations helper.
+
+## How Options Should Be Combined Correctly
+
+The key to understanding the CLI is not memorizing each switch in isolation. It is knowing which switches belong together.
+
+### Combination One: Minimal Server Set
 
 ```bash
-ppp --mode=client --config=./appsettings.json --tun-ssmt=4/mq --tun-protect=yes --bypass-nic=eth0
+ppp --mode=server --config=./server.json
 ```
 
-### Windows helper command example
+Only if policy gating is needed, add:
+
+```bash
+ppp --mode=server --config=./server.json --firewall-rules=./firewall-rules.txt
+```
+
+### Combination Two: Minimal Client Set
+
+```bash
+ppp --mode=client --config=./client.json
+```
+
+### Combination Three: Explicit Adapter Shaping Set
+
+```bash
+ppp --mode=client --config=./client.json --nic=eth0 --ngw=192.168.1.1 --tun=ppp0 --tun-ip=10.0.0.2 --tun-gw=10.0.0.1 --tun-mask=30
+```
+
+### Combination Four: Route And DNS Steering Set
+
+```bash
+ppp --mode=client --config=./client.json --dns=1.1.1.1,8.8.8.8 --bypass=./ip.txt --dns-rules=./dns-rules.txt
+```
+
+### Combination Five: Multi-Uplink Linux Client Set
+
+```bash
+ppp --mode=client --config=./client.json --nic=eth0 --ngw=192.168.1.1 --bypass=./ip.txt --bypass-nic=eth1 --bypass-ngw=192.168.2.1 --tun-protect=yes
+```
+
+## Recommended Parameter Introduction Order
+
+The safest way to use `ppp` is not to turn on everything at once. Introduce CLI layers in the following order.
+
+### Step One
+
+Only decide:
+
+- `--mode`
+- `--config`
+
+### Step Two
+
+If this is a client, then shape:
+
+- `--nic`
+- `--ngw`
+- `--tun`
+- `--tun-ip`
+- `--tun-gw`
+- `--tun-mask`
+
+### Step Three
+
+Only then add:
+
+- `--dns`
+- `--bypass`
+- `--dns-rules`
+
+### Step Four
+
+Only after that consider:
+
+- `--tun-static`
+- `--tun-mux`
+- `--tun-mux-acceleration`
+- `--block-quic`
+- `--auto-restart`
+- `--link-restart`
+
+```mermaid
+flowchart TD
+    A[mode and config] --> B[adapter shaping]
+    B --> C[route and DNS inputs]
+    C --> D[static or mux]
+    D --> E[lifecycle-related helpers]
+```
+
+## Common Misunderstandings
+
+### Misunderstanding One: The CLI Can Fully Replace JSON
+
+No. The CLI is best for startup overrides and host shaping. JSON remains the long-lived model.
+
+### Misunderstanding Two: More Switches Always Means A Better Result
+
+No. More switches mean more variables. Troubleshooting usually starts by reducing the parameter set, not expanding it.
+
+### Misunderstanding Three: The Help Text Fully Describes Real Behavior
+
+No. The help text is only the first layer. Real behavior also depends on:
+
+- parser defaults
+- normalization logic
+- later runtime paths
+
+### Misunderstanding Four: Platform Options Only Affect Display Or Cosmetic Host State
+
+No. Many platform options influence real route, DNS, protect, and helper behaviors.
+
+## Most Useful Command Templates
+
+### Template One: Minimal Server
+
+```bash
+ppp --mode=server --config=./server.json
+```
+
+### Template Two: Minimal Client
+
+```bash
+ppp --mode=client --config=./client.json
+```
+
+### Template Three: Client With Custom DNS
+
+```bash
+ppp --mode=client --config=./client.json --dns=1.1.1.1,8.8.8.8
+```
+
+### Template Four: Client With Explicit Route Inputs
+
+```bash
+ppp --mode=client --config=./client.json --bypass=./ip.txt --dns-rules=./dns-rules.txt --vbgp=yes
+```
+
+### Template Five: Windows Helper Action
 
 ```powershell
 ppp --system-network-reset
 ```
 
-## Final Guidance
+or:
 
-OPENPPP2 has a large CLI surface because it is not only a packet tunnel. It is a client/server infrastructure runtime with local network integration, route and DNS control, static mode, mux, mapping, and platform-specific behavior.
+```powershell
+ppp --system-network-preferred-ipv4
+```
 
-That means the right mindset for this CLI is not “memorize all switches.” The right mindset is:
+These should be treated as system-maintenance actions rather than as long-running tunnel commands.
 
-- understand which layer you are changing
-- know whether the switch affects startup, policy, interface realization, or platform maintenance
-- treat route and DNS options as policy inputs
-- treat platform helper commands as privileged system operations
+## Where To Read Next
 
-## Related Documents
+If you want the full configuration model after understanding the CLI surface, continue with:
+
+- [`CONFIGURATION.md`](CONFIGURATION.md)
+
+If you want to understand why the client mutates routes, DNS, and proxy behavior, continue with:
+
+- [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
+
+If you want to understand why the server opens listeners, mappings, IPv6 behavior, and backend cooperation, continue with:
+
+- [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
+
+If you want to understand why route and DNS inputs are so central, continue with:
+
+- [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md)
+
+If you want the broader user-facing usage model, continue with:
 
 - [`USER_MANUAL.md`](USER_MANUAL.md)
-- [`CONFIGURATION.md`](CONFIGURATION.md)
-- [`OPERATIONS.md`](OPERATIONS.md)
-- [`PLATFORMS.md`](PLATFORMS.md)
