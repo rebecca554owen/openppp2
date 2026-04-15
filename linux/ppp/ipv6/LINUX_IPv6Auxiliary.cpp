@@ -5,6 +5,23 @@
 #include <linux/ppp/tap/TapLinux.h>
 
 namespace {
+    static bool IsSafeIPv6ClientAddress(const boost::asio::ip::address_v6& address, int prefix_length, const boost::asio::ip::address_v6* gateway = NULLPTR) noexcept {
+        if (address.is_unspecified() || address.is_multicast() || address.is_loopback()) {
+            return false;
+        }
+
+        prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+        if (prefix_length < 128 && address == ppp::ipv6::ComputeNetworkAddress(address, prefix_length)) {
+            return false;
+        }
+
+        if (NULLPTR != gateway && !gateway->is_unspecified() && address == *gateway) {
+            return false;
+        }
+
+        return true;
+    }
+
     static bool IsSafeShellToken(const ppp::string& value) noexcept {
         if (value.empty()) {
             return false;
@@ -68,11 +85,39 @@ namespace {
         return interface_name;
     }
 
+    static ppp::vector<ppp::string> ReadDefaultRoutes() noexcept {
+        ppp::vector<ppp::string> routes;
+
+        FILE* pipe = popen("ip -6 route show default", "r");
+        if (NULLPTR == pipe) {
+            return routes;
+        }
+
+        char buffer[1024];
+        while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+            ppp::string route = buffer;
+            while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
+                route.pop_back();
+            }
+
+            if (!route.empty()) {
+                routes.emplace_back(std::move(route));
+            }
+        }
+
+        pclose(pipe);
+        return routes;
+    }
+
     static int LinuxExecuteCommandWithStatus(const ppp::string& command) noexcept {
         if (command.empty()) {
             return -1;
         }
         return system(command.data());
+    }
+
+    static bool SupportsIp6tablesNatTable() noexcept {
+        return LinuxExecuteCommandWithStatus("ip6tables -t nat -S >/dev/null 2>&1") == 0;
     }
 
     static ppp::string BuildIpv6ForwardRules(bool add_rules, const ppp::string& prefix, int prefix_length) noexcept {
@@ -162,20 +207,48 @@ namespace {
         return !prefix.empty();
     }
 
-    static void CleanupServerRules(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& prefix, int prefix_length, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
-        if (prefix.empty()) {
-            return;
+    static bool NormalizeIpv6Prefix(const ppp::string& cidr, int configured_prefix_length, ppp::string& prefix, int& prefix_length) noexcept {
+        if (!ParseIpv6Cidr(cidr, prefix, prefix_length)) {
+            return false;
         }
 
+        if (configured_prefix_length > 0 && configured_prefix_length <= 128) {
+            prefix_length = configured_prefix_length;
+        }
+
+        boost::system::error_code ec;
+        boost::asio::ip::address address = StringToAddress(prefix, ec);
+        if (ec || !address.is_v6()) {
+            return false;
+        }
+
+        prefix = ppp::ipv6::ComputeNetworkAddress(address.to_v6(), prefix_length).to_string();
+        return true;
+    }
+
+    static void LogLinuxRestoreStep(const char* action, bool ok, const ppp::string& detail) noexcept {
+        fprintf(stdout, "Linux IPv6 client restore %s: %s (%s).\r\n", action, ok ? "ok" : "failed", detail.data());
+    }
+
+    static void CleanupServerRules(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& prefix, int prefix_length, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
         ppp::string uplink_name = ResolveIpv6UplinkInterface(preferred_nic);
         if (!uplink_name.empty() && !IsSafeShellToken(uplink_name)) {
             uplink_name.clear();
         }
 
         char command[4096];
-        ppp::string forward_cleanup = BuildIpv6ForwardRules(false, prefix, prefix_length);
+        ppp::string forward_cleanup;
+        if (!prefix.empty()) {
+            forward_cleanup = BuildIpv6ForwardRules(false, prefix, prefix_length);
+        }
         if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
-            if (uplink_name.empty()) {
+            if (prefix.empty()) {
+                if (!uplink_name.empty()) {
+                    snprintf(command, sizeof(command), "ip6tables -t nat -D POSTROUTING -o %s -j MASQUERADE >/dev/null 2>&1", uplink_name.data());
+                    LinuxExecuteCommand(command);
+                }
+            }
+            else if (uplink_name.empty()) {
                 snprintf(command, sizeof(command),
                     "%s; "
                     "ip6tables -t nat -D POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1",
@@ -185,14 +258,18 @@ namespace {
             else {
                 snprintf(command, sizeof(command),
                     "%s; "
+                    "ip6tables -t nat -D POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1; "
                     "ip6tables -t nat -D POSTROUTING -o %s -s %s/%d -j MASQUERADE >/dev/null 2>&1",
                     forward_cleanup.data(),
+                    prefix.data(), prefix_length,
                     uplink_name.data(), prefix.data(), prefix_length);
             }
             LinuxExecuteCommand(command);
         }
         else if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
-            LinuxExecuteCommand(forward_cleanup);
+            if (!forward_cleanup.empty()) {
+                LinuxExecuteCommand(forward_cleanup);
+            }
             if (!uplink_name.empty()) {
                 ppp::tap::TapLinux::DisableIPv6NeighborProxy(uplink_name);
             }
@@ -275,7 +352,7 @@ namespace ppp {
 
                 ppp::string prefix;
                 int prefix_length = 0;
-                if (!ParseIpv6Cidr(ipv6.cidr, prefix, prefix_length) && mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
+                if (!NormalizeIpv6Prefix(ipv6.cidr, ipv6.prefix_length, prefix, prefix_length) && mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
                     prefix = "fd42:4242:4242::";
                     prefix_length = 64;
                 }
@@ -322,6 +399,11 @@ namespace ppp {
                     return false;
                 }
 
+                if (!SupportsIp6tablesNatTable()) {
+                    fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables nat table unavailable for NAT66.\r\n");
+                    return false;
+                }
+
                 if (uplink_name.empty()) {
                     snprintf(ip6tables_command, sizeof(ip6tables_command),
                         "%s; "
@@ -345,7 +427,7 @@ namespace ppp {
                     return true;
                 }
 
-                fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables rules failed.\r\n");
+                fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables nat66 rules failed.\r\n");
                 return false;
             }
 
@@ -353,13 +435,23 @@ namespace ppp {
                 (void)context;
                 (void)nat_mode;
                 state.OriginalDnsConfiguration = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
-                state.OriginalDefaultRoute = ReadDefaultRoute();
+                state.OriginalDefaultRoutes = ReadDefaultRoutes();
+                if (!state.OriginalDefaultRoutes.empty()) {
+                    state.OriginalDefaultRoute = state.OriginalDefaultRoutes.front();
+                }
+                else {
+                    state.OriginalDefaultRoute.clear();
+                }
                 state.DefaultRouteWasPresent = !state.OriginalDefaultRoute.empty();
                 state.OriginalDefaultRouteInterface = ExtractRouteInterface(state.OriginalDefaultRoute);
             }
 
             bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                 if (NULLPTR == context.Tap || context.InterfaceName.empty() || !address.is_v6()) {
+                    return false;
+                }
+
+                if (!IsSafeIPv6ClientAddress(address.to_v6(), prefix_length)) {
                     return false;
                 }
 
@@ -470,25 +562,33 @@ namespace ppp {
                 }
 
                 if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                    ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                    bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                    LogLinuxRestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
                 }
 
                 if (state.DefaultRouteApplied && nat_mode && state.DefaultRouteGateway.empty()) {
-                    ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, ppp::string());
+                    bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, ppp::string());
+                    LogLinuxRestoreStep("default-route-delete", ok, "::/0");
                 }
                 else if (state.DefaultRouteApplied) {
-                    ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
+                    bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
+                    LogLinuxRestoreStep("default-route-delete", ok, state.DefaultRouteGateway.empty() ? ppp::string("::/0") : state.DefaultRouteGateway);
                 }
 
                 if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
-                    ppp::tap::TapLinux::DeleteIPv6Address(context.InterfaceName, state.Address, prefix_length);
+                    bool ok = ppp::tap::TapLinux::DeleteIPv6Address(context.InterfaceName, state.Address, prefix_length);
+                    LogLinuxRestoreStep("address-delete", ok, state.Address);
                 }
 
                 if (state.DnsApplied) {
-                    ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
+                    bool ok = ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
+                    LogLinuxRestoreStep("dns-restore", ok, "resolv.conf");
                 }
-                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent && !state.OriginalDefaultRoute.empty()) {
-                    ApplyDefaultRouteCommand(state.OriginalDefaultRoute);
+                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
+                    for (const ppp::string& route : state.OriginalDefaultRoutes) {
+                        bool ok = ApplyDefaultRouteCommand(route);
+                        LogLinuxRestoreStep("default-route-restore", ok, route);
+                    }
                 }
             }
             }

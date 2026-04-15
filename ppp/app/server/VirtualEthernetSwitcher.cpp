@@ -57,6 +57,46 @@ static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boos
     return false;
 }
 
+static bool IsAssignableClientIPv6Address(const boost::asio::ip::address_v6& address, int prefix_length, const boost::asio::ip::address_v6* gateway = NULLPTR) noexcept {
+    if (address.is_unspecified() || address.is_multicast() || address.is_loopback()) {
+        return false;
+    }
+
+    prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+    if (prefix_length < 128 && address == ppp::ipv6::ComputeNetworkAddress(address, prefix_length)) {
+        return false;
+    }
+
+    if (NULLPTR != gateway && !gateway->is_unspecified() && address == *gateway) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool GetConfiguredIPv6Network(const ppp::configurations::AppConfiguration& configuration, boost::asio::ip::address_v6& network, int& prefix_length) noexcept {
+    const auto& ipv6 = configuration.server.ipv6;
+    prefix_length = std::max<int>(0, std::min<int>(128, ipv6.prefix_length));
+    if (prefix_length <= 0 || prefix_length > 128) {
+        return false;
+    }
+
+    ppp::string prefix_string = ipv6.cidr;
+    std::size_t slash = prefix_string.find('/');
+    if (slash != ppp::string::npos) {
+        prefix_string = prefix_string.substr(0, slash);
+    }
+
+    boost::system::error_code ec;
+    boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
+    if (ec || !prefix.is_v6()) {
+        return false;
+    }
+
+    network = ppp::ipv6::ComputeNetworkAddress(prefix.to_v6(), prefix_length);
+    return true;
+}
+
 #if defined(_LINUX)
 static ppp::string ResolvePreferredIPv6UplinkInterface(const ppp::string& preferred_nic) noexcept {
     if (!preferred_nic.empty()) {
@@ -162,20 +202,14 @@ namespace ppp {
                     return configured_gateway;
                 }
 
-                ppp::string prefix_string = ipv6.cidr;
-                std::size_t slash = prefix_string.find('/');
-                if (slash != ppp::string::npos) {
-                    prefix_string = prefix_string.substr(0, slash);
-                }
-
-                ec.clear();
-                boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
-                if (ec || !prefix.is_v6()) {
+                boost::asio::ip::address_v6 network;
+                int prefix_length = 0;
+                if (!GetConfiguredIPv6Network(*configuration_, network, prefix_length)) {
                     return boost::asio::ip::address();
                 }
 
                 boost::asio::ip::address_v6 gateway;
-                if (!TryGetFirstHostIPv6(prefix.to_v6(), gateway)) {
+                if (!TryGetFirstHostIPv6(network, gateway)) {
                     return boost::asio::ip::address();
                 }
                 return boost::asio::ip::address(gateway);
@@ -237,10 +271,18 @@ namespace ppp {
                     boost::asio::ip::address_v6 candidate = boost::asio::ip::address_v6(network_bytes);
 
                     boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
-                    if (transit_gateway.is_v6() && candidate == transit_gateway.to_v6()) {
+                    boost::asio::ip::address_v6 gateway_v6;
+                    if (transit_gateway.is_v6()) {
+                        gateway_v6 = transit_gateway.to_v6();
+                    }
+                    if (!IsAssignableClientIPv6Address(candidate, prefix_length, transit_gateway.is_v6() ? &gateway_v6 : NULLPTR)) {
                         boost::asio::ip::address_v6::bytes_type candidate_bytes = candidate.to_bytes();
                         candidate_bytes[15] ^= 0x01;
                         candidate = boost::asio::ip::address_v6(candidate_bytes);
+                    }
+
+                    if (!IsAssignableClientIPv6Address(candidate, prefix_length, transit_gateway.is_v6() ? &gateway_v6 : NULLPTR)) {
+                        return false;
                     }
 
                     extensions.AssignedIPv6Address = candidate;
@@ -249,23 +291,21 @@ namespace ppp {
 
                 auto try_commit_ipv6_lease = [&](const boost::asio::ip::address_v6& candidate, bool static_binding, Byte status_code, const ppp::string& status_message) noexcept -> bool {
                     boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
-                    if (transit_gateway.is_v6() && candidate == transit_gateway.to_v6()) {
+                    boost::asio::ip::address_v6 transit_gateway_v6;
+                    const boost::asio::ip::address_v6* transit_gateway_ptr = NULLPTR;
+                    if (transit_gateway.is_v6()) {
+                        transit_gateway_v6 = transit_gateway.to_v6();
+                        transit_gateway_ptr = &transit_gateway_v6;
+                    }
+
+                    if (!IsAssignableClientIPv6Address(candidate, ipv6.prefix_length, transit_gateway_ptr)) {
                         return false;
                     }
 
-                    if (candidate.is_multicast() || candidate.is_unspecified()) {
-                        return false;
-                    }
-
-                    boost::system::error_code prefix_ec;
-                    ppp::string configured_prefix_string;
-                    int configured_prefix_length = 0;
-                    std::size_t slash = ipv6.cidr.find('/');
-                    configured_prefix_string = slash == ppp::string::npos ? ipv6.cidr : ipv6.cidr.substr(0, slash);
-                    boost::asio::ip::address configured_prefix = StringToAddress(configured_prefix_string, prefix_ec);
-                    int allowed_prefix_length = std::max<int>(0, std::min<int>(128, ipv6.prefix_length));
-                    if (!prefix_ec && configured_prefix.is_v6()) {
-                        if (!ppp::ipv6::PrefixMatch(candidate, configured_prefix.to_v6(), allowed_prefix_length)) {
+                    boost::asio::ip::address_v6 configured_network;
+                    int allowed_prefix_length = 0;
+                    if (GetConfiguredIPv6Network(*configuration_, configured_network, allowed_prefix_length)) {
+                        if (!ppp::ipv6::PrefixMatch(candidate, configured_network, allowed_prefix_length)) {
                             return false;
                         }
                     }

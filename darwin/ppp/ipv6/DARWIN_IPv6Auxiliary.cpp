@@ -7,6 +7,10 @@ namespace ppp {
         namespace ipv6 {
             namespace auxiliary {
             namespace {
+                static void LogDarwinRestoreStep(const char* action, bool ok, const ppp::string& detail) noexcept {
+                    fprintf(stdout, "Darwin IPv6 client restore %s: %s (%s).\r\n", action, ok ? "ok" : "failed", detail.data());
+                }
+
                 static bool IsSafeShellToken(const ppp::string& value) noexcept {
                     if (value.empty()) {
                         return false;
@@ -80,6 +84,106 @@ namespace ppp {
                 }
 
                 pclose(pipe);
+            }
+
+            static ppp::vector<ppp::string> ReadDefaultRoutes() noexcept {
+                ppp::vector<ppp::string> routes;
+
+                FILE* pipe = popen("netstat -rn -f inet6", "r");
+                if (NULLPTR == pipe) {
+                    return routes;
+                }
+
+                char buffer[1024];
+                while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+                    ppp::string line = ATrim(buffer);
+                    if (line.empty()) {
+                        continue;
+                    }
+
+                    if (line.find("default") != 0) {
+                        continue;
+                    }
+
+                    if (line.find("Internet6") != ppp::string::npos || line.find("Destination") != ppp::string::npos) {
+                        continue;
+                    }
+
+                    std::istringstream stream(line);
+                    ppp::vector<ppp::string> tokens;
+                    ppp::string token;
+                    while (stream >> token) {
+                        tokens.emplace_back(token);
+                    }
+
+                    if (tokens.size() < 2 || tokens[0] != "default") {
+                        continue;
+                    }
+
+                    ppp::string gateway = tokens[1];
+                    if (!gateway.empty() && gateway.find("link#") == 0) {
+                        gateway.clear();
+                    }
+
+                    ppp::string interface_name;
+                    for (std::size_t i = 2; i < tokens.size(); ++i) {
+                        if (tokens[i].find("utun") == 0 || tokens[i].find("en") == 0 || tokens[i].find("bridge") == 0 || tokens[i].find("pdp_ip") == 0) {
+                            interface_name = tokens[i];
+                        }
+                    }
+
+                    if (interface_name.empty()) {
+                        continue;
+                    }
+
+                    routes.emplace_back("if=" + interface_name + ";gw=" + gateway);
+                }
+
+                pclose(pipe);
+                return routes;
+            }
+
+            static bool ApplyDefaultRouteSnapshot(const ppp::string& route) noexcept {
+                if (route.empty()) {
+                    return false;
+                }
+
+                ppp::vector<ppp::string> segments;
+                if (ppp::Tokenize<ppp::string>(route, segments, ";") < 2) {
+                    return false;
+                }
+
+                ppp::string gateway;
+                ppp::string interface_name;
+
+                for (const ppp::string& segment : segments) {
+                    std::size_t pos = segment.find('=');
+                    if (pos == ppp::string::npos) {
+                        continue;
+                    }
+
+                    ppp::string key = segment.substr(0, pos);
+                    ppp::string value = segment.substr(pos + 1);
+                    if (key == "if") {
+                        interface_name = value;
+                    }
+                    else if (key == "gw") {
+                        gateway = value;
+                    }
+                }
+
+                if (interface_name.empty()) {
+                    ppp::string current_interface;
+                    ppp::string current_gateway;
+                    ReadPrimaryDefaultRoute(current_interface, current_gateway);
+                    interface_name = current_interface;
+                }
+
+                if (interface_name.empty()) {
+                    return false;
+                }
+
+                return SetRoute(interface_name, "::", 0, gateway);
             }
 
             bool IsCurrentDefaultRoute(const ppp::string& interface_name, const ppp::string& gateway) noexcept {
@@ -159,6 +263,7 @@ namespace ppp {
                 (void)context;
                 (void)nat_mode;
                 state.OriginalDnsConfiguration = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
+                state.OriginalDefaultRoutes = ReadDefaultRoutes();
                 ReadPrimaryDefaultRoute(state.OriginalDefaultRouteInterface, state.OriginalDefaultRoute);
                 state.DefaultRouteWasPresent = !state.OriginalDefaultRouteInterface.empty();
             }
@@ -261,24 +366,38 @@ namespace ppp {
                 }
 
                 if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                    DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                    bool ok = DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                    LogDarwinRestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
                 }
 
                 if (state.DefaultRouteApplied) {
-                    DeleteRoute(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
+                    bool ok = DeleteRoute(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
+                    LogDarwinRestoreStep("default-route-delete", ok, state.DefaultRouteGateway.empty() ? ppp::string("::/0") : state.DefaultRouteGateway);
                 }
 
                 if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
                     char cmd[600];
                     snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s delete > /dev/null 2>&1", context.InterfaceName.data(), state.Address.data());
-                    system(cmd);
+                    bool ok = system(cmd) == 0;
+                    LogDarwinRestoreStep("address-delete", ok, state.Address);
                 }
 
                 if (state.DnsApplied) {
-                    ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
+                    bool ok = ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
+                    LogDarwinRestoreStep("dns-restore", ok, "resolver-config");
                 }
-                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent && !state.OriginalDefaultRouteInterface.empty()) {
-                    SetRoute(state.OriginalDefaultRouteInterface, "::", 0, state.OriginalDefaultRoute);
+                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
+                    bool restored = false;
+                    for (const ppp::string& route : state.OriginalDefaultRoutes) {
+                        bool ok = ApplyDefaultRouteSnapshot(route);
+                        restored |= ok;
+                        LogDarwinRestoreStep("default-route-restore", ok, route);
+                    }
+
+                    if (!restored && !state.OriginalDefaultRouteInterface.empty()) {
+                        bool ok = SetRoute(state.OriginalDefaultRouteInterface, "::", 0, state.OriginalDefaultRoute);
+                        LogDarwinRestoreStep("default-route-restore-fallback", ok, state.OriginalDefaultRouteInterface);
+                    }
                 }
             }
             }

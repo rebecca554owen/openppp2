@@ -564,6 +564,9 @@ namespace ppp {
                 else if (!ppp::ipv6::PrefixMatch(configured_gateway.to_v6(), cidr_prefix, config.server.ipv6.prefix_length)) {
                     config.server.ipv6.gateway.clear();
                 }
+                else if (configured_gateway.to_v6() == cidr_prefix) {
+                    config.server.ipv6.gateway.clear();
+                }
                 else {
                     effective_gateway_v6 = configured_gateway.to_v6();
                     has_effective_gateway = true;

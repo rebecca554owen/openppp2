@@ -12,6 +12,83 @@ namespace ppp {
     namespace win32 {
         namespace ipv6 {
             namespace auxiliary {
+            namespace {
+                static void LogWin32RestoreStep(const char* action, bool ok, const ppp::string& detail) noexcept {
+                    fprintf(stdout, "Windows IPv6 client restore %s: %s (%s).\r\n", action, ok ? "ok" : "failed", detail.data());
+                }
+
+                struct DefaultRouteSnapshot {
+                    int InterfaceIndex = -1;
+                    int Metric = -1;
+                    ppp::string Gateway;
+                };
+
+                static bool QueryOriginalDefaultRoutes(ppp::vector<DefaultRouteSnapshot>& routes) noexcept {
+                    routes.clear();
+
+                    PMIB_IPFORWARD_TABLE2 table = NULLPTR;
+                    if (::GetIpForwardTable2(AF_INET6, &table) != NO_ERROR || NULLPTR == table) {
+                        return false;
+                    }
+
+                    for (ULONG i = 0; i < table->NumEntries; ++i) {
+                        const MIB_IPFORWARD_ROW2& row = table->Table[i];
+                        if (row.DestinationPrefix.PrefixLength != 0) {
+                            continue;
+                        }
+
+                        const SOCKADDR_INET& prefix = row.DestinationPrefix.Prefix;
+                        if (prefix.si_family != AF_INET6) {
+                            continue;
+                        }
+
+                        const IN6_ADDR& prefix_addr = prefix.Ipv6.sin6_addr;
+                        if (memcmp(&prefix_addr, &in6addr_any, sizeof(prefix_addr)) != 0) {
+                            continue;
+                        }
+
+                        DefaultRouteSnapshot snapshot;
+                        snapshot.InterfaceIndex = (int)row.InterfaceIndex;
+                        snapshot.Metric = (int)row.Metric;
+
+                        char text[INET6_ADDRSTRLEN] = { 0 };
+                        const IN6_ADDR& next_hop = row.NextHop.Ipv6.sin6_addr;
+                        if (memcmp(&next_hop, &in6addr_any, sizeof(next_hop)) != 0) {
+                            if (NULLPTR != inet_ntop(AF_INET6, &next_hop, text, sizeof(text))) {
+                                snapshot.Gateway = text;
+                            }
+                        }
+
+                        routes.emplace_back(std::move(snapshot));
+                    }
+
+                    ::FreeMibTable(table);
+                    std::sort(routes.begin(), routes.end(), [](const DefaultRouteSnapshot& left, const DefaultRouteSnapshot& right) noexcept {
+                        if (left.Metric != right.Metric) {
+                            return left.Metric < right.Metric;
+                        }
+                        if (left.InterfaceIndex != right.InterfaceIndex) {
+                            return left.InterfaceIndex < right.InterfaceIndex;
+                        }
+                        return left.Gateway < right.Gateway;
+                    });
+                    return !routes.empty();
+                }
+
+                static bool RestoreDefaultRouteSnapshot(const DefaultRouteSnapshot& route) noexcept {
+                    if (route.InterfaceIndex < 0) {
+                        return false;
+                    }
+
+                    int metric = route.Metric > 0 ? route.Metric : 1;
+                    if (route.Gateway.empty()) {
+                        return ppp::win32::network::SetIPv6DefaultRoute(route.InterfaceIndex, metric);
+                    }
+
+                    return ppp::win32::network::SetIPv6DefaultGateway(route.InterfaceIndex, route.Gateway, metric);
+                }
+            }
+
             bool QueryOriginalDefaultRoute(int& interface_index, ppp::string& gateway, int& metric) noexcept {
                 interface_index = -1;
                 gateway.clear();
@@ -69,6 +146,15 @@ namespace ppp {
                 int metric = -1;
                 state.DefaultRouteWasPresent = QueryOriginalDefaultRoute(state.OriginalDefaultRouteInterfaceIndex, state.OriginalDefaultRoute, metric);
                 state.OriginalDefaultRouteMetric = metric;
+                ppp::vector<DefaultRouteSnapshot> routes;
+                if (QueryOriginalDefaultRoutes(routes)) {
+                    state.OriginalDefaultRoutes.reserve(routes.size());
+                    for (const DefaultRouteSnapshot& route : routes) {
+                        ppp::string encoded = "if=" + stl::to_string<ppp::string>(route.InterfaceIndex) + ";metric=" +
+                            stl::to_string<ppp::string>(route.Metric) + ";gw=" + route.Gateway;
+                        state.OriginalDefaultRoutes.emplace_back(std::move(encoded));
+                    }
+                }
                 if (auto current_ni = ppp::win32::network::GetNetworkInterfaceByInterfaceIndex(context.InterfaceIndex); NULLPTR != current_ni) {
                     state.OriginalDnsServers = current_ni->DnsAddresses;
                 }
@@ -157,29 +243,69 @@ namespace ppp {
                 (void)nat_mode;
 
                 if (state.DefaultRouteApplied) {
-                    ppp::win32::network::DeleteIPv6DefaultGateway(context.InterfaceIndex, state.DefaultRouteGateway);
+                    bool ok = ppp::win32::network::DeleteIPv6DefaultGateway(context.InterfaceIndex, state.DefaultRouteGateway);
+                    LogWin32RestoreStep("default-route-delete", ok, state.DefaultRouteGateway.empty() ? ppp::string("::/0") : state.DefaultRouteGateway);
                 }
 
                 if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                    ppp::win32::network::DeleteIPv6Route(context.InterfaceIndex, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                    bool ok = ppp::win32::network::DeleteIPv6Route(context.InterfaceIndex, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                    LogWin32RestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
                 }
 
                 if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
-                    ppp::win32::network::DeleteIPv6Address(context.InterfaceIndex, state.Address);
+                    bool ok = ppp::win32::network::DeleteIPv6Address(context.InterfaceIndex, state.Address);
+                    LogWin32RestoreStep("address-delete", ok, state.Address);
                 }
 
                 if (state.DnsApplied) {
-                    ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
+                    bool ok = ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
+                    LogWin32RestoreStep("dns-restore", ok, "interface-dns");
                     ppp::tap::TapWindows::DnsFlushResolverCache();
                 }
 
-                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent && state.OriginalDefaultRouteInterfaceIndex != -1) {
-                    int metric = state.OriginalDefaultRouteMetric > 0 ? state.OriginalDefaultRouteMetric : 1;
-                    if (state.OriginalDefaultRoute.empty()) {
-                        ppp::win32::network::SetIPv6DefaultRoute(state.OriginalDefaultRouteInterfaceIndex, metric);
+                if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
+                    bool restored = false;
+                    for (const ppp::string& encoded : state.OriginalDefaultRoutes) {
+                        ppp::vector<ppp::string> segments;
+                        if (ppp::Tokenize<ppp::string>(encoded, segments, ";") < 3) {
+                            continue;
+                        }
+
+                        DefaultRouteSnapshot route;
+                        for (const ppp::string& segment : segments) {
+                            std::size_t pos = segment.find('=');
+                            if (pos == ppp::string::npos) {
+                                continue;
+                            }
+
+                            ppp::string key = segment.substr(0, pos);
+                            ppp::string value = segment.substr(pos + 1);
+                            if (key == "if") {
+                                route.InterfaceIndex = atoi(value.c_str());
+                            }
+                            else if (key == "metric") {
+                                route.Metric = atoi(value.c_str());
+                            }
+                            else if (key == "gw") {
+                                route.Gateway = value;
+                            }
+                        }
+
+                        bool ok = RestoreDefaultRouteSnapshot(route);
+                        restored |= ok;
+                        LogWin32RestoreStep("default-route-restore", ok, encoded);
                     }
-                    else {
-                        ppp::win32::network::SetIPv6DefaultGateway(state.OriginalDefaultRouteInterfaceIndex, state.OriginalDefaultRoute, metric);
+
+                    if (!restored && state.OriginalDefaultRouteInterfaceIndex != -1) {
+                        int metric = state.OriginalDefaultRouteMetric > 0 ? state.OriginalDefaultRouteMetric : 1;
+                        if (state.OriginalDefaultRoute.empty()) {
+                            bool ok = ppp::win32::network::SetIPv6DefaultRoute(state.OriginalDefaultRouteInterfaceIndex, metric);
+                            LogWin32RestoreStep("default-route-restore-fallback", ok, "::/0");
+                        }
+                        else {
+                            bool ok = ppp::win32::network::SetIPv6DefaultGateway(state.OriginalDefaultRouteInterfaceIndex, state.OriginalDefaultRoute, metric);
+                            LogWin32RestoreStep("default-route-restore-fallback", ok, state.OriginalDefaultRoute);
+                        }
                     }
                 }
             }
