@@ -62,8 +62,8 @@ static bool IsAssignableClientIPv6Address(const boost::asio::ip::address_v6& add
         return false;
     }
 
-    prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
-    if (prefix_length < 128 && address == ppp::ipv6::ComputeNetworkAddress(address, prefix_length)) {
+    prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+    if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && address == ppp::ipv6::ComputeNetworkAddress(address, prefix_length)) {
         return false;
     }
 
@@ -76,8 +76,8 @@ static bool IsAssignableClientIPv6Address(const boost::asio::ip::address_v6& add
 
 static bool GetConfiguredIPv6Network(const ppp::configurations::AppConfiguration& configuration, boost::asio::ip::address_v6& network, int& prefix_length) noexcept {
     const auto& ipv6 = configuration.server.ipv6;
-    prefix_length = std::max<int>(0, std::min<int>(128, ipv6.prefix_length));
-    if (prefix_length <= 0 || prefix_length > 128) {
+    prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, ipv6.prefix_length));
+    if (prefix_length <= ppp::ipv6::IPv6_MIN_PREFIX_LENGTH || prefix_length > ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
         return false;
     }
 
@@ -103,18 +103,8 @@ static ppp::string ResolvePreferredIPv6UplinkInterface(const ppp::string& prefer
         return preferred_nic;
     }
 
-    FILE* pipe = popen("ip -6 route show default", "r");
-    if (NULLPTR == pipe) {
-        return ppp::string();
-    }
-
-    char buffer[1024];
-    while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
-        ppp::string route = buffer;
-        while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
-            route.pop_back();
-        }
-
+    auto lines = ppp::unix__::UnixAfx::ExecuteShellCommandLines("ip -6 route show default");
+    for (const ppp::string& route : lines) {
         std::size_t pos = route.find(" dev ");
         if (pos == ppp::string::npos) {
             continue;
@@ -124,12 +114,10 @@ static ppp::string ResolvePreferredIPv6UplinkInterface(const ppp::string& prefer
         std::size_t end = route.find(' ', pos);
         ppp::string ifname = end == ppp::string::npos ? route.substr(pos) : route.substr(pos, end - pos);
         if (!ifname.empty()) {
-            pclose(pipe);
             return ifname;
         }
     }
 
-    pclose(pipe);
     return ppp::string();
 }
 #endif
@@ -173,6 +161,7 @@ namespace ppp {
                 InformationEnvelope envelope;
                 envelope.Base = info;
                 BuildInformationIPv6Extensions(session_id, envelope.Extensions);
+                
                 envelope.ExtendedJson = envelope.Extensions.ToJson();
                 DebugLog("server info envelope session=%s json=%s",
                     auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
@@ -212,6 +201,7 @@ namespace ppp {
                 if (!TryGetFirstHostIPv6(network, gateway)) {
                     return boost::asio::ip::address();
                 }
+
                 return boost::asio::ip::address(gateway);
             }
 
@@ -253,7 +243,7 @@ namespace ppp {
                         return false;
                     }
 
-                    prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                    prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     boost::asio::ip::address_v6::bytes_type digest_bytes = {};
                     memcpy(digest_bytes.data(), digest.data(), std::min<std::size_t>(digest.size(), digest_bytes.size()));
 
@@ -263,6 +253,7 @@ namespace ppp {
                     for (int i = full_bytes; i < 16; ++i) {
                         network_bytes[i] = digest_bytes[i];
                     }
+
                     if (remainder_bits != 0 && full_bytes < 16) {
                         unsigned char host_mask = static_cast<unsigned char>(0xff >> remainder_bits);
                         network_bytes[full_bytes] = static_cast<unsigned char>((network_bytes[full_bytes] & static_cast<unsigned char>(~host_mask)) | (digest_bytes[full_bytes] & host_mask));
@@ -323,7 +314,14 @@ namespace ppp {
                         if (!lease.Address.is_v6() || lease.Address.to_v6() != candidate) {
                             continue;
                         }
+
                         if (lease.StaticBinding || lease.ExpiresAt == UINT64_MAX || lease.ExpiresAt > now) {
+                            DebugLog("server ipv6 lease conflict session=%s address=%s occupied_by=%s static=%d expires=%llu",
+                                auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                                candidate.to_string().c_str(),
+                                auxiliary::StringAuxiliary::Int128ToGuidString(kv.first).data(),
+                                lease.StaticBinding ? 1 : 0,
+                                (unsigned long long)lease.ExpiresAt);
                             return false;
                         }
                     }
@@ -353,9 +351,9 @@ namespace ppp {
                     ipv6.dns2.data());
                 if (mode == AppConfiguration::IPv6Mode_Nat66) {
                     extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
-                    extensions.AssignedIPv6AddressPrefixLength = 128;
+                    extensions.AssignedIPv6AddressPrefixLength = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
 
-                    if (configuration_->server.subnet && ipv6.prefix_length > 0 && ipv6.prefix_length < 128) {
+                    if (configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                         boost::system::error_code route_ec;
                         ppp::string route_prefix_string = ipv6.cidr;
                         std::size_t route_slash = route_prefix_string.find('/');
@@ -470,7 +468,7 @@ namespace ppp {
                 }
                 else if (mode == AppConfiguration::IPv6Mode_Gua) {
                     extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Gua;
-                    extensions.AssignedIPv6AddressPrefixLength = 128;
+                    extensions.AssignedIPv6AddressPrefixLength = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
                 }
                 else {
@@ -498,7 +496,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (configuration_->server.subnet && mode == AppConfiguration::IPv6Mode_Nat66 && ipv6.prefix_length > 0 && ipv6.prefix_length < 128) {
+                if (configuration_->server.subnet && mode == AppConfiguration::IPv6Mode_Nat66 && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     extensions.AssignedIPv6RoutePrefix = prefix;
                     extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
                 }
@@ -650,13 +648,13 @@ namespace ppp {
                 extensions.AssignedIPv6Mode = mode == AppConfiguration::IPv6Mode_Nat66 ?
                     VirtualEthernetInformationExtensions::IPv6Mode_Nat66 :
                     VirtualEthernetInformationExtensions::IPv6Mode_Gua;
-                extensions.AssignedIPv6AddressPrefixLength = 128;
+                extensions.AssignedIPv6AddressPrefixLength = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
                 extensions.AssignedIPv6Address = lease.Address;
                 extensions.AssignedIPv6Gateway = GetIPv6TransitGateway();
                 if (mode == AppConfiguration::IPv6Mode_Gua) {
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
                 }
-                if (mode == AppConfiguration::IPv6Mode_Nat66 && configuration_->server.subnet && ipv6.prefix_length > 0 && ipv6.prefix_length < 128) {
+                if (mode == AppConfiguration::IPv6Mode_Nat66 && configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     extensions.AssignedIPv6RoutePrefix = prefix;
                     extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
                 }
@@ -704,7 +702,7 @@ namespace ppp {
                     }
                 }
 
-                bool route_ok = AddIPv6TransitRoute(ip, 128);
+                bool route_ok = AddIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                 if (!route_ok) {
                     DebugLog("server ipv6 exchanger rejected session=%s reason=transit-route-install-failed address=%s",
                         auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
@@ -715,7 +713,7 @@ namespace ppp {
                 bool proxy_required = mode == AppConfiguration::IPv6Mode_Gua;
                 bool proxy_ok = !proxy_required || AddIPv6NeighborProxy(ip);
                 if (!proxy_ok) {
-                    DeleteIPv6TransitRoute(ip, 128);
+                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                     DebugLog("server ipv6 exchanger rejected session=%s reason=neighbor-proxy-install-failed address=%s",
                         auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
                         ip.to_string().c_str());
@@ -730,7 +728,7 @@ namespace ppp {
                             boost::system::error_code stale_ec;
                             boost::asio::ip::address stale_ip = StringToAddress(tail->first, stale_ec);
                             if (!stale_ec && stale_ip.is_v6()) {
-                                DeleteIPv6TransitRoute(stale_ip, 128);
+                                DeleteIPv6TransitRoute(stale_ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                                 DeleteIPv6NeighborProxy(stale_ip);
                             }
                             tail = ipv6s_.erase(tail);
@@ -764,7 +762,7 @@ namespace ppp {
                         return false;
                     }
 
-                    DeleteIPv6TransitRoute(ip, 128);
+                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                     DeleteIPv6NeighborProxy(ip);
                     ipv6s_.erase(tail);
                 }
@@ -785,7 +783,7 @@ namespace ppp {
                     boost::system::error_code ec;
                     boost::asio::ip::address ip = StringToAddress(tail->first, ec);
                     if (!ec && ip.is_v6()) {
-                        DeleteIPv6TransitRoute(ip, 128);
+                        DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                         DeleteIPv6NeighborProxy(ip);
                     }
 
@@ -884,7 +882,7 @@ namespace ppp {
 
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
-                prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                 bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
                 DebugLog("server ipv6 transit route %s name=%s ip=%s/%d", ok ? "add-ok" : "add-fail", tap->GetId().data(), ip_str.data(), prefix_length);
                 return ok;
@@ -916,7 +914,7 @@ namespace ppp {
 
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
-                prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+                prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                 bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
                 DebugLog("server ipv6 transit route %s name=%s ip=%s/%d", ok ? "del-ok" : "del-fail", tap->GetId().data(), ip_str.data(), prefix_length);
                 return ok;
@@ -933,7 +931,7 @@ namespace ppp {
                         continue;
                     }
 
-                    DeleteIPv6TransitRoute(ip, 128);
+                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                     DeleteIPv6NeighborProxy(ip);
                 }
 
@@ -1489,7 +1487,7 @@ namespace ppp {
 
             bool VirtualEthernetSwitcher::SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
                 ITapPtr tap = ipv6_transit_tap_;
-                if (NULLPTR == tap || NULLPTR == packet || packet_length < 40) {
+                if (NULLPTR == tap || NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
                 }
 
@@ -1538,7 +1536,7 @@ namespace ppp {
             }
 
             bool VirtualEthernetSwitcher::ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
-                if (NULLPTR == packet || packet_length < 40) {
+                if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
                 }
 
@@ -1558,7 +1556,7 @@ namespace ppp {
                 }
                 boost::asio::ip::address prefix = StringToAddress(prefix_string, prefix_ec);
                 if (!prefix_ec && prefix.is_v6()) {
-                    int allowed_prefix_length = std::max<int>(0, std::min<int>(128, ipv6.prefix_length));
+                    int allowed_prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, ipv6.prefix_length));
                     if (!ppp::ipv6::PrefixMatch(destination, prefix.to_v6(), allowed_prefix_length)) {
                         DebugLog("server ipv6 transit rejected reason=destination-outside-cidr destination=%s cidr=%s",
                             destination.to_string().c_str(),
@@ -1650,7 +1648,7 @@ namespace ppp {
 
                 std::string transit_std = transit.to_string();
                 ppp::string transit_ip(transit_std.data(), transit_std.size());
-                int prefix_length = mode == AppConfiguration::IPv6Mode_Gua ? 128 : std::max<int>(1, std::min<int>(128, ipv6.prefix_length));
+                int prefix_length = mode == AppConfiguration::IPv6Mode_Gua ? ppp::ipv6::IPv6_MAX_PREFIX_LENGTH : std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, ipv6.prefix_length));
 
                 ppp::vector<ppp::string> no_dns;
                 ppp::string tun_name = tun_name_;
@@ -1674,7 +1672,7 @@ namespace ppp {
 
                 tap->PacketInput =
                     [self = shared_from_this()](ppp::tap::ITap* sender, ppp::tap::ITap::PacketInputEventArgs& e) noexcept -> bool {
-                        if (NULLPTR == sender || NULLPTR == e.Packet || e.PacketLength < 40) {
+                        if (NULLPTR == sender || NULLPTR == e.Packet || e.PacketLength < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                             return false;
                         }
 
@@ -1762,7 +1760,7 @@ namespace ppp {
                 ppp::vector<Int128> broken_sessions;
                 for (const auto& entry : replay_entries) {
                     const boost::asio::ip::address& ip = entry.second;
-                    bool route_ok = AddIPv6TransitRoute(ip, 128);
+                    bool route_ok = AddIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                     bool proxy_ok = AddIPv6NeighborProxy(ip);
                     DebugLog("server ipv6 neighbor proxy replay session-address=%s route=%s proxy=%s",
                         ip.to_string().c_str(),
@@ -2240,6 +2238,9 @@ namespace ppp {
 
                     ClearIPv6ExchangersUnsafe();
 
+                    ipv6_requests_.clear();
+                    ipv6_leases_.clear();
+
                     static_echo_allocateds_.clear();
                     break;
                 }
@@ -2383,6 +2384,7 @@ namespace ppp {
             void VirtualEthernetSwitcher::RevokeIPv6Lease(const Int128& session_id) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 ipv6_leases_.erase(session_id);
+                ipv6_requests_.erase(session_id);
             }
 
             bool VirtualEthernetSwitcher::OnTick(UInt64 now) noexcept {
@@ -2486,6 +2488,7 @@ namespace ppp {
 
                 VirtualEthernetInformation info;
                 info.Clear();
+
                 BuildInformationIPv6Extensions(session_id, response);
                 if (response.AssignedIPv6Address.is_v6()) {
                     if (!AddIPv6Exchanger(session_id, response)) {

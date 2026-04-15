@@ -5,6 +5,14 @@
 
 namespace ppp {
     namespace ipv6 {
+        static constexpr int             IPv6_HEADER_MIN_SIZE         = 40;   /* RFC 8200 - Fixed header size */
+        static constexpr int             IPv6_ADDRESS_SIZE            = 16;   /* 128 bits / 8 */
+        static constexpr int             IPv6_MAX_PREFIX_LENGTH       = 128;
+        static constexpr int             IPv6_MIN_PREFIX_LENGTH       = 0;
+        static constexpr int             IPv6_DEFAULT_PREFIX_LENGTH   = 64;
+        static constexpr int             IPv6_DEFAULT_HOP_LIMIT       = 64;
+        static constexpr unsigned char   IPv6_VERSION                 = 6;
+
         struct PacketHeader {
             ppp::Byte VersionTrafficClass;
             ppp::Byte TrafficClassFlow;
@@ -17,17 +25,17 @@ namespace ppp {
         };
 
         static inline bool TryParsePacket(Byte* packet, int packet_length, boost::asio::ip::address_v6& source, boost::asio::ip::address_v6& destination, Byte* next_header = NULLPTR, int* payload_length = NULLPTR) noexcept {
-            if (NULLPTR == packet || packet_length < 40) {
+            if (NULLPTR == packet || packet_length < IPv6_HEADER_MIN_SIZE) {
                 return false;
             }
 
             PacketHeader* header = reinterpret_cast<PacketHeader*>(packet);
-            if ((header->VersionTrafficClass >> 4) != 6) {
+            if ((header->VersionTrafficClass >> 4) != IPv6_VERSION) {
                 return false;
             }
 
             int body_length = ntohs(header->PayloadLength);
-            if (body_length < 0 || packet_length < 40 + body_length) {
+            if (body_length < 0 || packet_length < IPv6_HEADER_MIN_SIZE + body_length) {
                 return false;
             }
 

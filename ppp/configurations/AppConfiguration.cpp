@@ -24,7 +24,7 @@ using ppp::threading::Thread;
 using ppp::threading::Executors;
 
 namespace {
-    static bool                                         SupportsServerIPv6DataPlane() noexcept {
+    static bool                                             SupportsServerIPv6DataPlane() noexcept {
 #if defined(_LINUX)
         return true;
 #else
@@ -32,7 +32,7 @@ namespace {
 #endif
     }
 
-    static ppp::configurations::AppConfiguration::IPv6Mode ParseIPv6Mode(const ppp::string& mode) noexcept {
+    static ppp::configurations::AppConfiguration::IPv6Mode  ParseIPv6Mode(const ppp::string& mode) noexcept {
         ppp::string value = ToLower(mode);
         if (value == "nat66") {
             return ppp::configurations::AppConfiguration::IPv6Mode_Nat66;
@@ -43,7 +43,7 @@ namespace {
         return ppp::configurations::AppConfiguration::IPv6Mode_None;
     }
 
-    static ppp::string IPv6ModeToString(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
+    static ppp::string                                      IPv6ModeToString(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
         switch (mode) {
         case ppp::configurations::AppConfiguration::IPv6Mode_Nat66:
             return "nat66";
@@ -54,7 +54,7 @@ namespace {
         }
     }
 
-    static ppp::configurations::AppConfiguration::IPv6Mode NormalizeIPv6Mode(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
+    static ppp::configurations::AppConfiguration::IPv6Mode  NormalizeIPv6Mode(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
         switch (mode) {
         case ppp::configurations::AppConfiguration::IPv6Mode_Nat66:
         case ppp::configurations::AppConfiguration::IPv6Mode_Gua:
@@ -64,7 +64,7 @@ namespace {
         }
     }
 
-    static bool ParseIPv6Cidr(const ppp::string& cidr, ppp::string& prefix, int& prefix_length) noexcept {
+    static bool                                             ParseIPv6Cidr(const ppp::string& cidr, ppp::string& prefix, int& prefix_length) noexcept {
         prefix.clear();
         prefix_length = 0;
         if (cidr.empty()) {
@@ -74,17 +74,17 @@ namespace {
         std::size_t slash = cidr.find('/');
         if (slash == ppp::string::npos) {
             prefix = cidr;
-            prefix_length = 128;
+            prefix_length = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
             return true;
         }
 
         prefix = cidr.substr(0, slash);
         prefix_length = atoi(cidr.substr(slash + 1).c_str());
-        prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
+        prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
         return !prefix.empty();
     }
 
-    static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boost::asio::ip::address_v6& host) noexcept {
+    static bool                                             TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boost::asio::ip::address_v6& host) noexcept {
         boost::asio::ip::address_v6::bytes_type bytes = network.to_bytes();
         for (int i = 15; i >= 0; --i) {
             if (bytes[i] != 0xff) {
@@ -98,13 +98,13 @@ namespace {
         }
         return false;
     }
-
-    static bool IsGlobalUnicastIPv6Prefix(const boost::asio::ip::address_v6& prefix) noexcept {
+                                            
+    static bool                                             IsGlobalUnicastIPv6Prefix(const boost::asio::ip::address_v6& prefix) noexcept {
         boost::asio::ip::address_v6::bytes_type bytes = prefix.to_bytes();
         return (bytes[0] & 0xe0) == 0x20;
     }
-
-    static void DisableServerIPv6(ppp::configurations::AppConfiguration& config) noexcept {
+                                            
+    static void                                             DisableServerIPv6(ppp::configurations::AppConfiguration& config) noexcept {
         config.server.ipv6.mode = ppp::configurations::AppConfiguration::IPv6Mode_None;
         config.server.ipv6.cidr.clear();
         config.server.ipv6.prefix_length = 0;
@@ -204,7 +204,7 @@ namespace ppp {
             config.server.backend_key = "";
             config.server.ipv6.mode = AppConfiguration::IPv6Mode_None;
             config.server.ipv6.cidr = "";
-            config.server.ipv6.prefix_length = 128;
+            config.server.ipv6.prefix_length = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
             config.server.ipv6.gateway = "";
             config.server.ipv6.dns1 = "";
             config.server.ipv6.dns2 = "";
@@ -379,9 +379,9 @@ namespace ppp {
             if (config.concurrent < 1) {
                 config.concurrent = Thread::GetProcessorCount();
             }
-            
+
             config.server.node = std::max<int>(0, config.server.node);
-            config.server.ipv6.prefix_length = std::max<int>(0, std::min<int>(128, config.server.ipv6.prefix_length));
+            config.server.ipv6.prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, config.server.ipv6.prefix_length));
             config.udp.dns.ttl = std::max<int>(0, config.udp.dns.ttl);
 
             if (config.udp.dns.timeout < 1) {
@@ -435,15 +435,15 @@ namespace ppp {
                 config.client.reconnections.timeout = PPP_TCP_CONNECT_TIMEOUT;
             }
 
-            int* pts[] = { 
-                &config.tcp.listen.port, 
-                &config.websocket.listen.ws, 
-                &config.websocket.listen.wss, 
-                &config.client.http_proxy.port, 
-                &config.client.socks_proxy.port, 
-                &config.udp.listen.port 
+            int* pts[] = {
+                &config.tcp.listen.port,
+                &config.websocket.listen.ws,
+                &config.websocket.listen.wss,
+                &config.client.http_proxy.port,
+                &config.client.socks_proxy.port,
+                &config.udp.listen.port
             };
-            
+
             for (int i = 0; i < arraysizeof(pts); i++) {
                 int& port = *pts[i];
                 if (port < IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
@@ -468,11 +468,11 @@ namespace ppp {
                 keep_alived = std::max<int>(0, keep_alived);
             }
 
-            ppp::string* ips[] = { 
-                &config.ip.public_, 
-                &config.ip.interface_, 
-                &config.client.http_proxy.bind, 
-                &config.client.socks_proxy.bind, 
+            ppp::string* ips[] = {
+                &config.ip.public_,
+                &config.ip.interface_,
+                &config.client.http_proxy.bind,
+                &config.client.socks_proxy.bind,
             };
             for (int i = 0; i < arraysizeof(ips); i++) {
                 ppp::string& ip = *ips[i];
@@ -515,7 +515,7 @@ namespace ppp {
                     }
                 }
 
-                if (config.server.ipv6.prefix_length <= 0 || config.server.ipv6.prefix_length >= 128) {
+                if (config.server.ipv6.prefix_length <= ppp::ipv6::IPv6_MIN_PREFIX_LENGTH || config.server.ipv6.prefix_length > ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     DisableServerIPv6(config);
                     ipv6_prefix = "";
                     ipv6_server_enabled = false;
@@ -650,7 +650,7 @@ namespace ppp {
                 config.websocket.http.response.clear();
             }
 
-            config.server.ipv6.prefix_length = std::max<int>(0, std::min<int>(128, config.server.ipv6.prefix_length));
+            config.server.ipv6.prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, config.server.ipv6.prefix_length));
             config.server.ipv6.lease_time = std::max<int>(0, config.server.ipv6.lease_time);
             config.server.ipv6.cidr = ipv6_prefix;
             if (config.server.ipv6.prefix_length > 0) {
@@ -658,7 +658,7 @@ namespace ppp {
                 config.server.ipv6.cidr.append(stl::to_string<ppp::string>(config.server.ipv6.prefix_length));
             }
 
-            if (ips) {
+            {
                 int destinationPort = IPEndPoint::MinPort;
                 ppp::string destinationIP;
 
@@ -760,10 +760,10 @@ namespace ppp {
 
             auto emplace =
                 [](const ppp::string& v, TSet& s) noexcept {
-                    ppp::string x = LTrim(RTrim(JsonAuxiliary::AsString(v)));
-                    if (!x.empty()) {
-                        s.emplace(x);
-                    }
+                ppp::string x = LTrim(RTrim(JsonAuxiliary::AsString(v)));
+                if (!x.empty()) {
+                    s.emplace(x);
+                }
                 };
 
             if (json.isObject()) {
@@ -892,11 +892,11 @@ namespace ppp {
                 vbgp = ppp::string();
             }
 
-            route.ngw  = htonl(ngw.to_v4().to_uint());
+            route.ngw = htonl(ngw.to_v4().to_uint());
             route.path = path;
             route.vbgp = vbgp;
 #if defined(_LINUX)
-            route.nic  = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["nic"])));
+            route.nic = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["nic"])));
 #endif
             return true;
         }
@@ -1135,7 +1135,7 @@ namespace ppp {
             tcp["cwnd"] = config.tcp.cwnd;
             tcp["rwnd"] = config.tcp.rwnd;
             root["tcp"] = tcp;
-            
+
             // Set mux structure
             Json::Value mux;
             mux["inactive"]["timeout"] = config.mux.inactive.timeout;
@@ -1147,7 +1147,7 @@ namespace ppp {
             config_mux_keep_alived.append(config.mux.keep_alived[0]);
             config_mux_keep_alived.append(config.mux.keep_alived[1]);
             mux["keep-alived"] = config_mux_keep_alived;
-            
+
             root["mux"] = mux;
 
             // Set websocket structure
@@ -1279,10 +1279,10 @@ namespace ppp {
 
         namespace extensions {
             bool IsHaveCiphertext(const AppConfiguration& configuration) noexcept {
-                return 
-                    !configuration.key.protocol.empty() && 
-                    !configuration.key.protocol_key.empty() && 
-                    !configuration.key.transport.empty() && 
+                return
+                    !configuration.key.protocol.empty() &&
+                    !configuration.key.protocol_key.empty() &&
+                    !configuration.key.transport.empty() &&
                     !configuration.key.transport_key.empty();
             }
         }

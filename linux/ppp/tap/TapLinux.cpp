@@ -35,6 +35,7 @@
 #include <exception>
 
 #include <linux/ppp/tap/TapLinux.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
 #include <common/unix/UnixAfx.h>
 #include <common/libtcpip/netstack.h>
@@ -236,7 +237,7 @@ namespace ppp {
             }
 
             char command[1200];
-            snprintf(command, sizeof(command), "ip -6 addr replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+            snprintf(command, sizeof(command), "ip -6 addr replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
             return ExecuteIpCommand(command);
         }
 
@@ -258,7 +259,7 @@ namespace ppp {
             }
 
             char command[1200];
-            snprintf(command, sizeof(command), "ip -6 addr del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+            snprintf(command, sizeof(command), "ip -6 addr del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
             return ExecuteIpCommand(command);
         }
 
@@ -273,7 +274,7 @@ namespace ppp {
                     snprintf(command, sizeof(command), "ip -6 route replace default dev %s metric 1 > /dev/null 2>&1", ifrName.data());
                 }
                 else {
-                    snprintf(command, sizeof(command), "ip -6 route replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+                    snprintf(command, sizeof(command), "ip -6 route replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
                 }
             }
             else {
@@ -281,7 +282,7 @@ namespace ppp {
                     snprintf(command, sizeof(command), "ip -6 route replace default via %s dev %s onlink > /dev/null 2>&1", gw.data(), ifrName.data());
                 }
                 else {
-                    snprintf(command, sizeof(command), "ip -6 route replace %s/%d via %s dev %s onlink > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data(), ifrName.data());
+                    snprintf(command, sizeof(command), "ip -6 route replace %s/%d via %s dev %s onlink > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), gw.data(), ifrName.data());
                 }
             }
             return ExecuteIpCommand(command);
@@ -298,7 +299,7 @@ namespace ppp {
                     snprintf(command, sizeof(command), "ip -6 route del default dev %s > /dev/null 2>&1", ifrName.data());
                 }
                 else {
-                    snprintf(command, sizeof(command), "ip -6 route del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifrName.data());
+                    snprintf(command, sizeof(command), "ip -6 route del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
                 }
             }
             else {
@@ -306,7 +307,7 @@ namespace ppp {
                     snprintf(command, sizeof(command), "ip -6 route del default via %s dev %s > /dev/null 2>&1", gw.data(), ifrName.data());
                 }
                 else {
-                    snprintf(command, sizeof(command), "ip -6 route del %s/%d via %s dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gw.data(), ifrName.data());
+                    snprintf(command, sizeof(command), "ip -6 route del %s/%d via %s dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), gw.data(), ifrName.data());
                 }
             }
             return ExecuteIpCommand(command);
@@ -343,6 +344,7 @@ namespace ppp {
                 while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) {
                     value.pop_back();
                 }
+                
                 if (!value.empty()) {
                     break;
                 }

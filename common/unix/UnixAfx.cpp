@@ -536,5 +536,136 @@ namespace ppp {
             return lseek(fd, offset, whence);
 #endif
         }
+
+        namespace {
+            struct LineHandler {
+                ppp::function<bool(const ppp::string&)> predicate;
+                ppp::string* str_output = NULLPTR;
+                ppp::vector<ppp::string>* lines_output = NULLPTR;
+                bool* bool_output = NULLPTR;
+
+                bool process_line(ppp::string&& line) noexcept {
+                    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+                        line.pop_back();
+                    }
+
+                    if (line.empty()) {
+                        return true;
+                    }
+
+                    bool accept = !predicate || predicate(line);
+                    if (!accept) {
+                        return true;
+                    }
+
+                    if (str_output) {
+                        *str_output += line;
+                        *str_output += '\n';
+                        return true;
+                    }
+
+                    if (lines_output) {
+                        lines_output->emplace_back(std::move(line));
+                        return true;
+                    }
+
+                    if (bool_output) {
+                        *bool_output = true;
+                        return true;
+                    }
+                    return true;
+                }
+            };
+
+            void ExecuteShellCommandCore(FILE* pipe, LineHandler& handler) noexcept {
+                char buffer[1024];
+                ppp::string accumulated;
+
+                while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+                    int len = static_cast<int>(strlen(buffer));
+                    bool line_complete = len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r');
+
+                    if (!accumulated.empty()) {
+                        accumulated += buffer;
+                        if (line_complete) {
+                            ppp::string line;
+                            line.swap(accumulated);
+                            accumulated.clear();
+                            handler.process_line(std::move(line));
+                        }
+                        continue;
+                    }
+
+                    if (!line_complete) {
+                        accumulated += buffer;
+                        continue;
+                    }
+
+                    handler.process_line(ppp::string(buffer));
+                }
+
+                pclose(pipe);
+            }
+        }
+
+        bool UnixAfx::ExecuteShellCommand(const ppp::string& command, const ppp::function<bool(ppp::string&)>& predicate) noexcept {
+            if (command.empty()) {
+                return false;
+            }
+
+            FILE* pipe = popen(command.data(), "r");
+            if (NULLPTR == pipe) {
+                return false;
+            }
+
+            bool result = false;
+            LineHandler handler{ 
+                .predicate = [&predicate](const ppp::string& line) noexcept -> bool {
+                    ppp::string modifiable = line;
+                    return predicate ? predicate(modifiable) : true;
+                },
+                .bool_output = &result 
+            };
+
+            ExecuteShellCommandCore(pipe, handler);
+            return result;
+        }
+
+        ppp::string UnixAfx::ExecuteShellCommand(const ppp::string& command) noexcept {
+            if (command.empty()) {
+                return ppp::string();
+            }
+
+            FILE* pipe = popen(command.data(), "r");
+            if (NULLPTR == pipe) {
+                return ppp::string();
+            }
+
+            ppp::string output;
+            LineHandler handler{ .str_output = &output };
+            ExecuteShellCommandCore(pipe, handler);
+
+            if (!output.empty() && output.back() == '\n') {
+                output.pop_back();
+            }
+            
+            return output;
+        }
+
+        ppp::vector<ppp::string> UnixAfx::ExecuteShellCommandLines(const ppp::string& command, const ppp::function<bool(const ppp::string&)>& predicate) noexcept {
+            if (command.empty()) {
+                return ppp::vector<ppp::string>();
+            }
+
+            FILE* pipe = popen(command.data(), "r");
+            if (NULLPTR == pipe) {
+                return ppp::vector<ppp::string>();
+            }
+
+            ppp::vector<ppp::string> lines;
+            LineHandler handler{ .predicate = predicate, .lines_output = &lines };
+            ExecuteShellCommandCore(pipe, handler);
+            return lines;
+        }
     }
 }

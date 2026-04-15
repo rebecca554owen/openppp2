@@ -34,7 +34,7 @@ static bool ClientSupportsManagedIPv6() noexcept {
 static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
     return (extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
         extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Gua) &&
-        extensions.AssignedIPv6AddressPrefixLength == 128 &&
+        extensions.AssignedIPv6AddressPrefixLength == ppp::ipv6::IPv6_MAX_PREFIX_LENGTH &&
         extensions.AssignedIPv6Address.is_v6();
 }
 
@@ -217,7 +217,7 @@ namespace ppp {
             }
 
             bool VEthernetNetworkSwitcher::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept {
-                if (NULLPTR == packet || packet_length < 40) {
+                if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
                 }
 
@@ -245,7 +245,7 @@ namespace ppp {
             }
 
             bool VEthernetNetworkSwitcher::IsApprovedIPv6Packet(Byte* packet, int packet_length) noexcept {
-                if (NULLPTR == packet || packet_length < 40) {
+                if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
                 }
 
@@ -255,12 +255,19 @@ namespace ppp {
                     return false;
                 }
 
-                (void)destination;
+                boost::asio::ip::address_v6::bytes_type src_bytes = source.to_bytes();
+                if (src_bytes[0] == 0xfe && (src_bytes[1] & 0xc0) == 0x80) {
+                    return false;
+                }
+
+                if (destination.is_unspecified() || destination.is_loopback() || destination.is_multicast()) {
+                    return false;
+                }
 
                 const VirtualEthernetInformationExtensions& approved = information_extensions_;
                 bool valid_mode = approved.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
                     approved.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
-                if (!ipv6_applied_ || !valid_mode || approved.AssignedIPv6AddressPrefixLength != 128 || !approved.AssignedIPv6Address.is_v6()) {
+                if (!ipv6_applied_ || !valid_mode || approved.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH || !approved.AssignedIPv6Address.is_v6()) {
                     DebugLog("client ipv6 tx rejected reason=not-assigned source=%s", source.to_string().c_str());
                     return false;
                 }
@@ -691,7 +698,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (extensions.AssignedIPv6AddressPrefixLength != 128) {
+                if (extensions.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     DebugLog("client ipv6 apply rejected reason=invalid-prefix prefix=%u", (unsigned)extensions.AssignedIPv6AddressPrefixLength);
                     return false;
                 }
@@ -710,7 +717,7 @@ namespace ppp {
                 ipv6_context.InterfaceIndex = tun_ni->Index;
                 ipv6_context.InterfaceName = tun_ni->Name;
 
-                int prefix = std::max<int>(1, std::min<int>(128, (int)extensions.AssignedIPv6AddressPrefixLength));
+                int prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, (int)extensions.AssignedIPv6AddressPrefixLength));
                 if (prefix < 1) {
                     prefix = 64;
                 }
@@ -729,7 +736,7 @@ namespace ppp {
 
                 if (extensions.AssignedIPv6RoutePrefix.is_v6() &&
                     extensions.AssignedIPv6RoutePrefixLength > 0 &&
-                    extensions.AssignedIPv6RoutePrefixLength < 128) {
+                    extensions.AssignedIPv6RoutePrefixLength < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     attempted = true;
                     applied &= ppp::ipv6::auxiliary::ApplyClientSubnetRoute(
                         ipv6_context,
@@ -787,7 +794,7 @@ namespace ppp {
                     return;
                 }
 
-                int prefix = std::max<int>(1, std::min<int>(128, (int)information_extensions_.AssignedIPv6AddressPrefixLength));
+                int prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, (int)information_extensions_.AssignedIPv6AddressPrefixLength));
                 if (prefix < 1) {
                     prefix = 64;
                 }

@@ -57,7 +57,7 @@ namespace {
             return false;
         }
 
-        icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(packet + 40);
+        icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(packet + ppp::ipv6::IPv6_HEADER_MIN_SIZE);
         int icmp_length = payload_length;
         if (icmp_length < static_cast<int>(sizeof(icmp_hdr))) {
             return false;
@@ -71,7 +71,7 @@ namespace {
         boost::asio::ip::address_v6::bytes_type gateway_bytes = gateway.to_bytes();
         memcpy(header->Source, gateway_bytes.data(), gateway_bytes.size());
         memcpy(header->Destination, source_bytes.data(), source_bytes.size());
-        header->HopLimit = 64;
+        header->HopLimit = ppp::ipv6::IPv6_DEFAULT_HOP_LIMIT;
 
         icmp->icmp_type = 129;
         icmp->icmp_chksum = 0;
