@@ -35,9 +35,9 @@ OPENPPP2 里的配置不是简单的数值袋。它是一个 policy 对象，决
 
 ```mermaid
 flowchart TD
-    A[默认构造] --> B[Clear()]
+    A[默认构造] --> B["Clear()"]
     B --> C[载入 JSON]
-    C --> D[Loaded() 规范化]
+    C --> D["Loaded() 规范化"]
     D --> E[CLI 覆盖]
     E --> F[运行时对象]
 ```

@@ -24,6 +24,7 @@ OPENPPP2 是一套源码驱动、跨平台的网络运行时，围绕 C++ 主程
 | [`docs/README_CN.md`](docs/README_CN.md) | 文档总索引与阅读路径 |
 | [`docs/README.md`](docs/README.md) | English 文档总索引 |
 | [`docs/ARCHITECTURE_CN.md`](docs/ARCHITECTURE_CN.md) | 顶层架构地图 |
+| [`docs/USER_MANUAL_CN.md`](docs/USER_MANUAL_CN.md) | 用户快速开始与附录 |
 | [`docs/SOURCE_READING_GUIDE_CN.md`](docs/SOURCE_READING_GUIDE_CN.md) | 源码阅读顺序 |
 
 ## 推荐阅读路径

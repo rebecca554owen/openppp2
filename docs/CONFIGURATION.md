@@ -35,9 +35,9 @@ That makes configuration a control surface for the entire repository.
 
 ```mermaid
 flowchart TD
-    A[Default construction] --> B[Clear()]
+    A[Default construction] --> B["Clear()"]
     B --> C[Load JSON]
-    C --> D[Loaded() normalize]
+    C --> D["Loaded() normalize"]
     D --> E[CLI overrides]
     E --> F[Runtime objects]
 ```

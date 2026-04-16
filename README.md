@@ -24,6 +24,7 @@ The documentation is written from code facts upward. It explains what the system
 | [`docs/README.md`](docs/README.md) | Documentation index and reading paths |
 | [`docs/README_CN.md`](docs/README_CN.md) | Chinese documentation index |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Top-level architecture map |
+| [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) | End-user quick start and appendices |
 | [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md) | Source reading order |
 
 ## Reading Paths
