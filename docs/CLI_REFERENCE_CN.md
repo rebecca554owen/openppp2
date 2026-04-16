@@ -103,7 +103,7 @@ ppp --mode=client --config=./client.json
 
 ### `--vbgp=[yes|no]`
 
-启用 vBGP 路由更新。
+启用 vBGP 路由更新。刷新节奏由配置文件里的 `vbgp.update-interval` 控制。
 
 ### `--nic=<interface>`
 
@@ -177,7 +177,7 @@ Linux 上用于旁路列表处理的接口。
 
 ### `--virr=[file/country]`
 
-启用 IP-list 刷新行为。
+启用 IP-list 刷新行为。刷新节奏由配置文件里的 `virr.update-interval` 和 `virr.retry-interval` 控制。
 
 ### `--dns-rules=<file>`
 

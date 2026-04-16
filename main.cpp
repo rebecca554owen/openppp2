@@ -83,11 +83,6 @@ using ppp::Int128;
 #define SIGRESTART 64 
 #endif
 
-// Constants for IP list update intervals
-static constexpr int PPP_VIRR_UPDATE_STRETCH  = 300;    // Retry interval in seconds if update fails
-static constexpr int PPP_VIRR_UPDATE_INTERVAL = 86400;  // Daily update interval in seconds
-static constexpr int PPP_VBGP_UPDATE_INTERVAL = 3600;   // Hourly vBGP update interval
-
 // Network interface configuration structure
 struct NetworkInterface final
 {
@@ -306,18 +301,16 @@ private:
 
 // Global variables
 static std::shared_ptr<PppApplication>              DEFAULT_;                            // Application instance
+static std::atomic<bool>                            GLOBAL_RESTART{ false };             // Restart flag
+static std::atomic<bool>                            GLOBAL_VBGP{ false };                // vBGP enabled
+static std::atomic<uint64_t>                        GLOBAL_VBGP_LAST{ 0 };               // Last vBGP update
+static std::atomic<bool>                            GLOBAL_VIRR{ false };                // Auto-IP update enabled
+static std::atomic<uint64_t>                        GLOBAL_VIRR_NEXT{ 0 };               // Next IP update time
 static struct {
     using BypassSet = NetworkInterface::BypassSet;
 
-    bool                                            restart                     = false; // Restart flag
-    bool                                            vbgp                        = false; // vBGP enabled
-    uint64_t                                        vbgp_last                   = 0;     // Last vBGP update
-
     int                                             link_restart                = 0;     // Link restart count
     int                                             auto_restart                = 0;     // Auto restart interval
-
-    bool                                            virr                        = false; // Auto-IP update enabled
-    uint64_t                                        virr_next                   = 0;     // Next IP update time
     ppp::string                                     virr_argument;                       // IP update argument
 
     std::shared_ptr<BypassSet>                      bypass;                              // Bypass file path
@@ -475,12 +468,14 @@ bool PppApplication::PullIPList(const ppp::string& url, const ppp::function<void
 
     auto self = shared_from_this();
     std::thread(
-        [self, this, url, cb]() noexcept 
+        [self, url, cb]() noexcept
         {
+            // The worker keeps the application instance alive through shared_ptr.
+            // This avoids capturing a raw this pointer across a detached thread boundary.
             ppp::set<ppp::string> ips;
             ppp::SetThreadName("vbgp");
 
-            int events = PullIPList(url, ips);
+            int events = self->PullIPList(url, ips);
             cb(events, ips);
         }).detach();
     return true;
@@ -610,7 +605,7 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept
                 if (return_code < 0)
                 {   
                     uint64_t now = Executors::GetTickCount();
-                    GLOBAL_.virr_next = now + (PPP_VIRR_UPDATE_STRETCH * 1000);
+                    GLOBAL_VIRR_NEXT.store(now + (configuration_->virr.retry_interval * 1000), std::memory_order_relaxed);
                 }
 
                 return return_code;
@@ -2099,21 +2094,21 @@ bool PppApplication::OnTick(uint64_t now) noexcept
     }
 
     // Check for IP list updates
-    if (now >= GLOBAL_.virr_next)
+    if (now >= GLOBAL_VIRR_NEXT.load(std::memory_order_relaxed))
     {
         // Update the last automatic pull time and decide whether to pull the IP list file based on the en1abled options.
-        GLOBAL_.virr_next = now + (PPP_VIRR_UPDATE_INTERVAL * 1000);
-        if (GLOBAL_.virr)
+        GLOBAL_VIRR_NEXT.store(now + (configuration_->virr.update_interval * 1000), std::memory_order_relaxed);
+        if (GLOBAL_VIRR.load(std::memory_order_relaxed))
         {
             PullIPList(GLOBAL_.virr_argument, true);
         }
     }
 
     // Check for vBGP updates
-    if ((now - GLOBAL_.vbgp_last) / 1000 >= PPP_VBGP_UPDATE_INTERVAL)
+    if ((now - GLOBAL_VBGP_LAST.load(std::memory_order_relaxed)) / 1000 >= (uint64_t)configuration_->vbgp.update_interval)
     {
-        GLOBAL_.vbgp_last = now;
-        if (RouteIPListTablePtr vbgp = client->GetVbgp(); GLOBAL_.vbgp && NULLPTR != vbgp)
+        GLOBAL_VBGP_LAST.store(now, std::memory_order_relaxed);
+        if (RouteIPListTablePtr vbgp = client->GetVbgp(); GLOBAL_VBGP.load(std::memory_order_relaxed) && NULLPTR != vbgp)
         {
             // Update all vBGP routes
             for (auto&& kv : *vbgp) 
@@ -2327,7 +2322,7 @@ bool PppApplication::ShutdownApplication(bool restart) noexcept
     }
     else
     {
-        GLOBAL_.restart |= restart;
+        GLOBAL_RESTART.store(GLOBAL_RESTART.load(std::memory_order_relaxed) || restart, std::memory_order_relaxed);
         boost::asio::post(*context, 
             [restart, context]() noexcept
             {
@@ -2558,15 +2553,15 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept
 #endif
 
         // Configure auto-update settings
-        GLOBAL_.virr = ppp::HasCommandArgument("--virr", argc, argv);
-        if (GLOBAL_.virr) 
+        GLOBAL_VIRR.store(ppp::HasCommandArgument("--virr", argc, argv), std::memory_order_relaxed);
+        if (GLOBAL_VIRR.load(std::memory_order_relaxed)) 
         {
             GLOBAL_.bypass = network_interface_->Bypass;
             GLOBAL_.virr_argument = ppp::GetCommandArgument("--virr", argc, argv);
         }
 
         // If vbgp is not set up, it is enabled by default; otherwise, the vbgp function is disabled. Enabling the vbgp function will consume performance.
-        GLOBAL_.vbgp = ppp::ToBoolean(ppp::GetCommandArgument("--vbgp", argc, argv, "y").data());
+        GLOBAL_VBGP.store(ppp::ToBoolean(ppp::GetCommandArgument("--vbgp", argc, argv, "y").data()), std::memory_order_relaxed);
     }
 
     // Parse restart configuration
@@ -2673,7 +2668,7 @@ int main(int argc, const char* argv[]) noexcept
     APP->Release();
 
     // Restart application if requested
-    if (GLOBAL_.restart)
+    if (GLOBAL_RESTART.load(std::memory_order_relaxed))
     {
 #if defined(_WIN32)
         // Build command line for restart

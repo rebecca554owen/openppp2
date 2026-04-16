@@ -203,14 +203,13 @@ namespace ppp
             using SynchronizedObject      = std::mutex;
             using SynchronizedObjectScope = std::lock_guard<SynchronizedObject>;
 
+            static SynchronizedObject syncobj;
+
             bool processed = false;
             std::shared_ptr<Awaitable> awaitable;
             for (;;)
             {
-                // Note that this lock is not released and must be allocated in the heap memory. This is because, on some platforms, 
-                // The compiler may not guarantee the order of dependency release, which can lead to crashes upon exit.
-                static SynchronizedObject* syncobj = new SynchronizedObject();
-                SynchronizedObjectScope scope(*syncobj);
+                SynchronizedObjectScope scope(syncobj);
 
                 awaitable = Internal->NetstackExitAwaitable;
                 lwip::netstack::close(

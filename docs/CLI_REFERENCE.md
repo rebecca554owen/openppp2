@@ -103,7 +103,7 @@ Selects the client network stack behavior.
 
 ### `--vbgp=[yes|no]`
 
-Enables vBGP route updates.
+Enables vBGP route updates. Refresh cadence is controlled by `vbgp.update-interval` in the configuration file.
 
 ### `--nic=<interface>`
 
@@ -177,7 +177,7 @@ Gateway used for bypass list processing.
 
 ### `--virr=[file/country]`
 
-Enables IP-list refresh behavior.
+Enables IP-list refresh behavior. Refresh cadence is controlled by `virr.update-interval` and `virr.retry-interval` in the configuration file.
 
 ### `--dns-rules=<file>`
 

@@ -175,7 +175,13 @@ namespace ppp {
                     ppp::string                                             password;
                 }                                                           socks_proxy;
             }                                                               client;
-
+            struct {
+                int                                                         update_interval;
+                int                                                         retry_interval;
+            }                                                               virr;
+            struct {
+                int                                                         update_interval;
+            }                                                               vbgp;
         public:
             AppConfiguration() noexcept;
 

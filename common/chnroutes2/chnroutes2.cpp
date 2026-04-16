@@ -691,6 +691,8 @@ void chnroutes2_getiplist_async(const ppp::function<void(ppp::string&)>& cb) noe
             cb(iplist);
         };
 
+    // The helper thread is intentionally detached because the callback owns the completion path.
+    // No raw state is captured here, so the worker can safely outlive the caller stack frame.
     std::thread t(w);
     t.detach();
 }

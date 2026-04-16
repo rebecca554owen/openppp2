@@ -21,6 +21,27 @@
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
 #include <ppp/ipv6/IPv6Packet.h>
 
+#include <ppp/net/asio/vdns.h>
+#include <ppp/net/Socket.h>
+#include <ppp/net/Ipep.h>
+#include <ppp/net/IPEndPoint.h>
+#include <ppp/net/http/HttpClient.h>
+#include <ppp/net/asio/InternetControlMessageProtocol.h>
+
+#if defined(_WIN32)
+#include <windows/ppp/tap/TapWindows.h>
+#include <windows/ppp/win32/network/Router.h>
+#include <windows/ppp/net/proxies/HttpProxy.h>
+#include <windows/ppp/win32/network/NetworkInterface.h>
+#else
+#include <common/unix/UnixAfx.h>
+#if defined(_MACOS)
+#include <darwin/ppp/tap/TapDarwin.h>
+#else
+#include <linux/ppp/tap/TapLinux.h>
+#endif
+#endif
+
 static void DebugLog(const char* format, ...) noexcept {}
 
 static bool ClientSupportsManagedIPv6() noexcept {
@@ -52,28 +73,6 @@ static bool SameManagedIPv6Configuration(
         left.AssignedIPv6Dns1 == right.AssignedIPv6Dns1 &&
         left.AssignedIPv6Dns2 == right.AssignedIPv6Dns2;
 }
-
-
-#include <ppp/net/asio/vdns.h>
-#include <ppp/net/Socket.h>
-#include <ppp/net/Ipep.h>
-#include <ppp/net/IPEndPoint.h>
-#include <ppp/net/http/HttpClient.h>
-#include <ppp/net/asio/InternetControlMessageProtocol.h>
-
-#if defined(_WIN32)
-#include <windows/ppp/tap/TapWindows.h>
-#include <windows/ppp/win32/network/Router.h>
-#include <windows/ppp/net/proxies/HttpProxy.h>
-#include <windows/ppp/win32/network/NetworkInterface.h>
-#else
-#include <common/unix/UnixAfx.h>
-#if defined(_MACOS)
-#include <darwin/ppp/tap/TapDarwin.h>
-#else
-#include <linux/ppp/tap/TapLinux.h>
-#endif
-#endif
 
 using ppp::auxiliary::StringAuxiliary;
 using ppp::collections::Dictionary;
@@ -2038,20 +2037,20 @@ namespace ppp {
 
                 // Create a new network protection backend subthread.
                 auto self = shared_from_this();
-                std::thread([self, this]() noexcept {
-                    auto prepare = [self, this]() noexcept {
+                std::thread([self]() noexcept {
+                    auto prepare = [self]() noexcept {
                         // If the current VEthernet framework object instance is released, the process is break.
-                        if (IsDisposed()) {
+                        if (self->IsDisposed()) {
                             return false;
                         }
 
                         // If the route is not added to the system, the route pops out without setting the flag.
-                        if (!route_added_) {
+                        if (!self->route_added_) {
                             return false;
                         }
 
                         // Check whether the physical nic interface information still exists.
-                        std::shared_ptr<NetworkInterface> underlying_ni = underlying_ni_;
+                        std::shared_ptr<NetworkInterface> underlying_ni = self->underlying_ni_;
                         if (NULLPTR == underlying_ni) {
                             return false;
                         }
@@ -2077,14 +2076,14 @@ namespace ppp {
                         }
 
                         // Try to get the lock, if you can't get the lock, do not deal with it and wait for the next execution.
-                        if (prdr_.try_lock()) {
+                        if (self->prdr_.try_lock()) {
                             ok = prepare();
                             if (ok) {
-                                ok = DeleteAllDefaultRoute();
+                                ok = self->DeleteAllDefaultRoute();
                             }
 
                             // Release the obtained prdr lock and decide whether to exit the process.
-                            prdr_.unlock();
+                            self->prdr_.unlock();
                             if (!ok) {
                                 break;
                             }

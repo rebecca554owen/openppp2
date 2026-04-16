@@ -57,6 +57,8 @@ flowchart TD
 - `vmem`
 - `server`
 - `client`
+- `virr`
+- `vbgp`
 
 每个块都对应某一块代码区域或运行时关注点，这不是随意拼起来的。
 
@@ -76,6 +78,9 @@ flowchart TD
 - client GUID 哨兵值。
 - client 带宽默认 `0`。
 - Windows 上 `paper_airplane.tcp = true`。
+- `virr.update-interval = 86400`。
+- `virr.retry-interval = 300`。
+- `vbgp.update-interval = 3600`。
 
 这些默认值描述的是仓库的安全启动姿态。
 
@@ -125,6 +130,14 @@ flowchart TD
 
 定义 client 侧身份、服务器目标、代理表面、路由映射和重启行为。
 
+### `virr`
+
+控制自动 IP-list 刷新节奏。
+
+### `vbgp`
+
+控制周期性的 vBGP 路由刷新节奏。
+
 ## `Loaded()` 的规范化规则
 
 `Loaded()` 才是真正的整形层。重要规则有：
@@ -142,6 +155,8 @@ flowchart TD
 - WebSocket 条件不满足时会直接关掉监听。
 - `vmem` 的路径或大小不合法时会整体清空。
 - `server.ipv6.static_addresses` 会被过滤成合法、唯一、同前缀的 IPv6 地址。
+- `virr.update-interval` 和 `vbgp.update-interval` 至少为 `1`。
+- `virr.retry-interval` 至少为 `1`。
 
 ```mermaid
 flowchart TD

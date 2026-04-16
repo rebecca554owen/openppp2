@@ -238,8 +238,8 @@ namespace ppp {
 
             std::shared_ptr<VNetstack> self = shared_from_this();
             acceptor->AcceptSocket = 
-                [self, this](SocketAcceptor*, SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
-                    this->ProcessAcceptSocket(e.Socket);
+                [self](SocketAcceptor*, SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
+                    self->ProcessAcceptSocket(e.Socket);
                 };
 
             lwip_ = lwip;
@@ -1148,19 +1148,19 @@ namespace ppp {
             }
 
             timer->expires_after(std::chrono::milliseconds(delay_ms));
-            timer->async_wait([self, this](const boost::system::error_code& ec) noexcept {
-                if (ec || this->disposed_) {
+            timer->async_wait([self](const boost::system::error_code& ec) noexcept {
+                if (ec || self->disposed_) {
                     return;
                 }
 
-                std::shared_ptr<Byte> packet = this->sync_ack_byte_array_;
-                std::shared_ptr<ITap> tap = this->sync_ack_tap_driver_;
-                int packet_length = this->sync_ack_bytes_size_;
+                std::shared_ptr<Byte> packet = self->sync_ack_byte_array_;
+                std::shared_ptr<ITap> tap = self->sync_ack_tap_driver_;
+                int packet_length = self->sync_ack_bytes_size_;
                 if (NULLPTR == packet || NULLPTR == tap || packet_length < 1) {
                     return;
                 }
 
-                if (this->sync_ack_state_.load() != VNETSTACK_SYNC_ACK_STATE_SYN_RECVD) {
+                if (self->sync_ack_state_.load() != VNETSTACK_SYNC_ACK_STATE_SYN_RECVD) {
                     return;
                 }
 

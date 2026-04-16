@@ -57,6 +57,8 @@ flowchart TD
 - `vmem`
 - `server`
 - `client`
+- `virr`
+- `vbgp`
 
 Each block corresponds to a specific code region or runtime concern. The structure is not arbitrary.
 
@@ -76,6 +78,9 @@ Important defaults from `Clear()` include:
 - client GUID sentinel value.
 - client bandwidth limit `0`.
 - Windows-only `paper_airplane.tcp = true`.
+- `virr.update-interval = 86400`.
+- `virr.retry-interval = 300`.
+- `vbgp.update-interval = 3600`.
 
 These defaults are important because they describe the repository's safe boot posture.
 
@@ -125,6 +130,14 @@ Defines server-side node identity, logging, backend, and IPv6 behavior.
 
 Defines client-side identity, server target, proxy surfaces, route mappings, and restart behavior.
 
+### `virr`
+
+Controls automatic IP-list refresh cadence.
+
+### `vbgp`
+
+Controls periodic vBGP route refresh cadence.
+
 ## Normalization Rules From `Loaded()`
 
 `Loaded()` does the real shaping work. Notable rules:
@@ -142,6 +155,8 @@ Defines client-side identity, server target, proxy surfaces, route mappings, and
 - WebSocket serving is disabled when host/path or certificates are invalid.
 - `vmem` is cleared if path is empty or size is below `1`.
 - `server.ipv6.static_addresses` is filtered to valid, unique, in-prefix IPv6 entries.
+- `virr.update-interval` and `vbgp.update-interval` are clamped to at least `1`.
+- `virr.retry-interval` is clamped to at least `1`.
 
 ```mermaid
 flowchart TD

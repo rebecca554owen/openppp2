@@ -227,6 +227,10 @@ namespace ppp {
             config.client.paper_airplane.tcp = true;
 #endif
 
+            config.virr.update_interval = 86400;
+            config.virr.retry_interval = 300;
+            config.vbgp.update_interval = 3600;
+
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
 
@@ -699,6 +703,10 @@ namespace ppp {
 
             config.client.bandwidth = std::max<int64_t>(0, config.client.bandwidth);
 
+            config.virr.retry_interval = std::max<int>(1, config.virr.retry_interval);
+            config.virr.update_interval = std::max<int>(1, config.virr.update_interval);
+            config.vbgp.update_interval = std::max<int>(1, config.vbgp.update_interval);
+
             config._lcgmods[LCGMOD_TYPE_TRANSMISSION] = ppp::cryptography::ssea::lcgmod(config.key.kf, EVP_HEADER_MSS_MIN_MOD, EVP_HEADER_MSS_MAX_MOD);
             config._lcgmods[LCGMOD_TYPE_STATIC] = ppp::cryptography::ssea::lcgmod(config.key.kf, VEP_HEADER_MSS_MIN_MOD, VEP_HEADER_MSS_MAX_MOD);
             return true;
@@ -1053,6 +1061,10 @@ namespace ppp {
 #if defined(_WIN32)
             AssignBoolIfPresent(config.client.paper_airplane.tcp, json["client"]["paper-airplane"]["tcp"]);
 #endif
+
+            AssignIfPresent(config.virr.update_interval, json["virr"]["update-interval"]);
+            AssignIfPresent(config.virr.retry_interval, json["virr"]["retry-interval"]);
+            AssignIfPresent(config.vbgp.update_interval, json["vbgp"]["update-interval"]);
             return Loaded();
         }
 
@@ -1260,6 +1272,15 @@ namespace ppp {
 #endif
 
             root["client"] = client;
+
+            Json::Value virr;
+            virr["update-interval"] = config.virr.update_interval;
+            virr["retry-interval"] = config.virr.retry_interval;
+            root["virr"] = virr;
+
+            Json::Value vbgp;
+            vbgp["update-interval"] = config.vbgp.update_interval;
+            root["vbgp"] = vbgp;
 
             return root;
         }

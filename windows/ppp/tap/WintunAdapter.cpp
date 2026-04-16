@@ -166,7 +166,7 @@ bool WintunAdapter::Start() noexcept {
 
     try {
         std::thread(
-            [self, this, awaitable_weak]() {
+            [self, awaitable_weak]() {
                 ppp::SetThreadPriorityToMaxLevel();
                 ppp::SetThreadName("wintun");
 
@@ -175,7 +175,7 @@ bool WintunAdapter::Start() noexcept {
                     a->Processed();
                 }
 
-                ReceiveLoop();
+                self->ReceiveLoop();
             }).detach();
     }
     catch (...) {
@@ -217,8 +217,9 @@ void WintunAdapter::Finalize() noexcept {
 }
 
 void WintunAdapter::Stop() noexcept {
-    // Atomically set the stop flag and retrieve the previous state
-    uint32_t old = state_.fetch_or(STOP_BIT, std::memory_order_acq_rel);
+    // Atomically set the stop flag. The in-flight counter remains protected by the same state word.
+    // The returned value is intentionally ignored because only the stop bit transition matters here.
+    state_.fetch_or(STOP_BIT, std::memory_order_acq_rel);
 
     // Wait for all in‑flight packets to complete.
     // The load with acquire ensures we see every release from fetch_sub.
@@ -226,7 +227,7 @@ void WintunAdapter::Stop() noexcept {
         std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
     }
 
-    // Ensure Finalize runs only once (multiple Stop calls are harmless)
+    // Ensure Finalize runs only once. Multiple Stop calls are harmless and will wait for completion.
     int excepted = 0;
     if (finalized_.compare_exchange_weak(excepted, 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
         Finalize();

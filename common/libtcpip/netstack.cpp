@@ -141,6 +141,8 @@ namespace lwip {
                 context.run(ec_);
             };
 
+        // The executor thread is intentionally detached because the netstack owns the context lifetime.
+        // The captured executor is the only shared resource needed to keep the loop valid until shutdown.
         std::thread executor(thread_start);
         executor.detach();
     }
