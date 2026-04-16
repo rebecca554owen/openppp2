@@ -55,6 +55,37 @@ Security also depends on:
 - timeout handling
 - orderly cleanup
 
+## What The Code Actually Proves
+
+The code shows:
+
+- session-specific working key derivation exists
+- the system does not rely on a single framing form
+- dummy traffic is used before normal traffic
+- protocol and transport ciphers are distinct
+- cleanup is deliberate and explicit
+
+The code does not show formal proof of confidentiality against every adversary model, so the docs should not overclaim.
+
+## Threat Surface View
+
+```mermaid
+flowchart TD
+    A[Client host] --> B[Handshake + framing]
+    C[Transport network] --> B
+    B --> D[Session-specific keys]
+    D --> E[Protected payload]
+    D --> F[Protected metadata]
+    G[Routing / DNS] --> B
+    H[Platform host effects] --> B
+```
+
+## Why Routing And Platform Matter To Security
+
+Security is not only cryptography. If the wrong DNS server becomes reachable, or the wrong route is protected, the tunnel's exposure changes.
+
+Likewise, platform-specific host side effects are part of the trust boundary, not background noise.
+
 ## Related Documents
 
 - `TRANSMISSION.md`

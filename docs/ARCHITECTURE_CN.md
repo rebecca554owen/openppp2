@@ -6,15 +6,7 @@
 
 本文是 OPENPPP2 的顶层架构地图，说明仓库如何分层、共享核心和宿主后果如何分开。
 
-锚点：
-
-- `main.cpp`
-- `ppp/configurations/AppConfiguration.*`
-- `ppp/transmissions/*`
-- `ppp/app/protocol/*`
-- `ppp/app/client/*`
-- `ppp/app/server/*`
-- 平台目录
+本文基于 `main.cpp`、`ppp/configurations/AppConfiguration.*`、`ppp/transmissions/*`、`ppp/app/protocol/*`、`ppp/app/client/*`、`ppp/app/server/*` 和各平台目录来说明系统边界。
 
 ## 核心思想
 
@@ -36,7 +28,7 @@ graph TD
     E --> J[VirtualEthernetExchanger]
     G --> K[平台层]
     I --> K
-    I --> L[go/*]
+    I --> L[go/* 可选后端]
 ```
 
 ## 共享核心与宿主后果
@@ -59,6 +51,17 @@ graph TD
 - `VirtualEthernetLinklayer` 负责隧道动作词汇
 - client/server exchanger 负责会话级行为
 
+```mermaid
+flowchart TD
+    A[配置加载] --> B[规范化 AppConfiguration]
+    B --> C[选择承载与角色]
+    C --> D[ITransmission]
+    D --> E[握手]
+    E --> F[VirtualEthernetLinklayer]
+    F --> G[客户端 exchanger]
+    F --> H[服务端 exchanger]
+```
+
 ## 宿主后果
 
 平台层负责本地操作系统上的实际副作用：
@@ -68,6 +71,8 @@ graph TD
 - DNS 变更
 - socket 保护
 - 平台特化 IPv6
+
+这些都不是“辅助代码”，而是可观测的运行时行为。
 
 ## 运行时入口
 
@@ -82,6 +87,19 @@ graph TD
 7. 运行维护 tick loop
 8. 输出状态
 9. 清理退出
+
+```mermaid
+stateDiagram-v2
+    [*] --> 参数解析
+    参数解析 --> 配置加载
+    配置加载 --> 配置规范化
+    配置规范化 --> 角色选择
+    角色选择 --> 宿主准备
+    宿主准备 --> 运行时启动
+    运行时启动 --> 维护循环
+    维护循环 --> 关闭
+    关闭 --> [*]
+```
 
 ## 对象所有权
 
@@ -98,6 +116,17 @@ client 和 server 不是对称的：
 
 - client：宿主集成、路由、DNS、代理、映射、可选 static 和 mux
 - server：监听、会话交换、转发、映射、IPv6、可选后端集成
+
+```mermaid
+graph LR
+    A[客户端] --> B[路由/DNS steering]
+    A --> C[本地代理入口]
+    A --> D[远端会话交换]
+    E[服务端] --> F[监听器设置]
+    E --> G[会话交换]
+    E --> H[转发]
+    E --> I[可选管理后端]
+```
 
 ## 配置即架构
 

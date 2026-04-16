@@ -16,6 +16,8 @@ OPENPPP2 的握手不只是一个最小化的 hello。它同时完成：
 - 通过 `nmux` 传递 mux 标记
 - 把 transmission 对象从预握手状态切到握手后状态
 
+这个握手既是控制面交换，也是流量形态控制。
+
 ## 核心函数
 
 | 函数 | 作用 |
@@ -59,6 +61,8 @@ sequenceDiagram
 7. 从 `nmux & 1` 提取 mux 标记
 8. 用 `ivv` 重建 cipher 状态
 
+客户端必须先拿到真实会话标识，再注入自己的随机输入，最后接收服务端的 mux 状态。
+
 ## 服务端顺序
 
 `InternalHandshakeServer(...)` 的动作是：
@@ -71,6 +75,8 @@ sequenceDiagram
 6. 接收 `ivv`
 7. 设置 `handshaked_ = true`
 8. 用 `ivv` 重建 cipher 状态
+
+服务端负责决定 mux 状态，并且不需要单独发一个布尔包。
 
 ## 握手超时包装层
 
@@ -92,6 +98,8 @@ flowchart TD
 `Transmission_Handshake_Nop(...)` 不是空字节流。它会根据 `key.kl` 和 `key.kh` 计算轮数，然后发送值为 `0` 的 session-id 样式包。
 
 这些包在语法上是合法握手对象，但在语义上是可丢弃的。接收侧根据首字节高位识别并忽略。
+
+这意味着前奏在外观上像正常握手流量，但在逻辑上不携带真实 session 身份。
 
 ## session-id 包如何构造
 
@@ -123,6 +131,18 @@ flowchart TD
 - 更多可打印字符
 
 然后 payload 会被前缀字节驱动的滚动 key 反馈变换。
+
+```mermaid
+flowchart TD
+    A[session_id 输入] --> B{session_id == 0?}
+    B -->|是| C[构造 dummy 值]
+    B -->|否| D[构造真实值]
+    C --> E[追加随机前缀]
+    D --> E
+    E --> F[追加分隔符与填充]
+    F --> G[滚动变换]
+    G --> H[线上包]
+```
 
 ## session-id 包如何解析
 

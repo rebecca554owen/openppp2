@@ -25,8 +25,8 @@
 
 ```mermaid
 flowchart TD
-    A[TCP / WS / WSS 承载] --> B[Handshake]
-    B --> C[Framing]
+    A[TCP / WS / WSS 承载] --> B[握手]
+    B --> C[帧化]
     C --> D[元数据保护]
     D --> E[负载保护]
     E --> F[VirtualEthernetLinklayer]
@@ -238,6 +238,12 @@ NOP 前奏不是空流量，而是结构化的 dummy 流量。
 
 - OPENPPP2 进行连接级动态工作密钥派生
 - 这减少了跨会话的静态密钥复用
+
+## 相关文档
+
+- `HANDSHAKE_SEQUENCE_CN.md`
+- `PACKET_FORMATS_CN.md`
+- `TRANSMISSION_PACK_SESSIONID_CN.md`
 - 除非代码其他部分给出更强证明，否则不能直接把它说成标准 PFS
 
 ## 握手超时

@@ -70,9 +70,35 @@ Server DNS can therefore be:
 - redirected to a configured upstream resolver
 - forwarded normally when no special rule applies
 
-## What This Means Operationally
+## Operational Meaning
 
 Routing and DNS are not separate knobs. A routing decision can determine whether a DNS resolver is reachable, and a DNS rule can depend on the routing state that was built by the client.
+
+## Path Model
+
+```mermaid
+flowchart TD
+    A[Local packet or query] --> B[Classify]
+    B --> C{bypass?}
+    C -->|yes| D[Stay local]
+    C -->|no| E[Send into tunnel]
+    E --> F[Route / DNS steering]
+    F --> G[Server resolver / cache]
+    G --> H[Return path]
+```
+
+## DNS Rule Shape
+
+The rule layer is intentionally tied to client path state. A rule is only useful if the resolver is reachable, and the resolver is only safe to use if the chosen path is correct.
+
+That means routing and DNS are policy coordination, not isolated toggles.
+
+## What To Watch For In Code
+
+- route entries are not just static tables; they are built from host, tunnel, and bypass inputs
+- DNS servers are treated like reachability-sensitive endpoints
+- server-side DNS behavior depends on namespace cache and datagram port state
+- IPv6 transit and static echo can alter what “reachable” means
 
 ## Related Documents
 

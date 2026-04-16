@@ -40,6 +40,10 @@
 - 判断主会话与额外连接
 - 协调映射与 namespace cache
 
+### 它做什么
+
+它管理接入面，决定一个新连接应该进入哪个会话对象。
+
 ## `VirtualEthernetExchanger`
 
 这个对象负责一个会话：
@@ -50,6 +54,10 @@
 - 数据加解密
 - 连接状态维护
 - 向客户端下发信息
+
+### 它做什么
+
+它处理单条会话的握手、转发和状态维护。
 
 ## 监听集合
 
@@ -66,6 +74,20 @@
 ## 配置的作用
 
 `AppConfiguration` 决定启用哪些监听器、是否启用后端、以及 IPv6 和 mapping 的行为。
+
+## 实现要点
+
+从头文件和实现可以直接确认，服务端同时负责：
+
+- firewall
+- transmission statistics
+- NAT / mapping
+- IPv6 lease 和 transit
+- static echo
+- mux
+- managed server bridge
+
+因此它并不是单一“接受连接再转发”的对象，而是会话控制与宿主网络控制的结合体。
 
 ## 相关文档
 

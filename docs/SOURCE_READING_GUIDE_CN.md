@@ -18,6 +18,18 @@
 8. 各平台目录
 9. 最后再看 `go/*`
 
+```mermaid
+flowchart TD
+    A[main.cpp] --> B[AppConfiguration]
+    B --> C[ITransmission]
+    C --> D[VirtualEthernetLinklayer]
+    D --> E[VirtualEthernetPacket]
+    E --> F[客户端运行时]
+    E --> G[服务端运行时]
+    G --> H[平台目录]
+    H --> I[go/* 可选]
+```
+
 ## 重点关注
 
 - 启动与角色选择
@@ -35,6 +47,12 @@
 - 把 `ITransmission` 的 framing 和 packet format 混为一谈
 - 把 client 和 server exchanger 当成对称实现
 - 以为 Go 后端是 data plane
+
+## 实用规则
+
+如果平台目录中的代码修改了路由、DNS、适配器、防火墙或者 socket 保护，就要把它当作运行时行为，而不是普通辅助函数。
+
+如果 `ITransmission` 中的代码改变了握手状态或帧形状，就要把它当作传输策略，而不是机械的读写封装。
 
 ## 相关文档
 

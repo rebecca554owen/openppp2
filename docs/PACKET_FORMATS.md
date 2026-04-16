@@ -260,19 +260,10 @@ The result is appended to the configured base keys. Static packet protection is 
 
 ### IP Family
 
-- stored through bitwise inversion so the sign becomes negative
-- unpacker recognizes and interprets the payload as IP semantics
+- `session_id < 0`
+- IP payload handling applies
+- `session_id` is logically treated as a signed family selector
 
-## Why These Formats Are Not Trivial Containers
+## Practical Reading Rule
 
-Neither family should be described as just “header plus encrypted payload.” The code also protects and disturbs metadata through:
-
-- dynamic key factor
-- length mapping
-- header body encryption
-- masking
-- shuffling
-- delta encoding
-- state transitions between early and later packet forms
-
-That is why packet formats are part of the security architecture.
+The packet format should always be read together with the transform chain that produces it. A header field only makes sense when you know which part of the pipeline touched it last.

@@ -175,6 +175,16 @@ The payload path can include:
 
 The runtime chooses conservative behavior before handshake and more normal behavior after handshake.
 
+```mermaid
+flowchart TD
+    A[Input bytes] --> B{Handshaked?}
+    B -->|no| C[Base94 decode]
+    B -->|yes| D[Binary read]
+    C --> E[Binary decrypt]
+    D --> F[Protected payload]
+    E --> F
+```
+
 ## Two Cipher Slots
 
 OPENPPP2 keeps two cipher slots:
@@ -238,6 +248,12 @@ The code-grounded statement is:
 
 - OPENPPP2 derives per-connection working keys dynamically
 - this reduces static key reuse across sessions
+
+## Related Documents
+
+- `HANDSHAKE_SEQUENCE.md`
+- `PACKET_FORMATS.md`
+- `TRANSMISSION_PACK_SESSIONID.md`
 - this is not the same as claiming formal standard PFS from the visible code alone
 
 ## Handshake Timeout

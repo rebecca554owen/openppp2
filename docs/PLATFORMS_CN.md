@@ -19,6 +19,12 @@
 - macOS: `darwin/*`
 - Android: 通过独立 `CMakeLists.txt` 构建 `android/*`
 
+## 为什么显式保留平台代码
+
+因为虚拟接口、路由、DNS 和 IPv6 的宿主行为在不同操作系统里并不一样，不能靠一个假的统一抽象完全掩盖。
+
+平台层不是“脏代码”，它是 runtime 的一部分。
+
 ## Windows
 
 Windows 侧有多条宿主集成路径：
@@ -30,21 +36,51 @@ Windows 侧有多条宿主集成路径：
 - DNS cache flush
 - 可选 proxy 和 QUIC 相关行为
 
+Windows 还包含对系统 proxy 和特定工作集优化的处理。
+
 ## Linux
 
 Linux 使用 native tun/tap 和 Linux 特化的 IPv6、protect 辅助能力。
+
+Linux 还是 server-side IPv6 data plane 最完整的目标平台。
 
 ## macOS
 
 macOS 使用 utun/TAP 风格集成，以及平台特化的路由和 IPv6 辅助。
 
+这里的关键是尊重 macOS 的系统语义，而不是把它当成“类 Linux”。
+
 ## Android
 
 Android 作为 shared library 构建，依赖宿主 app 和 JNI glue 进入 VPN 风格集成。
 
-## 为什么显式保留平台代码
+因此它更像嵌入式运行时，而不是独立桌面进程。
 
-因为虚拟接口、路由、DNS 和 IPv6 的宿主行为在不同操作系统里并不一样，不能靠一个假的统一抽象完全掩盖。
+## 平台责任图
+
+```mermaid
+flowchart TD
+    A[共享核心] --> B[平台层]
+    B --> C[虚拟网卡]
+    B --> D[路由]
+    B --> E[DNS]
+    B --> F[防火墙 / socket protect]
+    B --> G[IPv6 plumbing]
+```
+
+## 责任映射
+
+| 责任 | 为什么是平台特化 |
+|---|---|
+| 适配器创建 | OS API 不同 |
+| 路由变更 | 路由表和权限不同 |
+| DNS 变更 | 系统 DNS 机制不同 |
+| socket protect | 平台安全 plumbing 不同 |
+| IPv6 plumbing | 地址和 neighbor 处理不同 |
+
+## 运行时效果
+
+平台层改变的是可观测的宿主行为，所以它必须被当作运行时本身的一部分，而不是普通辅助 glue。
 
 ## 相关文档
 

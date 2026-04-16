@@ -13,6 +13,32 @@
 - 整形本地宿主网络
 - 维护远端隧道会话
 
+这两件事被明确拆成不同对象。
+
+## 代码锚点
+
+客户端运行时并不是一个单对象系统，它由网络整形与会话交换两部分组成：
+
+| 对象 | 作用 |
+|---|---|
+| `VEthernetNetworkSwitcher` | 虚拟网卡、路由、DNS、bypass、本地流量分类、代理表面 |
+| `VEthernetExchanger` | 远端会话、握手、保活、密钥状态、static 路径、IPv6、映射 |
+| `VEthernetLocalProxySwitcher` / `VEthernetHttpProxySwitcher` / `VEthernetSocksProxySwitcher` | 本地代理入口 |
+
+## 客户端拓扑图
+
+```mermaid
+flowchart TD
+    A[Host NIC / local traffic] --> B[VEthernetNetworkSwitcher]
+    B --> C[route / DNS / bypass]
+    B --> D[proxy surface]
+    C --> E[VEthernetExchanger]
+    D --> E
+    E --> F[ITransmission]
+    F --> G[Remote tunnel]
+    E --> H[Mapping / IPv6 / keepalive]
+```
+
 ## 核心拆分
 
 两个核心类型是：
@@ -27,6 +53,10 @@
 | `VEthernetNetworkSwitcher` | 虚拟网卡、路由、DNS、bypass、本地流量分类、代理表面 |
 | `VEthernetExchanger` | 远端会话、握手、保活、密钥状态、static 路径、IPv6、映射 |
 
+### 边界为何重要
+
+如果把路由/DNS/bypass 和远端会话混到一个对象里，客户端就会同时承担本地网络副作用和控制面职责，代码会很快失去可维护性。
+
 ## 客户端流程
 
 1. 构建本地网络上下文
@@ -37,6 +67,17 @@
 6. 交换会话信息
 7. 应用路由、DNS、代理、映射和可选 IPv6 状态
 8. 进入稳态转发
+
+```mermaid
+stateDiagram-v2
+    [*] --> ContextBuilt
+    ContextBuilt --> AdapterReady
+    AdapterReady --> TrafficClassified
+    TrafficClassified --> SessionOpen
+    SessionOpen --> Handshaked
+    Handshaked --> PolicyApplied
+    PolicyApplied --> SteadyForwarding
+```
 
 ## `VEthernetNetworkSwitcher`
 
@@ -51,6 +92,10 @@
 
 它决定哪些流量进入隧道，哪些留在本地。
 
+### 它为什么属于 host-side
+
+它做的是宿主机本地副作用：虚拟网卡、路由和 DNS 都是本机行为，不是远端会话行为。
+
 ## `VEthernetExchanger`
 
 这个对象负责远端会话侧：
@@ -63,9 +108,42 @@
 - 注册映射
 - 应用 IPv6
 
+### 它为什么属于 session-side
+
+这个对象处理的是“单条远端会话如何存活、如何握手、如何维持状态”。它不负责本地网络整形本身。
+
 ## 宿主集成
 
 客户端也负责本地代理表面和平台相关虚拟网卡行为。因此它是宿主集成层，而不是单纯的拨号器。
+
+## 常见联动
+
+| 事件 | switcher 动作 | exchanger 动作 |
+|---|---|---|
+| 启动 | 创建 adapter / route / DNS | 打开远端连接 |
+| 握手成功 | 应用返回策略 | 保存会话状态 |
+| 远端策略变化 | 更新本地可达性 | 重新注册映射 |
+| 退出 | 清理本地副作用 | 释放远端会话 |
+
+## `VEthernetExchanger` 的实现要点
+
+从源码可以确认，这个对象在建立连接时会根据协议类型选择 TCP、WebSocket 或 SSL WebSocket 传输；它还会负责：
+
+- 请求 IPv6 配置
+- 维护 datagram ports
+- 处理 mux 生命周期
+- 处理 static echo
+- 组织 keepalive
+
+## `VEthernetNetworkSwitcher` 的实现要点
+
+从头文件可以直接看出，它还承担：
+
+- 路由表管理
+- DNS 规则加载
+- 保护网络与本机网络的分离
+- TAP / VNetstack 侧输入输出
+- IPv6 应用与恢复
 
 ## 边界
 

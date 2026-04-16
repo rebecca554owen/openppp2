@@ -45,6 +45,10 @@
 
 C++ 负责网卡、路由、socket、会话和转发。Go 负责业务状态、存储和管理接口。
 
+## 管理面说明
+
+这个后端更像 service-state manager，而不是 data-plane helper。它维护的是用户、节点、额度和控制链路，而不是隧道包本身。
+
 ## 相关文档
 
 - `DEPLOYMENT_CN.md`

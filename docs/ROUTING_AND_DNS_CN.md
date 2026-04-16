@@ -74,6 +74,32 @@
 
 路由和 DNS 不是两个独立旋钮。路由决定 DNS resolver 是否可达，DNS 规则又依赖客户端已经建立好的路由状态。
 
+## 路径模型
+
+```mermaid
+flowchart TD
+    A[本地包或查询] --> B[分类]
+    B --> C{bypass?}
+    C -->|是| D[留在本地]
+    C -->|否| E[进入隧道]
+    E --> F[路由 / DNS steering]
+    F --> G[服务端 resolver / cache]
+    G --> H[返回路径]
+```
+
+## DNS 规则形态
+
+规则层是明确跟客户端路径状态绑定的。规则只有在 resolver 可达时才有意义，而 resolver 只有在路径正确时才安全。
+
+所以路由和 DNS 本质上是 policy coordination，而不是两个独立开关。
+
+## 读源码时要看什么
+
+- 路由项不是静态表，它来自宿主、隧道和 bypass 的组合输入
+- DNS 服务器被当成可达性敏感端点
+- 服务端 DNS 行为取决于 namespace cache 和 datagram port 状态
+- IPv6 transit 和 static echo 会改变“可达”的含义
+
 ## 相关文档
 
 - `CONFIGURATION_CN.md`

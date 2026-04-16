@@ -2,9 +2,9 @@
 
 [中文版本](README_CN.md)
 
-This directory is the documentation center for OPENPPP2. The documents are organized as one-to-one English and Chinese pairs so that each topic can be read in either language without losing coverage or structure.
+This directory is the documentation center for OPENPPP2.
 
-OPENPPP2 is a layered system built from code facts, not slogans. The documentation therefore follows the implementation boundary: startup, configuration, transmission, handshake, packet formats, link-layer protocol, client runtime, server runtime, routing and DNS, platform integration, deployment, operations, security, management backend, and source reading.
+The set is intentionally code-first. Each page is written from actual implementation boundaries rather than product slogans, so the docs stay tied to `main.cpp`, `ppp/configurations`, `ppp/transmissions`, `ppp/app/protocol`, `ppp/app/client`, `ppp/app/server`, the platform integration directories, and the optional Go backend.
 
 ## Reading Paths
 
@@ -17,12 +17,14 @@ OPENPPP2 is a layered system built from code facts, not slogans. The documentati
 5. [`TRANSMISSION.md`](TRANSMISSION.md)
 6. [`HANDSHAKE_SEQUENCE.md`](HANDSHAKE_SEQUENCE.md)
 7. [`PACKET_FORMATS.md`](PACKET_FORMATS.md)
-8. [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
-9. [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
-10. [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md)
-11. [`PLATFORMS.md`](PLATFORMS.md)
-12. [`DEPLOYMENT.md`](DEPLOYMENT.md)
-13. [`OPERATIONS.md`](OPERATIONS.md)
+8. [`TRANSMISSION_PACK_SESSIONID.md`](TRANSMISSION_PACK_SESSIONID.md)
+9. [`LINKLAYER_PROTOCOL.md`](LINKLAYER_PROTOCOL.md)
+10. [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
+11. [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
+12. [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md)
+13. [`PLATFORMS.md`](PLATFORMS.md)
+14. [`DEPLOYMENT.md`](DEPLOYMENT.md)
+15. [`OPERATIONS.md`](OPERATIONS.md)
 
 ### Source Reading
 

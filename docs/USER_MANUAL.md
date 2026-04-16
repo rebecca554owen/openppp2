@@ -47,6 +47,20 @@ Depending on platform and role, OPENPPP2 may change:
 6. `DEPLOYMENT.md`
 7. `OPERATIONS.md`
 
+## Practical User Guidance
+
+- start with the role first, not the command line
+- treat configuration as node intent, not a throwaway script
+- expect host changes; this is part of the runtime
+- use the source reading guide if you need to verify behavior
+
+## What Not To Assume
+
+- do not assume client and server are symmetric
+- do not assume the Go backend is required
+- do not assume route and DNS changes are incidental
+- do not assume the platform layer is interchangeable
+
 ## Related Documents
 
 - `README.md`

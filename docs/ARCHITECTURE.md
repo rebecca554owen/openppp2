@@ -6,15 +6,7 @@
 
 This is the top-level architecture map for OPENPPP2. It explains how the repository is divided, where the shared core ends, and where host-specific behavior begins.
 
-Anchors:
-
-- `main.cpp`
-- `ppp/configurations/AppConfiguration.*`
-- `ppp/transmissions/*`
-- `ppp/app/protocol/*`
-- `ppp/app/client/*`
-- `ppp/app/server/*`
-- platform directories
+The map is code-driven. The relevant anchors are `main.cpp`, `ppp/configurations/AppConfiguration.*`, `ppp/transmissions/*`, `ppp/app/protocol/*`, `ppp/app/client/*`, `ppp/app/server/*`, and the platform directories.
 
 ## Main Idea
 
@@ -36,7 +28,7 @@ graph TD
     E --> J[VirtualEthernetExchanger]
     G --> K[Platform layer]
     I --> K
-    I --> L[go/*]
+    I --> L[go/* optional backend]
 ```
 
 ## Shared Core Vs Host Consequences
@@ -59,6 +51,17 @@ The shared core owns tunnel semantics:
 - `VirtualEthernetLinklayer` owns tunnel action vocabulary
 - client and server exchangers own session-level behavior
 
+```mermaid
+flowchart TD
+    A[Configuration load] --> B[Normalize AppConfiguration]
+    B --> C[Choose carrier and role]
+    C --> D[ITransmission]
+    D --> E[Handshake]
+    E --> F[VirtualEthernetLinklayer]
+    F --> G[Client exchanger]
+    F --> H[Server exchanger]
+```
+
 ## Host Consequences
 
 The platform layer owns local operating-system side effects:
@@ -68,6 +71,8 @@ The platform layer owns local operating-system side effects:
 - DNS changes
 - socket protection
 - platform-specific IPv6 behavior
+
+These are not implementation details that can be hand-waved away. They are part of the observable runtime behavior.
 
 ## Runtime Entry
 
@@ -82,6 +87,19 @@ The platform layer owns local operating-system side effects:
 7. run the maintenance tick loop
 8. report status
 9. cleanly shut down
+
+```mermaid
+stateDiagram-v2
+    [*] --> ArgsParsed
+    ArgsParsed --> ConfigLoaded
+    ConfigLoaded --> ConfigNormalized
+    ConfigNormalized --> RoleChosen
+    RoleChosen --> HostPrepared
+    HostPrepared --> RuntimeStarted
+    RuntimeStarted --> MaintenanceLoop
+    MaintenanceLoop --> Shutdown
+    Shutdown --> [*]
+```
 
 ## Object Ownership
 
@@ -98,6 +116,17 @@ The client and server are not symmetric:
 
 - client: host integration, routing, DNS, proxy, mapping, optional static and mux behavior
 - server: listener setup, session switching, forwarding, mapping, IPv6, optional backend integration
+
+```mermaid
+graph LR
+    A[Client] --> B[Route/DNS steering]
+    A --> C[Local proxy surfaces]
+    A --> D[Remote session exchange]
+    E[Server] --> F[Listener setup]
+    E --> G[Session switching]
+    E --> H[Forwarding]
+    E --> I[Optional management backend]
+```
 
 ## Configuration As Architecture
 

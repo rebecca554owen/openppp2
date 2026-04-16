@@ -12,6 +12,8 @@
 #include <ppp/net/SocketAcceptor.h>
 #include <ppp/net/asio/IAsynchronousWriteIoQueue.h>
 
+#include <boost/asio/steady_timer.hpp>
+
 #ifdef SYSNAT
 #include <linux/ppp/tap/openppp2_sysnat.h>
 #endif
@@ -99,6 +101,8 @@ namespace ppp {
                 virtual bool                                                AckAccept() noexcept;
                 virtual bool                                                Establish() noexcept = 0;
                 virtual bool                                                EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept;
+                void                                                        CancelSyncAckRetry() noexcept;
+                void                                                        ScheduleSyncAckRetry(uint64_t delay_ms) noexcept;
 
             private:
                 void                                                        Finalize() noexcept;
@@ -117,6 +121,8 @@ namespace ppp {
                 std::shared_ptr<Byte>                                       sync_ack_byte_array_;
                 std::atomic<Byte>                                           sync_ack_state_      = 0;
                 int                                                         sync_ack_bytes_size_ = 0;
+                int                                                         sync_ack_retry_count_ = 0;
+                std::shared_ptr<boost::asio::steady_timer>                  sync_ack_retry_timer_;
 
                 boost::asio::ip::tcp::endpoint                              natEP_;
                 boost::asio::ip::tcp::endpoint                              localEP_;

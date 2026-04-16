@@ -15,6 +15,8 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/coroutines/asio/asio.h>
 
+#include <chrono>
+
 #include <libtcpip/netstack.h>
 
 #ifdef SYSNAT
@@ -872,6 +874,8 @@ namespace ppp {
         }
 
         void VNetstack::TapTcpClient::Finalize() noexcept {
+            this->CancelSyncAckRetry();
+
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
             std::shared_ptr<TapTcpLink> link = std::move(link_);
 
@@ -936,9 +940,13 @@ namespace ppp {
             this->natEP_ = natEP;
             this->socket_ = socket;
 
+            this->CancelSyncAckRetry();
+
             this->sync_ack_byte_array_.reset();
             this->sync_ack_bytes_size_ = 0;
             this->sync_ack_tap_driver_.reset();
+            this->sync_ack_retry_count_ = 0;
+            this->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_CLOSED;
 
             if (lwip_) {
                 std::shared_ptr<TapTcpLink> link = this->link_;
@@ -957,8 +965,8 @@ namespace ppp {
                 return false;
             }
 
-            std::shared_ptr<Byte> packet = std::move(this->sync_ack_byte_array_);
-            std::shared_ptr<ITap> tap = std::move(this->sync_ack_tap_driver_);
+            std::shared_ptr<Byte> packet = this->sync_ack_byte_array_;
+            std::shared_ptr<ITap> tap = this->sync_ack_tap_driver_;
 
             int packet_length = this->sync_ack_bytes_size_;
             if (packet_length < 1) {
@@ -970,7 +978,10 @@ namespace ppp {
                 return false;
             }
 
-            this->sync_ack_bytes_size_ = 0;
+            if (NULLPTR == tap) {
+                return false;
+            }
+
             if (lwip_) {
                 std::shared_ptr<TapTcpLink> link = this->link_;
                 if (NULLPTR == link) {
@@ -978,10 +989,16 @@ namespace ppp {
                 }
 
                 link->state = TcpState::TCP_STATE_SYN_RECEIVED;
-                return lwip::netstack::input(packet.get(), packet_length);
+                (void)tap->Output(packet, packet_length);
+                this->sync_ack_byte_array_ = packet;
+                this->sync_ack_bytes_size_ = packet_length;
+                this->sync_ack_retry_count_ = 0;
+                this->ScheduleSyncAckRetry(200);
+                (void)lwip::netstack::input(packet.get(), packet_length);
+                return true;
             }
 
-            if (NULLPTR == tap || NULLPTR == packet) {
+            if (NULLPTR == packet) {
                 return false;
             }
 
@@ -1047,7 +1064,75 @@ namespace ppp {
             }
 #endif
 
-            return tap->Output(packet, packet_length);
+            this->sync_ack_byte_array_ = packet;
+            this->sync_ack_bytes_size_ = packet_length;
+            this->sync_ack_retry_count_ = 0;
+            this->ScheduleSyncAckRetry(200);
+
+            (void)tap->Output(packet, packet_length);
+            return true;
+        }
+
+        void VNetstack::TapTcpClient::CancelSyncAckRetry() noexcept {
+            std::shared_ptr<boost::asio::steady_timer> timer = std::move(this->sync_ack_retry_timer_);
+            if (NULLPTR != timer) {
+                boost::system::error_code ec;
+                timer->cancel(ec);
+            }
+        }
+
+        void VNetstack::TapTcpClient::ScheduleSyncAckRetry(uint64_t delay_ms) noexcept {
+            if (disposed_ || delay_ms == 0) {
+                return;
+            }
+
+            std::shared_ptr<boost::asio::io_context> context = this->context_;
+            if (NULLPTR == context) {
+                return;
+            }
+
+            std::shared_ptr<TapTcpClient> self = shared_from_this();
+            std::shared_ptr<boost::asio::steady_timer> timer = this->sync_ack_retry_timer_;
+            if (NULLPTR == timer) {
+                timer = make_shared_object<boost::asio::steady_timer>(*context);
+                this->sync_ack_retry_timer_ = timer;
+            }
+
+            if (NULLPTR == timer) {
+                return;
+            }
+
+            timer->expires_after(std::chrono::milliseconds(delay_ms));
+            timer->async_wait([self, this](const boost::system::error_code& ec) noexcept {
+                if (ec || this->disposed_) {
+                    return;
+                }
+
+                std::shared_ptr<Byte> packet = this->sync_ack_byte_array_;
+                std::shared_ptr<ITap> tap = this->sync_ack_tap_driver_;
+                int packet_length = this->sync_ack_bytes_size_;
+                if (NULLPTR == packet || NULLPTR == tap || packet_length < 1) {
+                    return;
+                }
+
+                if (this->sync_ack_state_.load() != VNETSTACK_SYNC_ACK_STATE_SYN_RECVD) {
+                    return;
+                }
+
+                static constexpr uint64_t retry_delays[] = {200, 400, 800, 1600};
+                int retry_index = this->sync_ack_retry_count_;
+                if (retry_index < 0 || retry_index >= static_cast<int>(arraysizeof(retry_delays))) {
+                    return;
+                }
+
+                bool ok = tap->Output(packet, packet_length);
+                this->sync_ack_retry_count_ = retry_index + 1;
+                if (this->sync_ack_retry_count_ < static_cast<int>(arraysizeof(retry_delays))) {
+                    this->ScheduleSyncAckRetry(retry_delays[this->sync_ack_retry_count_]);
+                }
+
+                (void)ok;
+            });
         }
     }
 }

@@ -45,6 +45,23 @@ Observed commands include:
 
 C++ owns adapters, routes, sockets, sessions, and forwarding. Go owns business state, storage, and management APIs.
 
+## Backend Shape Notes
+
+The Go code is organized around service-state synchronization rather than packet forwarding. The main visible responsibilities are:
+
+- loading node and user state
+- persisting traffic and quota facts
+- exposing administrative control endpoints
+- exchanging control data over a framed JSON link
+
+That means the backend is an administrative control plane, not a substitute for the C++ data plane.
+
+## What To Watch For
+
+- control commands are separate from packet tunnel opcodes
+- storage and HTTP endpoints live in the management realm
+- the backend can be present even when the core tunnel transport remains unchanged
+
 ## Related Documents
 
 - `DEPLOYMENT.md`

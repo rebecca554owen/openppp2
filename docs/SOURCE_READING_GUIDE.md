@@ -18,6 +18,18 @@ This guide helps engineers read OPENPPP2 in a useful order.
 8. platform directories
 9. `go/*` last
 
+```mermaid
+flowchart TD
+    A[main.cpp] --> B[AppConfiguration]
+    B --> C[ITransmission]
+    C --> D[VirtualEthernetLinklayer]
+    D --> E[VirtualEthernetPacket]
+    E --> F[Client runtime]
+    E --> G[Server runtime]
+    G --> H[Platform dirs]
+    H --> I[go/* optional]
+```
+
 ## What To Focus On
 
 - startup and role selection
@@ -35,6 +47,12 @@ This guide helps engineers read OPENPPP2 in a useful order.
 - confusing `ITransmission` framing with packet formats
 - treating client and server exchangers as symmetric
 - assuming the Go backend is the data plane
+
+## Practical Reading Rule
+
+If a line in the platform directory changes routes, DNS, adapter state, firewall state, or socket protection, treat it as runtime behavior, not helper code.
+
+If a line in `ITransmission` changes handshake state or frame shape, treat it as transport policy, not plumbing.
 
 ## Related Documents
 

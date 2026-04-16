@@ -16,12 +16,14 @@ OPENPPP2 does more than a minimal hello exchange. The handshake also:
 - delivers `nmux` with an embedded mux flag
 - flips the transmission object from pre-handshake to post-handshake state
 
-## Core Functions
+The key point is that the handshake is both a control exchange and a traffic-shaping exchange.
+
+## Code Anchors
 
 | Function | Role |
 |----------|------|
 | `Transmission_Handshake_Pack_SessionId(...)` | Build session-id style packets |
-| `Transmission_Handshake_Unpack_SessionId(...)` | Reverse the packing and detect dummy packets |
+| `Transmission_Handshake_Unpack_SessionId(...)` | Reverse packing and detect dummy packets |
 | `Transmission_Handshake_SessionId(...)` | Send or receive logical session-id style values |
 | `Transmission_Handshake_Nop(...)` | Send the configurable dummy prelude |
 | `ITransmission::InternalHandshakeClient(...)` | Client-side handshake orchestration |
@@ -44,7 +46,7 @@ sequenceDiagram
     Note over C,S: handshaked_ becomes true
 ```
 
-The code is slightly asymmetric between client and server, but the logical exchange is the same.
+The code is asymmetric in execution order, but symmetric in information exchange.
 
 ## Client Order
 
@@ -59,6 +61,8 @@ The code is slightly asymmetric between client and server, but the logical excha
 7. extract mux flag from `nmux & 1`
 8. rebuild cipher state using `ivv`
 
+The client cannot rebuild its working keys until it has both the server's session identity and its own generated input sent across.
+
 ## Server Order
 
 `InternalHandshakeServer(...)` performs:
@@ -71,6 +75,8 @@ The code is slightly asymmetric between client and server, but the logical excha
 6. receive `ivv`
 7. set `handshaked_ = true`
 8. rebuild cipher state using `ivv`
+
+The server decides mux state and communicates it without creating a separate flag packet.
 
 ## Timeout Wrapper
 
@@ -92,6 +98,8 @@ If the timer fires first, the transmission is disposed.
 `Transmission_Handshake_Nop(...)` is not empty traffic. It computes a number of rounds from `key.kl` and `key.kh`, then sends session-id style packets with value `0`.
 
 Those packets are syntactically valid handshake objects, but semantically disposable. The receiver recognizes them as dummy packets because the high bit of the first byte is set.
+
+That means the prelude looks like real handshake traffic while carrying no logical session identity.
 
 ## Session-Id Packet Construction
 
@@ -124,6 +132,18 @@ Both paths then add:
 
 Then the payload is transformed using the prefix bytes as rolling key feedback.
 
+```mermaid
+flowchart TD
+    A[session_id input] --> B{session_id == 0?}
+    B -->|yes| C[build dummy value]
+    B -->|no| D[build real value]
+    C --> E[add random prefix]
+    D --> E
+    E --> F[add separator + padding]
+    F --> G[rolling transform]
+    G --> H[wire packet]
+```
+
 ## Session-Id Packet Parsing
 
 `Transmission_Handshake_Unpack_SessionId(...)` reverses the process.
@@ -147,6 +167,8 @@ That means the same encoder handles four logical values:
 - `session_id`
 - `ivv`
 - `nmux`
+
+The handshake therefore reuses one packet family to carry multiple control values.
 
 ## `nmux` Semantics
 
@@ -207,7 +229,7 @@ The handshake fails if any of these happen:
 
 ## Why Order Matters
 
-The order `sid -> ivv -> nmux` is not arbitrary.
+`sid -> ivv -> nmux` is not arbitrary.
 
 | Value | Purpose |
 |-------|---------|
@@ -227,7 +249,7 @@ The handshake provides:
 - timeout-bounded handshake state
 - embedded mux state instead of a trivial flag packet
 
-The honest wording is important: this is strong connection-specific shaping and key diversification, not an excuse to overclaim formal properties not shown in code.
+The honest wording matters: this is strong connection-specific shaping and key diversification, not a claim of formal properties that are not proved in code.
 
 ## Reading Notes For Developers
 
