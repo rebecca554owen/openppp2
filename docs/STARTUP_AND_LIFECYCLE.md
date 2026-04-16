@@ -66,6 +66,8 @@ stateDiagram-v2
 
 The tick loop handles periodic maintenance. Restart and shutdown are controlled at the process level, not as side effects of individual connections.
 
+These process timers do not implement transport handshake retry or client-side SYN/ACK reinjection; those belong to the client virtual network stack path.
+
 This is important because connection failures should not automatically collapse process ownership. The process remains the outer lifecycle boundary.
 
 ## Ownership Model

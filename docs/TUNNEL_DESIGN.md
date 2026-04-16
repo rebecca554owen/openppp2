@@ -23,9 +23,9 @@ The outer carrier decides how bytes move between peers. The code supports TCP an
 
 `ITransmission` owns:
 
-- handshake timeout
-- handshake sequencing
-- session identifier exchange
+- transport handshake timeout
+- transport handshake sequencing
+- session identifier exchange for the protected transport
 - `ivv`-based per-connection key variation
 - read/write framing
 - protocol-layer cipher state
@@ -33,9 +33,11 @@ The outer carrier decides how bytes move between peers. The code supports TCP an
 
 The configured keys are base secrets; the working keys are derived per connection.
 
-## Handshake Behavior
+## Transport Handshake Behavior
 
 Handshake establishes session identity, mux orientation, and the transition into established framing. The code also treats the early phase conservatively and allows dummy prelude traffic.
+
+This section refers to the protected transport handshake in `ITransmission`, not to client-side virtual TCP accept recovery or any process-level timer.
 
 ## Layer 3: Link-Layer Actions
 

@@ -876,6 +876,12 @@ namespace ppp {
         void VNetstack::TapTcpClient::Finalize() noexcept {
             this->CancelSyncAckRetry();
 
+            this->sync_ack_byte_array_.reset();
+            this->sync_ack_bytes_size_ = 0;
+            this->sync_ack_tap_driver_.reset();
+            this->sync_ack_retry_count_ = 0;
+            this->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_CLOSED;
+
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
             std::shared_ptr<TapTcpLink> link = std::move(link_);
 
@@ -1119,7 +1125,7 @@ namespace ppp {
                     return;
                 }
 
-                static constexpr uint64_t retry_delays[] = {200, 400, 800, 1600};
+                static constexpr uint64_t retry_delays[] = {200, 400, 800, 1200, 1600};
                 int retry_index = this->sync_ack_retry_count_;
                 if (retry_index < 0 || retry_index >= static_cast<int>(arraysizeof(retry_delays))) {
                     return;

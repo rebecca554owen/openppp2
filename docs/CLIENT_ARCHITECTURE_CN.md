@@ -145,6 +145,12 @@ stateDiagram-v2
 - TAP / VNetstack 侧输入输出
 - IPv6 应用与恢复
 
+## 虚拟 TCP 接受恢复
+
+TAP 侧的 TCP accept 路径有一条缓存 SYN/ACK 的重试链路。当客户端侧 accept 流程进入 `AckAccept()` 时，会先把缓存包立刻写回虚拟网卡，然后在 accept 状态仍然未完成时，按 `200`、`400`、`800`、`1200`、`1600` 毫秒继续重试。
+
+`EndAccept()` 在连接完成后会取消重试定时器并清理缓存包状态。`Finalize()` 也会做同样的兜底清理，避免缓存的 SYN/ACK 缓冲和定时器在关闭时泄漏。
+
 ## 边界
 
 route/DNS/bypass 留在 switcher 中，远端连接和握手留在 exchanger 中。这条边界是客户端设计的核心。

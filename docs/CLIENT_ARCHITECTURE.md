@@ -147,6 +147,12 @@ The switcher owns routing and DNS steering, but it also manages:
 - IPv6 application state
 - tunnel-adjacent host mutation
 
+## Virtual TCP Accept Recovery
+
+The TAP-side TCP accept path has a retry loop for cached SYN/ACK packets. When the client-side accept path reaches `AckAccept()`, it writes the cached packet back to the virtual adapter immediately, then schedules retries at `200`, `400`, `800`, `1200`, and `1600` ms while the accept state remains pending.
+
+`EndAccept()` cancels the retry timer and clears the cached packet state as soon as the connection completes. `Finalize()` performs the same cleanup as a safety fallback, so the cached SYN/ACK buffer and timer do not leak across shutdown.
+
 ## What the Client Is Not
 
 It is not only a dialer.
