@@ -529,7 +529,7 @@ namespace ppp {
             }
 
             void VEthernetNetworkSwitcher::Dispose() noexcept {
-                auto self = shared_from_this();
+                auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::dispatch(*context, 
                     [self, this, context]() noexcept {
@@ -2036,7 +2036,7 @@ namespace ppp {
 #endif
 
                 // Create a new network protection backend subthread.
-                auto self = shared_from_this();
+                auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::thread([self]() noexcept {
                     auto prepare = [self]() noexcept {
                         // If the current VEthernet framework object instance is released, the process is break.

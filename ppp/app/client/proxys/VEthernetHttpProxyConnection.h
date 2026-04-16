@@ -45,7 +45,7 @@ namespace ppp {
                     static bool                                                         ProtocolReadAllHeaders(ppp::io::MemoryStream& headers, VEthernetHttpProxyConnection::YieldContext& y, boost::asio::ip::tcp::socket& socket) noexcept;
                     static bool                                                         ProtocolReadAllHeaders(const ppp::vector<ppp::string>& headers, ProtocolRoot::HeaderCollection& s) noexcept;
                     static bool                                                         ProtocolReadFirstRoot(const ppp::vector<ppp::string>& headers, const std::shared_ptr<ProtocolRoot>& protocolRoot) noexcept;
-                    static std::shared_ptr<ProtocolRoot>                                GetProtocolRootFromSocket(ppp::io::MemoryStream& ms) noexcept;
+                    static std::shared_ptr<ProtocolRoot>                                GetProtocolRootFromSocket(ppp::io::MemoryStream& ms, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, VEthernetHttpProxyConnection::YieldContext& y) noexcept;
                     static bool                                                         ProtocolReadHeaders(ppp::io::MemoryStream& ms, ppp::vector<ppp::string>& headers, ppp::string* out_) noexcept;
                     static std::shared_ptr<ppp::app::protocol::AddressEndPoint>         GetAddressEndPointByProtocol(const std::shared_ptr<ProtocolRoot>& protocolRoot) noexcept;
     

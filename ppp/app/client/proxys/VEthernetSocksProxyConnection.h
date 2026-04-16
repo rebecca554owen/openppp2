@@ -25,7 +25,7 @@ namespace ppp {
                     int                                                                 SelectMethod(YieldContext& y, int& method) noexcept;
                     bool                                                                Replay(YieldContext& y, int k, int v) noexcept;
                     int                                                                 Authentication(YieldContext& y) noexcept;
-                    bool                                                                Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept;
+                    int                                                                 Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept;
 
                 protected:
                     virtual bool                                                        Handshake(YieldContext& y) noexcept override;

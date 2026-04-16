@@ -1165,15 +1165,17 @@ namespace ppp {
                 }
 
                 static constexpr uint64_t retry_delays[] = {200, 400, 800, 1200, 1600};
-                int retry_index = this->sync_ack_retry_count_;
+
+                int retry_index = self->sync_ack_retry_count_;
                 if (retry_index < 0 || retry_index >= static_cast<int>(arraysizeof(retry_delays))) {
                     return;
                 }
 
                 bool ok = tap->Output(packet, packet_length);
-                this->sync_ack_retry_count_ = retry_index + 1;
-                if (this->sync_ack_retry_count_ < static_cast<int>(arraysizeof(retry_delays))) {
-                    this->ScheduleSyncAckRetry(retry_delays[this->sync_ack_retry_count_]);
+                self->sync_ack_retry_count_ = retry_index + 1;
+
+                if (self->sync_ack_retry_count_ < static_cast<int>(arraysizeof(retry_delays))) {
+                    self->ScheduleSyncAckRetry(retry_delays[self->sync_ack_retry_count_]);
                 }
 
                 (void)ok;

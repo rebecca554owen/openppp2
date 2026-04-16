@@ -84,8 +84,13 @@ namespace {
         return !prefix.empty();
     }
 
-    static bool                                             TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boost::asio::ip::address_v6& host) noexcept {
-        boost::asio::ip::address_v6::bytes_type bytes = network.to_bytes();
+    static bool                                             TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, int prefix_length, boost::asio::ip::address_v6& host) noexcept {
+        prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+        if (prefix_length >= ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+            return false;
+        }
+
+        boost::asio::ip::address_v6::bytes_type bytes = ppp::ipv6::ComputeNetworkAddress(network, prefix_length).to_bytes();
         for (int i = 15; i >= 0; --i) {
             if (bytes[i] != 0xff) {
                 ++bytes[i];
@@ -519,7 +524,7 @@ namespace ppp {
                     }
                 }
 
-                if (config.server.ipv6.prefix_length <= ppp::ipv6::IPv6_MIN_PREFIX_LENGTH || config.server.ipv6.prefix_length > ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+                if (config.server.ipv6.prefix_length <= ppp::ipv6::IPv6_MIN_PREFIX_LENGTH || config.server.ipv6.prefix_length >= ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     DisableServerIPv6(config);
                     ipv6_prefix = "";
                     ipv6_server_enabled = false;
@@ -577,7 +582,7 @@ namespace ppp {
                 }
 
                 if (!has_effective_gateway && !cidr_ec) {
-                    has_effective_gateway = TryGetFirstHostIPv6(cidr_prefix, effective_gateway_v6);
+                    has_effective_gateway = TryGetFirstHostIPv6(cidr_prefix, config.server.ipv6.prefix_length, effective_gateway_v6);
                 }
 
                 ppp::map<ppp::string, ppp::string> normalized_static_addresses;

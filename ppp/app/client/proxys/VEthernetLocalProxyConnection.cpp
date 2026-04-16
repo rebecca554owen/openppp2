@@ -237,6 +237,18 @@ namespace ppp {
                     boost::asio::ip::address address = StringToAddress(host, ec);
 
                     if (ec) {
+                        ppp::string endpoint = host;
+                        ppp::string parsed_host;
+                        int parsed_port = port;
+                        if (ppp::net::Ipep::ParseEndPoint(endpoint, parsed_host, parsed_port)) {
+                            address = StringToAddress(parsed_host, ec);
+                            if (!ec && parsed_port > ppp::net::IPEndPoint::MinPort && parsed_port <= ppp::net::IPEndPoint::MaxPort) {
+                                port = parsed_port;
+                            }
+                        }
+                    }
+
+                    if (ec) {
                         destinationEP->Type = ppp::app::protocol::AddressType::Domain;
                     }
                     elif(address.is_v4()) {

@@ -3,6 +3,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
 namespace ppp {
     namespace linux {

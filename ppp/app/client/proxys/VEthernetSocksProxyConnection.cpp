@@ -40,6 +40,52 @@ namespace ppp {
                         
                 }
                 
+                static bool SendSocksRequestReply(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, Byte rep, ppp::coroutines::YieldContext& y) noexcept {
+                    if (NULLPTR == socket || !socket->is_open()) {
+                        return false;
+                    }
+
+                    Byte data[32];
+                    int packet_length = 0;
+                    data[packet_length++] = SOCKS_VER;
+                    data[packet_length++] = rep;
+                    data[packet_length++] = 0;
+
+                    boost::system::error_code ec;
+                    boost::asio::ip::tcp::endpoint local_endpoint = socket->local_endpoint(ec);
+                    if (ec) {
+                        local_endpoint = boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v4::any(), 0);
+                    }
+                    else {
+                        local_endpoint = ppp::net::Ipep::V6ToV4(local_endpoint);
+                    }
+
+                    boost::asio::ip::address local_ip = local_endpoint.address();
+                    if (local_ip.is_v4()) {
+                        data[packet_length++] = SOCKS_ATYPE_IPV4;
+                        auto bytes = local_ip.to_v4().to_bytes();
+                        memcpy(data + packet_length, bytes.data(), bytes.size());
+                        packet_length += bytes.size();
+                    }
+                    elif(local_ip.is_v6()) {
+                        data[packet_length++] = SOCKS_ATYPE_IPV6;
+                        auto bytes = local_ip.to_v6().to_bytes();
+                        memcpy(data + packet_length, bytes.data(), bytes.size());
+                        packet_length += bytes.size();
+                    }
+                    else {
+                        data[packet_length++] = SOCKS_ATYPE_IPV4;
+                        memset(data + packet_length, 0, 4);
+                        packet_length += 4;
+                    }
+
+                    int local_port = local_endpoint.port();
+                    data[packet_length++] = (Byte)(local_port >> 8);
+                    data[packet_length++] = (Byte)(local_port);
+
+                    return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                }
+
                 bool VEthernetSocksProxyConnection::Handshake(YieldContext& y) noexcept {
                     int method = SOCKS_METHOD_NONE;
                     int status = SelectMethod(y, method); 
@@ -71,7 +117,9 @@ namespace ppp {
                     ppp::string host;
                     ppp::app::protocol::AddressType address_type = ppp::app::protocol::AddressType::Domain;
 
-                    if (!Requirement(y, host, port, address_type)) {
+                    int command_status = Requirement(y, host, port, address_type);
+                    if (command_status != SOCKS_ERR_OK) {
+                        SendSocksRequestReply(GetSocket(), (Byte)command_status, y);
                         return false;
                     }
 
@@ -84,7 +132,12 @@ namespace ppp {
                     address_endpoint->Host = host;
                     address_endpoint->Port = port;
 
-                    return ConnectBridgeToPeer(address_endpoint, y);
+                    if (!ConnectBridgeToPeer(address_endpoint, y)) {
+                        SendSocksRequestReply(GetSocket(), SOCKS_ERR_NO, y);
+                        return false;
+                    }
+
+                    return true;
                 }
 
                 int VEthernetSocksProxyConnection::Authentication(YieldContext& y) noexcept {
@@ -126,7 +179,7 @@ namespace ppp {
                         }
                     }
 
-                    if (socks_proxy.username != strings[0] && socks_proxy.password != strings[1]) {
+                    if (socks_proxy.username != strings[0] || socks_proxy.password != strings[1]) {
                         return SOCKS_ERR_NO;
                     }
 
@@ -207,7 +260,7 @@ namespace ppp {
                     return no_auth ? SOCKS_ERR_OK : SOCKS_ERR_NO;
                 }
             
-                bool VEthernetSocksProxyConnection::Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept {
+                int VEthernetSocksProxyConnection::Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
                     address.clear();
 
@@ -215,11 +268,11 @@ namespace ppp {
                     address_type = ppp::app::protocol::AddressType::Domain;
 
                     if (NULLPTR == socket || !socket->is_open()) {
-                        return false;
+                        return SOCKS_ERR_ER;
                     }
 
                     if (IsDisposed()) {
-                        return false;
+                        return SOCKS_ERR_ER;
                     }
                     
                     Byte cmd = SOCKS_ERR_CMD;
@@ -227,15 +280,15 @@ namespace ppp {
 
                     for (;;) {
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 4), y)) {
-                            return false;
+                            return SOCKS_ERR_ER;
                         }
 
                         if (data[0] != SOCKS_VER) {
-                            break;
+                            return SOCKS_ERR_CMD;
                         }
 
                         if (data[1] != SOCKS_CMD_CONNECT) {
-                            break;
+                            return SOCKS_ERR_CMD;
                         }
 
                         int address_type = data[3];
@@ -250,7 +303,7 @@ namespace ppp {
                         }
                         elif(address_type == SOCKS_ATYPE_DOMAIN) {
                             if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                                return false;
+                                return SOCKS_ERR_ER;
                             }
 
                             address_length = data[0];
@@ -258,15 +311,15 @@ namespace ppp {
                         }
                         else {
                             cmd = SOCKS_ERR_ATYPE;
-                            break;
+                            return SOCKS_ERR_ATYPE;
                         }
 
                         if (address_length < 1) {
-                            break;
+                            return SOCKS_ERR_ATYPE;
                         }
 
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, address_length), y)) {
-                            return false;
+                            return SOCKS_ERR_ER;
                         }
 
                         switch (address_type) {
@@ -294,7 +347,7 @@ namespace ppp {
                         };
 
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 2), y)) {
-                            return false;
+                            return SOCKS_ERR_ER;
                         }
 
                         cmd = SOCKS_ERR_OK;
@@ -311,7 +364,7 @@ namespace ppp {
                         boost::system::error_code ec;
                         boost::asio::ip::tcp::endpoint local_endpoint = socket->local_endpoint(ec);
                         if (ec) {
-                            return false;
+                            return SOCKS_ERR_ER;
                         }
                         else {
                             local_endpoint = ppp::net::Ipep::V6ToV4(local_endpoint);
@@ -337,14 +390,14 @@ namespace ppp {
                             packet_length += bytes.size();
                         }
                         else {
-                            return false;
+                            return SOCKS_ERR_ER;
                         }
 
                         int local_port = local_endpoint.port();
                         data[packet_length++] = (Byte)(local_port >> 8);
                         data[packet_length++] = (Byte)(local_port);
 
-                        return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                        return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y) ? SOCKS_ERR_OK : SOCKS_ERR_ER;
                     }
                 }
             }

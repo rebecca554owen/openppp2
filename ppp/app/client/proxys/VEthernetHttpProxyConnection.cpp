@@ -101,7 +101,15 @@ namespace ppp {
                     }
                 }
 
-                std::shared_ptr<VEthernetHttpProxyConnection::ProtocolRoot> VEthernetHttpProxyConnection::GetProtocolRootFromSocket(ppp::io::MemoryStream& ms) noexcept {
+                static bool SendHttpProxyErrorResponse(
+                    const std::shared_ptr<boost::asio::ip::tcp::socket>& socket,
+                    const ppp::string& protocol,
+                    const ppp::string& version,
+                    int status_code,
+                    const char* status_text,
+                    VEthernetHttpProxyConnection::YieldContext& y) noexcept;
+
+                std::shared_ptr<VEthernetHttpProxyConnection::ProtocolRoot> VEthernetHttpProxyConnection::GetProtocolRootFromSocket(ppp::io::MemoryStream& ms, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, VEthernetHttpProxyConnection::YieldContext& y) noexcept {
                     std::shared_ptr<ProtocolRoot> protocolRoot = make_shared_object<ProtocolRoot>();
                     if (NULLPTR == protocolRoot) {
                         return NULLPTR;
@@ -148,6 +156,26 @@ namespace ppp {
                     } /* nocall: boost::asio::async_read_until(...); */
                 }
 
+                static bool SendHttpProxyErrorResponse(
+                    const std::shared_ptr<boost::asio::ip::tcp::socket>& socket,
+                    const ppp::string& protocol,
+                    const ppp::string& version,
+                    int status_code,
+                    const char* status_text,
+                    VEthernetHttpProxyConnection::YieldContext& y) noexcept {
+
+                    if (NULLPTR == socket || !socket->is_open()) {
+                        return false;
+                    }
+
+                    ppp::string response_protocol = protocol.empty() ? ppp::string("HTTP") : protocol;
+                    ppp::string response_version = version.empty() ? ppp::string("1.1") : version;
+                    ppp::string response_headers = response_protocol + "/" + response_version + " " + stl::to_string<ppp::string>(status_code) + " ";
+                    response_headers += status_text;
+                    response_headers += "\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                    return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(response_headers.data(), response_headers.size()), y);
+                }
+
                 bool VEthernetHttpProxyConnection::ProtocolReadAllHeaders(ppp::io::MemoryStream& headers, VEthernetHttpProxyConnection::YieldContext& y, boost::asio::ip::tcp::socket& socket) noexcept {
                     bool opened = socket.is_open();
                     if (!opened) {
@@ -179,36 +207,48 @@ namespace ppp {
                     if (protocol_array_size < 1) {
                         return false;
                     }
-                    elif(protocol_array_size < (int64_t)gStaticVariable->protocolMethodMaxBytes) {
+
+                    ppp::string protocol = ppp::string((char*)protocol_array_ptr.get(), protocol_array_size);
+                    std::size_t index = protocol.find(' ');
+                    if (index == ppp::string::npos) {
+                        (void)SendHttpProxyErrorResponse(socket_, "HTTP", "1.1", 400, "Bad Request", y);
                         return false;
                     }
-                    else {
-                        ppp::string protocol = ppp::string((char*)protocol_array_ptr.get(), gStaticVariable->protocolMethodMaxBytes);
-                        std::size_t index = protocol.find(' ');
-                        if (index != ppp::string::npos) {
-                            protocol = protocol.substr(0, index);
-                        }
 
-                        protocol = ToUpper<ppp::string>(protocol);
-                        if (!gStaticVariable->IsSupportMethodKey(protocol)) {
-                            return false;
-                        }
+                    protocol = protocol.substr(0, index);
+                    protocol = ToUpper<ppp::string>(protocol);
+                    if (!gStaticVariable->IsSupportMethodKey(protocol)) {
+                        (void)SendHttpProxyErrorResponse(socket_, "HTTP", "1.1", 501, "Not Implemented", y);
+                        return false;
                     }
 
                     int next[4];
-                    int index = FindIndexOf(next, (char*)protocol_array_ptr.get(), protocol_array_size, (char*)("\r\n\r\n"), arraysizeof(next)); // KMP
-                    if (index < 0) {
+                    int headers_index = FindIndexOf(next, (char*)protocol_array_ptr.get(), protocol_array_size, (char*)("\r\n\r\n"), arraysizeof(next)); // KMP
+                    if (headers_index < 0) {
+                        (void)SendHttpProxyErrorResponse(socket_, "HTTP", "1.1", 400, "Bad Request", y);
                         return false;
                     }
 
-                    std::shared_ptr<ProtocolRoot> protocol_root = this->GetProtocolRootFromSocket(protocol_array);
+                    std::shared_ptr<ProtocolRoot> protocol_root = this->GetProtocolRootFromSocket(protocol_array, socket_, y);
                     if (!this->ConnectBridgeToPeer(protocol_root, y)) {
+                        if (NULLPTR != protocol_root) {
+                            (void)SendHttpProxyErrorResponse(socket_, protocol_root->Protocol, protocol_root->Version, 502, "Bad Gateway", y);
+                        }
+                        else {
+                            (void)SendHttpProxyErrorResponse(socket_, "HTTP", "1.1", 400, "Bad Request", y);
+                        }
                         return false;
                     }
 
-                    int headers_endoffset = index + arraysizeof(next);
+                    int headers_endoffset = headers_index + arraysizeof(next);
                     int pushfd_array_size = protocol_array_size - headers_endoffset;
-                    return this->ProcessHandshaked(protocol_root, protocol_array_ptr.get() + headers_endoffset, pushfd_array_size, y);
+                    
+                    bool handshaked = this->ProcessHandshaked(protocol_root, protocol_array_ptr.get() + headers_endoffset, pushfd_array_size, y);
+                    if (!handshaked && NULLPTR != protocol_root && !protocol_root->TunnelMode) {
+                        (void)SendHttpProxyErrorResponse(socket_, protocol_root->Protocol, protocol_root->Version, 502, "Bad Gateway", y);
+                    }
+
+                    return handshaked;
                 }
 
                 bool VEthernetHttpProxyConnection::ProcessHandshaked(const std::shared_ptr<ProtocolRoot>& protocolRoot, const void* messages, int messages_size, YieldContext& y) noexcept {
@@ -239,14 +279,17 @@ namespace ppp {
 
                         ppp::string request_headers = protocolRoot->ToString();
                         if (request_headers.empty()) {
+                            (void)SendHttpProxyErrorResponse(socket, protocolRoot->Protocol, protocolRoot->Version, 500, "Internal Server Error", y);
                             return false;
                         }
                         
                         if (!ms.Write(request_headers.data(), 0, static_cast<int>(request_headers.size()))) {
+                            (void)SendHttpProxyErrorResponse(socket, protocolRoot->Protocol, protocolRoot->Version, 500, "Internal Server Error", y);
                             return false;
                         }
 
                         if (messages_size > 0 && !ms.Write(messages, 0, messages_size)) {
+                            (void)SendHttpProxyErrorResponse(socket, protocolRoot->Protocol, protocolRoot->Version, 502, "Bad Gateway", y);
                             return false;
                         }
 
@@ -257,10 +300,16 @@ namespace ppp {
 
                         std::shared_ptr<Byte> packet_array = ms.GetBuffer();
                         if (NULLPTR == packet_array) {
+                            (void)SendHttpProxyErrorResponse(socket, protocolRoot->Protocol, protocolRoot->Version, 500, "Internal Server Error", y);
                             return false;
                         }
 
-                        return this->SendBufferToPeer(y, packet_array.get(), packet_size);
+                        bool ok = this->SendBufferToPeer(y, packet_array.get(), packet_size);
+                        if (!ok) {
+                            (void)SendHttpProxyErrorResponse(socket, protocolRoot->Protocol, protocolRoot->Version, 502, "Bad Gateway", y);
+                        }
+
+                        return ok;
                     }
                 }
 
@@ -284,14 +333,36 @@ namespace ppp {
                     }
 
                     int port = PPP_HTTP_SYS_PORT; 
-                    if (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
-                        port = atoi(p + 1);
-                        if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
-                            port = PPP_HTTP_SYS_PORT;
+                    if (!host.empty()) {
+                        if (host.front() == '[') {
+                            std::size_t end = host.find(']');
+                            if (end != ppp::string::npos) {
+                                ppp::string literal = host.substr(1, end - 1);
+                                if (!literal.empty()) {
+                                    boost::system::error_code ec;
+                                    boost::asio::ip::address parsed = StringToAddress(literal, ec);
+                                    if (!ec && parsed.is_v6()) {
+                                        host = literal;
+                                        std::size_t colon = host.find(':', end + 1);
+                                        if (colon != ppp::string::npos) {
+                                            port = atoi(host.substr(colon + 1).c_str());
+                                            if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
+                                                port = PPP_HTTP_SYS_PORT;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
+                        else if (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
+                            port = atoi(p + 1);
+                            if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
+                                port = PPP_HTTP_SYS_PORT;
+                            }
 
-                        *p = '\x0';
-                        host = host.data();
+                            *p = '\x0';
+                            host = host.data();
+                        }
                     }
 
                     return VEthernetLocalProxyConnection::GetAddressEndPointByProtocol(host, port);
@@ -433,7 +504,12 @@ namespace ppp {
                     }
 
                     const ppp::string& host = protocolRoot->Host;
-                    if (host.rfind(':') == ppp::string::npos) {
+                    if (protocolRoot->TunnelMode) {
+                        if (host.find(':') == ppp::string::npos) {
+                            protocolRoot->Host = host + ":443";
+                        }
+                    }
+                    else if (host.find(':') == ppp::string::npos) {
                         protocolRoot->Host = host + ":80";
                     }
 

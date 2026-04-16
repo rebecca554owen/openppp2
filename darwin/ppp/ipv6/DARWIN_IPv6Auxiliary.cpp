@@ -344,6 +344,7 @@ namespace ppp {
                     state.SubnetRouteApplied = true;
                     state.SubnetRoutePrefix = prefix_string;
                     state.SubnetRoutePrefixLength = prefix_length;
+                    state.SubnetRouteGateway = gateway_string;
                     return true;
                 }
 
@@ -380,7 +381,7 @@ namespace ppp {
                     }
 
                     if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                        bool ok = DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                        bool ok = DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
                         LogDarwinRestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
                     }
 

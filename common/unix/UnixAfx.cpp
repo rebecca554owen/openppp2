@@ -627,13 +627,12 @@ namespace ppp {
             }
 
             bool result = false;
-            LineHandler handler{ 
-                .predicate = [&predicate](const ppp::string& line) noexcept -> bool {
-                    ppp::string modifiable = line;
-                    return predicate ? predicate(modifiable) : true;
-                },
-                .bool_output = &result 
+            LineHandler handler;
+            handler.predicate = [&predicate](const ppp::string& line) noexcept -> bool {
+                ppp::string modifiable = line;
+                return predicate ? predicate(modifiable) : true;
             };
+            handler.bool_output = &result;
 
             ExecuteShellCommandCore(pipe, handler);
             return result;
@@ -650,7 +649,9 @@ namespace ppp {
             }
 
             ppp::string output;
-            LineHandler handler{ .str_output = &output };
+            LineHandler handler;
+            handler.str_output = &output;
+
             ExecuteShellCommandCore(pipe, handler);
 
             if (!output.empty() && output.back() == '\n') {
@@ -671,7 +672,11 @@ namespace ppp {
             }
 
             ppp::vector<ppp::string> lines;
-            LineHandler handler{ .predicate = predicate, .lines_output = &lines };
+
+            LineHandler handler;
+            handler.predicate = predicate;
+            handler.lines_output = &lines;
+
             ExecuteShellCommandCore(pipe, handler);
             return lines;
         }

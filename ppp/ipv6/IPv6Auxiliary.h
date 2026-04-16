@@ -25,6 +25,7 @@ namespace ppp {
                 ppp::string                                                   DefaultRouteGateway;
                 ppp::string                                                   SubnetRoutePrefix;
                 int                                                           SubnetRoutePrefixLength = 0;
+                ppp::string                                                   SubnetRouteGateway;
                 ppp::string                                                   OriginalDefaultRouteInterface;
                 ppp::vector<ppp::string>                                      DnsServers;
                 ppp::vector<ppp::string>                                      OriginalDnsServers;
@@ -44,6 +45,7 @@ namespace ppp {
                     DefaultRouteGateway.clear();
                     SubnetRoutePrefix.clear();
                     SubnetRoutePrefixLength = 0;
+                    SubnetRouteGateway.clear();
                     OriginalDefaultRouteInterface.clear();
                     DnsServers.clear();
                     OriginalDnsServers.clear();

@@ -1,4 +1,5 @@
 #include <windows/ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -242,6 +243,7 @@ namespace ppp {
                     state.SubnetRouteApplied = true;
                     state.SubnetRoutePrefix = prefix_str;
                     state.SubnetRoutePrefixLength = prefix_length;
+                    state.SubnetRouteGateway = gateway_str;
                     return true;
                 }
 
@@ -274,7 +276,7 @@ namespace ppp {
                     }
 
                     if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                        bool ok = ppp::win32::network::DeleteIPv6Route(context.InterfaceIndex, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                        bool ok = ppp::win32::network::DeleteIPv6Route(context.InterfaceIndex, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
                         LogWin32RestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
                     }
 

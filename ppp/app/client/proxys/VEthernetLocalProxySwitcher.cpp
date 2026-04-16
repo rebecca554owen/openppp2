@@ -233,11 +233,13 @@ namespace ppp {
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = NewSocket(context, strand, sockfd);
                     if (NULLPTR == socket) {
+                        ppp::net::Socket::Closesocket(sockfd);
                         return false;
                     }
 
                     std::shared_ptr<VEthernetLocalProxyConnection> connection = NewConnection(context, strand, socket);
                     if (NULLPTR == connection) {
+                        ppp::net::Socket::Closesocket(sockfd);
                         return false;
                     }
 

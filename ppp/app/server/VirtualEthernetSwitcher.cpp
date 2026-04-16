@@ -18,9 +18,12 @@
 #include <ppp/net/packet/IcmpFrame.h>
 #include <ppp/app/server/VirtualEthernetIPv6.h>
 #include <ppp/ipv6/IPv6Packet.h>
+
 #if defined(_LINUX)
+#include <common/unix/UnixAfx.h>
 #include <linux/ppp/tap/TapLinux.h>
 #endif
+
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
@@ -42,8 +45,13 @@ static bool IsGlobalUnicastIPv6Address(const boost::asio::ip::address_v6& addres
     return (bytes[0] & 0xe0) == 0x20;
 }
 
-static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, boost::asio::ip::address_v6& host) noexcept {
-    boost::asio::ip::address_v6::bytes_type bytes = network.to_bytes();
+static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, int prefix_length, boost::asio::ip::address_v6& host) noexcept {
+    prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+    if (prefix_length >= ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+        return false;
+    }
+
+    boost::asio::ip::address_v6::bytes_type bytes = ppp::ipv6::ComputeNetworkAddress(network, prefix_length).to_bytes();
     for (int i = 15; i >= 0; --i) {
         if (bytes[i] != 0xff) {
             ++bytes[i];
@@ -198,7 +206,7 @@ namespace ppp {
                 }
 
                 boost::asio::ip::address_v6 gateway;
-                if (!TryGetFirstHostIPv6(network, gateway)) {
+                if (!TryGetFirstHostIPv6(network, prefix_length, gateway)) {
                     return boost::asio::ip::address();
                 }
 
@@ -410,6 +418,13 @@ namespace ppp {
                     boost::asio::ip::address_v6 requested_address = request_entry.RequestedAddress.is_v6() ? request_entry.RequestedAddress.to_v6() : boost::asio::ip::address_v6();
                     bool use_requested_first = is_request_usable(requested_address, boost::asio::ip::address_v6(ula_bytes), ipv6.prefix_length);
 
+                    if (!extensions.AssignedIPv6Address.is_v6() && use_requested_first && request_entry.RequestedAddress.is_v6()) {
+                        boost::asio::ip::address_v6 requested = request_entry.RequestedAddress.to_v6();
+                        if (ppp::ipv6::PrefixMatch(requested, boost::asio::ip::address_v6(ula_bytes), ipv6.prefix_length)) {
+                            try_commit_ipv6_lease(requested, false, VirtualEthernetInformationExtensions::IPv6Status_ClientRequested, "client-request-accepted");
+                        }
+                    }
+
                     if (!extensions.AssignedIPv6Address.is_v6()) {
                         boost::asio::ip::address_v6 leased;
                         {
@@ -424,15 +439,20 @@ namespace ppp {
                         }
                     }
 
-                    if (!extensions.AssignedIPv6Address.is_v6() && use_requested_first && request_entry.RequestedAddress.is_v6()) {
-                        boost::asio::ip::address_v6 requested = request_entry.RequestedAddress.to_v6();
-                        if (ppp::ipv6::PrefixMatch(requested, boost::asio::ip::address_v6(ula_bytes), ipv6.prefix_length)) {
-                            try_commit_ipv6_lease(requested, false, VirtualEthernetInformationExtensions::IPv6Status_ClientRequested, "client-request-accepted");
-                        }
-                    }
-
                     if (!extensions.AssignedIPv6Address.is_v6()) {
-                        if (!try_commit_ipv6_lease(stable_candidate, false, VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned, request_entry.RequestedAddress.is_v6() ? "client-request-replaced" : "server-auto-assigned")) {
+                        boost::asio::ip::address_v6::bytes_type candidate_bytes = stable_candidate.to_bytes();
+                        bool committed = false;
+                        static constexpr unsigned char retry_masks[] = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80 };
+                        for (unsigned char retry_mask : retry_masks) {
+                            boost::asio::ip::address_v6 candidate = boost::asio::ip::address_v6(candidate_bytes);
+                            if (try_commit_ipv6_lease(candidate, false, VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned, request_entry.RequestedAddress.is_v6() ? "client-request-replaced" : "server-auto-assigned")) {
+                                committed = true;
+                                break;
+                            }
+                            candidate_bytes[15] ^= retry_mask;
+                        }
+
+                        if (!committed) {
                             extensions.Clear();
                             extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
                             extensions.IPv6StatusMessage = "ipv6-address-unavailable";
@@ -507,7 +527,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (configuration_->server.subnet && mode == AppConfiguration::IPv6Mode_Nat66 && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+                if (configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     extensions.AssignedIPv6RoutePrefix = prefix;
                     extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
                 }
@@ -551,20 +571,38 @@ namespace ppp {
                     }
                 }
 
-                if (!extensions.AssignedIPv6Address.is_v6() && use_requested_first && request_entry.RequestedAddress.is_v6()) {
-                    boost::asio::ip::address_v6 requested = request_entry.RequestedAddress.to_v6();
-                    if (ppp::ipv6::PrefixMatch(requested, prefix.to_v6(), ipv6.prefix_length)) {
-                        try_commit_ipv6_lease(requested, false, VirtualEthernetInformationExtensions::IPv6Status_ClientRequested, "client-request-accepted");
-                    }
-                }
-
                 if (!extensions.AssignedIPv6Address.is_v6()) {
-                    if (!try_commit_ipv6_lease(stable_candidate, false, VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned, request_entry.RequestedAddress.is_v6() ? "client-request-replaced" : "server-auto-assigned")) {
-                        extensions.Clear();
-                        extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
-                        extensions.IPv6StatusMessage = "ipv6-address-unavailable";
-                        return false;
+                    if (!extensions.AssignedIPv6Address.is_v6() && use_requested_first && request_entry.RequestedAddress.is_v6()) {
+                        boost::asio::ip::address_v6 requested = request_entry.RequestedAddress.to_v6();
+                        if (ppp::ipv6::PrefixMatch(requested, prefix.to_v6(), ipv6.prefix_length)) {
+                            try_commit_ipv6_lease(requested, false, VirtualEthernetInformationExtensions::IPv6Status_ClientRequested, "client-request-accepted");
+                        }
                     }
+
+                    if (!extensions.AssignedIPv6Address.is_v6()) {
+                        boost::asio::ip::address_v6::bytes_type candidate_bytes = stable_candidate.to_bytes();
+                        bool committed = false;
+
+                        static constexpr unsigned char retry_masks[] = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80 };
+                        
+                        for (unsigned char retry_mask : retry_masks) {
+                            boost::asio::ip::address_v6 candidate = boost::asio::ip::address_v6(candidate_bytes);
+                            if (try_commit_ipv6_lease(candidate, false, VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned, request_entry.RequestedAddress.is_v6() ? "client-request-replaced" : "server-auto-assigned")) {
+                                committed = true;
+                                break;
+                            }
+                            
+                            candidate_bytes[15] ^= retry_mask;
+                        }
+
+                        if (!committed) {
+                            extensions.Clear();
+                            extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
+                            extensions.IPv6StatusMessage = "ipv6-address-unavailable";
+                            return false;
+                        }
+                    }
+
                 }
 
                 boost::asio::ip::address gateway = GetIPv6TransitGateway();
@@ -670,7 +708,7 @@ namespace ppp {
                 if (mode == AppConfiguration::IPv6Mode_Gua) {
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
                 }
-                if (mode == AppConfiguration::IPv6Mode_Nat66 && configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+                if (configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     extensions.AssignedIPv6RoutePrefix = prefix;
                     extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
                 }
@@ -783,15 +821,10 @@ namespace ppp {
 
                     route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                     proxy_removed = DeleteIPv6NeighborProxy(ip);
-                    if (route_removed && proxy_removed) {
-                        ipv6s_.erase(tail);
-                    }
+                    ipv6s_.erase(tail);
                 }
 
-                if (route_removed && proxy_removed) {
-                    RevokeIPv6Lease(session_id);
-                }
-
+                RevokeIPv6Lease(session_id);
                 return route_removed && proxy_removed;
             }
 
@@ -812,10 +845,8 @@ namespace ppp {
                     if (!ec && ip.is_v6()) {
                         bool route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                         bool proxy_removed = DeleteIPv6NeighborProxy(ip);
-                        if (!(route_removed && proxy_removed)) {
-                            ++tail;
-                            continue;
-                        }
+                        (void)route_removed;
+                        (void)proxy_removed;
                     }
 
                     tail = ipv6s_.erase(tail);
@@ -1678,9 +1709,10 @@ namespace ppp {
                 }
                 else {
                     boost::asio::ip::address_v6 derived_transit;
-                    if (!TryGetFirstHostIPv6(transit, derived_transit)) {
+                    if (!TryGetFirstHostIPv6(transit, ipv6.prefix_length, derived_transit)) {
                         return false;
                     }
+
                     transit = derived_transit;
                 }
 

@@ -559,7 +559,7 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept
     {
         // Asynchronous download for auto-updates
         chnroutes2_getiplist_async(
-            [path, nation](const ppp::string& response_text) noexcept 
+            [path, nation, configuration = configuration_](const ppp::string& response_text) noexcept 
             {
                 auto process =
                     [&]() noexcept 
@@ -605,7 +605,7 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept
                 if (return_code < 0)
                 {   
                     uint64_t now = Executors::GetTickCount();
-                    GLOBAL_VIRR_NEXT.store(now + (configuration_->virr.retry_interval * 1000), std::memory_order_relaxed);
+                    GLOBAL_VIRR_NEXT.store(now + (configuration->virr.retry_interval * 1000), std::memory_order_relaxed);
                 }
 
                 return return_code;

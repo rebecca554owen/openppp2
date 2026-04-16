@@ -39,7 +39,7 @@ echo   build_windows.bat help
 echo   build_windows.bat /?
 echo.
 echo Notes:
-echo   - Running with no arguments shows this help.
+echo   - Running with no arguments builds the default Release all targets.
 echo   - Argument order is flexible.
 echo   - Debug/Release are case-insensitive.
 echo   - Output goes to bin\Debug or bin\Release.
@@ -83,6 +83,7 @@ call :prepare_env x86
 if errorlevel 1 exit /b 1
 call :build_one x86 x86-windows-static
 if errorlevel 1 exit /b 1
+if /I not "%TARGET%"=="all" exit /b 0
 goto :x64
 
 :x64
@@ -142,7 +143,6 @@ exit /b 1
 
 :parse_args_done
 if %ARG_COUNT%==0 (
-    set "SHOW_HELP=1"
     exit /b 0
 )
 if %ARG_COUNT% gtr 2 exit /b 1

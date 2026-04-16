@@ -11,7 +11,10 @@ namespace {
         }
 
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-        if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && address == ppp::ipv6::ComputeNetworkAddress(address, prefix_length)) {
+        
+        boost::system::error_code network_ec;
+        boost::asio::ip::address network_address = StringToAddress(ppp::linux::ipv6::auxiliary::ComputeNetworkAddress(address, prefix_length), network_ec);
+        if (!network_ec && prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && address == network_address.to_v6()) {
             return false;
         }
 
@@ -196,7 +199,7 @@ namespace {
             return false;
         }
 
-        prefix = ppp::ipv6::ComputeNetworkAddress(address.to_v6(), prefix_length).to_string();
+        prefix = ppp::linux::ipv6::auxiliary::ComputeNetworkAddress(address.to_v6(), prefix_length);
         return true;
     }
 
@@ -497,6 +500,7 @@ namespace ppp {
                     state.SubnetRouteApplied = true;
                     state.SubnetRoutePrefix = prefix_string;
                     state.SubnetRoutePrefixLength = prefix_length;
+                    state.SubnetRouteGateway = gateway_string;
                     return true;
                 }
 
@@ -537,7 +541,7 @@ namespace ppp {
                     }
 
                     if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                        bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.DefaultRouteGateway);
+                        bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
                         LogLinuxRestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
                     }
 

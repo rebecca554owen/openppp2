@@ -97,12 +97,14 @@ namespace ppp {
 
         void Timer::Dispose() noexcept {
             auto self = shared_from_this();
-            // 将定时器对象以 shared_ptr 形式带入投递任务，确保异步销毁期间对象不会被提前释放。
-            // 这里不再捕获裸 this，避免在多线程退出边界上出现悬挂访问。
-            boost::asio::post(*_context, 
-                [self]() noexcept {
+            struct DisposeInvoker final {
+                std::shared_ptr<Timer> self;
+                void operator()() const noexcept {
                     self->Finalize();
-                });
+                }
+            } invoker{self};
+
+            boost::asio::post(*_context, invoker);
         }
 
         bool Timer::SetInterval(int milliseconds) noexcept {
