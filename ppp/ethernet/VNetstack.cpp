@@ -114,7 +114,7 @@ namespace ppp {
         std::shared_ptr<VNetstack::TapTcpLink> VNetstack::AllocTcpLink(UInt32 src_ip, int src_port, UInt32 dst_ip, int dst_port) noexcept {
             auto key = LAN2WAN_KEY(src_ip, src_port, dst_ip, dst_port);
             std::shared_ptr<TapTcpLink> link = this->FindTcpLink(key);
-            if (link != NULLPTR) {
+            if (NULLPTR != link) {
                 return link;
             }
             else {
@@ -133,8 +133,8 @@ namespace ppp {
                             continue;
                         }
 
-                        auto tail = this->lan2wan_.find(key);
-                        auto endl = this->lan2wan_.end();
+                        auto tail = this->wan2lan_.find(localPort);
+                        auto endl = this->wan2lan_.end();
                         if (tail == endl) {
                             newPort = localPort;
                             break;
@@ -287,7 +287,9 @@ namespace ppp {
 #ifdef SYSNAT
             if (!sysnat_interface_name_.empty()) {
                 VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+
                 openppp2_sysnat_detach(sysnat_interface_name_.data());
+                sysnat_interface_name_.clear();
             }
 #endif
         }
@@ -333,15 +335,30 @@ namespace ppp {
             }
             elif((link = this->AllocTcpLink(ip->src, tcp->src, ip->dest, tcp->dest))) { // SYN
                 for (;;) {
-                    if (link->closed || link->state != TcpState::TCP_STATE_SYN_RECEIVED) {
+                    if (link->state == TcpState::TCP_STATE_CLOSED) {
                         break;
                     }
                     else {
                         c = link->socket;
                         if (NULLPTR != c) {
-                            rst = c->IsDisposed();
+                            if (c->IsDisposed()) {
+                                if (link->state == TcpState::TCP_STATE_SYN_RECEIVED || link->state == TcpState::TCP_STATE_SYN_SENT) {
+                                    link->Update();
+                                    return true;
+                                }
+
+                                rst = true;
+                            }
                             break;
                         }
+                    }
+
+                    if (link->state != TcpState::TCP_STATE_SYN_RECEIVED && link->state != TcpState::TCP_STATE_SYN_SENT) {
+                        // Keep handshake-phase links pending instead of turning a transient
+                        // state mismatch into an artificial RST. The peer's TCP retransmission
+                        // will re-enter this path once the accept side becomes ready again.
+                        link->Update();
+                        return true;
                     }
 
                     boost::asio::ip::tcp::endpoint localEP = IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(ip->src, ntohs(tcp->src));
@@ -349,7 +366,10 @@ namespace ppp {
 
                     c = this->BeginAcceptClient(localEP, remoteEP);
                     if (NULLPTR == c) {
-                        break;
+                        // The remote side is not ready yet. Keep the SYN link pending and let
+                        // the peer's TCP retransmission drive a retry instead of emitting RST.
+                        link->Update();
+                        return true;
                     }
 
                     c->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_SYN_SENT;
@@ -362,7 +382,10 @@ namespace ppp {
 #endif
 
                     if (!c->BeginAccept()) {
-                        break;
+                        // Preserve the pending SYN so a later retry can complete once the
+                        // remote transport becomes established.
+                        link->Update();
+                        return true;
                     }
 
                     rst = false;
@@ -718,12 +741,22 @@ namespace ppp {
 
             std::shared_ptr<TapTcpClient> pcb = link->socket;
             if (NULLPTR == pcb) {
-                if (link->state != TcpState::TCP_STATE_CLOSED) {
-                    link->state = TcpState::TCP_STATE_CLOSED;
+                if (link->state == TcpState::TCP_STATE_SYN_SENT) {
+                    boost::asio::ip::tcp::endpoint localEP = IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(src_ip, src_port);
+                    boost::asio::ip::tcp::endpoint remoteEP = IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(dest_ip, dest_port);
+
+                    pcb = this->BeginAcceptClient(localEP, remoteEP);
+                    if (NULLPTR != pcb) {
+                        pcb->lwip_ = link->natPort;
+                        pcb->link_ = link;
+                        link->socket = pcb;
+                    }
                 }
 
-                this->CloseTcpLink(link);
-                return -1;
+                if (NULLPTR == pcb) {
+                    link->Update();
+                    return 0;
+                }
             }
             
             Byte sync_ack_state = VNETSTACK_SYNC_ACK_STATE_CLOSED;
@@ -781,7 +814,9 @@ namespace ppp {
 
             std::shared_ptr<TapTcpClient> socket = this->BeginAcceptClient(localEP, remoteEP);
             if (NULLPTR == socket) {
-                this->CloseTcpLink(link);
+                // Keep the SYN link pending when the remote transport is transiently unavailable.
+                // Let the peer's TCP retransmission retry instead of hard-closing the flow.
+                link->Update();
                 return NULLPTR;
             }
 
@@ -798,7 +833,8 @@ namespace ppp {
 
             bool bok = socket->BeginAccept();
             if (!bok) {
-                this->CloseTcpLink(link);
+                // Preserve the pending SYN and wait for the next retransmission window.
+                link->Update();
                 return NULLPTR;
             }
 
@@ -1059,6 +1095,9 @@ namespace ppp {
                 SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
                 if (openppp2_sysnat_add_rule(&forward_key_, &forward_val) == 0) {
                     if (openppp2_sysnat_add_rule(&backward_key_, &backward_val) != 0) {
+                        // If the backward rule cannot be installed, the forward rule must be
+                        // removed immediately so SYSNAT does not keep a one-way mapping for
+                        // this TCP flow. The accept path will continue without SYSNAT state.
                         openppp2_sysnat_del_rule(&forward_key_);
 
                         _ = 1;

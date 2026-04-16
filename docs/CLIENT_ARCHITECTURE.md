@@ -153,6 +153,8 @@ The TAP-side TCP accept path has a retry loop for cached SYN/ACK packets. When t
 
 `EndAccept()` cancels the retry timer and clears the cached packet state as soon as the connection completes. `Finalize()` performs the same cleanup as a safety fallback, so the cached SYN/ACK buffer and timer do not leak across shutdown.
 
+If the remote transport is not established yet, the SYN path is kept pending and the peer's TCP retransmission is expected to retry the flow. The design avoids sending an artificial RST during this transient not-ready window.
+
 ## What the Client Is Not
 
 It is not only a dialer.
