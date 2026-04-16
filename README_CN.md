@@ -150,12 +150,11 @@ OPENPPP2 是一套源码驱动、跨平台的网络运行时，围绕 C++ 主程
 
 | 命令 | 作用 |
 |------|------|
-| `ppp --client` | 以 client 角色启动 |
-| `ppp --server` | 以 server 角色启动 |
-| `ppp --status` | 查看运行状态 |
-| `ppp --sessions` | 查看会话 |
-| `ppp --stats` | 查看流量统计 |
-| `ppp --reload` | 重载配置 |
+| `ppp --help` | 查看真实 CLI 帮助 |
+| `ppp --mode=client` | 以 client 模式启动 |
+| `ppp --mode=server` | 以 server 模式启动 |
+| `ppp --config=./config.json` | 加载显式配置文件 |
+| `ppp --pull-iplist [file/country]` | 下载 IP list 后退出 |
 
 ## 说明
 

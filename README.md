@@ -150,12 +150,11 @@ The repository contains 20 paired English/Chinese documents plus the root README
 
 | Command | Purpose |
 |---------|---------|
-| `ppp --client` | Start client role |
-| `ppp --server` | Start server role |
-| `ppp --status` | Show runtime state |
-| `ppp --sessions` | List sessions |
-| `ppp --stats` | Show traffic statistics |
-| `ppp --reload` | Reload configuration |
+| `ppp --help` | Show the real CLI help |
+| `ppp --mode=client` | Start in client mode |
+| `ppp --mode=server` | Start in server mode |
+| `ppp --config=./config.json` | Load an explicit config file |
+| `ppp --pull-iplist [file/country]` | Download an IP list and exit |
 
 ## Notes
 

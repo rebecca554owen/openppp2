@@ -26,7 +26,7 @@
 - `fib_` 转发表
 - `ribs_` 已加载的 IP-list 来源
 - `vbgp_` 远程路由来源
-- `dns_ruless_` DNS 规则
+- `dns_rules_` DNS 规则
 - `dns_serverss_` DNS 服务器路由分配
 - 路由增删逻辑
 - 默认路由保护

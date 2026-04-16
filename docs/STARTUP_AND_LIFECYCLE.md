@@ -56,8 +56,8 @@ The client and server branches diverge early:
 ```mermaid
 stateDiagram-v2
     [*] --> Boot
-    Boot --> ClientPath: --client
-    Boot --> ServerPath: --server
+    Boot --> ClientPath: --mode=client
+    Boot --> ServerPath: --mode=server
     ClientPath --> ClientRuntime
     ServerPath --> ServerRuntime
 ```

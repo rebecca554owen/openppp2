@@ -93,7 +93,7 @@ ppp --mode=client --config=./client.json
 
 ### `--firewall-rules=<file>`
 
-防火墙规则文件。帮助输出默认值为 `./firewall_rules.txt`。
+防火墙规则文件。帮助输出默认值为 `./firewall-rules.txt`。
 
 ## 客户端输入
 
@@ -143,11 +143,11 @@ MUX 加速模式。
 
 ### `--tun-promisc=[yes|no]`
 
-混杂模式开关。
+混杂模式开关，仅在 Linux 和 macOS 上使用。
 
 ### `--tun-ssmt=<threads>` 或 `--tun-ssmt=<N>[/<mode>]`
 
-SSMT 调优。Linux 上 `mq` 表示每个 worker 打开一个 tun 队列。
+SSMT 调优。Linux 上 `mq` 表示每个 worker 打开一个 tun 队列；macOS 只文档化线程数形式。
 
 ### `--tun-route=[yes|no]`
 
@@ -211,7 +211,7 @@ DNS 规则文件。默认 `./dns-rules.txt`。
 - `--dns` 解析失败时回退到首选 DNS 组合
 - `--bypass` 默认 `./ip.txt`
 - `--dns-rules` 默认 `./dns-rules.txt`
-- `--firewall-rules` 默认 `./firewall_rules.txt`
+- `--firewall-rules` 默认 `./firewall-rules.txt`
 
 ## 相关文档
 

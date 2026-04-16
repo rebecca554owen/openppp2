@@ -93,7 +93,7 @@ Blocks QUIC-related behavior for the current run.
 
 ### `--firewall-rules=<file>`
 
-Firewall rules file. Help default: `./firewall_rules.txt`.
+Firewall rules file. Help default: `./firewall-rules.txt`.
 
 ## Client Inputs
 
@@ -143,11 +143,11 @@ MUX acceleration mode.
 
 ### `--tun-promisc=[yes|no]`
 
-Promiscuous mode on supported platforms.
+Promiscuous mode on Linux and macOS.
 
 ### `--tun-ssmt=<threads>` or `--tun-ssmt=<N>[/<mode>]`
 
-SSMT tuning. On Linux, `mq` opens one tun queue per worker.
+SSMT tuning. On Linux, `mq` opens one tun queue per worker; macOS documents the thread-count form only.
 
 ### `--tun-route=[yes|no]`
 
@@ -211,7 +211,7 @@ Downloads an IP list and exits after the action completes.
 - `--dns` falls back to the preferred DNS pair if parsing fails
 - `--bypass` falls back to `./ip.txt`
 - `--dns-rules` falls back to `./dns-rules.txt`
-- `--firewall-rules` falls back to `./firewall_rules.txt`
+- `--firewall-rules` falls back to `./firewall-rules.txt`
 
 ## Related Documents
 

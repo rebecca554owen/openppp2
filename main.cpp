@@ -1485,7 +1485,7 @@ void PppApplication::PrintHelpInformation() noexcept
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--firewall-rules=<file>", 
         col_description_width, "Firewall rules file", 
-        col_default_width, "./firewall_rules.txt");
+        col_default_width, "./firewall-rules.txt");
     
     printf("└──────────────────────────────────────────┴──────────────────────────────────────────────────┴─────────────────────────┘\n\n");
     
@@ -1648,7 +1648,7 @@ void PppApplication::PrintHelpInformation() noexcept
     printf("│ %-*s │ %-*s │ %-*s │\n", 
         col_option_width, "--dns-rules=<file>", 
         col_description_width, "DNS rules configuration", 
-        col_default_width, "./dns_rules.txt");
+        col_default_width, "./dns-rules.txt");
     
     printf("└──────────────────────────────────────────┴──────────────────────────────────────────────────┴─────────────────────────┘\n\n");
     

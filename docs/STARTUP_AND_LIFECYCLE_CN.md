@@ -56,8 +56,8 @@ client 和 server 很早就分流：
 ```mermaid
 stateDiagram-v2
     [*] --> 启动
-    启动 --> 客户端路径: --client
-    启动 --> 服务端路径: --server
+    启动 --> 客户端路径: --mode=client
+    启动 --> 服务端路径: --mode=server
     客户端路径 --> 客户端运行时
     服务端路径 --> 服务端运行时
 ```

@@ -26,7 +26,7 @@ The client decides what goes local, what goes to the tunnel, and which DNS serve
 - `fib_` for forwarding lookups
 - `ribs_` for loaded IP-list sources
 - `vbgp_` for remote route sources
-- `dns_ruless_` for DNS rules
+- `dns_rules_` for DNS rules
 - `dns_serverss_` for DNS server route assignments
 - route add/delete behavior
 - default-route protection
