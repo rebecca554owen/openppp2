@@ -1131,10 +1131,24 @@ namespace ppp {
 
                 public:
                     virtual void Dispose() noexcept override {
-                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer();  NULLPTR != linklayer) {
-                            VirtualEthernetExchanger* exchanger = dynamic_cast<VirtualEthernetExchanger*>(linklayer.get());
-                            if (NULLPTR != exchanger) {
-                                VirtualEthernetMappingPort::DeleteMappingPort(exchanger->mappings_, ProtocolIsNetworkV4(), ProtocolIsTcpNetwork(), GetRemotePort());
+                        // Remove the mapping entry after leaving the current call stack so
+                        // disposal cannot re-enter the exchanger while its lock is held.
+                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer(); NULLPTR != linklayer) {
+                            if (std::shared_ptr<VirtualEthernetExchanger> exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(linklayer); NULLPTR != exchanger) {
+                                auto self = shared_from_this();
+                                std::shared_ptr<boost::asio::io_context> context = exchanger->GetContext();
+                                auto remove_mapping = [exchanger, self]() noexcept {
+                                    SynchronizedObjectScope scope(exchanger->syncobj_);
+                                    VirtualEthernetMappingPort::DeleteMappingPort(
+                                        exchanger->mappings_, self->ProtocolIsNetworkV4(), self->ProtocolIsTcpNetwork(), self->GetRemotePort());
+                                };
+
+                                if (NULLPTR != context) {
+                                    boost::asio::post(*context, std::move(remove_mapping));
+                                }
+                                else {
+                                    remove_mapping();
+                                }
                             }
                         }
 

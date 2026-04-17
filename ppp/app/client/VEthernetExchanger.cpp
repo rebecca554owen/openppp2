@@ -1230,12 +1230,24 @@ namespace ppp {
 
                 public:
                     virtual void Dispose() noexcept override {
-                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer();  NULLPTR != linklayer) {
-                            VEthernetExchanger* exchanger = dynamic_cast<VEthernetExchanger*>(linklayer.get());
-                            if (NULLPTR != exchanger) {
-                                SynchronizedObjectScope scope(exchanger->syncobj_);
-                                VirtualEthernetMappingPort::DeleteMappingPort(
-                                    exchanger->mappings_, ProtocolIsNetworkV4(), ProtocolIsTcpNetwork(), GetRemotePort());
+                        // Defer parent-table removal so Dispose() never runs child finalization
+                        // while the exchanger lock is held.
+                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer(); NULLPTR != linklayer) {
+                            if (std::shared_ptr<VEthernetExchanger> exchanger = std::dynamic_pointer_cast<VEthernetExchanger>(linklayer); NULLPTR != exchanger) {
+                                auto self = shared_from_this();
+                                std::shared_ptr<boost::asio::io_context> context = exchanger->GetContext();
+                                auto remove_mapping = [exchanger, self]() noexcept {
+                                    SynchronizedObjectScope scope(exchanger->syncobj_);
+                                    VirtualEthernetMappingPort::DeleteMappingPort(
+                                        exchanger->mappings_, self->ProtocolIsNetworkV4(), self->ProtocolIsTcpNetwork(), self->GetRemotePort());
+                                };
+
+                                if (NULLPTR != context) {
+                                    boost::asio::post(*context, std::move(remove_mapping));
+                                }
+                                else {
+                                    remove_mapping();
+                                }
                             }
                         }
 
