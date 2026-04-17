@@ -47,7 +47,7 @@ namespace ppp {
         }
 #endif
 
-        static Int128 LAN2WAN_KEY(uint32_t src_ip, uint16_t src_port, uint16_t dst_ip, uint16_t dst_port) noexcept {
+        static Int128 LAN2WAN_KEY(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_port) noexcept {
             uint64_t src_ep = MAKE_QWORD(src_ip, src_port);
             uint64_t dst_ep = MAKE_QWORD(dst_ip, dst_port);
 

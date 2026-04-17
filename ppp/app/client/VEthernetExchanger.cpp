@@ -480,27 +480,27 @@ namespace ppp {
                         ITransmissionPtr transmission = OpenTransmission(context, y);
                         if (transmission) {
                             if (transmission->HandshakeServer(y, GetId(), true) && EchoLanToRemoteExchanger(transmission, y) > -1) {
+                                transmission_ = transmission;
                                 ExchangeToEstablishState(); {
-                                    transmission_ = transmission; {
-                                        if (!SendRequestedIPv6Configuration(transmission, y)) {
-                                            transmission->Dispose();
-                                            continue;
-                                        }
-                                        RegisterAllMappingPorts();
-                                        if (StaticEchoAllocatedToRemoteExchanger(y) && Run(transmission, y)) {
-                                            run_once = true;
-                                            StaticEchoClean();
-                                        }
-
-                                        UnregisterAllMappingPorts();
+                                    if (!SendRequestedIPv6Configuration(transmission, y)) {
+                                        transmission->Dispose();
+                                        continue;
                                     }
-                                    transmission_.reset();
+                                    RegisterAllMappingPorts();
+                                    if (StaticEchoAllocatedToRemoteExchanger(y) && Run(transmission, y)) {
+                                        run_once = true;
+                                        StaticEchoClean();
+                                    }
+
+                                    UnregisterAllMappingPorts();
                                 }
+                                transmission_.reset();
                             }
 
                             transmission->Dispose();
                         }
-                    } ExchangeToReconnectingState();
+                    }
+                    ExchangeToReconnectingState();
 
                     int64_t reconnection_timeout = static_cast<int64_t>(configuration->client.reconnections.timeout) * 1000;
                     Sleep(reconnection_timeout, context, y);
