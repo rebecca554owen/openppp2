@@ -22,6 +22,16 @@ namespace ppp {
 #endif
         }
 
+        void FinalizeServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
+#if defined(_LINUX)
+            ppp::linux::ipv6::auxiliary::FinalizeServerEnvironment(configuration, preferred_nic, transit_ifname);
+#else
+            (void)configuration;
+            (void)preferred_nic;
+            (void)transit_ifname;
+#endif
+        }
+
         bool ClientSupportsManaged() noexcept {
 #if defined(_WIN32) || defined(_LINUX) || defined(_MACOS)
             return true;

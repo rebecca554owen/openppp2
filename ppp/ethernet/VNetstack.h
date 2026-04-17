@@ -37,9 +37,9 @@ namespace ppp {
                 UInt16                                                      natPort = 0;
                 struct {
                     bool                                                    lwip   : 1;
-                    bool                                                    closed : 1;
                     Byte                                                    state  : 6;
                 };
+                std::atomic_bool                                            closed = false;
                 std::shared_ptr<TapTcpClient>                               socket;
                 UInt64                                                      lastTime = 0;
 

@@ -393,7 +393,7 @@ namespace ppp {
                     return switcher_->SendIPv6TransitPacket(packet, packet_length);
                 }
 
-                if (!configuration->server.subnet) {
+                if (!configuration->server.subnet && configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
                     DebugLog("server ipv6 peer delivery rejected session=%s destination=%s reason=subnet-disabled",
                         auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(),
                         destination.to_string().c_str());

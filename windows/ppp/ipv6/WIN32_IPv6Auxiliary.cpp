@@ -219,6 +219,10 @@ namespace ppp {
                 }
 
                 bool ApplyClientSubnetRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& prefix, int prefix_length, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                    if (!nat_mode) {
+                        return true;
+                    }
+
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || context.InterfaceName.empty() || !prefix.is_v6()) {
                         return false;
                     }
@@ -253,6 +257,7 @@ namespace ppp {
                     }
 
                     if (!ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, dns_servers)) {
+                        (void)ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
                         return false;
                     }
 

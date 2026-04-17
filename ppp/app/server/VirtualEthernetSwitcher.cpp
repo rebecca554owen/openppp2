@@ -17,6 +17,7 @@
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
 #include <ppp/app/server/VirtualEthernetIPv6.h>
+#include <ppp/ipv6/IPv6Auxiliary.h>
 #include <ppp/ipv6/IPv6Packet.h>
 
 #if defined(_LINUX)
@@ -301,6 +302,9 @@ namespace ppp {
                         return false;
                     }
 
+                    std::string candidate_std = candidate.to_string();
+                    ppp::string candidate_key(candidate_std.data(), candidate_std.size());
+
                     boost::asio::ip::address_v6 configured_network;
                     int allowed_prefix_length = 0;
                     if (GetConfiguredIPv6Network(*configuration_, configured_network, allowed_prefix_length)) {
@@ -313,6 +317,15 @@ namespace ppp {
                     UInt64 expires_at = ipv6.lease_time > 0 ? now + static_cast<UInt64>(ipv6.lease_time) * 1000ULL : UINT64_MAX;
 
                     SynchronizedObjectScope scope(syncobj_);
+                    auto mapping_it = ipv6s_.find(candidate_key);
+                    if (mapping_it != ipv6s_.end() && mapping_it->second && mapping_it->second->GetId() != session_id) {
+                        DebugLog("server ipv6 lease conflict session=%s address=%s occupied_by_exchanger=%s",
+                            auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
+                            candidate.to_string().c_str(),
+                            auxiliary::StringAuxiliary::Int128ToGuidString(mapping_it->second->GetId()).data());
+                        return false;
+                    }
+
                     for (const auto& kv : ipv6_leases_) {
                         if (kv.first == session_id) {
                             continue;
@@ -527,11 +540,6 @@ namespace ppp {
                     return false;
                 }
 
-                if (configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
-                    extensions.AssignedIPv6RoutePrefix = prefix;
-                    extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
-                }
-
                 boost::asio::ip::address_v6::bytes_type bytes = prefix.to_v6().to_bytes();
                 if (!build_stable_ipv6(bytes, ipv6.prefix_length)) {
                     extensions.Clear();
@@ -708,7 +716,7 @@ namespace ppp {
                 if (mode == AppConfiguration::IPv6Mode_Gua) {
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
                 }
-                if (configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+                if (mode == AppConfiguration::IPv6Mode_Nat66 && configuration_->server.subnet && ipv6.prefix_length > ppp::ipv6::IPv6_MIN_PREFIX_LENGTH && ipv6.prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     extensions.AssignedIPv6RoutePrefix = prefix;
                     extensions.AssignedIPv6RoutePrefixLength = static_cast<Byte>(ipv6.prefix_length);
                 }
@@ -2318,6 +2326,7 @@ namespace ppp {
                 CloseIPv6TransitSsmtContexts();
                 CloseAlwaysTimeout();
                 CloseIPv6NeighborProxyIfNeed();
+                ppp::ipv6::auxiliary::FinalizeServerEnvironment(configuration_, preferred_nic_, ipv6_transit_tap ? ipv6_transit_tap->GetId() : tun_name_);
 
                 CancelAllResolver(tresolver);
                 CancelAllResolver(uresolver);

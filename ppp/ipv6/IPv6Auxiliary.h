@@ -56,6 +56,7 @@ namespace ppp {
             };
 
             bool                                                              PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept;
+            void                                                              FinalizeServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept;
             bool                                                              ClientSupportsManaged() noexcept;
             void                                                              CaptureClientOriginalState(const ClientContext& context, bool nat_mode, ClientState& state) noexcept;
             bool                                                              ApplyClientAddress(const ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ClientState& state) noexcept;

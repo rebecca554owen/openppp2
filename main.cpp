@@ -1281,6 +1281,9 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
         // Cleanup on failure
         if (!success)
         {
+            #if defined(_LINUX)
+            ppp::ipv6::auxiliary::FinalizeServerEnvironment(configuration, network_interface->Nic, network_interface->ComponentId);
+            #endif
             server_.reset();
             if (NULLPTR != ethernet)
             {

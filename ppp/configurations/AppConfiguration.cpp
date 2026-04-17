@@ -74,7 +74,7 @@ namespace {
         std::size_t slash = cidr.find('/');
         if (slash == ppp::string::npos) {
             prefix = cidr;
-            prefix_length = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
+            prefix_length = ppp::ipv6::IPv6_DEFAULT_PREFIX_LENGTH;
             return true;
         }
 
@@ -519,7 +519,7 @@ namespace ppp {
             if (ipv6_server_enabled) {
                 if (config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66) {
                     if (ipv6_prefix.empty()) {
-                        ipv6_prefix = "fd42:4242:4242::";
+                        ipv6_prefix = ppp::ipv6::IPV6_DEFAULT_PREFIX;
                         config.server.ipv6.prefix_length = 64;
                     }
                 }

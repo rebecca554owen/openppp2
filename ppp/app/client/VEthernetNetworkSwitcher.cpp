@@ -6,6 +6,7 @@
 #include <ppp/IDisposable.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+
 #include <ppp/io/File.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
@@ -53,10 +54,18 @@ static bool ClientSupportsManagedIPv6() noexcept {
 }
 
 static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
-    return (extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
+    bool status_ok = extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_Applied ||
+        extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned ||
+        extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_ClientRequested;
+
+    return status_ok &&
+        (extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
         extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Gua) &&
         extensions.AssignedIPv6AddressPrefixLength == ppp::ipv6::IPv6_MAX_PREFIX_LENGTH &&
-        extensions.AssignedIPv6Address.is_v6();
+        extensions.AssignedIPv6Address.is_v6() &&
+        !extensions.AssignedIPv6Address.is_unspecified() &&
+        !extensions.AssignedIPv6Address.is_multicast() &&
+        !extensions.AssignedIPv6Address.is_loopback();
 }
 
 static bool SameManagedIPv6Configuration(
@@ -733,7 +742,7 @@ namespace ppp {
                     applied &= ppp::ipv6::auxiliary::ApplyClientDefaultRoute(ipv6_context, extensions.AssignedIPv6Gateway, nat_mode, ipv6_state_);
                 }
 
-                if (extensions.AssignedIPv6RoutePrefix.is_v6() &&
+                if (nat_mode && extensions.AssignedIPv6RoutePrefix.is_v6() &&
                     extensions.AssignedIPv6RoutePrefixLength > 0 &&
                     extensions.AssignedIPv6RoutePrefixLength < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
                     attempted = true;

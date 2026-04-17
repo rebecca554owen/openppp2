@@ -61,13 +61,17 @@ namespace ppp {
             this->srcPort = 0;
             this->natPort = 0;
             this->lwip = false;
-            this->closed = false;
+            this->closed.store(false, std::memory_order_relaxed);
             this->state = TcpState::TCP_STATE_CLOSED;
             this->socket = NULLPTR;
             this->lastTime = Executors::GetTickCount();
         }
 
         void VNetstack::TapTcpLink::Release() noexcept {
+            if (this->closed.load(std::memory_order_acquire)) {
+                return;
+            }
+
             this->Closing();
 
             this->state = TcpState::TCP_STATE_CLOSED;
@@ -75,8 +79,13 @@ namespace ppp {
         }
 
         void VNetstack::TapTcpLink::Closing() noexcept {
+            if (this->closed.exchange(true, std::memory_order_acq_rel)) {
+                return;
+            }
+
+            this->state = TcpState::TCP_STATE_CLOSED;
+
             std::shared_ptr<TapTcpClient> c = std::move(this->socket); 
-            this->closed = true;
 
             if (NULLPTR != c) {
                 c->Dispose();
@@ -802,7 +811,7 @@ namespace ppp {
                 link->srcPort = ntohs(srcPort);
                 link->natPort = (UInt16)key;
                 link->lwip = true;
-                link->closed = false;
+                link->closed.store(false, std::memory_order_relaxed);
                 link->state = TcpState::TCP_STATE_SYN_SENT;
 
                 this->wan2lan_[key] = link;
@@ -891,6 +900,10 @@ namespace ppp {
         }
 
         void VNetstack::TapTcpClient::Dispose() noexcept {
+            if (disposed_.exchange(TRUE, std::memory_order_acq_rel) != FALSE) {
+                return;
+            }
+
             std::shared_ptr<TapTcpClient> self = shared_from_this();
             ppp::threading::Executors::ContextPtr context = context_;
             ppp::threading::Executors::StrandPtr strand = strand_;
@@ -910,6 +923,8 @@ namespace ppp {
         }
 
         void VNetstack::TapTcpClient::Finalize() noexcept {
+            disposed_.store(TRUE, std::memory_order_release);
+
             this->CancelSyncAckRetry();
 
             this->sync_ack_byte_array_.reset();
@@ -921,7 +936,6 @@ namespace ppp {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
             std::shared_ptr<TapTcpLink> link = std::move(link_);
 
-            disposed_.exchange(TRUE);
             if (NULLPTR != socket) {
                 Socket::Closesocket(socket);
             }

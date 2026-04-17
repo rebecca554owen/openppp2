@@ -323,6 +323,10 @@ namespace ppp {
                 }
 
                 bool ApplyClientSubnetRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& prefix, int prefix_length, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                    if (!nat_mode) {
+                        return true;
+                    }
+
                     if (context.InterfaceName.empty() || !prefix.is_v6()) {
                         return false;
                     }

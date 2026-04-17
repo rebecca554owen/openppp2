@@ -12,6 +12,7 @@ namespace ppp {
         static constexpr int             IPv6_DEFAULT_PREFIX_LENGTH   = 64;
         static constexpr int             IPv6_DEFAULT_HOP_LIMIT       = 64;
         static constexpr unsigned char   IPv6_VERSION                 = 6;
+        static const char*               IPV6_DEFAULT_PREFIX          = "fd42:4242:4242::";
 
         struct PacketHeader {
             ppp::Byte VersionTrafficClass;

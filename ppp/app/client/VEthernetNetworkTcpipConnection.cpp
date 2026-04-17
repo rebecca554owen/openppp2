@@ -49,6 +49,10 @@ namespace ppp {
             }
 
             void VEthernetNetworkTcpipConnection::Dispose() noexcept {
+                if (IsDisposed()) {
+                    return;
+                }
+
                 auto self = shared_from_this();
                 auto socket = GetSocket(); 
 

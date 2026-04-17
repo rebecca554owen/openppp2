@@ -1450,6 +1450,7 @@ namespace ppp
                 }
 
                 bool any = false;
+                bool all = true;
                 int index = 1;
                 for (const ppp::string& server : servers) {
                     if (server.empty()) {
@@ -1467,11 +1468,13 @@ namespace ppp
                         snprintf(command, sizeof(command), "netsh interface ipv6 add dnsservers name=\"%s\" %s index=%d validate=no", interface_name.data(), server.data(), index);
                     }
 
-                    any |= ExecuteNetshCommand(command);
+                    bool ok = ExecuteNetshCommand(command);
+                    any |= ok;
+                    all &= ok;
                     index++;
                 }
 
-                return any;
+                return any && all;
             }
 
             static bool FixGatewayServerAddress(const ppp::win32::network::AdapterInterfacePtr& ai) noexcept

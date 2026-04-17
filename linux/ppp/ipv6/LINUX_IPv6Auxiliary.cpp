@@ -1,4 +1,5 @@
 #include <linux/ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
 #include <ppp/net/IPEndPoint.h>
 #include <common/unix/UnixAfx.h>
@@ -247,9 +248,6 @@ namespace {
             if (!forward_cleanup.empty()) {
                 LinuxExecuteCommand(forward_cleanup);
             }
-            if (!uplink_name.empty()) {
-                ppp::tap::TapLinux::DisableIPv6NeighborProxy(uplink_name);
-            }
         }
 
         if (!transit_ifname.empty() && IsSafeShellToken(transit_ifname)) {
@@ -331,7 +329,7 @@ namespace ppp {
                     ppp::string prefix;
                     int prefix_length = 0;
                     if (!NormalizeIpv6Prefix(ipv6.cidr, ipv6.prefix_length, prefix, prefix_length) && mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
-                        prefix = "fd42:4242:4242::";
+                        prefix = ppp::ipv6::IPV6_DEFAULT_PREFIX;
                         prefix_length = ppp::ipv6::IPv6_DEFAULT_PREFIX_LENGTH;
                     }
 
@@ -353,6 +351,7 @@ namespace ppp {
                     char ip6tables_command[3072];
                     if (!uplink_name.empty() && !IsSafeShellToken(uplink_name)) {
                         fprintf(stdout, "Linux IPv6 server prepare failed: invalid uplink interface.\r\n");
+                        CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
 
@@ -365,6 +364,7 @@ namespace ppp {
                     ppp::string forward_rules = BuildIpv6ForwardRules(true, prefix, prefix_length);
                     if (forward_rules.empty()) {
                         fprintf(stdout, "Linux IPv6 server prepare failed: invalid ipv6 forward rules.\r\n");
+                        CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
 
@@ -374,11 +374,13 @@ namespace ppp {
                         }
 
                         fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables forward rules failed.\r\n");
+                        CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
 
                     if (!SupportsIp6tablesNatTable()) {
                         fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables nat table unavailable for NAT66.\r\n");
+                        CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
 
@@ -406,7 +408,33 @@ namespace ppp {
                     }
 
                     fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables nat66 rules failed.\r\n");
+                    CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                     return false;
+                }
+
+                void FinalizeServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
+                    if (NULLPTR == configuration) {
+                        return;
+                    }
+
+                    const auto& ipv6 = configuration->server.ipv6;
+                    auto mode = ipv6.mode;
+                    if (mode != ppp::configurations::AppConfiguration::IPv6Mode_Nat66 && mode != ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
+                        return;
+                    }
+
+                    ppp::string prefix;
+                    int prefix_length = 0;
+                    if (!NormalizeIpv6Prefix(ipv6.cidr, ipv6.prefix_length, prefix, prefix_length) && mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
+                        prefix = ppp::ipv6::IPV6_DEFAULT_PREFIX;
+                        prefix_length = ppp::ipv6::IPv6_DEFAULT_PREFIX_LENGTH;
+                    }
+
+                    if (!prefix.empty() && !IsSafeShellToken(prefix)) {
+                        return;
+                    }
+
+                    CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                 }
 
                 void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
@@ -478,6 +506,10 @@ namespace ppp {
                 }
 
                 bool ApplyClientSubnetRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& prefix, int prefix_length, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
+                    if (!nat_mode) {
+                        return true;
+                    }
+
                     if (NULLPTR == context.Tap || context.InterfaceName.empty() || !prefix.is_v6()) {
                         return false;
                     }

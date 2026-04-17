@@ -940,7 +940,8 @@ namespace ppp {
         void TapLinux::Dispose() noexcept {
             std::shared_ptr<ITap> self = shared_from_this();
             std::shared_ptr<boost::asio::io_context> context = GetContext();
-            boost::asio::dispatch(*context,
+            // Schedule Finalize  asynchronously to avoid inline execution on the io_context thread.
+            boost::asio::post(*context,
                 [self, this, context]() noexcept {
                     Finalize();
                 });
