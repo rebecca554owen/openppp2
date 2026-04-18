@@ -19,7 +19,6 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 
-static void DebugLog(const char* format, ...) noexcept {}
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 
@@ -103,7 +102,6 @@ namespace ppp {
                 envelope.Base.Clear();
                 envelope.Extensions = request;
                 envelope.ExtendedJson = request.ToJson();
-                DebugLog("client info send ipv6-request json=%s", envelope.ExtendedJson.data());
                 return DoInformation(transmission, envelope, y);
             }
 
@@ -822,8 +820,6 @@ namespace ppp {
             }
 
             bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                (void)transmission;
-                (void)y;
                 return switcher_->Output(packet, packet_length);
             }
 
@@ -873,17 +869,6 @@ namespace ppp {
                     [self, this, context, ei, information]() noexcept {
                         information_ = ei;
                         if (!disposed_) {
-                            DebugLog("client info envelope raw-json=%s", information.ExtendedJson.data());
-                            DebugLog("client info received ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s route=%s/%u dns1=%s dns2=%s",
-                                (unsigned)information.Extensions.AssignedIPv6Mode,
-                                (unsigned)information.Extensions.AssignedIPv6AddressPrefixLength,
-                                (unsigned)information.Extensions.AssignedIPv6Flags,
-                                information.Extensions.AssignedIPv6Address.is_v6() ? information.Extensions.AssignedIPv6Address.to_string().c_str() : "",
-                                information.Extensions.AssignedIPv6Gateway.is_v6() ? information.Extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                                information.Extensions.AssignedIPv6RoutePrefix.is_v6() ? information.Extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
-                                (unsigned)information.Extensions.AssignedIPv6RoutePrefixLength,
-                                information.Extensions.AssignedIPv6Dns1.is_v6() ? information.Extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                                information.Extensions.AssignedIPv6Dns2.is_v6() ? information.Extensions.AssignedIPv6Dns2.to_string().c_str() : "");
                             switcher_->OnInformation(ei, information.Extensions);
                         }
                     });

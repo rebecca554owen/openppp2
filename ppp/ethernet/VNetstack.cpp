@@ -1192,7 +1192,6 @@ namespace ppp {
                     self->ScheduleSyncAckRetry(retry_delays[self->sync_ack_retry_count_]);
                 }
 
-                (void)ok;
             });
         }
     }

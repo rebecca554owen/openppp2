@@ -2,6 +2,7 @@
 #include <ppp/ipv6/IPv6Packet.h>
 
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/diagnostics/Error.h>
 #include <common/unix/UnixAfx.h>
 #include <linux/ppp/tap/TapLinux.h>
 
@@ -204,9 +205,6 @@ namespace {
         return true;
     }
 
-    static void LogLinuxRestoreStep(const char* action, bool ok, const ppp::string& detail) noexcept {
-        fprintf(stdout, "Linux IPv6 client restore %s: %s (%s).\r\n", action, ok ? "ok" : "failed", detail.data());
-    }
 
     static void CleanupServerRules(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& prefix, int prefix_length, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
         ppp::string uplink_name = ResolveIpv6UplinkInterface(preferred_nic);
@@ -334,7 +332,7 @@ namespace ppp {
                     }
 
                     if (!prefix.empty() && !IsSafeShellToken(prefix)) {
-                        fprintf(stdout, "Linux IPv6 server prepare failed: invalid ipv6 prefix.\r\n");
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
                         return false;
                     }
 
@@ -343,14 +341,14 @@ namespace ppp {
                     char sysctl_command[512];
                     snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 > /dev/null 2>&1");
                     if (!LinuxExecuteCommand(sysctl_command)) {
-                        fprintf(stdout, "Linux IPv6 server prepare failed: cannot enable ipv6 forwarding.\r\n");
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardingEnableFailed);
                         return false;
                     }
 
                     ppp::string uplink_name = ResolveIpv6UplinkInterface(preferred_nic);
                     char ip6tables_command[3072];
                     if (!uplink_name.empty() && !IsSafeShellToken(uplink_name)) {
-                        fprintf(stdout, "Linux IPv6 server prepare failed: invalid uplink interface.\r\n");
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
@@ -363,7 +361,7 @@ namespace ppp {
 
                     ppp::string forward_rules = BuildIpv6ForwardRules(true, prefix, prefix_length);
                     if (forward_rules.empty()) {
-                        fprintf(stdout, "Linux IPv6 server prepare failed: invalid ipv6 forward rules.\r\n");
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardRuleApplyFailed);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
@@ -373,13 +371,13 @@ namespace ppp {
                             return true;
                         }
 
-                        fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables forward rules failed.\r\n");
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardRuleApplyFailed);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
 
                     if (!SupportsIp6tablesNatTable()) {
-                        fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables nat table unavailable for NAT66.\r\n");
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6Nat66Unavailable);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                         return false;
                     }
@@ -407,7 +405,7 @@ namespace ppp {
                         return true;
                     }
 
-                    fprintf(stdout, "Linux IPv6 server prepare failed: ip6tables nat66 rules failed.\r\n");
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardRuleApplyFailed);
                     CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
                     return false;
                 }
@@ -438,8 +436,6 @@ namespace ppp {
                 }
 
                 void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)context;
-                    (void)nat_mode;
                     state.OriginalDnsConfiguration = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
                     state.OriginalDefaultRoutes = ReadDefaultRoutes();
                     if (!state.OriginalDefaultRoutes.empty()) {
@@ -474,7 +470,6 @@ namespace ppp {
 
                     state.AddressApplied = true;
                     state.Address = addr_str;
-                    (void)gua_mode;
                     return true;
                 }
 
@@ -537,7 +532,6 @@ namespace ppp {
                 }
 
                 bool ApplyClientDns(const ::ppp::ipv6::auxiliary::ClientContext& context, const ppp::vector<ppp::string>& dns_servers, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)context;
                     if (dns_servers.empty()) {
                         return false;
                     }
@@ -573,36 +567,27 @@ namespace ppp {
                     }
 
                     if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                        bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
-                        LogLinuxRestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
+                        ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
                     }
 
                     if (state.DefaultRouteApplied && nat_mode && state.DefaultRouteGateway.empty()) {
-                        bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, ppp::string());
-                        LogLinuxRestoreStep("default-route-delete", ok, "::/0");
+                        ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, ppp::string());
                     }
                     else if (state.DefaultRouteApplied) {
-                        bool ok = ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
-                        LogLinuxRestoreStep("default-route-delete", ok, state.DefaultRouteGateway.empty() ? ppp::string("::/0") : state.DefaultRouteGateway);
+                        ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
                     }
 
                     if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
-                        bool ok = ppp::tap::TapLinux::DeleteIPv6Address(context.InterfaceName, state.Address, prefix_length);
-                        LogLinuxRestoreStep("address-delete", ok, state.Address);
+                        ppp::tap::TapLinux::DeleteIPv6Address(context.InterfaceName, state.Address, prefix_length);
                     }
 
                     if (state.DnsApplied) {
-                        bool ok = ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
-                        LogLinuxRestoreStep("dns-restore", ok, "resolv.conf");
+                        ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
                     }
                     
                     if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
                         for (const ppp::string& route : state.OriginalDefaultRoutes) {
-                            bool ok = ApplyDefaultRouteCommand(route);
-                            LogLinuxRestoreStep("default-route-restore", ok, route);
-                            if (!ok) {
-                                fprintf(stdout, "Linux IPv6 client restore failed: could not restore default route '%s'.\r\n", route.data());
-                            }
+                            ApplyDefaultRouteCommand(route);
                         }
                     }
                 }

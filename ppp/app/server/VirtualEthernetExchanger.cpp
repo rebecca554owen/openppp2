@@ -36,8 +36,6 @@ typedef ppp::net::packet::IcmpFrame                                 IcmpFrame;
 typedef ppp::threading::Executors                                   Executors;
 typedef ppp::collections::Dictionary                                Dictionary;
 
-static void DebugLog(const char* format, ...) noexcept {}
-
 namespace {
     static bool HandleIPv6GatewayEchoReply(ppp::Byte* packet, int packet_length, const boost::asio::ip::address_v6& gateway) noexcept {
         if (NULLPTR == packet || packet_length < 48) {
@@ -129,7 +127,6 @@ namespace ppp {
             void VirtualEthernetExchanger::SetPreferredTunFd(int fd) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 preferred_tun_fd_ = fd;
-                DebugLog("server ipv6 transit preferred-fd update session=%s fd=%d", auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(), fd);
             }
 
             void VirtualEthernetExchanger::Dispose() noexcept {
@@ -338,6 +335,11 @@ namespace ppp {
             }
 
             bool VirtualEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                VirtualEthernetLoggerPtr logger = switcher_->GetLogger();
+                if (NULLPTR != logger) {
+                    logger->Packet(GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ClientToServer);
+                }
+
                 AppConfigurationPtr configuration = GetConfiguration();
                 bool forwarded = false;
                 if (configuration->server.subnet) {
@@ -374,10 +376,6 @@ namespace ppp {
                 }
 
                 if (source != approved.AssignedIPv6Address.to_v6()) {
-                    DebugLog("server ipv6 source rejected session=%s source=%s assigned=%s",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(),
-                        source.to_string().c_str(),
-                        approved.AssignedIPv6Address.to_string().c_str());
                     return false;
                 }
 
@@ -394,9 +392,6 @@ namespace ppp {
                 }
 
                 if (!configuration->server.subnet && configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
-                    DebugLog("server ipv6 peer delivery rejected session=%s destination=%s reason=subnet-disabled",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(),
-                        destination.to_string().c_str());
                     return false;
                 }
 
@@ -406,6 +401,10 @@ namespace ppp {
                 }
 
                 if (exchanger->DoNat(transmission, packet, packet_length, y)) {
+                    VirtualEthernetLoggerPtr logger = switcher_->GetLogger();
+                    if (NULLPTR != logger) {
+                        logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToClient);
+                    }
                     return true;
                 }
 
@@ -1003,6 +1002,10 @@ namespace ppp {
                         ITransmissionPtr transmission = exchanger->GetTransmission(); 
                         if (NULLPTR != transmission) {
                             if (exchanger->DoNat(transmission, packet, packet_length, y)) {
+                                VirtualEthernetLoggerPtr logger = switcher->GetLogger();
+                                if (NULLPTR != logger) {
+                                    logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToClient);
+                                }
                                 return 1;
                             }
 

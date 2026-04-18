@@ -14,10 +14,6 @@ namespace ppp {
         namespace ipv6 {
             namespace auxiliary {
                 namespace {
-                    static void LogWin32RestoreStep(const char* action, bool ok, const ppp::string& detail) noexcept {
-                        fprintf(stdout, "Windows IPv6 client restore %s: %s (%s).\r\n", action, ok ? "ok" : "failed", detail.data());
-                    }
-
                     struct DefaultRouteSnapshot {
                         int InterfaceIndex = -1;
                         int Metric = -1;
@@ -145,7 +141,6 @@ namespace ppp {
                 }
 
                 void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)nat_mode;
                     int metric = -1;
                     state.DefaultRouteWasPresent = QueryOriginalDefaultRoute(state.OriginalDefaultRouteInterfaceIndex, state.OriginalDefaultRoute, metric);
                     state.OriginalDefaultRouteMetric = metric;
@@ -166,7 +161,6 @@ namespace ppp {
                 }
 
                 bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)gua_mode;
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || context.InterfaceName.empty() || !address.is_v6()) {
                         return false;
                     }
@@ -257,7 +251,7 @@ namespace ppp {
                     }
 
                     if (!ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, dns_servers)) {
-                        (void)ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
+                        ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
                         return false;
                     }
 
@@ -272,27 +266,21 @@ namespace ppp {
                         return;
                     }
 
-                    (void)prefix_length;
-                    (void)nat_mode;
 
                     if (state.DefaultRouteApplied) {
-                        bool ok = ppp::win32::network::DeleteIPv6DefaultGateway(context.InterfaceIndex, state.DefaultRouteGateway);
-                        LogWin32RestoreStep("default-route-delete", ok, state.DefaultRouteGateway.empty() ? ppp::string("::/0") : state.DefaultRouteGateway);
+                        ppp::win32::network::DeleteIPv6DefaultGateway(context.InterfaceIndex, state.DefaultRouteGateway);
                     }
 
                     if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                        bool ok = ppp::win32::network::DeleteIPv6Route(context.InterfaceIndex, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
-                        LogWin32RestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
+                        ppp::win32::network::DeleteIPv6Route(context.InterfaceIndex, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
                     }
 
                     if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
-                        bool ok = ppp::win32::network::DeleteIPv6Address(context.InterfaceIndex, state.Address);
-                        LogWin32RestoreStep("address-delete", ok, state.Address);
+                        ppp::win32::network::DeleteIPv6Address(context.InterfaceIndex, state.Address);
                     }
 
                     if (state.DnsApplied) {
-                        bool ok = ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
-                        LogWin32RestoreStep("dns-restore", ok, "interface-dns");
+                        ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
                         ppp::tap::TapWindows::DnsFlushResolverCache();
                     }
 
@@ -326,18 +314,15 @@ namespace ppp {
 
                             bool ok = RestoreDefaultRouteSnapshot(route);
                             restored |= ok;
-                            LogWin32RestoreStep("default-route-restore", ok, encoded);
                         }
 
                         if (!restored && state.OriginalDefaultRouteInterfaceIndex != -1) {
                             int metric = state.OriginalDefaultRouteMetric > 0 ? state.OriginalDefaultRouteMetric : 1;
                             if (state.OriginalDefaultRoute.empty()) {
-                                bool ok = ppp::win32::network::SetIPv6DefaultRoute(state.OriginalDefaultRouteInterfaceIndex, metric);
-                                LogWin32RestoreStep("default-route-restore-fallback", ok, "::/0");
+                                ppp::win32::network::SetIPv6DefaultRoute(state.OriginalDefaultRouteInterfaceIndex, metric);
                             }
                             else {
-                                bool ok = ppp::win32::network::SetIPv6DefaultGateway(state.OriginalDefaultRouteInterfaceIndex, state.OriginalDefaultRoute, metric);
-                                LogWin32RestoreStep("default-route-restore-fallback", ok, state.OriginalDefaultRoute);
+                                ppp::win32::network::SetIPv6DefaultGateway(state.OriginalDefaultRouteInterfaceIndex, state.OriginalDefaultRoute, metric);
                             }
                         }
                     }

@@ -220,7 +220,7 @@ namespace ppp {
                 void                                                    ClearIPv6ExchangersUnsafe() noexcept;
                 bool                                                    SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
                 bool                                                    ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept;
-                bool                                                    SendIPv6PacketToClient(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
+                bool                                                    SendIPv6PacketToClient(const ITransmissionPtr& transmission, const Int128& session_id, Byte* packet, int packet_length) noexcept;
                 bool                                                    DeleteNatInformation(VirtualEthernetExchanger* key, uint32_t ip) noexcept;
                 NatInformationPtr                                       FindNatInformation(uint32_t ip) noexcept;
                 NatInformationPtr                                       AddNatInformation(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, uint32_t ip, uint32_t mask) noexcept;

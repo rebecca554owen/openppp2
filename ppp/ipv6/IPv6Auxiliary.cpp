@@ -15,9 +15,6 @@ namespace ppp {
 #if defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::PrepareServerEnvironment(configuration, preferred_nic, transit_ifname);
 #else
-            (void)configuration;
-            (void)preferred_nic;
-            (void)transit_ifname;
             return true;
 #endif
         }
@@ -26,9 +23,6 @@ namespace ppp {
 #if defined(_LINUX)
             ppp::linux::ipv6::auxiliary::FinalizeServerEnvironment(configuration, preferred_nic, transit_ifname);
 #else
-            (void)configuration;
-            (void)preferred_nic;
-            (void)transit_ifname;
 #endif
         }
 
@@ -48,9 +42,6 @@ namespace ppp {
 #elif defined(_LINUX)
             ppp::linux::ipv6::auxiliary::CaptureClientOriginalState(context, nat_mode, state);
 #else
-            (void)context;
-            (void)nat_mode;
-            (void)state;
 #endif
         }
 
@@ -62,11 +53,6 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, gua_mode, state);
 #else
-            (void)context;
-            (void)address;
-            (void)prefix_length;
-            (void)gua_mode;
-            (void)state;
             return false;
 #endif
         }
@@ -79,10 +65,6 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientDefaultRoute(context, gateway, nat_mode, state);
 #else
-            (void)context;
-            (void)gateway;
-            (void)nat_mode;
-            (void)state;
             return false;
 #endif
         }
@@ -95,12 +77,6 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientSubnetRoute(context, prefix, prefix_length, gateway, nat_mode, state);
 #else
-            (void)context;
-            (void)prefix;
-            (void)prefix_length;
-            (void)gateway;
-            (void)nat_mode;
-            (void)state;
             return false;
 #endif
         }
@@ -113,9 +89,6 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientDns(context, dns_servers, state);
 #else
-            (void)context;
-            (void)dns_servers;
-            (void)state;
             return false;
 #endif
         }
@@ -128,11 +101,6 @@ namespace ppp {
 #elif defined(_LINUX)
             ppp::linux::ipv6::auxiliary::RestoreClientConfiguration(context, address, prefix_length, nat_mode, state);
 #else
-            (void)context;
-            (void)address;
-            (void)prefix_length;
-            (void)nat_mode;
-            (void)state;
 #endif
         }
         }

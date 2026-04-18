@@ -313,8 +313,6 @@ ENDIF()
 
 # List of common cpp source files compilations for ppp/unix cmake solution projects.
 FILE(GLOB_RECURSE SOURCE_FILES 
-    ${PROJECT_SOURCE_DIR}/main.cpp 
-    
     ${PROJECT_SOURCE_DIR}/common/lwip/my/*.c 
     ${PROJECT_SOURCE_DIR}/common/lwip/core/*.c 
     ${PROJECT_SOURCE_DIR}/common/lwip/api/*.c 

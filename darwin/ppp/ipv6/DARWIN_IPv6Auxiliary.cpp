@@ -7,10 +7,6 @@ namespace ppp {
         namespace ipv6 {
             namespace auxiliary {
                 namespace {
-                    static void LogDarwinRestoreStep(const char* action, bool ok, const ppp::string& detail) noexcept {
-                        fprintf(stdout, "Darwin IPv6 client restore %s: %s (%s).\r\n", action, ok ? "ok" : "failed", detail.data());
-                    }
-
                     static bool IsSafeShellToken(const ppp::string& value) noexcept {
                         if (value.empty()) {
                             return false;
@@ -262,8 +258,6 @@ namespace ppp {
                 }
 
                 void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)context;
-                    (void)nat_mode;
                     state.OriginalDnsConfiguration = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
                     state.OriginalDefaultRoutes = ReadDefaultRoutes();
 
@@ -272,7 +266,6 @@ namespace ppp {
                 }
 
                 bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)gua_mode;
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || !IsSafeShellToken(context.InterfaceName) || !address.is_v6()) {
                         return false;
                     }
@@ -353,7 +346,6 @@ namespace ppp {
                 }
 
                 bool ApplyClientDns(const ::ppp::ipv6::auxiliary::ClientContext& context, const ppp::vector<ppp::string>& dns_servers, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)context;
                     if (dns_servers.empty()) {
                         return false;
                     }
@@ -379,19 +371,16 @@ namespace ppp {
                 }
 
                 void RestoreClientConfiguration(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
-                    (void)nat_mode;
                     if (context.InterfaceName.empty()) {
                         return;
                     }
 
                     if (state.SubnetRouteApplied && !state.SubnetRoutePrefix.empty()) {
-                        bool ok = DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
-                        LogDarwinRestoreStep("subnet-route-delete", ok, state.SubnetRoutePrefix);
+                        DeleteRoute(context.InterfaceName, state.SubnetRoutePrefix, state.SubnetRoutePrefixLength, state.SubnetRouteGateway);
                     }
 
                     if (state.DefaultRouteApplied) {
-                        bool ok = DeleteRoute(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
-                        LogDarwinRestoreStep("default-route-delete", ok, state.DefaultRouteGateway.empty() ? ppp::string("::/0") : state.DefaultRouteGateway);
+                        DeleteRoute(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
                     }
 
                     if (state.AddressApplied && address.is_v6() && !state.Address.empty()) {
@@ -399,13 +388,11 @@ namespace ppp {
                         int delete_prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                         snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s/%d delete > /dev/null 2>&1", context.InterfaceName.data(), state.Address.data(), delete_prefix);
 
-                        bool ok = system(cmd) == 0;
-                        LogDarwinRestoreStep("address-delete", ok, state.Address);
+                        system(cmd);
                     }
 
                     if (state.DnsApplied) {
-                        bool ok = ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
-                        LogDarwinRestoreStep("dns-restore", ok, "resolver-config");
+                        ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
                     }
 
                     if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
@@ -413,12 +400,10 @@ namespace ppp {
                         for (const ppp::string& route : state.OriginalDefaultRoutes) {
                             bool ok = ApplyDefaultRouteSnapshot(route);
                             restored |= ok;
-                            LogDarwinRestoreStep("default-route-restore", ok, route);
                         }
 
                         if (!restored && !state.OriginalDefaultRouteInterface.empty()) {
-                            bool ok = SetRoute(state.OriginalDefaultRouteInterface, "::", 0, state.OriginalDefaultRoute);
-                            LogDarwinRestoreStep("default-route-restore-fallback", ok, state.OriginalDefaultRouteInterface);
+                            SetRoute(state.OriginalDefaultRouteInterface, "::", 0, state.OriginalDefaultRoute);
                         }
                     }
                 }

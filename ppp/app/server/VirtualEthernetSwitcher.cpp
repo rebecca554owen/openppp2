@@ -39,7 +39,6 @@ using ppp::threading::Executors;
 using ppp::coroutines::YieldContext;
 using ppp::collections::Dictionary;
 
-static void DebugLog(const char* format, ...) noexcept {}
 
 static bool IsGlobalUnicastIPv6Address(const boost::asio::ip::address_v6& address) noexcept {
     boost::asio::ip::address_v6::bytes_type bytes = address.to_bytes();
@@ -172,9 +171,6 @@ namespace ppp {
                 BuildInformationIPv6Extensions(session_id, envelope.Extensions);
                 
                 envelope.ExtendedJson = envelope.Extensions.ToJson();
-                DebugLog("server info envelope session=%s json=%s",
-                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                    envelope.ExtendedJson.data());
                 return envelope;
             }
 
@@ -221,7 +217,6 @@ namespace ppp {
                 if (!IsIPv6ServerEnabled()) {
                     extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
                     extensions.IPv6StatusMessage = "server-ipv6-disabled";
-                    DebugLog("server ipv6 disabled session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                     return false;
                 }
 
@@ -319,10 +314,6 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     auto mapping_it = ipv6s_.find(candidate_key);
                     if (mapping_it != ipv6s_.end() && mapping_it->second && mapping_it->second->GetId() != session_id) {
-                        DebugLog("server ipv6 lease conflict session=%s address=%s occupied_by_exchanger=%s",
-                            auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                            candidate.to_string().c_str(),
-                            auxiliary::StringAuxiliary::Int128ToGuidString(mapping_it->second->GetId()).data());
                         return false;
                     }
 
@@ -337,12 +328,6 @@ namespace ppp {
                         }
 
                         if (lease.StaticBinding || lease.ExpiresAt == UINT64_MAX || lease.ExpiresAt > now) {
-                            DebugLog("server ipv6 lease conflict session=%s address=%s occupied_by=%s static=%d expires=%llu",
-                                auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                                candidate.to_string().c_str(),
-                                auxiliary::StringAuxiliary::Int128ToGuidString(kv.first).data(),
-                                lease.StaticBinding ? 1 : 0,
-                                (unsigned long long)lease.ExpiresAt);
                             return false;
                         }
                     }
@@ -363,13 +348,6 @@ namespace ppp {
                 boost::system::error_code ec;
 
                 AppConfiguration::IPv6Mode mode = ipv6.mode;
-                DebugLog("server ipv6 build session=%s mode=%d cidr=%s gateway=%s dns1=%s dns2=%s",
-                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                    (int)mode,
-                    ipv6.cidr.data(),
-                    ipv6.gateway.data(),
-                    ipv6.dns1.data(),
-                    ipv6.dns2.data());
                 if (mode == AppConfiguration::IPv6Mode_Nat66) {
                     extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                     extensions.AssignedIPv6AddressPrefixLength = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
@@ -406,7 +384,6 @@ namespace ppp {
 
                     if (!build_stable_ipv6(ula_bytes, ipv6.prefix_length)) {
                         extensions.Clear();
-                        DebugLog("server ipv6 build failed session=%s reason=stable-address", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                         return false;
                     }
 
@@ -499,15 +476,6 @@ namespace ppp {
                         extensions.AssignedIPv6Dns2 = dns2;
                     }
 
-                    DebugLog("server ipv6 build result session=%s address=%s gateway=%s route=%s/%u dns1=%s dns2=%s flags=%u",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
-                        extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                        extensions.AssignedIPv6RoutePrefix.is_v6() ? extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
-                        (unsigned)extensions.AssignedIPv6RoutePrefixLength,
-                        extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                        extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "",
-                        (unsigned)extensions.AssignedIPv6Flags);
                     return extensions.HasAny();
                 }
                 else if (mode == AppConfiguration::IPv6Mode_Gua) {
@@ -516,7 +484,6 @@ namespace ppp {
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
                 }
                 else {
-                    DebugLog("server ipv6 build failed session=%s reason=invalid-mode mode=%d", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(), (int)mode);
                     return false;
                 }
 
@@ -528,7 +495,6 @@ namespace ppp {
                 boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
                 if (ec || !prefix.is_v6()) {
                     extensions.Clear();
-                    DebugLog("server ipv6 build failed session=%s reason=invalid-cidr cidr=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(), ipv6.cidr.data());
                     return false;
                 }
 
@@ -536,14 +502,12 @@ namespace ppp {
                     extensions.Clear();
                     extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
                     extensions.IPv6StatusMessage = "server-gua-requires-global-unicast-cidr";
-                    DebugLog("server ipv6 build failed session=%s reason=non-global-gua-cidr cidr=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(), ipv6.cidr.data());
                     return false;
                 }
 
                 boost::asio::ip::address_v6::bytes_type bytes = prefix.to_v6().to_bytes();
                 if (!build_stable_ipv6(bytes, ipv6.prefix_length)) {
                     extensions.Clear();
-                    DebugLog("server ipv6 build failed session=%s reason=stable-prefix-address", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                     return false;
                 }
                 boost::asio::ip::address_v6 stable_candidate = extensions.AssignedIPv6Address.to_v6();
@@ -630,28 +594,12 @@ namespace ppp {
                     extensions.AssignedIPv6Dns2 = dns2;
                 }
 
-                DebugLog("server ipv6 build result session=%s address=%s gateway=%s route=%s/%u dns1=%s dns2=%s flags=%u",
-                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                    extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
-                    extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                    extensions.AssignedIPv6RoutePrefix.is_v6() ? extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
-                    (unsigned)extensions.AssignedIPv6RoutePrefixLength,
-                    extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "",
-                    (unsigned)extensions.AssignedIPv6Flags);
 
                 if (mode == AppConfiguration::IPv6Mode_Gua) {
-                    DebugLog("server ipv6 gua semantics session=%s provider=%s assigned-prefix-length=%u",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        "kernel",
-                        (unsigned)extensions.AssignedIPv6AddressPrefixLength);
                 }
 
                 if (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
                     extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Gua) {
-                    DebugLog("server ipv6 build failed session=%s reason=invalid-assigned-mode mode=%u",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        (unsigned)extensions.AssignedIPv6Mode);
                     extensions.Clear();
                     return false;
                 }
@@ -756,19 +704,12 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     auto existing = ipv6s_.find(ip_key);
                     if (existing != ipv6s_.end() && existing->second && existing->second->GetId() != session_id) {
-                        DebugLog("server ipv6 exchanger rejected session=%s reason=address-mapped-to-other-session address=%s owner=%s",
-                            auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                            ip.to_string().c_str(),
-                            auxiliary::StringAuxiliary::Int128ToGuidString(existing->second->GetId()).data());
                         return false;
                     }
                 }
 
                 bool route_ok = AddIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                 if (!route_ok) {
-                    DebugLog("server ipv6 exchanger rejected session=%s reason=transit-route-install-failed address=%s",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        ip.to_string().c_str());
                     return false;
                 }
 
@@ -776,9 +717,6 @@ namespace ppp {
                 bool proxy_ok = !proxy_required || AddIPv6NeighborProxy(ip);
                 if (!proxy_ok) {
                     DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                    DebugLog("server ipv6 exchanger rejected session=%s reason=neighbor-proxy-install-failed address=%s",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        ip.to_string().c_str());
                     return false;
                 }
 
@@ -853,8 +791,6 @@ namespace ppp {
                     if (!ec && ip.is_v6()) {
                         bool route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                         bool proxy_removed = DeleteIPv6NeighborProxy(ip);
-                        (void)route_removed;
-                        (void)proxy_removed;
                     }
 
                     tail = ipv6s_.erase(tail);
@@ -893,7 +829,6 @@ namespace ppp {
                     return true;
                 }
 
-                DebugLog("server ipv6 neighbor proxy provider=%s", "kernel");
 
                 ppp::string uplink_name = ResolvePreferredIPv6UplinkInterface(preferred_nic_);
                 if (uplink_name.empty()) {
@@ -908,10 +843,8 @@ namespace ppp {
 
                 ipv6_neighbor_proxy_ifname_ = uplink_name;
                 ipv6_neighbor_proxy_owned_ = query_ok ? !proxy_enabled : false;
-                DebugLog("server ipv6 neighbor proxy enabled if=%s owned=%s", uplink_name.data(), ipv6_neighbor_proxy_owned_ ? "yes" : "no");
 #else
                 if (IsIPv6ServerEnabled()) {
-                    DebugLog("server ipv6 neighbor proxy ignored reason=unsupported-platform");
                 }
 #endif
                 return true;
@@ -927,7 +860,6 @@ namespace ppp {
                 if (ipv6_neighbor_proxy_owned_) {
                     ok = ppp::tap::TapLinux::DisableIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_);
                 }
-                DebugLog("server ipv6 neighbor proxy disabled if=%s status=%s owned=%s", ipv6_neighbor_proxy_ifname_.data(), ok ? "ok" : "fail", ipv6_neighbor_proxy_owned_ ? "yes" : "no");
                 ipv6_neighbor_proxy_ifname_.clear();
                 ipv6_neighbor_proxy_owned_ = false;
 #endif
@@ -959,7 +891,6 @@ namespace ppp {
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                 bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
-                DebugLog("server ipv6 transit route %s name=%s ip=%s/%d", ok ? "add-ok" : "add-fail", tap->GetId().data(), ip_str.data(), prefix_length);
                 return ok;
 #else
                 return false;
@@ -991,7 +922,6 @@ namespace ppp {
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                 bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
-                DebugLog("server ipv6 transit route %s name=%s ip=%s/%d", ok ? "del-ok" : "del-fail", tap->GetId().data(), ip_str.data(), prefix_length);
                 return ok;
 #else
                 return false;
@@ -1029,7 +959,6 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::AddIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
-                DebugLog("server ipv6 neighbor proxy %s if=%s ip=%s", ok ? "add-ok" : "add-fail", ipv6_neighbor_proxy_ifname_.data(), ip_str.data());
                 return ok;
 #else
                 return false;
@@ -1045,7 +974,6 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
-                DebugLog("server ipv6 neighbor proxy %s if=%s ip=%s", ok ? "del-ok" : "del-fail", ipv6_neighbor_proxy_ifname_.data(), ip_str.data());
                 return ok;
 #else
                 return false;
@@ -1061,7 +989,6 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ifname, ip_str);
-                DebugLog("server ipv6 neighbor proxy %s if=%s ip=%s", ok ? "del-ok" : "del-fail", ifname.data(), ip_str.data());
                 return ok;
 #else
                 return false;
@@ -1273,12 +1200,9 @@ namespace ppp {
                     fallback_information.ExpiredTime = std::numeric_limits<UInt32>::max();
                     established_information = &fallback_information;
                     const char* reason = "no-managed-backend";
-                    DebugLog("server establish using local bootstrap info session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
-                    DebugLog("server establish info source=local-bootstrap reason=%s session=%s", reason, auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                 }
 
                 if (NULLPTR == established_information && !configuration_->server.backend.empty()) {
-                    DebugLog("server establish aborted reason=managed-info-empty session=%s", auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data());
                     DeleteExchanger(channel.get());
                     return false;
                 }
@@ -1286,9 +1210,6 @@ namespace ppp {
                 bool run = true;
                 if (NULLPTR != established_information) {
                     InformationEnvelope envelope = BuildInformationEnvelope(session_id, *established_information);
-                    DebugLog("server info send establish session=%s json=%s",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        envelope.ExtendedJson.data());
                     if (envelope.Extensions.AssignedIPv6Address.is_v6() && !AddIPv6Exchanger(session_id, envelope.Extensions)) {
                         RevokeIPv6Lease(session_id);
                         DeleteIPv6Exchanger(session_id);
@@ -1568,15 +1489,22 @@ namespace ppp {
                     return false;
                 }
 
+                Int128 session_id = 0;
+                VirtualEthernetLoggerPtr logger = GetLogger();
+
 #if defined(_LINUX)
                 boost::asio::ip::address_v6 source;
                 boost::asio::ip::address_v6 destination;
                 if (ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
                     VirtualEthernetExchangerPtr exchanger = FindIPv6Exchanger(destination);
                     if (NULLPTR != exchanger) {
+                        session_id = exchanger->GetId();
                         int affinity_fd = exchanger->GetPreferredTunFd();
                         if (affinity_fd >= 0) {
-                            DebugLog("server ipv6 transit preferred-fd hit session=%s fd=%d", auxiliary::StringAuxiliary::Int128ToGuidString(exchanger->GetId()).data(), affinity_fd);
+                            if (NULLPTR != logger) {
+                                logger->Packet(session_id, packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToUplink);
+                            }
+
                             int last_fd = ppp::tap::TapLinux::SetLastHandle(affinity_fd);
                             bool ok = tap->Output(packet, packet_length);
                             ppp::tap::TapLinux::SetLastHandle(last_fd);
@@ -1586,12 +1514,21 @@ namespace ppp {
                 }
 #endif
 
+                if (NULLPTR != logger) {
+                    logger->Packet(session_id, packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToUplink);
+                }
+
                 return tap->Output(packet, packet_length);
             }
 
-            bool VirtualEthernetSwitcher::SendIPv6PacketToClient(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept {
+            bool VirtualEthernetSwitcher::SendIPv6PacketToClient(const ITransmissionPtr& transmission, const Int128& session_id, Byte* packet, int packet_length) noexcept {
                 if (NULLPTR == transmission || NULLPTR == packet || packet_length < 1) {
                     return false;
+                }
+
+                VirtualEthernetLoggerPtr logger = GetLogger();
+                if (NULLPTR != logger) {
+                    logger->Packet(session_id, packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToClient);
                 }
 
                 ppp::io::MemoryStream ms;
@@ -1635,15 +1572,10 @@ namespace ppp {
                 if (!prefix_ec && prefix.is_v6()) {
                     int allowed_prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, ipv6.prefix_length));
                     if (!ppp::ipv6::PrefixMatch(destination, prefix.to_v6(), allowed_prefix_length)) {
-                        DebugLog("server ipv6 transit rejected reason=destination-outside-cidr destination=%s cidr=%s",
-                            destination.to_string().c_str(),
-                            ipv6.cidr.data());
                         return false;
                     }
 
                     if (source.is_unspecified() || source.is_multicast() || source.is_loopback()) {
-                        DebugLog("server ipv6 transit rejected reason=invalid-source-class source=%s",
-                            source.to_string().c_str());
                         return false;
                     }
 
@@ -1652,9 +1584,6 @@ namespace ppp {
                     if (!source_is_transit_gateway && ppp::ipv6::PrefixMatch(source, prefix.to_v6(), allowed_prefix_length)) {
                         VirtualEthernetExchangerPtr source_owner = FindIPv6Exchanger(source);
                         if (mode != AppConfiguration::IPv6Mode_Gua || source_owner != NULLPTR) {
-                            DebugLog("server ipv6 transit rejected reason=source-inside-vpn-cidr source=%s cidr=%s",
-                                source.to_string().c_str(),
-                                ipv6.cidr.data());
                             return false;
                         }
                     }
@@ -1674,9 +1603,14 @@ namespace ppp {
                 exchanger->SetPreferredTunFd(ppp::tap::TapLinux::GetLastHandle());
 #endif
 
+                VirtualEthernetLoggerPtr logger = GetLogger();
+                if (NULLPTR != logger) {
+                    logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::UplinkToServer);
+                }
+
                 app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, 80));
 
-                return SendIPv6PacketToClient(transmission, packet, packet_length);
+                return SendIPv6PacketToClient(transmission, exchanger->GetId(), packet, packet_length);
             }
 
             bool VirtualEthernetSwitcher::OpenIPv6TransitIfNeed() noexcept {
@@ -1740,13 +1674,11 @@ namespace ppp {
                 }
 
                 bool address_ok = ppp::tap::TapLinux::SetIPv6Address(tap->GetId(), transit_ip, prefix_length);
-                DebugLog("server ipv6 transit address %s name=%s address=%s/%d", address_ok ? "ok" : "fail", tap->GetId().data(), transit_ip.data(), prefix_length);
                 if (!address_ok) {
                     tap->Dispose();
                     return false;
                 }
 
-                DebugLog("server ipv6 transit connected route managed by kernel name=%s cidr=%s", tap->GetId().data(), ipv6.cidr.data());
 
                 tap->PacketInput =
                     [self = shared_from_this()](ppp::tap::ITap* sender, ppp::tap::ITap::PacketInputEventArgs& e) noexcept -> bool {
@@ -1768,10 +1700,8 @@ namespace ppp {
                 }
 
                 ipv6_transit_tap_ = tap;
-                DebugLog("server ipv6 transit tap opened name=%s address=%s/%d", tap->GetId().data(), transit_ip.data(), prefix_length);
 #else
                 if (IsIPv6ServerEnabled()) {
-                    DebugLog("server ipv6 transit ignored reason=unsupported-platform");
                 }
 #endif
                 return true;
@@ -1840,10 +1770,6 @@ namespace ppp {
                     const boost::asio::ip::address& ip = entry.second;
                     bool route_ok = AddIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                     bool proxy_ok = AddIPv6NeighborProxy(ip);
-                    DebugLog("server ipv6 neighbor proxy replay session-address=%s route=%s proxy=%s",
-                        ip.to_string().c_str(),
-                        route_ok ? "ok" : "fail",
-                        proxy_ok ? "ok" : "fail");
                     if (!route_ok || !proxy_ok) {
                         broken_sessions.emplace_back(entry.first);
                     }
@@ -1907,12 +1833,10 @@ namespace ppp {
 
                     contexts.emplace_back(worker);
                 }
-                DebugLog("server ipv6 transit multiqueue enabled name=%s workers=%d", tap->GetId().data(), tun_ssmt_);
 
                 SynchronizedObjectScope scope(syncobj_);
                 ipv6_transit_ssmt_contexts_ = std::move(contexts);
 #else
-                (void)tap;
 #endif
                 return true;
             }
@@ -2479,7 +2403,6 @@ namespace ppp {
                 TickAllConnections(now);
                 TickIPv6Leases(now);
                 if (!RefreshIPv6NeighborProxyIfNeed()) {
-                    DebugLog("server ipv6 neighbor proxy refresh failed");
                 }
 
                 VirtualEthernetNamespaceCachePtr cache = namespace_cache_;
@@ -2513,9 +2436,6 @@ namespace ppp {
                 bool bok = false;
                 if (NULLPTR != info) {
                     InformationEnvelope envelope = BuildInformationEnvelope(session_id, *info);
-                    DebugLog("server info send update session=%s json=%s",
-                        auxiliary::StringAuxiliary::Int128ToGuidString(session_id).data(),
-                        envelope.ExtendedJson.data());
                     if (envelope.Extensions.AssignedIPv6Address.is_v6() && !AddIPv6Exchanger(session_id, envelope.Extensions)) {
                         RevokeIPv6Lease(session_id);
                         DeleteIPv6Exchanger(session_id);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/stdafx.h>
+#include <ppp/Int128.h>
 
 namespace ppp
 {

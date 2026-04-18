@@ -10,6 +10,14 @@ namespace ppp {
         namespace protocol {
             class VirtualEthernetLogger : public std::enable_shared_from_this<VirtualEthernetLogger> {
             public:
+                enum class PacketDirection : Byte {
+                    ClientToServer,
+                    ServerToClient,
+                    ServerToUplink,
+                    UplinkToServer,
+                };
+
+            public:
                 VirtualEthernetLogger(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& log_path) noexcept;
                 virtual ~VirtualEthernetLogger() noexcept;
 
@@ -34,22 +42,32 @@ namespace ppp {
             public:
                 bool                                                            MPEntry(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::tcp::endpoint& publicEP, bool protocol_tcp_or_udp) noexcept;
                 bool                                                            MPConnect(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::tcp::endpoint& publicEP, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept;
+                bool                                                            Packet(Int128 guid, const void* packet, int packet_length, PacketDirection direction) noexcept;
                 
             public:
                 bool                                                            Write(const void* s, int length, const ppp::function<void(bool)>& cb) noexcept;
                 virtual bool                                                    Write(const std::shared_ptr<Byte>& s, int length, const ppp::function<void(bool)>& cb) noexcept;
 
             private:
+                bool                                                            OpenLogFile() noexcept;
+                bool                                                            EnsureLogFile(std::size_t incoming_bytes) noexcept;
+                bool                                                            EnqueueLine(ppp::string line) noexcept;
+                void                                                            FlushPending() noexcept;
+                void                                                            RotateLogFile(int day_key) noexcept;
+                void                                                            CleanupArchives() noexcept;
                 void                                                            Finalize() noexcept;
 
             private:
-#if defined(_WIN32)
-                std::atomic<FILE*>                                              log_file_ = NULLPTR;
-#else
-                std::shared_ptr<boost::asio::posix::stream_descriptor>          log_file_;
-#endif
+                FILE*                                                           log_file_ = NULLPTR;
                 ppp::string                                                     log_path_;
+                ppp::string                                                     log_directory_;
+                ppp::string                                                     log_file_name_;
                 std::shared_ptr<boost::asio::io_context>                        log_context_;
+                std::shared_ptr<boost::asio::strand<boost::asio::io_context::executor_type>> log_strand_;
+                std::size_t                                                     log_file_size_ = 0;
+                int                                                             log_file_day_key_ = -1;
+                bool                                                            flush_scheduled_ = false;
+                std::list<ppp::string>                                          pending_lines_;
             };
         }
     }

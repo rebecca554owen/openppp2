@@ -43,7 +43,6 @@
 #endif
 #endif
 
-static void DebugLog(const char* format, ...) noexcept {}
 
 static bool ClientSupportsManagedIPv6() noexcept {
 #if defined(_WIN32) || defined(_LINUX) || defined(_MACOS)
@@ -229,7 +228,6 @@ namespace ppp {
                     return false;
                 }
 
-                (void)vnet;
 
                 if (!IsApprovedIPv6Packet(packet, packet_length)) {
                     return false;
@@ -276,14 +274,10 @@ namespace ppp {
                 bool valid_mode = approved.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
                     approved.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
                 if (!ipv6_applied_ || !valid_mode || approved.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH || !approved.AssignedIPv6Address.is_v6()) {
-                    DebugLog("client ipv6 tx rejected reason=not-assigned source=%s", source.to_string().c_str());
                     return false;
                 }
 
                 if (source != approved.AssignedIPv6Address.to_v6()) {
-                    DebugLog("client ipv6 tx rejected reason=source-mismatch source=%s assigned=%s",
-                        source.to_string().c_str(),
-                        approved.AssignedIPv6Address.to_string().c_str());
                     return false;
                 }
 
@@ -668,12 +662,10 @@ namespace ppp {
 
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!ClientSupportsManagedIPv6()) {
-                    DebugLog("client ipv6 apply ignored reason=unsupported-platform");
                     return false;
                 }
 
                 if (ipv6_applied_) {
-                    DebugLog("client ipv6 apply skipped reason=already-applied");
                     return false;
                 }
 
@@ -684,35 +676,21 @@ namespace ppp {
 
                 auto tun_ni = tun_ni_;
                 if (NULLPTR == tun_ni) {
-                    DebugLog("client ipv6 apply failed reason=no-tun-interface");
                     return false;
                 }
 
-                DebugLog("client ipv6 apply begin mode=%u prefix=%u flags=%u address=%s gateway=%s route=%s/%u dns1=%s dns2=%s",
-                    (unsigned)extensions.AssignedIPv6Mode,
-                    (unsigned)extensions.AssignedIPv6AddressPrefixLength,
-                    (unsigned)extensions.AssignedIPv6Flags,
-                    extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
-                    extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                    extensions.AssignedIPv6RoutePrefix.is_v6() ? extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
-                    (unsigned)extensions.AssignedIPv6RoutePrefixLength,
-                    extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "");
 
                 bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                 bool gua_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
                 if (!nat_mode && !gua_mode) {
-                    DebugLog("client ipv6 apply rejected reason=invalid-mode mode=%u", (unsigned)extensions.AssignedIPv6Mode);
                     return false;
                 }
 
                 if (extensions.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
-                    DebugLog("client ipv6 apply rejected reason=invalid-prefix prefix=%u", (unsigned)extensions.AssignedIPv6AddressPrefixLength);
                     return false;
                 }
 
                 if (!extensions.AssignedIPv6Address.is_v6()) {
-                    DebugLog("client ipv6 apply rejected reason=missing-address");
                     return false;
                 }
 
@@ -774,12 +752,10 @@ namespace ppp {
 
                 if (applied) {
                     ipv6_applied_ = true;
-                    DebugLog("client ipv6 apply done");
                 }
                 else {
                     ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, extensions.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
                     ipv6_state_.Clear();
-                    DebugLog("client ipv6 apply skipped-or-failed");
                 }
 
                 return applied;
@@ -831,16 +807,6 @@ namespace ppp {
                     return false;
                 }
 
-                DebugLog("client switcher info ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s route=%s/%u dns1=%s dns2=%s",
-                    (unsigned)extensions.AssignedIPv6Mode,
-                    (unsigned)extensions.AssignedIPv6AddressPrefixLength,
-                    (unsigned)extensions.AssignedIPv6Flags,
-                    extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
-                    extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                    extensions.AssignedIPv6RoutePrefix.is_v6() ? extensions.AssignedIPv6RoutePrefix.to_string().c_str() : "",
-                    (unsigned)extensions.AssignedIPv6RoutePrefixLength,
-                    extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "");
 
                 bool previous_assignment = HasManagedIPv6Assignment(information_extensions_);
                 bool current_assignment = HasManagedIPv6Assignment(extensions);
@@ -852,17 +818,14 @@ namespace ppp {
 
                 bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
                 if (!valid_ipv6_assignment && ipv6_applied_) {
-                    DebugLog("client ipv6 restore reason=server-withdrew-assignment");
                     RestoreAssignedIPv6();
                 }
 
                 if (valid_ipv6_assignment) {
                     if (!ClientSupportsManagedIPv6()) {
-                        DebugLog("client ipv6 ignored reason=unsupported-platform");
                     }
                     else if (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
                         extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Gua) {
-                        DebugLog("client ipv6 ignored reason=invalid-mode mode=%u", (unsigned)extensions.AssignedIPv6Mode);
                     }
                     else if (!ipv6_applied_) {
                         ApplyAssignedIPv6(extensions);

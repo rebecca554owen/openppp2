@@ -15,7 +15,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
+    <ClCompile Include="ppp\app\PppApplication.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\PppMain.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\stdafx.cpp">
@@ -397,6 +400,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\diagnostics\PreventReturn.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\diagnostics\Error.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\dns\Rule.cpp">
@@ -1256,6 +1262,9 @@
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\PppApplication.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\transmissions\ITransmissionStatistics.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1416,6 +1425,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\diagnostics\PreventReturn.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\diagnostics\Error.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\dns\Rule.h">
