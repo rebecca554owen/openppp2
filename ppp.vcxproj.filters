@@ -33,6 +33,9 @@
     <ClCompile Include="ppp\app\ApplicationNetwork.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\ConsoleUI.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\PppApplication.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -418,6 +421,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\diagnostics\Error.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\diagnostics\ErrorHandler.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\dns\Rule.cpp">
@@ -1283,6 +1289,9 @@
     <ClInclude Include="ppp\app\PppApplicationInternal.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\ConsoleUI.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\transmissions\ITransmissionStatistics.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1446,6 +1455,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\diagnostics\Error.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\diagnostics\ErrorHandler.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\dns\Rule.h">

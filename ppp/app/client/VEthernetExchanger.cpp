@@ -18,6 +18,7 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
@@ -397,16 +398,103 @@ namespace ppp {
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::post(*context, 
                     [self, this, context]() noexcept {
+                        static thread_local VEthernetExchanger* in_update_owner = NULLPTR;
+                        if (NULLPTR != in_update_owner) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TCPLinkDeadlockDetected);
+                            return;
+                        }
+
+                        in_update_owner = this;
+                        struct UpdateScope final {
+                            VEthernetExchanger*& owner;
+
+                            ~UpdateScope() noexcept {
+                                owner = NULLPTR;
+                            }
+                        } update_scope{ in_update_owner };
+
                         uint64_t now = ppp::threading::Executors::GetTickCount();
                         SendEchoKeepAlivePacket(now, false); 
                         DoMuxEvents();
                         DoKeepAlived(GetTransmission(), now);
 
+                        ppp::vector<std::pair<boost::asio::ip::udp::endpoint, VEthernetDatagramPortPtr>> datagram_candidates;
+                        ppp::vector<std::pair<uint32_t, VirtualEthernetMappingPortPtr>> mapping_candidates;
+                        ppp::vector<std::pair<boost::asio::ip::udp::endpoint, VEthernetDatagramPortPtr>> stale_datagram_candidates;
+                        ppp::vector<std::pair<uint32_t, VirtualEthernetMappingPortPtr>> stale_mapping_candidates;
+                        ppp::vector<VEthernetDatagramPortPtr> stale_datagrams;
+                        ppp::vector<VirtualEthernetMappingPortPtr> stale_mappings;
+
                         for (;;) {
                             SynchronizedObjectScope scope(syncobj_);
-                            Dictionary::UpdateAllObjects(datagrams_, now);
-                            Dictionary::UpdateAllObjects2(mappings_, now);
+
+                            for (auto&& kv : datagrams_) {
+                                datagram_candidates.emplace_back(kv.first, kv.second);
+                            }
+
+                            for (auto&& kv : mappings_) {
+                                mapping_candidates.emplace_back(kv.first, kv.second);
+                            }
+
                             break;
+                        }
+
+                        for (auto&& kv : datagram_candidates) {
+                            VEthernetDatagramPortPtr& datagram = kv.second;
+                            if (NULLPTR == datagram || datagram->IsPortAging(now)) {
+                                stale_datagram_candidates.emplace_back(kv.first, datagram);
+                            }
+                        }
+
+                        for (auto&& kv : mapping_candidates) {
+                            VirtualEthernetMappingPortPtr& mapping = kv.second;
+                            if (NULLPTR == mapping || !mapping->Update(now)) {
+                                stale_mapping_candidates.emplace_back(kv.first, mapping);
+                            }
+                        }
+
+                        for (;;) {
+                            SynchronizedObjectScope scope(syncobj_);
+
+                            for (auto&& stale_datagram_candidate : stale_datagram_candidates) {
+                                auto&& object_key = stale_datagram_candidate.first;
+                                auto tail = datagrams_.find(object_key);
+                                auto endl = datagrams_.end();
+                                if (tail == endl || tail->second != stale_datagram_candidate.second) {
+                                    continue;
+                                }
+
+                                VEthernetDatagramPortPtr datagram = std::move(tail->second);
+                                datagrams_.erase(tail);
+                                if (NULLPTR != datagram) {
+                                    stale_datagrams.emplace_back(std::move(datagram));
+                                }
+                            }
+
+                            for (auto&& stale_mapping_candidate : stale_mapping_candidates) {
+                                auto&& object_key = stale_mapping_candidate.first;
+                                auto tail = mappings_.find(object_key);
+                                auto endl = mappings_.end();
+                                if (tail == endl || tail->second != stale_mapping_candidate.second) {
+                                    continue;
+                                }
+
+                                VirtualEthernetMappingPortPtr mapping = std::move(tail->second);
+                                mappings_.erase(tail);
+                                if (NULLPTR != mapping) {
+                                    stale_mappings.emplace_back(std::move(mapping));
+                                }
+                            }
+
+                            break;
+                        }
+
+                        for (auto&& datagram : stale_datagrams) {
+                            IDisposable::Dispose(*datagram);
+                        }
+
+                        for (auto&& mapping : stale_mappings) {
+                            IDisposable::Dispose(*mapping);
                         }
                     });
                 return true;

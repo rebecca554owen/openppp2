@@ -6,6 +6,7 @@
 #pragma once
 
 #include <ppp/app/PppApplication.h>
+#include <ppp/app/ConsoleUI.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/Int128.h>
 #include <ppp/io/File.h>

@@ -795,7 +795,7 @@ namespace ppp
         {
             // Use CComPtr to automatically release the IShellItem2 interface when the function returns
             // or an exception is thrown.
-            HRESULT hr = SHCreateItemFromParsingName(pPath, nullptr, IID_PPV_ARGS(&pItem));
+            HRESULT hr = SHCreateItemFromParsingName(pPath, NULLPTR, IID_PPV_ARGS(&pItem));
             if (FAILED(hr))
             {
                 throw std::system_error(hr, std::system_category(), "SHCreateItemFromParsingName() failed");

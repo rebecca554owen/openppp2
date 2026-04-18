@@ -11,6 +11,8 @@ namespace ppp::app {
  * @brief Disposes active server/client switchers and clears periodic timers.
  */
 void PppApplication::Dispose() noexcept {
+    ConsoleUI::GetInstance().Stop();
+
     std::shared_ptr<VirtualEthernetSwitcher> server = std::move(server_);
     if (NULLPTR != server) {
         server->Dispose();
@@ -77,7 +79,16 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     using RouteIPListTablePtr = VEthernetNetworkSwitcher::RouteIPListTablePtr;
     using NetworkState = VEthernetExchanger::NetworkState;
 
-    LogEnvironmentInformation();
+    uint64_t incoming_traffic = 0;
+    uint64_t outgoing_traffic = 0;
+    std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
+
+    ppp::string status = "tick=" + stl::to_string<ppp::string>(now);
+    if (GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
+        status += " | rx=" + ppp::StrFormatByteSize((Int64)incoming_traffic);
+        status += " | tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
+    }
+    ConsoleUI::GetInstance().UpdateStatus(status);
 
 #if defined(_WIN32)
     ppp::win32::Win32Native::OptimizedProcessWorkingSize();

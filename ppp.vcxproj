@@ -284,6 +284,7 @@
     <ClCompile Include="ppp\app\ApplicationInitialize.cpp" />
     <ClCompile Include="ppp\app\ApplicationMainLoop.cpp" />
     <ClCompile Include="ppp\app\ApplicationNetwork.cpp" />
+    <ClCompile Include="ppp\app\ConsoleUI.cpp" />
     <ClCompile Include="ppp\app\PppApplication.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp" />
@@ -302,6 +303,7 @@
     <ClCompile Include="ppp\app\server\VirtualInternetControlMessageProtocolStatic.cpp" />
     <ClCompile Include="ppp\configurations\Ini.cpp" />
     <ClCompile Include="ppp\diagnostics\Error.cpp" />
+    <ClCompile Include="ppp\diagnostics\ErrorHandler.cpp" />
     <ClCompile Include="ppp\diagnostics\PreventReturn.cpp" />
     <ClCompile Include="ppp\hash\hash_bytes.cpp" />
     <ClCompile Include="ppp\net\asio\vdns.cpp" />
@@ -607,6 +609,7 @@
     <ClInclude Include="ppp\collections\LinkedList.h" />
     <ClInclude Include="ppp\configurations\Ini.h" />
     <ClInclude Include="ppp\diagnostics\Error.h" />
+    <ClInclude Include="ppp\diagnostics\ErrorHandler.h" />
     <ClInclude Include="ppp\diagnostics\PreventReturn.h" />
     <ClInclude Include="ppp\hash\hash_bytes.h" />
     <ClInclude Include="ppp\net\asio\vdns.h" />
@@ -630,6 +633,7 @@
     <ClInclude Include="ppp\app\server\VirtualInternetControlMessageProtocol.h" />
     <ClInclude Include="ppp\auxiliary\JsonAuxiliary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h" />
+    <ClInclude Include="ppp\app\ConsoleUI.h" />
     <ClInclude Include="ppp\app\PppApplication.h" />
     <ClInclude Include="ppp\app\PppApplicationInternal.h" />
     <ClInclude Include="ppp\auxiliary\StringAuxiliary.h" />

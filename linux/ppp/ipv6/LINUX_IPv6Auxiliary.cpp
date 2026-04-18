@@ -783,11 +783,13 @@ namespace ppp {
 
                 bool ApplyClientDefaultRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (NULLPTR == context.Tap || context.InterfaceName.empty()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
                     ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(context.Tap);
                     if (NULLPTR == linux_tap) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
@@ -800,6 +802,7 @@ namespace ppp {
                     }
 
                     if (!ppp::tap::TapLinux::AddRoute6(context.InterfaceName, "::", 0, gateway_string)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                         return false;
                     }
 
@@ -814,6 +817,7 @@ namespace ppp {
                     }
 
                     if (NULLPTR == context.Tap || context.InterfaceName.empty() || !prefix.is_v6()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
@@ -829,6 +833,7 @@ namespace ppp {
                     ppp::string prefix_string(prefix_std.data(), prefix_std.size());
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     if (!ppp::tap::TapLinux::AddRoute6(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                         return false;
                     }
 

@@ -11,6 +11,7 @@
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file AppConfiguration.cpp
@@ -34,7 +35,7 @@ namespace {
      * @return True on Linux builds, otherwise false.
      */
     static bool                                             SupportsServerIPv6DataPlane() noexcept {
-#if defined(_LINUX)
+#if defined(_LINUX) && !defined(_ANDROID)
         return true;
 #else
         return false;
@@ -580,11 +581,8 @@ namespace ppp {
             bool ipv6_server_enabled = config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66 ||
                 config.server.ipv6.mode == AppConfiguration::IPv6Mode_Gua;
             if (ipv6_server_enabled && !SupportsServerIPv6DataPlane()) {
-                config.server.ipv6.mode = AppConfiguration::IPv6Mode_None;
-                config.server.ipv6.gateway = "";
-                config.server.ipv6.dns1 = "";
-                config.server.ipv6.dns2 = "";
-                ipv6_server_enabled = false;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PlatformNotSupportGUAMode);
+                return false;
             }
 
             ppp::string ipv6_prefix;

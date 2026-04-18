@@ -6,6 +6,7 @@
  */
 
 #include <cstdint>
+#include <type_traits>
 #include <ppp/stdafx.h>
 
 namespace ppp {
@@ -31,6 +32,65 @@ namespace ppp {
          * @return The same error code that was provided.
          */
         ErrorCode                                                           SetLastErrorCode(ErrorCode code) noexcept;
+
+        /**
+         * @brief Gets the most recent process-wide error code snapshot.
+         * @return Last observed error code across threads.
+         */
+        ErrorCode                                                           GetLastErrorCodeSnapshot() noexcept;
+
+        /**
+         * @brief Gets process-wide timestamp for the latest error update.
+         * @return Tick count when last error code snapshot was set.
+         */
+        uint64_t                                                            GetLastErrorTimestamp() noexcept;
+
+        /**
+         * @brief Sets the last error code and returns a caller-provided value.
+         * @tparam T Return type.
+         * @param code Error code to store.
+         * @param value Value to return.
+         * @return The provided value.
+         */
+        template <typename T>
+        T                                                                   SetLastError(ErrorCode code, T value) noexcept {
+            SetLastErrorCode(code);
+            return value;
+        }
+
+        /**
+         * @brief Sets the last error code and returns false.
+         * @param code Error code to store.
+         * @return false.
+         */
+        inline bool                                                         SetLastError(ErrorCode code) noexcept {
+            SetLastErrorCode(code);
+            return false;
+        }
+
+        /**
+         * @brief Sets the last error code and returns -1 for integer failure paths.
+         * @tparam TInt Integral return type except bool.
+         * @param code Error code to store.
+         * @return -1 converted to TInt.
+         */
+        template <typename TInt, typename std::enable_if<std::is_integral<TInt>::value && !std::is_same<TInt, bool>::value, int>::type = 0>
+        TInt                                                                SetLastError(ErrorCode code) noexcept {
+            SetLastErrorCode(code);
+            return static_cast<TInt>(-1);
+        }
+
+        /**
+         * @brief Sets the last error code and returns NULLPTR for pointer failure paths.
+         * @tparam TPointer Pointer return type.
+         * @param code Error code to store.
+         * @return NULLPTR.
+         */
+        template <typename TPointer, typename std::enable_if<std::is_pointer<TPointer>::value, int>::type = 0>
+        TPointer                                                            SetLastError(ErrorCode code) noexcept {
+            SetLastErrorCode(code);
+            return NULLPTR;
+        }
 
         /**
          * @brief Converts an error code to a readable static message.

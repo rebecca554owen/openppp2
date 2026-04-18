@@ -347,6 +347,10 @@ std::shared_ptr<AppConfiguration> PppApplication::LoadConfiguration(int argc, co
         }
 
         if (!configuration->Load(configuration_path)) {
+            if (ppp::diagnostics::ErrorCode::PlatformNotSupportGUAMode == ppp::diagnostics::GetLastErrorCode()) {
+                path.clear();
+                return NULLPTR;
+            }
             continue;
         }
 

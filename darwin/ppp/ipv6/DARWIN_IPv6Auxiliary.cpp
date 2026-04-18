@@ -1,6 +1,7 @@
 #include <darwin/ppp/ipv6/IPv6Auxiliary.h>
 
 #include <common/unix/UnixAfx.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace darwin {
@@ -295,6 +296,7 @@ namespace ppp {
 
                 bool ApplyClientDefaultRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (context.InterfaceName.empty()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
@@ -307,6 +309,7 @@ namespace ppp {
                     }
 
                     if (!SetRoute(context.InterfaceName, "::", 0, gateway_string)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                         return false;
                     }
 
@@ -321,6 +324,7 @@ namespace ppp {
                     }
 
                     if (context.InterfaceName.empty() || !prefix.is_v6()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
@@ -335,6 +339,7 @@ namespace ppp {
                     ppp::string prefix_string = prefix.to_string();
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     if (!SetRoute(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                         return false;
                     }
 

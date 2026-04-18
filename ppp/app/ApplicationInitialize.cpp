@@ -50,14 +50,6 @@ void PppApplication::Release() noexcept {
 }
 
 /**
- * @brief Emits environment/runtime diagnostics.
- * @return Always returns true in the current implementation.
- */
-bool PppApplication::LogEnvironmentInformation() noexcept {
-    return true;
-}
-
-/**
  * @brief Prepares tunnel, switcher, and route environment for client/server mode.
  * @param network_interface Resolved tunnel and routing configuration.
  * @return True when all required runtime components are successfully opened.
@@ -209,12 +201,12 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
          * created, opened, and started. Failure paths finalize platform state.
          */
         do {
-#if defined(_LINUX)
             if (!ppp::ipv6::auxiliary::PrepareServerEnvironment(configuration, network_interface->Nic, network_interface->ComponentId)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ServerPrepareFailed);
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ServerPrepareFailed);
+                }
                 break;
             }
-#endif
 
 #if defined(_WIN32)
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId);
@@ -241,9 +233,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
         } while (false);
 
         if (!success) {
-#if defined(_LINUX)
             ppp::ipv6::auxiliary::FinalizeServerEnvironment(configuration, network_interface->Nic, network_interface->ComponentId);
-#endif
             server_.reset();
             if (NULLPTR != ethernet) {
                 ethernet->Dispose();
@@ -316,7 +306,14 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
 #endif
 
     if (!PreparedLoopbackEnvironment(network_interface_)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPreflightCheckFailed);
+        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPreflightCheckFailed);
+        }
+        return -1;
+    }
+
+    if (!ConsoleUI::GetInstance().Start()) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
         return -1;
     }
 

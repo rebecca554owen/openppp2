@@ -1,5 +1,6 @@
 #include <windows/ppp/ipv6/IPv6Auxiliary.h>
 #include <ppp/ipv6/IPv6Packet.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -188,6 +189,7 @@ namespace ppp {
 
                 bool ApplyClientDefaultRoute(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& gateway, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || context.InterfaceName.empty()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
@@ -195,6 +197,7 @@ namespace ppp {
                         std::string gw_std = gateway.to_string();
                         ppp::string gw_str(gw_std.data(), gw_std.size());
                         if (!ppp::win32::network::SetIPv6DefaultGateway(context.InterfaceIndex, gw_str, 0)) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                             return false;
                         }
 
@@ -204,6 +207,7 @@ namespace ppp {
                     }
 
                     if (!nat_mode || !ppp::win32::network::SetIPv6DefaultRoute(context.InterfaceIndex, 0)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                         return false;
                     }
 
@@ -218,6 +222,7 @@ namespace ppp {
                     }
 
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || context.InterfaceName.empty() || !prefix.is_v6()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
 
@@ -235,6 +240,7 @@ namespace ppp {
                     }
 
                     if (!ppp::win32::network::AddIPv6Route(context.InterfaceIndex, prefix_str, prefix_length, gateway_str, 0)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
                         return false;
                     }
 

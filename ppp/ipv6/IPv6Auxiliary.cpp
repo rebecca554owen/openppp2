@@ -1,4 +1,5 @@
 #include <ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file IPv6Auxiliary.cpp
@@ -24,6 +25,16 @@ namespace ppp {
 #if defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::PrepareServerEnvironment(configuration, preferred_nic, transit_ifname);
 #else
+            if (NULLPTR == configuration) {
+                return false;
+            }
+
+            auto mode = configuration->server.ipv6.mode;
+            if (ppp::configurations::AppConfiguration::IPv6Mode_Gua == mode || ppp::configurations::AppConfiguration::IPv6Mode_Nat66 == mode) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PlatformNotSupportGUAMode);
+                return false;
+            }
+
             return true;
 #endif
         }

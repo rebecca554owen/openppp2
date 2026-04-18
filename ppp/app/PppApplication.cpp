@@ -46,6 +46,7 @@ int PppApplication::Run(int argc, char** argv) noexcept {
         app->GetBufferAllocator(),
         [app, prepared_status](int inner_argc, const char* inner_argv[]) noexcept -> int {
             int rc = RunPreparedApplication(app, prepared_status, inner_argc, inner_argv);
+            ConsoleUI::GetInstance().Stop();
 #if defined(_WIN32)
             if (rc != 0) {
                 ppp::win32::Win32Native::PauseWindowsConsole();

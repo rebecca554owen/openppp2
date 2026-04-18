@@ -22,6 +22,8 @@ class Timer;
 }
 
 namespace app {
+class ConsoleUI;
+
 namespace server {
 class VirtualEthernetSwitcher;
 }
@@ -87,7 +89,6 @@ private:
     boost::asio::ip::address GetNetworkAddress(const char* name, int MIN_PREFIX_ADDRESS, int MAX_PREFIX_ADDRESS, const char* default_address_string, int argc, const char* argv[]) noexcept;
     void GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addresses, int argc, const char* argv[]) noexcept;
     bool PreparedLoopbackEnvironment(const std::shared_ptr<NetworkInterface>& network_interface) noexcept;
-    bool LogEnvironmentInformation() noexcept;
 
 private:
     static bool NextTickAlwaysTimeout(bool next) noexcept;
