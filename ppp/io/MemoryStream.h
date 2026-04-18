@@ -1,5 +1,10 @@
 #pragma once 
 
+/**
+ * @file MemoryStream.h
+ * @brief Defines an in-memory implementation of `ppp::io::Stream`.
+ */
+
 #include <string.h>
 #include <limits.h>
 #include <ppp/stdafx.h>
@@ -11,12 +16,22 @@
 
 namespace ppp {
     namespace io {
+        /**
+         * @brief Stream implementation backed by a contiguous byte buffer.
+         */
         class MemoryStream : public Stream {
         public:
+            /**
+             * @brief Initializes an empty expandable memory stream.
+             */
             MemoryStream() noexcept
                 : MemoryStream(0) {
 
             }
+            /**
+             * @brief Initializes an expandable memory stream with initial capacity.
+             * @param capacity Initial buffer capacity in bytes.
+             */
             MemoryStream(int capacity) noexcept
                 : _expandable(true)
                 , _disposed(false)
@@ -27,6 +42,11 @@ namespace ppp {
                     this->SetCapacity(capacity);
                 }
             }
+            /**
+             * @brief Wraps an external buffer as a non-expandable stream.
+             * @param buffer Shared byte buffer.
+             * @param count Valid byte count in the wrapped buffer.
+             */
             MemoryStream(const std::shared_ptr<Byte>& buffer, int count) noexcept
                 : _expandable(false)
                 , _disposed(false)
@@ -38,21 +58,34 @@ namespace ppp {
             }
 
         public:
+            /** @brief Indicates that seeking is supported. */
             virtual bool                        CanSeek() noexcept override { return true; }
+            /** @brief Indicates that reading is supported. */
             virtual bool                        CanRead() noexcept override { return true; }
+            /** @brief Indicates that writing is supported. */
             virtual bool                        CanWrite() noexcept override { return true; }
 
         public:
+            /** @brief Gets the current read/write position. */
             virtual int                         GetPosition() noexcept override { return this->_position; }
+            /** @brief Gets the current logical stream length. */
             virtual int                         GetLength() noexcept override { return this->_length; }
+            /** @brief Gets remaining free capacity (`capacity - length`). */
             virtual int                         GetCapacity() noexcept { return this->_capacity - this->_length; }
 
         public:         
+            /**
+             * @brief Moves the current position relative to an origin.
+             * @param offset Signed offset in bytes.
+             * @param loc Origin for the seek operation.
+             * @return `true` when resulting position is valid.
+             */
             virtual bool                        Seek(int offset, SeekOrigin loc) noexcept override {
                 if (this->_disposed) {
                     return false;
                 }
 
+                /** Validate bounds after translating offset with selected origin. */
                 switch (loc) {
                 case SeekOrigin::Begin: {
                     int now = offset;
@@ -86,7 +119,13 @@ namespace ppp {
                 }
                 return true;
             }
+            /** @brief Sets the absolute current position from stream begin. */
             virtual bool                        SetPosition(int position) noexcept override { return this->Seek(position, SeekOrigin::Begin); }
+            /**
+             * @brief Adjusts logical stream length and expands capacity when needed.
+             * @param value New length in bytes.
+             * @return `true` on success.
+             */
             virtual bool                        SetLength(int value) noexcept override {
                 if (this->_disposed) {
                     return false;
@@ -107,6 +146,11 @@ namespace ppp {
                 
                 return true;
             }
+            /**
+             * @brief Changes internal buffer capacity.
+             * @param value New capacity in bytes.
+             * @return `true` if capacity is accepted and applied.
+             */
             virtual bool                        SetCapacity(int value) noexcept {
                 if (this->_disposed) {
                     return false;
@@ -139,6 +183,7 @@ namespace ppp {
                 this->_capacity = value;
                 return true;
             }
+            /** @brief Releases buffer resources and marks stream as disposed. */
             virtual void                        Dispose() noexcept override {
                 if (!this->_disposed) {
                     this->_expandable = false;
@@ -151,6 +196,11 @@ namespace ppp {
             }     
 
         public:
+            /**
+             * @brief Writes one byte at the current position.
+             * @param value Byte value to write.
+             * @return `true` on success.
+             */
             virtual bool                        WriteByte(Byte value) noexcept override {
                 if (this->_disposed) {
                     return false;
@@ -168,6 +218,13 @@ namespace ppp {
                 this->_buffer.get()[this->_position++] = value;
                 return true;
             }
+            /**
+             * @brief Writes a block of bytes into the stream.
+             * @param buffer Source memory address.
+             * @param offset Source offset in bytes.
+             * @param count Number of bytes to write.
+             * @return `true` on success.
+             */
             virtual bool                        Write(const void* buffer, int offset, int count) noexcept override {
                 if (this->_disposed) {
                     return false;
@@ -209,6 +266,10 @@ namespace ppp {
             }                                
 
         public:
+            /**
+             * @brief Reads one byte from the current position.
+             * @return Byte value in range [0,255], or `-1` on end/disposed.
+             */
             virtual int                         ReadByte() noexcept override {
                 if (this->_disposed) {
                     return -1;
@@ -220,6 +281,13 @@ namespace ppp {
 
                 return this->_buffer.get()[this->_position++];
             }
+            /**
+             * @brief Reads a block of bytes from the stream.
+             * @param buffer Destination memory address.
+             * @param offset Destination offset in bytes.
+             * @param count Number of bytes requested.
+             * @return Number of bytes actually read, or `-1` on invalid/disposed state.
+             */
             virtual int                         Read(const void* buffer, int offset, int count) noexcept override {
                 if (this->_disposed) {
                     return -1;
@@ -259,7 +327,13 @@ namespace ppp {
             }
 
         public:
+            /** @brief Returns the underlying internal buffer without copying. */
             std::shared_ptr<Byte>               GetBuffer() const noexcept { return this->_buffer; }
+            /**
+             * @brief Creates a copy of current stream content.
+             * @param length Receives copied byte count.
+             * @return New shared byte array, or `NULLPTR` when empty/failed.
+             */
             std::shared_ptr<Byte>               ToArray(int& length) noexcept {
                 length = this->_length;
                 if (length < 1) {
@@ -283,6 +357,11 @@ namespace ppp {
             }
         
         private:        
+            /**
+             * @brief Allocates a new byte buffer using configured allocator.
+             * @param length Requested buffer length in bytes.
+             * @return Allocated shared byte array, or `NULLPTR`.
+             */
             std::shared_ptr<Byte>               NewBuffer(int length) noexcept {
                 if (length < 1) {
                     return NULLPTR;
@@ -291,6 +370,11 @@ namespace ppp {
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = this->BufferAllocator;
                 return ppp::threading::BufferswapAllocator::MakeByteArray(allocator, length);
             }
+            /**
+             * @brief Ensures internal capacity is at least `value`.
+             * @param value Minimum required capacity in bytes.
+             * @return `true` when capacity requirement is satisfied.
+             */
             bool                                EnsureCapacity(int value) noexcept {
                 if (value < 0) {
                     return false;
@@ -298,6 +382,7 @@ namespace ppp {
 
                 int& capacity = this->_capacity;
                 if (value > capacity) {
+                    /** Grow geometrically with a small minimum while honoring int limits. */
                     int num = value;
                     if (num < 256) {
                         num = 256;

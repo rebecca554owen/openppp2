@@ -3,12 +3,21 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/collections/Dictionary.h>
 
+/**
+ * @file VirtualEthernetNamespaceCache.cpp
+ * @brief Implements DNS response cache insertion, lookup, and expiration cleanup.
+ */
+
 namespace ppp {
     namespace app {
         namespace server {
             using ppp::threading::Executors;
             using ppp::collections::Dictionary;
 
+            /**
+             * @brief Creates a cache and normalizes TTL to milliseconds.
+             * @param ttl TTL in seconds from configuration.
+             */
             VirtualEthernetNamespaceCache::VirtualEthernetNamespaceCache(int ttl) noexcept {
                 if (ttl < 1) {
                     ttl = 60;
@@ -22,11 +31,19 @@ namespace ppp {
                 TTL_ = static_cast<int>(qw);
             }
 
+            /** @brief Destroys all cache state and releases owned nodes. */
             VirtualEthernetNamespaceCache::~VirtualEthernetNamespaceCache() noexcept {
                 NamespaceHashTable_.clear();
                 NamespaceLinkedList_.Clear();
             }
 
+            /**
+             * @brief Formats a canonical hash key for DNS question records.
+             * @param type DNS RR type value.
+             * @param clazz DNS class value.
+             * @param domain Fully qualified domain name text.
+             * @return Canonical query key string.
+             */
             ppp::string VirtualEthernetNamespaceCache::QueriesKey(uint16_t type, uint16_t clazz, const ppp::string& domain) noexcept {
                 ppp::string queries_key = "TYPE:" +
                     stl::to_string<ppp::string>(type) + "|CLASS:" +
@@ -34,6 +51,13 @@ namespace ppp {
                 return queries_key;
             }
 
+            /**
+             * @brief Adds or refreshes a DNS cache entry for the specified key.
+             * @param key Canonical query key.
+             * @param response DNS response packet buffer.
+             * @param response_length DNS response packet size in bytes.
+             * @return true if the entry was inserted into hash/list indexes; otherwise false.
+             */
             bool VirtualEthernetNamespaceCache::Add(const ppp::string& key, const std::shared_ptr<Byte>& response, int response_length) noexcept {
                 using dns_hdr = ppp::net::native::dns::dns_hdr;
 
@@ -52,6 +76,9 @@ namespace ppp {
                 NamespaceRecordNodePtr node;
                 SynchronizedObjectScope scope(LockObj_);
 
+                /**
+                 * @brief Keep hash and list indexes in sync when replacing an existing key.
+                 */
                 if (Dictionary::TryRemove(NamespaceHashTable_, key, node)) {
                     NamespaceLinkedList_.Remove(node);
                 }
@@ -80,6 +107,9 @@ namespace ppp {
                 return false;
             }
 
+            /**
+             * @brief Purges expired entries from the ordered cache list head.
+             */
             void VirtualEthernetNamespaceCache::Update() noexcept {
                 NamespaceRecordNodePtr node;
                 SynchronizedObjectScope scope(LockObj_);
@@ -87,6 +117,9 @@ namespace ppp {
                 node = NamespaceLinkedList_.First();
                 if (NULLPTR != node) {
                     uint64_t now = Executors::GetTickCount();
+                    /**
+                     * @brief Stops when the first non-expired record is reached.
+                     */
                     do {
                         NamespaceRecord& record = node->Value;
                         if (now < record.expired_time) {
@@ -104,6 +137,14 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Looks up a cached DNS response and applies caller transaction id.
+             * @param key Canonical query key.
+             * @param response Receives packet buffer pointer.
+             * @param response_length Receives packet length.
+             * @param trans_id Transaction id to write into cached DNS header.
+             * @return true on cache hit with a valid DNS header; otherwise false.
+             */
             bool VirtualEthernetNamespaceCache::Get(const ppp::string& key, std::shared_ptr<Byte>& response, int& response_length, uint16_t trans_id) noexcept {
                 using dns_hdr = ppp::net::native::dns::dns_hdr;
 
@@ -136,6 +177,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Clears all current entries from both cache indexes. */
             void VirtualEthernetNamespaceCache::Clear() noexcept {
                 SynchronizedObjectScope scope(LockObj_);
                 NamespaceHashTable_.clear();

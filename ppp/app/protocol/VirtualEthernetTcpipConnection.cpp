@@ -7,13 +7,32 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VirtualEthernetTcpipConnection.cpp
+ * @brief Implements TCP/IP connection handshake and bidirectional forwarding.
+ * @author ("OPENPPP2 Team")
+ * @license ("GPL-3.0")
+ */
+
 namespace ppp {
     namespace app {
         namespace protocol {
+            /**
+             * @brief Temporary linklayer helper used during connect/accept handshake.
+             */
             class STATIC_VIRTUAL_ETHERNET_TCPIP_CONNECTOR_NEST final : public VirtualEthernetLinklayer {
                 friend class VirtualEthernetTcpipConnection;
 
             public:
+                /**
+                 * @brief Constructs handshake helper instance.
+                 * @param connection Parent TCP/IP connection bridge.
+                 * @param configuration Runtime configuration.
+                 * @param context IO context.
+                 * @param id Logical connection id.
+                 * @return N/A.
+                 * @note This object captures handshake packets and exposes decoded fields.
+                 */
                 STATIC_VIRTUAL_ETHERNET_TCPIP_CONNECTOR_NEST(
                     VirtualEthernetTcpipConnection*                         connection,
                     const AppConfigurationPtr&                              configuration,
@@ -54,25 +73,68 @@ namespace ppp {
                 bool                                                        MuxON;
 
             public:
+                /**
+                 * @brief Returns firewall object from parent bridge.
+                 * @return Firewall object or null.
+                 * @note Used by linklayer pipeline for access checks.
+                 */
                 virtual std::shared_ptr<ppp::net::Firewall>                 GetFirewall() noexcept {
                     return connection_->GetFirewall();
                 }
+                /**
+                 * @brief Handles PREPARED_CONNECT control message.
+                 * @param transmission Active transmission channel.
+                 * @param connection_id Connection identifier.
+                 * @param destinationHost Destination host string.
+                 * @param destinationEP Destination endpoint.
+                 * @param y Coroutine yield context.
+                 * @return Always true.
+                 * @note Stores host for later logging.
+                 */
                 virtual bool                                                OnPreparedConnect(const ITransmissionPtr& transmission, int connection_id, const ppp::string& destinationHost, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept override {
                     Host = destinationHost;
                     return true;
                 }
+                /**
+                 * @brief Handles CONNECT control message.
+                 * @param transmission Active transmission channel.
+                 * @param connection_id Connection identifier.
+                 * @param destinationEP Destination endpoint.
+                 * @param y Coroutine yield context.
+                 * @return Always true.
+                 * @note Marks connect request as received and caches endpoint data.
+                 */
                 virtual bool                                                OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept override {
                     Connect = true;
                     ConnectId = connection_id;
                     Destination = destinationEP;
                     return true;
                 }
+                /**
+                 * @brief Handles CONNECT_OK control message.
+                 * @param transmission Active transmission channel.
+                 * @param connection_id Connection identifier.
+                 * @param error_code Handshake result code.
+                 * @param y Coroutine yield context.
+                 * @return Always true.
+                 * @note Stores status for caller-side validation.
+                 */
                 virtual bool                                                OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept override {
                     ConnectOK = true;
                     ErrorCode = error_code;
                     ConnectId = connection_id;
                     return true;
                 }
+                /**
+                 * @brief Handles MUXON control message.
+                 * @param transmission Active transmission channel.
+                 * @param vlan VLAN value.
+                 * @param seq Sequence value.
+                 * @param ack Acknowledge value.
+                 * @param y Coroutine yield context.
+                 * @return Always true.
+                 * @note Stores mux tuple for strict handshake matching.
+                 */
                 virtual bool                                                OnMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept override {
                     MuxON = true;
                     Vlan = vlan;
@@ -85,6 +147,16 @@ namespace ppp {
                 VirtualEthernetTcpipConnection* const                       connection_;
             };
 
+            /**
+             * @brief Constructs TCP/IP bridge object.
+             * @param configuration Runtime configuration.
+             * @param context IO context.
+             * @param strand Serialized executor.
+             * @param id Logical connection id.
+             * @param socket TCP socket object.
+             * @return N/A.
+             * @note Applies socket window/QoS hints when socket is available.
+             */
             VirtualEthernetTcpipConnection::VirtualEthernetTcpipConnection(
                 const AppConfigurationPtr&                              configuration,
                 const ContextPtr&                                       context,
@@ -111,6 +183,15 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Performs active connect handshake.
+             * @param y Coroutine yield context.
+             * @param transmission Transmission channel.
+             * @param host Destination host.
+             * @param port Destination port.
+             * @return True on successful handshake.
+             * @note Delegates to common `MuxOrConnect` path with connect mode.
+             */
             bool VirtualEthernetTcpipConnection::Connect(
                 YieldContext&       y, 
                 ITransmissionPtr&   transmission, 
@@ -120,6 +201,16 @@ namespace ppp {
                 return MuxOrConnect(y, transmission, host, port, 0, 0, 0, false);
             }
 
+            /**
+             * @brief Performs active mux handshake.
+             * @param y Coroutine yield context.
+             * @param transmission Transmission channel.
+             * @param vlan VLAN value.
+             * @param seq Sequence value.
+             * @param ack Acknowledge value.
+             * @return True on successful mux negotiation.
+             * @note Delegates to common `MuxOrConnect` path with mux mode.
+             */
             bool VirtualEthernetTcpipConnection::ConnectMux(
                 YieldContext&       y, 
                 ITransmissionPtr&   transmission, 
@@ -133,6 +224,19 @@ namespace ppp {
                 return MuxOrConnect(y, transmission, default_host, default_port, vlan, seq, ack, true);
             }
 
+            /**
+             * @brief Shared implementation for connect/mux active negotiation.
+             * @param y Coroutine yield context.
+             * @param transmission Transmission channel.
+             * @param host Destination host for connect mode.
+             * @param port Destination port for connect mode.
+             * @param vlan VLAN value for mux mode.
+             * @param seq Sequence value for mux mode.
+             * @param ack Acknowledge value for mux mode.
+             * @param mux_or_connect True for mux handshake, false for connect handshake.
+             * @return True when negotiation succeeds.
+             * @note This routine sends one request and validates one peer response packet.
+             */
             bool VirtualEthernetTcpipConnection::MuxOrConnect(
                 YieldContext&       y, 
                 ITransmissionPtr&   transmission, 
@@ -170,6 +274,7 @@ namespace ppp {
                     return false;
                 }
                 else {
+                    // Dispatch exactly one control packet according to selected negotiation mode.
                     bool connector_dook = false;
                     if (mux_or_connect) {
                         connector_dook = connector->DoMuxON(transmission, vlan, seq, ack, y);
@@ -194,6 +299,7 @@ namespace ppp {
                 }
 
                 if (mux_or_connect) {
+                    // For mux mode, reply must be a MUXON echo with exact tuple match.
                     if (!connector->MuxON) {
                         return false;
                     }
@@ -203,6 +309,7 @@ namespace ppp {
                     }
                 }
                 else {
+                    // For connect mode, reply must be CONNECT_OK with success code.
                     if (!connector->ConnectOK) {
                         return false;
                     }
@@ -220,6 +327,15 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Performs passive connect acceptance.
+             * @param y Coroutine yield context.
+             * @param transmission Transmission channel.
+             * @param logger Optional logger.
+             * @param mux Optional mux callback.
+             * @return True on successful acceptance.
+             * @note Delegates to common `MuxOrAccept` path with connect mode.
+             */
             bool VirtualEthernetTcpipConnection::Accept(
                 YieldContext&                                           y, 
                 ITransmissionPtr&                                       transmission, 
@@ -229,6 +345,14 @@ namespace ppp {
                 return MuxOrAccept(y, transmission, logger, mux, false);
             }
 
+            /**
+             * @brief Performs passive mux acceptance.
+             * @param y Coroutine yield context.
+             * @param transmission Transmission channel.
+             * @param ac Mux callback.
+             * @return True on successful mux acceptance.
+             * @note Delegates to common `MuxOrAccept` path with mux mode.
+             */
             bool VirtualEthernetTcpipConnection::AcceptMux(
                 YieldContext&                           y, 
                 ITransmissionPtr&                       transmission, 
@@ -241,6 +365,16 @@ namespace ppp {
                 return MuxOrAccept(y, transmission, NULLPTR, ac, true);
             }
 
+            /**
+             * @brief Shared implementation for connect/mux passive acceptance.
+             * @param y Coroutine yield context.
+             * @param transmission Transmission channel.
+             * @param logger Optional logger for connect events.
+             * @param accept_mux_ac Optional mux callback.
+             * @param mux_or_connect True for mux-only accept path.
+             * @return True when acceptance succeeds.
+             * @note In connect mode this function opens/connects the local socket and returns CONNECT_OK.
+             */
             bool VirtualEthernetTcpipConnection::MuxOrAccept(
                 YieldContext&                                           y, 
                 ITransmissionPtr&                                       transmission, 
@@ -285,6 +419,7 @@ namespace ppp {
 
                 if (mux_or_connect) {
                 LABEL_MUXON:
+                    // Mux mode: mark linked state and hand negotiated tuple to callback.
                     if (!connector->MuxON) {
                         return false;
                     }
@@ -301,6 +436,7 @@ namespace ppp {
                 else {
                     boost::asio::ip::tcp::endpoint& destinationEP = connector->Destination;
                     if (!connector->Connect) {
+                        // If first packet is not CONNECT and mux callback exists, allow mux fallback.
                         if (NULLPTR != accept_mux_ac) {
                             goto LABEL_MUXON;
                         }
@@ -338,6 +474,7 @@ namespace ppp {
                     ppp::net::Socket::SetWindowSizeIfNotZero(socket_->native_handle(), configuration->tcp.cwnd, configuration->tcp.rwnd);
                     ppp::net::Socket::AdjustSocketOptional(*socket_, destinationIP.is_v4(), configuration->tcp.fast_open, configuration->tcp.turbo);
 
+                    // Connect to requested destination and send CONNECT_OK with precise status code.
                     bool ok = ppp::coroutines::asio::async_connect(*socket_, destinationEP, y);
                     if (NULLPTR != logger) {
                         logger->Connect(GetId(), transmission, socket_->local_endpoint(ec), destinationEP, connector->Host);
@@ -367,6 +504,11 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Finalizes bridge resources immediately.
+             * @return void.
+             * @note Closes transmission and socket; resets connected/disposed flags.
+             */
             void VirtualEthernetTcpipConnection::Finalize() noexcept {
                 ITransmissionPtr transmission = std::move(transmission_); 
                 if (NULLPTR != transmission) {
@@ -383,6 +525,11 @@ namespace ppp {
                 ppp::net::Socket::Closesocket(socket_);
             }
 
+            /**
+             * @brief Clears handles without posting async finalization.
+             * @return void.
+             * @note Intended for lightweight reset scenarios.
+             */
             void VirtualEthernetTcpipConnection::Clear() noexcept {
                 connected_ = false;
 
@@ -394,10 +541,20 @@ namespace ppp {
                 transmission_.reset();
             }
 
+            /**
+             * @brief Destroys bridge object.
+             * @return N/A.
+             * @note Destructor calls `Finalize()` directly.
+             */
             VirtualEthernetTcpipConnection::~VirtualEthernetTcpipConnection() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Posts asynchronous finalization to context/strand.
+             * @return void.
+             * @note Ensures cleanup order is consistent with other strand-bound operations.
+             */
             void VirtualEthernetTcpipConnection::Dispose() noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
@@ -409,6 +566,12 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Starts the bidirectional forwarding session.
+             * @param y Coroutine yield context.
+             * @return True when forward loop yields at least one packet.
+             * @note Starts socket-read side first, then enters transmission-read loop.
+             */
             bool VirtualEthernetTcpipConnection::Run(YieldContext& y) noexcept {
                 if (!ReceiveTransmissionToSocket()) {
                     return false;
@@ -418,6 +581,14 @@ namespace ppp {
                 return ForwardTransmissionToSocket(y);
             }
 
+            /**
+             * @brief Writes data to remote peer through transmission.
+             * @param y Coroutine yield context.
+             * @param packet Payload pointer.
+             * @param packet_length Payload length.
+             * @return True on successful write.
+             * @note Requires connected and non-disposed state.
+             */
             bool VirtualEthernetTcpipConnection::SendBufferToPeer(YieldContext& y, const void* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -439,6 +610,14 @@ namespace ppp {
                 return transmission->Write(y, packet, packet_length);
             }
 
+            /**
+             * @brief Forwards one socket-read chunk into transmission.
+             * @param buffer Shared receive buffer.
+             * @param buffer_size Buffer capacity.
+             * @param bytes_transferred Number of valid bytes.
+             * @return True when async transmission write is accepted.
+             * @note Completion callback decides whether to continue receive loop.
+             */
             bool VirtualEthernetTcpipConnection::ForwardSocketToTransmission(const std::shared_ptr<Byte>& buffer, int buffer_size, int bytes_transferred) noexcept {
                 if (NULLPTR == buffer || buffer_size < 1 || bytes_transferred < 1) {
                     return false;
@@ -464,6 +643,13 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Arms asynchronous socket receive and forwards received data.
+             * @param buffer Shared receive buffer.
+             * @param buffer_size Buffer capacity.
+             * @return True when async receive is scheduled.
+             * @note Receive length is randomized by skateboarding strategy to diversify chunk sizes.
+             */
             bool VirtualEthernetTcpipConnection::ReceiveSocketToTransmission(const std::shared_ptr<Byte>& buffer, int buffer_size) noexcept {
                 if (NULLPTR == buffer || buffer_size < 1) {
                     return false;
@@ -480,6 +666,7 @@ namespace ppp {
                 auto self = shared_from_this();
                 boost::asio::post(socket_->get_executor(),
                     [self, this, buffer, buffer_size]() noexcept {
+                        // Pick a dynamic read size, then chain read -> write -> next read.
                         int bytes_transferred = BufferSkateboarding(configuration_->key.sb, buffer_size, PPP_BUFFER_SIZE);
                         socket_->async_read_some(boost::asio::buffer(buffer.get(), bytes_transferred),
                             [self, this, buffer, buffer_size](const boost::system::error_code& ec, std::size_t sz) noexcept {
@@ -498,6 +685,11 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Initializes first socket receive cycle.
+             * @return True when initial receive scheduling succeeds.
+             * @note Allocates a single reusable read buffer.
+             */
             bool VirtualEthernetTcpipConnection::ReceiveTransmissionToSocket() noexcept {
                 if (disposed_) {
                     return false;
@@ -516,6 +708,12 @@ namespace ppp {
                 return ReceiveSocketToTransmission(buffer, PPP_BUFFER_SIZE);
             }
 
+            /**
+             * @brief Reads from transmission and writes to local socket until termination.
+             * @param y Coroutine yield context.
+             * @return True if at least one packet is forwarded.
+             * @note Loop exits on read/write failure or disposal, then schedules cleanup.
+             */
             bool VirtualEthernetTcpipConnection::ForwardTransmissionToSocket(YieldContext& y) noexcept {
                 if (!connected_) {
                     return false;
@@ -527,6 +725,7 @@ namespace ppp {
 
                 bool any = false;
                 while (!disposed_) {
+                    // Pull framed payload from transmission, then push to TCP socket.
                     ITransmissionPtr transmission = transmission_;
                     if (NULLPTR == transmission) {
                         break;

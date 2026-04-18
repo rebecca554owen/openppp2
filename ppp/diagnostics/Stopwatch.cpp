@@ -1,5 +1,10 @@
 #include <ppp/diagnostics/Stopwatch.h>
 
+/**
+ * @file Stopwatch.cpp
+ * @brief Implements a thread-safe high-resolution stopwatch.
+ */
+
 #include <iostream>
 #include <ctime>
 #include <chrono>
@@ -27,6 +32,13 @@ namespace ppp
 {
     namespace diagnostics
     {
+        /**
+         * @brief Calculates elapsed ticks between two time points.
+         * @tparam Duration Target duration unit for conversion.
+         * @param start Start time point.
+         * @param stop Stop time point; current time is used when default-initialized.
+         * @return Elapsed duration count in the requested unit.
+         */
         template <typename Duration>
         static constexpr int64_t ElapsedTimed(std::chrono::high_resolution_clock::time_point start, std::chrono::high_resolution_clock::time_point stop) noexcept
         {
@@ -41,6 +53,9 @@ namespace ppp
         void Stopwatch::Start() noexcept
         {
             std::chrono::high_resolution_clock::time_point null_;
+            /**
+             * @brief Lock-protected start transition; preserves existing start timestamp.
+             */
             do
             {
                 SynchronizeObjectScope scope(syncobj_);
@@ -56,6 +71,9 @@ namespace ppp
         void Stopwatch::Stop() noexcept
         {
             std::chrono::high_resolution_clock::time_point null_;
+            /**
+             * @brief Lock-protected stop transition; records current time when running.
+             */
             do
             {
                 SynchronizeObjectScope scope(syncobj_);
@@ -74,6 +92,9 @@ namespace ppp
         void Stopwatch::Reset() noexcept
         {
             std::chrono::high_resolution_clock::time_point null_;
+            /**
+             * @brief Lock-protected full state reset.
+             */
             do
             {
                 SynchronizeObjectScope scope(syncobj_);

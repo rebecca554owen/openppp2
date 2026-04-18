@@ -22,6 +22,13 @@
 #include <ppp/net/packet/IcmpFrame.h>
 #include <ppp/ipv6/IPv6Packet.h>
 
+/**
+ * @file VirtualEthernetExchanger.cpp
+ * @brief Implements per-session packet forwarding, NAT, DNS relay and mapping handlers.
+ * @author OPENPPP2 Team
+ * @license GPL-3.0
+ */
+
 typedef ppp::app::protocol::VirtualEthernetInformation              VirtualEthernetInformation;
 typedef ppp::collections::Dictionary                                Dictionary;
 typedef ppp::net::AddressFamily                                     AddressFamily;
@@ -37,6 +44,13 @@ typedef ppp::threading::Executors                                   Executors;
 typedef ppp::collections::Dictionary                                Dictionary;
 
 namespace {
+    /**
+     * @brief Converts matching ICMPv6 gateway echo requests into echo replies in-place.
+     * @param packet Raw IPv6 packet buffer.
+     * @param packet_length Packet length in bytes.
+     * @param gateway Expected gateway destination address.
+     * @return True when packet was transformed to a valid echo reply.
+     */
     static bool HandleIPv6GatewayEchoReply(ppp::Byte* packet, int packet_length, const boost::asio::ip::address_v6& gateway) noexcept {
         if (NULLPTR == packet || packet_length < 48) {
             return false;
@@ -81,6 +95,9 @@ namespace {
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Initializes exchanger state for one virtual session.
+             */
             VirtualEthernetExchanger::VirtualEthernetExchanger(
                 const VirtualEthernetSwitcherPtr&                       switcher,
                 const AppConfigurationPtr&                              configuration,
@@ -115,20 +132,24 @@ namespace ppp {
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
             }
 
+            /** @brief Releases exchanger resources. */
             VirtualEthernetExchanger::~VirtualEthernetExchanger() noexcept {
                 Finalize();
             }
 
+            /** @brief Gets preferred TUN descriptor hint. */
             int VirtualEthernetExchanger::GetPreferredTunFd() noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return preferred_tun_fd_;
             }
 
+            /** @brief Sets preferred TUN descriptor hint. */
             void VirtualEthernetExchanger::SetPreferredTunFd(int fd) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 preferred_tun_fd_ = fd;
             }
 
+            /** @brief Defers finalization onto exchanger io context. */
             void VirtualEthernetExchanger::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -138,6 +159,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Finalizes all runtime objects and unregisters session from switcher. */
             void VirtualEthernetExchanger::Finalize() noexcept {
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
                 for (;;) {
@@ -195,45 +217,55 @@ namespace ppp {
                 switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
             }
 
+            /** @brief Gets firewall assigned to this exchanger. */
             VirtualEthernetExchanger::FirewallPtr VirtualEthernetExchanger::GetFirewall() noexcept {
                 return firewall_;
             }
 
+            /** @brief Rejects direct connect requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Rejects direct push requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Rejects direct disconnect requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Handles logical echo acknowledgment from client. */
             bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept {
                 DoEcho(transmission, ack_id, y);
                 return true;
             }
 
+            /** @brief Handles ICMP echo payload forwarded from client. */
             bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 SendEchoToDestination(transmission, packet, packet_length);
                 return true;
             }
 
+            /** @brief Handles UDP send request from virtual client endpoint. */
             bool VirtualEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 SendPacketToDestination(transmission, sourceEP, destinationEP, packet, packet_length, y);
                 return true;
             }
 
+            /** @brief Rejects connect-ack packets from client side for safety hardening. */
             bool VirtualEthernetExchanger::OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Rejects legacy information packet to keep protocol surface strict. */
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Processes extended information packets, including IPv6 assignment requests. */
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
                 if (disposed_ || NULLPTR == switcher_ || NULLPTR == transmission) {
                     return false;
@@ -261,15 +293,18 @@ namespace ppp {
                 return DoInformation(transmission, envelope, y);
             }
 
+            /** @brief Allocates static-echo relay session for client. */
             bool VirtualEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 StaticEcho(transmission, y);
                 return true;
             }
 
+            /** @brief Rejects client-originated static assignment packets for safety hardening. */
             bool VirtualEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Applies VMUX enable/disable request and acknowledges resulting state. */
             bool VirtualEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept {
                 bool err = true;
                 for (;;) {
@@ -334,6 +369,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles client NAT packet and forwards via IPv4 or IPv6 routing path. */
             bool VirtualEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 VirtualEthernetLoggerPtr logger = switcher_->GetLogger();
                 if (NULLPTR != logger) {
@@ -353,6 +389,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards IPv6 packet toward local exchanger or transit gateway. */
             bool VirtualEthernetExchanger::ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;
@@ -412,6 +449,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Registers NAT mapping after LAN information announcement. */
             bool VirtualEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (configuration->server.subnet) {
@@ -421,6 +459,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Allocates static echo context and responds with assigned session values. */
             bool VirtualEthernetExchanger::StaticEcho(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;
@@ -443,6 +482,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Registers this exchanger in switcher NAT table using announced IP/mask. */
             bool VirtualEthernetExchanger::Arp(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask) noexcept {
                 using VES = VirtualEthernetSwitcher;
 
@@ -470,6 +510,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Removes timeout callback entry by native key pointer. */
             bool VirtualEthernetExchanger::DeleteTimeout(void* k) noexcept {
                 if (NULLPTR == k) {
                     return false;
@@ -479,6 +520,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Forwards one UDP payload to destination through cached/new datagram port. */
             bool VirtualEthernetExchanger::SendPacketToDestination(const ITransmissionPtr& transmission, 
                 const boost::asio::ip::udp::endpoint&   sourceEP, 
                 const boost::asio::ip::udp::endpoint&   destinationEP, 
@@ -590,6 +632,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Sends DNS query to redirect endpoint and relays async response.
+             */
             bool VirtualEthernetExchanger::INTERNAL_RedirectDnsQuery(
                 ITransmissionPtr                                    transmission,
                 boost::asio::ip::udp::endpoint                      redirectEP,
@@ -632,6 +677,7 @@ namespace ppp {
                     return false;
                 }
 
+                /** @brief Timer callback closes socket if redirect query times out. */
                 const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
                 const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
                     [socket_weak](Timer*) noexcept {
@@ -661,6 +707,7 @@ namespace ppp {
                     return false;
                 }
 
+                /** @brief Receives redirect DNS response and forwards to static/dynamic path. */
                 socket->async_receive_from(boost::asio::buffer(buffer_.get(), max_buffer_size),
                     *responseEP,
                     [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP, responseEP](boost::system::error_code ec, size_t sz) noexcept {
@@ -691,6 +738,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Resolves configured DNS redirect host and dispatches redirect send.
+             */
             bool VirtualEthernetExchanger::INTERNAL_RedirectDnsQuery(
                 const ITransmissionPtr&                             transmission, 
                 const boost::asio::ip::udp::endpoint&               sourceEP,
@@ -745,6 +795,9 @@ namespace ppp {
                 return Ipep::GetAddressByHostName(*context, configuration->udp.dns.redirect, PPP_DNS_SYS_PORT, cb);
             }
 
+            /**
+             * @brief Applies DNS redirect policy for one outgoing DNS query packet.
+             */
             int VirtualEthernetExchanger::RedirectDnsQuery(
                 const ITransmissionPtr&                             transmission,
                 const boost::asio::ip::udp::endpoint&               sourceEP,
@@ -776,6 +829,7 @@ namespace ppp {
                     wrap_shared_pointer(packet), packet_length, static_transit);
             }
 
+            /** @brief Schedules periodic maintenance for all exchanger-owned runtime objects. */
             bool VirtualEthernetExchanger::Update(UInt64 now) noexcept {
                 if (disposed_) {
                     return false;
@@ -801,6 +855,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Polls VMUX and tears it down when update fails. */
             bool VirtualEthernetExchanger::DoMuxEvents() noexcept {
                 if (disposed_) {
                     return false;
@@ -819,6 +874,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Uploads traffic delta counters to managed server when link is available. */
             bool VirtualEthernetExchanger::UploadTrafficToManagedServer() noexcept {
                 VirtualEthernetManagedServerPtr server = managed_server_;
                 if (NULLPTR == server) {
@@ -863,6 +919,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Creates ICMP and static-ICMP helper components for this exchanger. */
             bool VirtualEthernetExchanger::Open() noexcept {
                 if (disposed_) {
                     return false;
@@ -904,6 +961,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Constructs echo forwarding helper bound to current session. */
             VirtualEthernetExchanger::VirtualInternetControlMessageProtocolPtr VirtualEthernetExchanger::NewEchoTransmissions(const ITransmissionPtr& transmission) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -914,6 +972,7 @@ namespace ppp {
                 return make_shared_object<VirtualInternetControlMessageProtocol>(exchanger, transmission);
             }
 
+            /** @brief Constructs UDP datagram port proxy for one source endpoint. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -924,14 +983,17 @@ namespace ppp {
                 return make_shared_object<VirtualEthernetDatagramPort>(self, transmission, sourceEP);
             }
 
+            /** @brief Finds a cached datagram port by source endpoint key. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 return Dictionary::FindObjectByKey(datagrams_, sourceEP);
             }
 
+            /** @brief Removes and returns cached datagram port by source endpoint key. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 return Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
             }
 
+            /** @brief Parses and forwards ICMP packet to echo subsystem after firewall checks. */
             bool VirtualEthernetExchanger::SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept {
                 if (disposed_) {
                     return false;
@@ -968,6 +1030,7 @@ namespace ppp {
                 return echo->Echo(ip, icmp, IPEndPoint(icmp->Destination, IPEndPoint::MinPort));
             }
 
+            /** @brief Forwards IPv4 NAT packet to matching peer exchangers in same subnet. */
             bool VirtualEthernetExchanger::ForwardNatPacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
                 using VES = VirtualEthernetSwitcher;
                 
@@ -985,6 +1048,7 @@ namespace ppp {
                     return false;
                 }
 
+                /** @brief Delivers a packet to the exchanger that owns destination address. */
                 static const auto forward = 
                     [](VirtualEthernetSwitcher* switcher, uint32_t destination, Byte* packet, int packet_length, YieldContext& y) noexcept -> int {
                         VES::NatInformationPtr nat = switcher->FindNatInformation(destination);
@@ -1042,6 +1106,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Handles FRP mapping entry registration notification. */
             bool VirtualEthernetExchanger::OnFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (configuration->server.mapping) {
@@ -1051,6 +1116,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP UDP payload to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1060,6 +1126,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP connect result to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1069,6 +1136,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP disconnect event to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1078,6 +1146,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP TCP stream payload to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1087,6 +1156,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Creates, opens and registers FRP mapping port if absent. */
             bool VirtualEthernetExchanger::RegisterMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 if (disposed_) {
                     return false;
@@ -1124,6 +1194,7 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Builds FRP mapping port object with disposal hook. */
             VirtualEthernetExchanger::VirtualEthernetMappingPortPtr VirtualEthernetExchanger::NewMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 class MappingPort : public VirtualEthernetMappingPort {
                 public:
@@ -1133,6 +1204,7 @@ namespace ppp {
                     }
 
                 public:
+                    /** @brief Unregisters mapping key asynchronously, then disposes base resources. */
                     virtual void Dispose() noexcept override {
                         // Remove the mapping entry after leaving the current call stack so
                         // disposal cannot re-enter the exchanger while its lock is held.
@@ -1168,10 +1240,12 @@ namespace ppp {
                 return make_shared_object<MappingPort>(self, transmission, tcp, in, remote_port);
             }
 
+            /** @brief Finds FRP mapping port by direction/protocol/remote-port key. */
             VirtualEthernetExchanger::VirtualEthernetMappingPortPtr VirtualEthernetExchanger::GetMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 return VirtualEthernetMappingPort::FindMappingPort(mappings_, in, tcp, remote_port);
             }
 
+            /** @brief Runs keepalive and disposes exchanger when keepalive fails. */
             bool VirtualEthernetExchanger::DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept {
                 if (disposed_) {
                     return false;
@@ -1185,6 +1259,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Handles static-echo ICMP packet and relays via static echo engine. */
             bool VirtualEthernetExchanger::StaticEchoEchoToDestination(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (disposed_) {
                     return false;
@@ -1230,6 +1305,7 @@ namespace ppp {
                 return echo->Echo(ip, frame, IPEndPoint::ToEndPoint(sourceEP));
             }
 
+            /** @brief Releases static-echo datagram port by source address and port. */
             bool VirtualEthernetExchanger::StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept {
                 std::shared_ptr<VirtualEthernetDatagramPortStatic> datagram_port;
                 if (source_port <= IPEndPoint::MinPort || source_port > IPEndPoint::MaxPort) {
@@ -1250,6 +1326,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards static-echo UDP packet to destination through cached/static port. */
             bool VirtualEthernetExchanger::StaticEchoSendToDestination(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet) noexcept {
                 if (disposed_) {
                     return false;

@@ -11,6 +11,11 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VirtualEthernetDatagramPortStatic.cpp
+ * @brief Implements static-echo UDP relay behavior for virtual ethernet traffic.
+ */
+
 typedef ppp::coroutines::YieldContext                   YieldContext;
 typedef ppp::net::IPEndPoint                            IPEndPoint;
 typedef ppp::net::Socket                                Socket;
@@ -20,6 +25,9 @@ typedef ppp::app::protocol::VirtualEthernetPacket       VirtualEthernetPacket;
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Initializes static relay state and acquires receive buffer.
+             */
             VirtualEthernetDatagramPortStatic::VirtualEthernetDatagramPortStatic(const VirtualEthernetExchangerPtr& exchanger, const std::shared_ptr<boost::asio::io_context>& context, uint32_t source_ip, int source_port) noexcept
                 : disposed_(false)
                 , in_(false)
@@ -36,15 +44,24 @@ namespace ppp {
                 Update();
             }
 
+            /**
+             * @brief Ensures asynchronous resources are finalized.
+             */
             VirtualEthernetDatagramPortStatic::~VirtualEthernetDatagramPortStatic() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Builds source UDP endpoint from stored IPv4/port pair.
+             */
             boost::asio::ip::udp::endpoint VirtualEthernetDatagramPortStatic::GetSourceEndPoint() noexcept {
                 IPEndPoint ep(source_ip_, source_port_);
                 return IPEndPoint::ToEndPoint<boost::asio::ip::udp>(ep);
             }
 
+            /**
+             * @brief Closes socket and releases static relay registration.
+             */
             void VirtualEthernetDatagramPortStatic::Finalize() noexcept {
                 Socket::Closesocket(socket_);
                 disposed_ = true; 
@@ -52,6 +69,9 @@ namespace ppp {
                 exchanger_->StaticEchoReleasePort(source_ip_, source_port_);
             }
 
+            /**
+             * @brief Dispatches finalization to the owning io_context thread.
+             */
             void VirtualEthernetDatagramPortStatic::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -61,6 +81,10 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Opens and configures the UDP socket, then starts async receive loop.
+             * @return True if opening and initialization succeed.
+             */
             bool VirtualEthernetDatagramPortStatic::Open() noexcept {
                 if (disposed_) {
                     return false;
@@ -96,6 +120,10 @@ namespace ppp {
                 return success;
             }
 
+            /**
+             * @brief Starts one asynchronous receive cycle for static relay traffic.
+             * @return True if receive operation is scheduled.
+             */
             bool VirtualEthernetDatagramPortStatic::Loopback() noexcept {
                 if (disposed_) {
                     return false;
@@ -109,6 +137,9 @@ namespace ppp {
                 auto self = shared_from_this();
                 socket_.async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), sourceEP_,
                     [self, this](const boost::system::error_code& ec, std::size_t sz) noexcept {
+                        /**
+                         * @brief Handles one datagram, optional DNS cache insert, and re-arms receive.
+                         */
                         if (ec == boost::system::errc::operation_canceled) {
                             return false;
                         }
@@ -132,6 +163,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Normalizes source endpoint form then forwards to raw source-ip overload.
+             */
             bool VirtualEthernetDatagramPortStatic::Output(
                 VirtualEthernetSwitcher*                            switcher, 
                 VirtualEthernetExchanger*                           exchanger, 
@@ -158,6 +192,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Encapsulates and emits payload through the static echo tunnel socket.
+             */
             bool VirtualEthernetDatagramPortStatic::Output(
                 VirtualEthernetSwitcher*                            switcher, 
                 VirtualEthernetExchanger*                           exchanger, 
@@ -227,6 +264,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Instance output helper that refreshes timeout on success.
+             */
             bool VirtualEthernetDatagramPortStatic::Output(const void* messages, int message_length, const boost::asio::ip::udp::endpoint& remoteEP) noexcept {
                 if (disposed_) {
                     return false;
@@ -240,6 +280,10 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Tries to satisfy DNS query from namespace cache and output cached response.
+             * @return Positive on output success; -1 if no usable cached response.
+             */
             int VirtualEthernetDatagramPortStatic::NamespaceQuery(
                 const boost::asio::ip::udp::endpoint&               destinationEP,
                 const void*                                         packet,
@@ -266,6 +310,10 @@ namespace ppp {
                 return -1;
             }
 
+            /**
+             * @brief Sends outbound UDP payload with optional DNS cache short-circuit.
+             * @return True on successful send or cache-hit output.
+             */
             bool VirtualEthernetDatagramPortStatic::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;

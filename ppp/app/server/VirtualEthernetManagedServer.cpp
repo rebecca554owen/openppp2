@@ -10,6 +10,13 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VirtualEthernetManagedServer.cpp
+ * @brief Implements managed-server connection, authentication and traffic reporting workflows.
+ * @author OPENPPP2 Team
+ * @license GPL-3.0
+ */
+
 using ppp::threading::Executors;
 using ppp::auxiliary::UriAuxiliary;
 using ppp::auxiliary::JsonAuxiliary;
@@ -21,6 +28,9 @@ using ppp::threading::Timer;
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Packet command identifiers and timing constants for managed-server protocol.
+             */
             enum {
                 PACKET_CMD_ECHO                 = 1000,
                 PACKET_CMD_CONNECT              = 1001,
@@ -35,6 +45,9 @@ namespace ppp {
                 PACKET_TIMEOUT_TRAFFIC          = PACKET_TIMEOUT_ECHO << 2,
             };
 
+            /**
+             * @brief Initializes managed-server bridge with switcher-owned runtime context.
+             */
             VirtualEthernetManagedServer::VirtualEthernetManagedServer(const std::shared_ptr<VirtualEthernetSwitcher>& switcher) noexcept
                 : disposed_(false)
                 , reconnecting_(false)
@@ -47,6 +60,9 @@ namespace ppp {
                 allocator_ = configuration_->GetBufferAllocator();
             }
 
+            /**
+             * @brief Starts asynchronous reconnect loop toward managed server.
+             */
             bool VirtualEthernetManagedServer::ConnectToManagedServer(const ppp::string& url) noexcept {
                 if (url_.empty() || url.empty()) {
                     return false;
@@ -65,10 +81,14 @@ namespace ppp {
                     });
             }
 
+            /** @brief Returns currently verified managed-server URI. */
             ppp::string VirtualEthernetManagedServer::GetUri() noexcept {
                 return url_;
             }
 
+            /**
+             * @brief Sends an authentication request and stores completion callback with timeout.
+             */
             bool VirtualEthernetManagedServer::AuthenticationToManagedServer(const ppp::Int128& session_id, const AuthenticationToManagedServerAsyncCallback& ac) noexcept {
                 if (disposed_) {
                     return false;
@@ -97,6 +117,9 @@ namespace ppp {
                 return false;
             }
 
+            /**
+             * @brief Removes pending authentication callback for a session id.
+             */
             VirtualEthernetManagedServer::AuthenticationToManagedServerAsyncCallback VirtualEthernetManagedServer::DeleteAuthenticationToManagedServer(const ppp::Int128& session_id) noexcept {
                 AuthenticationToManagedServerAsyncCallback f; {
                     SynchronizedObjectScope scope(syncobj_);
@@ -112,6 +135,9 @@ namespace ppp {
                 return f;
             }
 
+            /**
+             * @brief Expires timed-out authentication requests and triggers failure callbacks.
+             */
             void VirtualEthernetManagedServer::TickAllAuthenticationToManagedServer(UInt64 now) noexcept {
                 typedef struct {
                     ppp::Int128 k;
@@ -142,22 +168,27 @@ namespace ppp {
                 }
             }
 
+            /** @brief Returns shared ownership reference for this object. */
             std::shared_ptr<VirtualEthernetManagedServer> VirtualEthernetManagedServer::GetReference() noexcept {
                 return shared_from_this();
             }
 
+            /** @brief Gets active application configuration. */
             VirtualEthernetManagedServer::AppConfigurationPtr VirtualEthernetManagedServer::GetConfiguration() noexcept {
                 return configuration_;
             }
 
+            /** @brief Gets default buffer allocator. */
             std::shared_ptr<ppp::threading::BufferswapAllocator> VirtualEthernetManagedServer::GetBufferswapAllocator() noexcept {
                 return allocator_;
             }
 
+            /** @brief Gets internal synchronization object. */
             VirtualEthernetManagedServer::SynchronizedObject& VirtualEthernetManagedServer::GetSynchronizedObject() noexcept {
                 return syncobj_;
             }
 
+            /** @brief Reports whether reconnect backoff loop is active. */
             bool VirtualEthernetManagedServer::LinkIsReconnecting() noexcept {
                 if (disposed_) {
                     return false;
@@ -166,6 +197,7 @@ namespace ppp {
                 return reconnecting_;
             }
 
+            /** @brief Reports whether websocket link to managed server is currently usable. */
             bool VirtualEthernetManagedServer::LinkIsAvailable() noexcept {
                 if (disposed_) {
                     return false;
@@ -183,6 +215,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Schedules periodic maintenance tasks onto managed-server context. */
             bool VirtualEthernetManagedServer::Update(UInt64 now) noexcept {
                 if (disposed_) {
                     return false;
@@ -198,6 +231,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Generates a strictly positive packet identifier. */
             int VirtualEthernetManagedServer::NewId() noexcept {
                 for (;;) {
                     int id = ++aid_;
@@ -211,6 +245,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Sends protocol echo packets at randomized keepalive interval. */
             void VirtualEthernetManagedServer::TickEchoToManagedServer(UInt64 now) noexcept {
                 if (echotest_next_ == 0) {
                     echotest_next_ = now + RandomNext(1000, PACKET_TIMEOUT_ECHO);
@@ -223,6 +258,9 @@ namespace ppp {
             }
 
             template <typename TWebSocket, typename TWebSocketPtr, typename TData>
+            /**
+             * @brief Serializes and sends one managed-server packet through websocket.
+             */
             static bool PACKET_SendToManagedServer(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, TWebSocketPtr websocket, const ppp::Int128& session_id, int cmd, int id, int node, const TData& data) noexcept {
                 if (NULLPTR == websocket) {
                     return false;
@@ -263,6 +301,9 @@ namespace ppp {
             }
 
             template <typename TWebSocketPtr>
+            /**
+             * @brief Reads one length-prefixed binary packet from websocket stream.
+             */
             static std::shared_ptr<Byte> PACKET_ReadBinaryPacket(std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, TWebSocketPtr& websocket, int& packet_length, ppp::coroutines::YieldContext& y) noexcept {
                 char length_hex[8];
                 if (!websocket->Read(length_hex, 0, sizeof(length_hex), y)) {
@@ -293,6 +334,9 @@ namespace ppp {
             }
 
             template <typename TWebSocketPtr>
+            /**
+             * @brief Reads one length-prefixed packet and parses it as JSON object.
+             */
             static bool PACKET_ReadJsonPacket(std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, TWebSocketPtr& websocket, Json::Value& json, ppp::coroutines::YieldContext& y) noexcept {
                 int packet_length = 0;
                 std::shared_ptr<Byte> packet = PACKET_ReadBinaryPacket(allocator, websocket, packet_length, y);
@@ -304,22 +348,26 @@ namespace ppp {
                 return json.isObject();
             }
 
+            /** @brief Sends a command packet without additional payload. */
             bool VirtualEthernetManagedServer::SendToManagedServer(const ppp::Int128& session_id, int cmd, int id) noexcept {
                 return SendToManagedServer(session_id, cmd, id, ppp::string());
             }
 
+            /** @brief Sends a command packet with JSON payload. */
             bool VirtualEthernetManagedServer::SendToManagedServer(const ppp::Int128& session_id, int cmd, int id, const Json::Value& data) noexcept {
                 auto allocator = configuration_->GetBufferAllocator();
                 int node = switcher_->GetNode();
                 return PACKET_SendToManagedServer<WebSocket>(allocator, server_, session_id, cmd, id, node, data);
             }
 
+            /** @brief Sends a command packet with string payload. */
             bool VirtualEthernetManagedServer::SendToManagedServer(const ppp::Int128& session_id, int cmd, int id, const ppp::string& data) noexcept {
                 auto allocator = configuration_->GetBufferAllocator();
                 int node = switcher_->GetNode();
                 return PACKET_SendToManagedServer<WebSocket>(allocator, server_, session_id, cmd, id, node, data);
             }
 
+            /** @brief Asynchronously validates managed-server URI and caches normalized form. */
             bool VirtualEthernetManagedServer::TryVerifyUriAsync(const ppp::string& url, const TryVerifyUriAsyncCallback& ac) noexcept {
                 if (disposed_) {
                     return false;
@@ -356,6 +404,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Parses managed-server URI and resolves transport endpoint details. */
             ppp::string VirtualEthernetManagedServer::GetManagedServerEndPoint(const ppp::string& url, ppp::string& host, ppp::string& path, boost::asio::ip::tcp::endpoint& remoteEP, bool& ssl, YieldContext& y) noexcept {
                 using ProtocolType = UriAuxiliary::ProtocolType;
 
@@ -414,6 +463,7 @@ namespace ppp {
                 return url_new;
             }
 
+            /** @brief Persistent reconnect loop for managed-server websocket session. */
             void VirtualEthernetManagedServer::RunInner(const ppp::string& url, YieldContext& y) noexcept {
                 while (!disposed_) {
                     IWebScoketPtr websocket = NewWebSocketConnectToManagedServer2(url, y);
@@ -433,6 +483,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Disposes active websocket and marks component as disposed. */
             void VirtualEthernetManagedServer::Dispose() noexcept {
                 IWebScoketPtr websocket = std::move(server_); 
                 disposed_ = true;
@@ -442,6 +493,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Main receive loop that dispatches managed-server commands. */
             void VirtualEthernetManagedServer::Run(IWebScoketPtr& websocket, YieldContext& y) noexcept {
                 int node = switcher_->GetNode();
                 while (!disposed_) {
@@ -471,6 +523,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Applies traffic response entries by feeding information to switcher. */
             bool VirtualEthernetManagedServer::AckAllUploadTrafficToManagedServer(Json::Value& json, YieldContext& y) noexcept {
                 Json::Value json_array = JsonAuxiliary::FromString(JsonAuxiliary::AsString(json["Data"]));
                 if (!json_array.isObject()) {
@@ -507,6 +560,7 @@ namespace ppp {
                 return any;
             }
 
+            /** @brief Completes one authentication waiter using response packet content. */
             bool VirtualEthernetManagedServer::AckAuthenticationToManagedServer(Json::Value& json, YieldContext& y) noexcept {
                 ppp::string guid = JsonAuxiliary::AsString(json["Guid"]);
                 if (guid.empty()) {
@@ -541,6 +595,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Accumulates traffic deltas for later batched upload. */
             void VirtualEthernetManagedServer::UploadTrafficToManagedServer(const ppp::Int128& session_id, int64_t rx, int64_t tx) noexcept {
                 if ((session_id != 0) && (rx != 0 || tx != 0)) {
                     SynchronizedObjectScope scope(syncobj_);
@@ -550,6 +605,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Flushes queued traffic tasks to managed server at fixed interval. */
             bool VirtualEthernetManagedServer::TickAllUploadTrafficToManagedServer(UInt64 now) noexcept {
                 if (traffics_next_ == 0) {
                     traffics_next_ = now + PACKET_TIMEOUT_TRAFFIC;
@@ -586,6 +642,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Establishes websocket then performs protocol connect handshake. */
             VirtualEthernetManagedServer::IWebScoketPtr VirtualEthernetManagedServer::NewWebSocketConnectToManagedServer2(const ppp::string& url, YieldContext& y) noexcept {
                 IWebScoketPtr websocket = NewWebSocketConnectToManagedServer(url, y);
                 if (NULLPTR == websocket) {
@@ -598,6 +655,9 @@ namespace ppp {
                 auto allocator = configuration_->GetBufferAllocator();
                 bool ok = PACKET_SendToManagedServer<WebSocket>(allocator, websocket, 0, PACKET_CMD_CONNECT, id, node, configuration_->server.backend_key);
 
+                /**
+                 * @brief RAII guard that disposes websocket when handshake fails.
+                 */
                 class websocket_auto_destroy final {
                 public:
                     websocket_auto_destroy(IWebScoketPtr& websocket, bool& ok) noexcept
@@ -658,6 +718,7 @@ namespace ppp {
                 return ToBoolean(data.data()) ? websocket : NULLPTR;
             }
 
+            /** @brief Opens TCP/TLS websocket transport and completes network handshake. */
             VirtualEthernetManagedServer::IWebScoketPtr VirtualEthernetManagedServer::NewWebSocketConnectToManagedServer(const ppp::string& url, YieldContext& y) noexcept {
                 if (disposed_) {
                     return NULLPTR;
@@ -731,6 +792,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Disposes the active plain/TLS websocket endpoint. */
             void VirtualEthernetManagedServer::IWebSocket::Dispose() noexcept {
                 if (std::shared_ptr<WebSocket> p = std::move(ws); NULLPTR != p) {
                     p->Dispose();
@@ -741,6 +803,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Returns whether current websocket endpoint is disposed. */
             bool VirtualEthernetManagedServer::IWebSocket::IsDisposed() noexcept {
                 if (auto p = ws; NULLPTR != p) {
                     return p->IsDisposed();
@@ -753,6 +816,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Reads bytes from whichever websocket backend is active. */
             bool VirtualEthernetManagedServer::IWebSocket::Read(const void* buffer, int offset, int length, YieldContext& y) noexcept {
                 if (auto p = ws; NULLPTR != p) {
                     return p->Read(buffer, offset, length, y);
@@ -765,6 +829,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Executes websocket handshake for plain or TLS backend. */
             bool VirtualEthernetManagedServer::IWebSocket::Run(HandshakeType type, const ppp::string& host, const ppp::string& path, YieldContext& y) noexcept {
                 if (auto p = ws; NULLPTR != p) {
                     return p->Run(type, host, path, y);
@@ -793,6 +858,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Writes bytes to whichever websocket backend is active. */
             bool VirtualEthernetManagedServer::IWebSocket::Write(const void* buffer, int offset, int length, const AsynchronousWriteCallback& cb) noexcept {
                 if (auto p = ws; NULLPTR != p) {
                     return p->Write(buffer, offset, length, cb);

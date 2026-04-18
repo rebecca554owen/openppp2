@@ -2,6 +2,11 @@
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/tap/ITap.h>
 
+/**
+ * @file IPFrame.cpp
+ * @brief Implements IPv4 frame serialization, parsing, and fragmentation.
+ */
+
 using namespace ppp::net::native;
 
 namespace ppp {
@@ -9,6 +14,10 @@ namespace ppp {
         namespace packet {
             const unsigned char& IPFrame::DefaultTtl = ppp::net::native::ip_hdr::IP_DFT_TTL;
 
+            /**
+             * @brief Computes the serialized IPv4 frame length.
+             * @return Total packet length including header/options/payload.
+             */
             int IPFrame::SizeOf() noexcept {
                 std::shared_ptr<BufferSegment> payload_segment = this->Payload;
                 std::shared_ptr<BufferSegment> options_segment = this->Options;
@@ -27,6 +36,11 @@ namespace ppp {
                 return message_data_size;
             }
 
+            /**
+             * @brief Serializes the current frame into wire-format bytes.
+             * @param allocator Buffer allocator used to allocate output storage.
+             * @return Serialized packet segment or null on failure.
+             */
             std::shared_ptr<BufferSegment> IPFrame::ToArray(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<BufferSegment> payload_segment = this->Payload;
                 std::shared_ptr<BufferSegment> options_segment = this->Options;
@@ -69,6 +83,7 @@ namespace ppp {
                 }
 
                 iphdr->chksum = inet_chksum(message_data.get(), payload_offset);
+                /** @note RFC-compatible fallback when checksum computes to zero. */
                 if (iphdr->chksum == 0) {
                     iphdr->chksum = 0xffff;
                 }
@@ -76,6 +91,13 @@ namespace ppp {
                 return make_shared_object<BufferSegment>(message_data, message_data_size);
             }
 
+            /**
+             * @brief Parses raw bytes into an @ref IPFrame instance.
+             * @param allocator Buffer allocator for option/payload copies.
+             * @param packet Raw packet bytes.
+             * @param size Raw packet size.
+             * @return Parsed frame or null when validation/allocation fails.
+             */
             std::shared_ptr<IPFrame> IPFrame::Parse(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* packet, int size) noexcept {
                 struct ip_hdr* iphdr = ip_hdr::Parse(packet, size);
                 if (NULLPTR == iphdr) {
@@ -134,6 +156,12 @@ namespace ppp {
                 return frame;
             }
 
+            /**
+             * @brief Splits an IPv4 packet into MTU-constrained fragments.
+             * @param out Receives generated fragments.
+             * @param packet Input packet.
+             * @return Number of fragments generated, or zero on failure.
+             */
             int IPFrame::Subpackages(ppp::vector<IPFramePtr>& out, const IPFramePtr& packet) noexcept {
                 if (NULLPTR == packet) {
                     return 0;
@@ -168,6 +196,10 @@ namespace ppp {
                 std::shared_ptr<Byte> buffer = messages->Buffer;
 
                 std::shared_ptr<IPFrame> fragment;
+                /**
+                 * @details Emit fixed-size middle fragments with MF set, then
+                 * emit a final fragment carrying the remaining bytes.
+                 */
                 while (szz > max) {
                     fragment = make_shared_object<IPFrame>();
                     if (NULLPTR == fragment) {

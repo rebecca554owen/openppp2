@@ -19,6 +19,7 @@
 #include <ppp/app/server/VirtualEthernetIPv6.h>
 #include <ppp/ipv6/IPv6Auxiliary.h>
 #include <ppp/ipv6/IPv6Packet.h>
+#include <ppp/diagnostics/Error.h>
 
 #if defined(_LINUX)
 #include <common/unix/UnixAfx.h>
@@ -30,6 +31,11 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 
+/**
+ * @file VirtualEthernetSwitcher.cpp
+ * @brief Implements virtual ethernet switching, session lifecycle, and IPv6 dataplane plumbing.
+ */
+
 using ppp::app::protocol::VirtualEthernetPacket;
 using ppp::net::Ipep;
 using ppp::net::Socket;
@@ -40,11 +46,23 @@ using ppp::coroutines::YieldContext;
 using ppp::collections::Dictionary;
 
 
+/**
+ * @brief Tests whether an IPv6 address is in the global unicast range.
+ * @param address IPv6 address to evaluate.
+ * @return true for 2000::/3 addresses; otherwise false.
+ */
 static bool IsGlobalUnicastIPv6Address(const boost::asio::ip::address_v6& address) noexcept {
     boost::asio::ip::address_v6::bytes_type bytes = address.to_bytes();
     return (bytes[0] & 0xe0) == 0x20;
 }
 
+/**
+ * @brief Derives the first host address from an IPv6 network/prefix.
+ * @param network Network base address.
+ * @param prefix_length Prefix length used to compute the network.
+ * @param host Receives the derived first host address.
+ * @return true if a host address can be generated; otherwise false.
+ */
 static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, int prefix_length, boost::asio::ip::address_v6& host) noexcept {
     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
     if (prefix_length >= ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
@@ -65,6 +83,13 @@ static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, int 
     return false;
 }
 
+/**
+ * @brief Validates whether an IPv6 address can be leased to a client.
+ * @param address Candidate client address.
+ * @param prefix_length Prefix length used for network/broadcast checks.
+ * @param gateway Optional gateway address to exclude.
+ * @return true if the candidate is assignable; otherwise false.
+ */
 static bool IsAssignableClientIPv6Address(const boost::asio::ip::address_v6& address, int prefix_length, const boost::asio::ip::address_v6* gateway = NULLPTR) noexcept {
     if (address.is_unspecified() || address.is_multicast() || address.is_loopback()) {
         return false;
@@ -82,6 +107,13 @@ static bool IsAssignableClientIPv6Address(const boost::asio::ip::address_v6& add
     return true;
 }
 
+/**
+ * @brief Reads and normalizes configured IPv6 CIDR information.
+ * @param configuration Application configuration source.
+ * @param network Receives normalized network address.
+ * @param prefix_length Receives clamped prefix length.
+ * @return true when configuration resolves to a valid IPv6 network; otherwise false.
+ */
 static bool GetConfiguredIPv6Network(const ppp::configurations::AppConfiguration& configuration, boost::asio::ip::address_v6& network, int& prefix_length) noexcept {
     const auto& ipv6 = configuration.server.ipv6;
     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, ipv6.prefix_length));
@@ -106,6 +138,11 @@ static bool GetConfiguredIPv6Network(const ppp::configurations::AppConfiguration
 }
 
 #if defined(_LINUX)
+/**
+ * @brief Chooses the uplink interface used for IPv6 neighbor proxy.
+ * @param preferred_nic Configured preferred interface name.
+ * @return Preferred interface, or detected default-route interface, or empty string.
+ */
 static ppp::string ResolvePreferredIPv6UplinkInterface(const ppp::string& preferred_nic) noexcept {
     if (!preferred_nic.empty()) {
         return preferred_nic;
@@ -128,6 +165,25 @@ static ppp::string ResolvePreferredIPv6UplinkInterface(const ppp::string& prefer
 
     return ppp::string();
 }
+
+/**
+ * @brief Checks if the host currently has an IPv6 default route.
+ * @return true when a default IPv6 route is present; otherwise false.
+ */
+static bool HasIPv6DefaultRoute() noexcept {
+    auto lines = ppp::unix__::UnixAfx::ExecuteShellCommandLines("ip -6 route show default");
+    for (const ppp::string& route : lines) {
+        if (route.empty()) {
+            continue;
+        }
+
+        if (route.find("default") == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
 #endif
 
 namespace ppp {
@@ -142,6 +198,13 @@ namespace ppp {
 
     namespace app {
         namespace server {
+            /**
+             * @brief Constructs the virtual ethernet switch core.
+             * @param configuration Shared server/application configuration.
+             * @param tun_name Optional TUN interface name.
+             * @param tun_ssmt Number of SSMT worker contexts for transit TAP.
+             * @param tun_ssmt_mq Enables multiqueue SSMT mode when true.
+             */
             VirtualEthernetSwitcher::VirtualEthernetSwitcher(const AppConfigurationPtr& configuration, const ppp::string& tun_name, int tun_ssmt, bool tun_ssmt_mq) noexcept
                 : disposed_(false)
                 , configuration_(configuration)
@@ -161,10 +224,17 @@ namespace ppp {
                 static_echo_buffers_ = ppp::threading::Executors::GetCachedBuffer(context_);
             }
 
+            /** @brief Releases all switch-owned resources and active sessions. */
             VirtualEthernetSwitcher::~VirtualEthernetSwitcher() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Builds information payload plus IPv6 extension fields.
+             * @param session_id Session identifier.
+             * @param info Base information payload.
+             * @return Envelope containing base info and extension JSON.
+             */
             VirtualEthernetSwitcher::InformationEnvelope VirtualEthernetSwitcher::BuildInformationEnvelope(const Int128& session_id, const VirtualEthernetInformation& info) noexcept {
                 InformationEnvelope envelope;
                 envelope.Base = info;
@@ -174,6 +244,10 @@ namespace ppp {
                 return envelope;
             }
 
+            /**
+             * @brief Reports whether the current platform supports IPv6 dataplane integration.
+             * @return true on supported platforms; otherwise false.
+             */
             bool VirtualEthernetSwitcher::SupportsIPv6DataPlane() noexcept {
 #if defined(_LINUX)
                 return true;
@@ -182,13 +256,28 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Checks whether IPv6 server mode is enabled and supported.
+             * @return true when IPv6 mode is NAT66 or GUA and dataplane exists.
+             */
             bool VirtualEthernetSwitcher::IsIPv6ServerEnabled() noexcept {
                 AppConfiguration::IPv6Mode mode = configuration_->server.ipv6.mode;
                 return SupportsIPv6DataPlane() && (mode == AppConfiguration::IPv6Mode_Nat66 || mode == AppConfiguration::IPv6Mode_Gua);
             }
 
+            /**
+             * @brief Resolves the IPv6 transit gateway used for client routing.
+             * @return Configured or derived gateway address, or empty on failure.
+             */
             boost::asio::ip::address VirtualEthernetSwitcher::GetIPv6TransitGateway() noexcept {
                 const auto& ipv6 = configuration_->server.ipv6;
+
+#if defined(_LINUX)
+                if (ipv6.mode == AppConfiguration::IPv6Mode_Gua && !HasIPv6DefaultRoute()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6GatewayNotReachable);
+                    return boost::asio::ip::address();
+                }
+#endif
 
                 boost::system::error_code ec;
                 boost::asio::ip::address configured_gateway = StringToAddress(ipv6.gateway, ec);
@@ -199,17 +288,25 @@ namespace ppp {
                 boost::asio::ip::address_v6 network;
                 int prefix_length = 0;
                 if (!GetConfiguredIPv6Network(*configuration_, network, prefix_length)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6GatewayNotReachable);
                     return boost::asio::ip::address();
                 }
 
                 boost::asio::ip::address_v6 gateway;
                 if (!TryGetFirstHostIPv6(network, prefix_length, gateway)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6GatewayNotReachable);
                     return boost::asio::ip::address();
                 }
 
                 return boost::asio::ip::address(gateway);
             }
 
+            /**
+             * @brief Computes IPv6 lease/route metadata for a session handshake.
+             * @param session_id Session identifier.
+             * @param extensions Receives generated IPv6 extension fields.
+             * @return true when extensions contain a usable assignment; otherwise false.
+             */
             bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
                 extensions.Clear();
 
@@ -233,12 +330,18 @@ namespace ppp {
                 extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned;
                 extensions.IPv6StatusMessage = "server-auto-assigned";
 
+                /**
+                 * @brief Validates whether a client-requested IPv6 can be honored.
+                 */
                 auto is_request_usable = [&](const boost::asio::ip::address_v6& requested, const boost::asio::ip::address_v6& prefix, int prefix_length) noexcept -> bool {
                     return request_entry.RequestedAddress.is_v6() &&
                         requested == request_entry.RequestedAddress.to_v6() &&
                         ppp::ipv6::PrefixMatch(requested, prefix, prefix_length);
                 };
 
+                /**
+                 * @brief Builds a deterministic per-session IPv6 candidate from session digest.
+                 */
                 auto build_stable_ipv6 = [&](boost::asio::ip::address_v6::bytes_type bytes, int prefix_length) noexcept -> bool {
                     ppp::string seed = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
 
@@ -284,6 +387,9 @@ namespace ppp {
                     return true;
                 };
 
+                /**
+                 * @brief Attempts to reserve and record an IPv6 lease for the session.
+                 */
                 auto try_commit_ipv6_lease = [&](const boost::asio::ip::address_v6& candidate, bool static_binding, Byte status_code, const ppp::string& status_message) noexcept -> bool {
                     boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
                     boost::asio::ip::address_v6 transit_gateway_v6;
@@ -607,6 +713,12 @@ namespace ppp {
                 return extensions.HasAny();
             }
 
+            /**
+             * @brief Retrieves the currently leased IPv6 extension set for a session.
+             * @param session_id Session identifier.
+             * @param extensions Receives extension values when lease is valid.
+             * @return true if a valid assigned IPv6 lease exists; otherwise false.
+             */
             bool VirtualEthernetSwitcher::TryGetAssignedIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
                 extensions.Clear();
                 if (!IsIPv6ServerEnabled()) {
@@ -684,6 +796,12 @@ namespace ppp {
                 return extensions.AssignedIPv6Address.is_v6();
             }
 
+            /**
+             * @brief Binds a session exchanger to its assigned IPv6 dataplane state.
+             * @param session_id Session identifier.
+             * @param extensions Assigned IPv6 settings.
+             * @return true when route/proxy and table mappings are installed.
+             */
             bool VirtualEthernetSwitcher::AddIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!extensions.AssignedIPv6Address.is_v6()) {
                     return false;
@@ -742,6 +860,12 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Removes one IPv6 exchanger binding using explicit extension data.
+             * @param session_id Session identifier.
+             * @param extensions Extension object containing assigned IPv6 address.
+             * @return true when teardown succeeds for both route and neighbor proxy.
+             */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!extensions.AssignedIPv6Address.is_v6()) {
                     return false;
@@ -774,6 +898,11 @@ namespace ppp {
                 return route_removed && proxy_removed;
             }
 
+            /**
+             * @brief Removes all IPv6 exchanger bindings owned by the session.
+             * @param session_id Session identifier.
+             * @return true if any matching binding existed and was removed.
+             */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id) noexcept {
                 bool any = false;
                 bool released_any = false;
@@ -805,6 +934,11 @@ namespace ppp {
                 return any;
             }
 
+            /**
+             * @brief Finds the session exchanger that owns a given IPv6 address.
+             * @param ip IPv6 address key.
+             * @return Matching exchanger pointer or null when not found.
+             */
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::FindIPv6Exchanger(const boost::asio::ip::address& ip) noexcept {
                 if (!ip.is_v6()) {
                     return NULLPTR;
@@ -821,6 +955,10 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /**
+             * @brief Enables host-level IPv6 neighbor proxy when required by mode.
+             * @return true if proxy state is ready or not required; otherwise false.
+             */
             bool VirtualEthernetSwitcher::OpenIPv6NeighborProxyIfNeed() noexcept {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -850,6 +988,10 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Restores neighbor proxy configuration when switcher is closing.
+             * @return true after cleanup path completes.
+             */
             bool VirtualEthernetSwitcher::CloseIPv6NeighborProxyIfNeed() noexcept {
 #if defined(_LINUX)
                 if (ipv6_neighbor_proxy_ifname_.empty()) {
@@ -866,6 +1008,12 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Installs a host route for an assigned IPv6 client address.
+             * @param ip Client IPv6 address.
+             * @param prefix_length Route prefix length.
+             * @return true when route add operation succeeds.
+             */
             bool VirtualEthernetSwitcher::AddIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept {
 #if defined(_LINUX)
                 if (!ip.is_v6()) {
@@ -897,6 +1045,12 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Removes a previously installed IPv6 transit route.
+             * @param ip Client IPv6 address.
+             * @param prefix_length Route prefix length.
+             * @return true when route delete operation succeeds.
+             */
             bool VirtualEthernetSwitcher::DeleteIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept {
 #if defined(_LINUX)
                 if (!ip.is_v6()) {
@@ -928,6 +1082,9 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Clears all IPv6 exchanger mappings and related lease/request state.
+             */
             void VirtualEthernetSwitcher::ClearIPv6ExchangersUnsafe() noexcept {
                 for (const auto& kv : ipv6s_) {
                     boost::system::error_code ec;
@@ -945,6 +1102,11 @@ namespace ppp {
                 ipv6_requests_.clear();
             }
 
+            /**
+             * @brief Adds an IPv6 neighbor proxy entry for one client address.
+             * @param ip Client IPv6 address.
+             * @return true when proxy entry is installed or not required.
+             */
             bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -965,6 +1127,11 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Removes an IPv6 neighbor proxy entry from active uplink.
+             * @param ip Client IPv6 address.
+             * @return true when proxy delete succeeds.
+             */
             bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept {
 #if defined(_LINUX)
                 if (!ip.is_v6() || ipv6_neighbor_proxy_ifname_.empty()) {
@@ -980,6 +1147,12 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Removes an IPv6 neighbor proxy entry from a specific interface.
+             * @param ifname Interface name.
+             * @param ip Client IPv6 address.
+             * @return true when proxy delete succeeds.
+             */
             bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(const ppp::string& ifname, const boost::asio::ip::address& ip) noexcept {
 #if defined(_LINUX)
                 if (!ip.is_v6() || ifname.empty()) {
@@ -995,6 +1168,10 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Starts accept loops for all configured inbound listener categories.
+             * @return true if at least one acceptor starts successfully.
+             */
             bool VirtualEthernetSwitcher::Run() noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
@@ -1034,6 +1211,13 @@ namespace ppp {
             static constexpr int STATUS_RUNING = +1;
             static constexpr int STATUS_RUNNING_SWAP = +0;
 
+            /**
+             * @brief Handles one accepted transport: handshake, establish, or connect.
+             * @param context I/O context associated with the accepted socket.
+             * @param transmission Accepted transport object.
+             * @param y Coroutine context for async workflow.
+             * @return Internal status code describing ownership/run outcome.
+             */
             int VirtualEthernetSwitcher::Run(const ContextPtr& context, const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (disposed_) {
                     return STATUS_ERROR;
@@ -1080,6 +1264,13 @@ namespace ppp {
                     }) ? STATUS_RUNNING_SWAP : STATUS_ERROR;
             }
 
+            /**
+             * @brief Dispatches accepted TCP sockets to proxy or transport handshake flows.
+             * @param context Socket execution context.
+             * @param socket Accepted socket.
+             * @param categories Listener category.
+             * @return true if async handling was started successfully.
+             */
             bool VirtualEthernetSwitcher::Accept(const ContextPtr& context, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, int categories) noexcept {
                 if (categories == NetworkAcceptorCategories_CDN1 || categories == NetworkAcceptorCategories_CDN2) {
                     std::shared_ptr<ppp::net::proxies::sniproxy> sniproxy = make_shared_object<ppp::net::proxies::sniproxy>(categories == NetworkAcceptorCategories_CDN1 ? 0 : 1,
@@ -1121,6 +1312,12 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Performs fallback noop handshake response for failed sessions.
+             * @param transmission Transport used to send response.
+             * @param y Coroutine context.
+             * @return true if handshake response is sent; otherwise false.
+             */
             bool VirtualEthernetSwitcher::FlowerArrangement(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (NULLPTR == transmission) {
                     return false;
@@ -1129,6 +1326,11 @@ namespace ppp {
                 return ppp::transmissions::Transmission_Handshake_Nop(configuration_, transmission.get(), y);
             }
 
+            /**
+             * @brief Looks up an active exchanger by session id.
+             * @param session_id Session identifier.
+             * @return Exchanger pointer when present; otherwise null.
+             */
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::GetExchanger(const Int128& session_id) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
@@ -1138,6 +1340,12 @@ namespace ppp {
                 return Dictionary::FindObjectByKey(exchangers_, session_id);
             }
 
+            /**
+             * @brief Creates, opens, and registers a new exchanger for a session.
+             * @param transmission Transport bound to exchanger.
+             * @param session_id Session identifier.
+             * @return New registered exchanger or null on failure.
+             */
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::AddNewExchanger(const ITransmissionPtr& transmission, const Int128& session_id) noexcept {
                 VirtualEthernetExchangerPtr newExchanger;
                 VirtualEthernetExchangerPtr oldExchanger;
@@ -1171,6 +1379,12 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /**
+             * @brief Allocates a new exchanger instance for a session.
+             * @param transmission Transport bound to exchanger.
+             * @param session_id Session identifier.
+             * @return New exchanger instance or null on allocation failure.
+             */
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::NewExchanger(const ITransmissionPtr& transmission, const Int128& session_id) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -1180,6 +1394,14 @@ namespace ppp {
                 return make_shared_object<VirtualEthernetExchanger>(self, configuration_, transmission, session_id);
             }
 
+            /**
+             * @brief Establishes or updates a primary exchanger session connection.
+             * @param transmission Transport bound to session.
+             * @param session_id Session identifier.
+             * @param i Optional managed-server information payload.
+             * @param y Coroutine context for protocol exchange.
+             * @return true if establishment and run succeed; otherwise false.
+             */
             bool VirtualEthernetSwitcher::Establish(const ITransmissionPtr& transmission, const Int128& session_id, const VirtualEthernetInformationPtr& i, YieldContext& y) noexcept {
                 if (NULLPTR == transmission) {
                     return false;
@@ -1242,10 +1464,21 @@ namespace ppp {
                 return run;
             }
 
+            /**
+             * @brief Creates a firewall instance for traffic filtering.
+             * @return Shared firewall pointer.
+             */
             VirtualEthernetSwitcher::FirewallPtr VirtualEthernetSwitcher::NewFirewall() noexcept {
                 return make_shared_object<Firewall>();
             }
 
+            /**
+             * @brief Attaches an auxiliary transport to an existing session exchanger.
+             * @param transmission Transport to attach.
+             * @param session_id Session identifier.
+             * @param y Coroutine context.
+             * @return Internal status code describing run/scheduler ownership.
+             */
             int VirtualEthernetSwitcher::Connect(const ITransmissionPtr& transmission, const Int128& session_id, YieldContext& y) noexcept {
                 // VPN client A link can be created only after a link is established between the local switch and the remote VPN server.
                 if (y) {
@@ -1270,6 +1503,9 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
+                /**
+                 * @brief Creates and runs transient TCP/IP connection wrappers.
+                 */
                 auto run =
                     [self, this](const ITransmissionPtr& transmission, const Int128& session_id, YieldContext& y) noexcept {
                         VirtualEthernetNetworkTcpipConnectionPtr connection = AddNewConnection(transmission, session_id);
@@ -1322,6 +1558,12 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Creates and registers a temporary network TCP/IP connection object.
+             * @param transmission Incoming transport channel.
+             * @param session_id Session identifier.
+             * @return Registered connection object or null.
+             */
             VirtualEthernetSwitcher::VirtualEthernetNetworkTcpipConnectionPtr VirtualEthernetSwitcher::AddNewConnection(const ITransmissionPtr& transmission, const Int128& session_id) noexcept {
                 std::shared_ptr<VirtualEthernetNetworkTcpipConnection> connection = NewConnection(transmission, session_id);
                 if (NULLPTR == connection) {
@@ -1342,6 +1584,11 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /**
+             * @brief Removes one exchanger by pointer identity and disposes it.
+             * @param exchanger Raw exchanger pointer key.
+             * @return Detached exchanger shared pointer, already disposed when non-null.
+             */
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::DeleteExchanger(VirtualEthernetExchanger* exchanger) noexcept {
                 VirtualEthernetExchangerPtr channel;
                 if (NULLPTR != exchanger) {
@@ -1361,6 +1608,12 @@ namespace ppp {
                 return channel;
             }
 
+            /**
+             * @brief Allocates a network connection wrapper for one accepted transport.
+             * @param transmission Accepted transport.
+             * @param session_id Session identifier.
+             * @return New connection wrapper or null.
+             */
             VirtualEthernetSwitcher::VirtualEthernetNetworkTcpipConnectionPtr VirtualEthernetSwitcher::NewConnection(const ITransmissionPtr& transmission, const Int128& session_id) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -1370,6 +1623,10 @@ namespace ppp {
                 return make_shared_object<VirtualEthernetNetworkTcpipConnection>(self, session_id, transmission);
             }
 
+            /**
+             * @brief Creates a packet/session logger according to configuration.
+             * @return Logger instance when configured and valid; otherwise null.
+             */
             VirtualEthernetSwitcher::VirtualEthernetLoggerPtr VirtualEthernetSwitcher::NewLogger() noexcept {
                 ppp::string& log = configuration_->server.log;
                 if (log.empty()) {
@@ -1389,6 +1646,10 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /**
+             * @brief Creates and binds all configured TCP acceptors.
+             * @return true if at least one acceptor opens successfully.
+             */
             bool VirtualEthernetSwitcher::CreateAllAcceptors() noexcept {
                 if (disposed_) {
                     return false;
@@ -1440,6 +1701,11 @@ namespace ppp {
                 return bany;
             }
 
+            /**
+             * @brief Opens switch subsystems and prepares runtime state.
+             * @param firewall_rules Firewall rule file path.
+             * @return true when all required subsystems initialize successfully.
+             */
             bool VirtualEthernetSwitcher::Open(const ppp::string& firewall_rules) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
@@ -1469,6 +1735,10 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Initializes DNS namespace cache when TTL is enabled.
+             * @return true if cache setup succeeds or is not required.
+             */
             bool VirtualEthernetSwitcher::OpenNamespaceCacheIfNeed() noexcept {
                 int ttl = configuration_->udp.dns.ttl;
                 if (ttl > 0) {
@@ -1483,6 +1753,12 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Forwards an IPv6 packet from server/client side to transit TAP.
+             * @param packet Packet buffer.
+             * @param packet_length Packet length in bytes.
+             * @return true when packet is emitted to TAP.
+             */
             bool VirtualEthernetSwitcher::SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
                 ITapPtr tap = ipv6_transit_tap_;
                 if (NULLPTR == tap || NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
@@ -1521,6 +1797,14 @@ namespace ppp {
                 return tap->Output(packet, packet_length);
             }
 
+            /**
+             * @brief Encapsulates and sends an IPv6 packet to a client session.
+             * @param transmission Destination transport.
+             * @param session_id Session identifier for logging.
+             * @param packet IPv6 packet bytes.
+             * @param packet_length Packet length in bytes.
+             * @return true if write is queued successfully.
+             */
             bool VirtualEthernetSwitcher::SendIPv6PacketToClient(const ITransmissionPtr& transmission, const Int128& session_id, Byte* packet, int packet_length) noexcept {
                 if (NULLPTR == transmission || NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -1549,6 +1833,12 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Handles IPv6 packets received from transit TAP toward clients.
+             * @param packet Packet buffer.
+             * @param packet_length Packet length in bytes.
+             * @return true when packet is accepted and forwarded to session.
+             */
             bool VirtualEthernetSwitcher::ReceiveIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
@@ -1613,6 +1903,10 @@ namespace ppp {
                 return SendIPv6PacketToClient(transmission, exchanger->GetId(), packet, packet_length);
             }
 
+            /**
+             * @brief Opens and configures Linux TAP used for IPv6 transit dataplane.
+             * @return true when transit TAP is ready or not required.
+             */
             bool VirtualEthernetSwitcher::OpenIPv6TransitIfNeed() noexcept {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -1707,6 +2001,10 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Refreshes uplink neighbor-proxy interface and replays active entries.
+             * @return true when refresh succeeds; otherwise false.
+             */
             bool VirtualEthernetSwitcher::RefreshIPv6NeighborProxyIfNeed() noexcept {
 #if defined(_LINUX)
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -1787,6 +2085,11 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Starts optional SSMT worker contexts for transit TAP queues.
+             * @param tap Transit TAP instance.
+             * @return true when SSMT is ready or not required.
+             */
             bool VirtualEthernetSwitcher::OpenIPv6TransitSsmtIfNeed(const ITapPtr& tap) noexcept {
 #if defined(_LINUX)
                 if (tun_ssmt_ <= 0 || !tun_ssmt_mq_) {
@@ -1841,6 +2144,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Stops all previously created IPv6 transit SSMT worker contexts.
+             */
             void VirtualEthernetSwitcher::CloseIPv6TransitSsmtContexts() noexcept {
 #if defined(_LINUX)
                 ppp::vector<std::shared_ptr<boost::asio::io_context>> contexts;
@@ -1856,6 +2162,10 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Creates and stores the runtime logger instance.
+             * @return true when logger exists and is ready.
+             */
             bool VirtualEthernetSwitcher::OpenLogger() noexcept {
                 VirtualEthernetLoggerPtr logger = NewLogger();
                 if (NULLPTR == logger) {
@@ -1866,6 +2176,10 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Opens UDP socket used for static-echo transport ingress.
+             * @return true when socket is ready or UDP listener is disabled.
+             */
             bool VirtualEthernetSwitcher::OpenDatagramSocket() noexcept {
                 if (disposed_) {
                     return false;
@@ -1897,6 +2211,10 @@ namespace ppp {
                 return LoopbackDatagramSocket();
             }
 
+            /**
+             * @brief Continues asynchronous UDP receive loop for static-echo packets.
+             * @return true when receive loop is armed.
+             */
             bool VirtualEthernetSwitcher::LoopbackDatagramSocket() noexcept {
                 if (disposed_) {
                     return false;
@@ -1940,6 +2258,13 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Resolves protocol or transport ciphertext by static-echo allocation id.
+             * @param allocated_id Allocation identifier.
+             * @param protocol_or_transport true for protocol key; false for transport key.
+             * @param allocated_context Receives allocation context if found.
+             * @return Ciphertext pointer for requested channel or null.
+             */
             std::shared_ptr<ppp::cryptography::Ciphertext> VirtualEthernetSwitcher::StaticEchoSelectCiphertext(int allocated_id, bool protocol_or_transport, VirtualEthernetStaticEchoAllocatedContextPtr& allocated_context) noexcept {
                 if (NULLPTR == allocated_context && !StaticEchoQuery(allocated_id, allocated_context)) {
                     return NULLPTR;
@@ -1948,6 +2273,15 @@ namespace ppp {
                 return protocol_or_transport ? allocated_context->protocol : allocated_context->transport;
             }
 
+            /**
+             * @brief Processes one decoded static-echo packet and dispatches by protocol.
+             * @param allocated_context Allocation metadata for packet owner.
+             * @param allocator Buffer allocator used by packet pipeline.
+             * @param packet Decoded virtual ethernet packet.
+             * @param packet_length Raw datagram length in bytes.
+             * @param sourceEP Source UDP endpoint.
+             * @return true when packet is accepted by destination handler.
+             */
             bool VirtualEthernetSwitcher::StaticEchoPacketInput(const VirtualEthernetStaticEchoAllocatedContextPtr& allocated_context, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 VirtualEthernetExchangerPtr exchanger;
                 if (packet->Protocol == ppp::net::native::ip_hdr::IP_PROTO_UDP || packet->Protocol == ppp::net::native::ip_hdr::IP_PROTO_IP) {
@@ -1981,6 +2315,11 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Releases and returns a static-echo allocation entry by id.
+             * @param allocated_id Allocation identifier.
+             * @return Removed allocation context or null when not found.
+             */
             VirtualEthernetSwitcher::VirtualEthernetStaticEchoAllocatedContextPtr VirtualEthernetSwitcher::StaticEchoUnallocated(int allocated_id) noexcept {
                 if (allocated_id < 1) {
                     return NULLPTR;
@@ -1996,6 +2335,12 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Queries an existing static-echo allocation entry.
+             * @param allocated_id Allocation identifier.
+             * @param allocated_context Receives allocation context on success.
+             * @return true when a valid allocation exists.
+             */
             bool VirtualEthernetSwitcher::StaticEchoQuery(int allocated_id, VirtualEthernetStaticEchoAllocatedContextPtr& allocated_context) noexcept {
                 if (allocated_id < 1) {
                     return false;
@@ -2018,6 +2363,13 @@ namespace ppp {
                 return false; 
             }
 
+            /**
+             * @brief Creates or reuses a static-echo allocation for a session.
+             * @param session_id Session identifier.
+             * @param allocated_id In/out allocation id; zero requests new allocation.
+             * @param remote_port Receives remote UDP port exposed to client.
+             * @return Allocation context on success; otherwise null.
+             */
             VirtualEthernetSwitcher::VirtualEthernetStaticEchoAllocatedContextPtr VirtualEthernetSwitcher::StaticEchoAllocated(Int128 session_id, int& allocated_id, int& remote_port) noexcept {
                 remote_port = IPEndPoint::MinPort;
                 if (session_id == 0) {
@@ -2079,6 +2431,10 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /**
+             * @brief Initializes managed-server integration when backend is configured.
+             * @return true if managed mode is connected or not required.
+             */
             bool VirtualEthernetSwitcher::OpenManagedServerIfNeed() noexcept {
                 if (configuration_->server.node < 1 || configuration_->server.backend.empty()) {
                     return true;
@@ -2113,6 +2469,13 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Creates a transmission object for an accepted socket category.
+             * @param categories Listener category.
+             * @param context I/O context.
+             * @param socket Accepted TCP socket.
+             * @return Constructed transmission instance or null.
+             */
             VirtualEthernetSwitcher::ITransmissionPtr VirtualEthernetSwitcher::Accept(int categories, const ContextPtr& context, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
                 if (NULLPTR == context || NULLPTR == socket) {
                     return NULLPTR;
@@ -2138,6 +2501,9 @@ namespace ppp {
                 return transmission;
             }
 
+            /**
+             * @brief Posts asynchronous finalization on switch context.
+             */
             void VirtualEthernetSwitcher::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -2147,10 +2513,19 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Indicates whether switcher has entered disposed state.
+             * @return true after finalization begins.
+             */
             bool VirtualEthernetSwitcher::IsDisposed() noexcept {
                 return disposed_;
             }
 
+            /**
+             * @brief Allocates a DNS namespace cache for positive TTL values.
+             * @param ttl Cache TTL in seconds.
+             * @return Cache instance or null for invalid TTL/allocation failure.
+             */
             VirtualEthernetSwitcher::VirtualEthernetNamespaceCachePtr VirtualEthernetSwitcher::NewNamespaceCache(int ttl) noexcept {
                 if (ttl < 1) {
                     return NULLPTR;
@@ -2159,9 +2534,17 @@ namespace ppp {
                 return make_shared_object<VirtualEthernetNamespaceCache>(ttl);
             }
             
+            /**
+             * @brief Creates a statistics object optionally chained to global totals.
+             * @return Shared statistics collector.
+             */
             VirtualEthernetSwitcher::ITransmissionStatisticsPtr VirtualEthernetSwitcher::NewStatistics() noexcept {
                 class NetworkStatistics final : public ppp::transmissions::ITransmissionStatistics {
                 public:
+                    /**
+                     * @brief Constructs per-connection statistics linked to aggregate owner.
+                     * @param owner Aggregate statistics sink.
+                     */
                     NetworkStatistics(const ITransmissionStatisticsPtr& owner) noexcept
                         : ITransmissionStatistics()
                         , owner_(owner) {
@@ -2169,10 +2552,20 @@ namespace ppp {
                     }
 
                 public:
+                    /**
+                     * @brief Adds inbound traffic to both aggregate and local counters.
+                     * @param incoming_traffic Bytes received.
+                     * @return Updated local inbound total.
+                     */
                     virtual uint64_t                                    AddIncomingTraffic(uint64_t incoming_traffic) noexcept {
                         owner_->AddIncomingTraffic(incoming_traffic);
                         return ITransmissionStatistics::AddIncomingTraffic(incoming_traffic);
                     }
+                    /**
+                     * @brief Adds outbound traffic to both aggregate and local counters.
+                     * @param outcoming_traffic Bytes sent.
+                     * @return Updated local outbound total.
+                     */
                     virtual uint64_t                                    AddOutgoingTraffic(uint64_t outcoming_traffic) noexcept {
                         owner_->AddOutgoingTraffic(outcoming_traffic);
                         return ITransmissionStatistics::AddOutgoingTraffic(outcoming_traffic);
@@ -2191,12 +2584,22 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Allocates a managed-server helper bound to this switcher.
+             * @return Managed-server instance.
+             */
             VirtualEthernetSwitcher::VirtualEthernetManagedServerPtr VirtualEthernetSwitcher::NewManagedServer() noexcept {
                 std::shared_ptr<VirtualEthernetSwitcher> self = shared_from_this();
                 return make_shared_object<VirtualEthernetManagedServer>(self);
             }
 
             template <typename TProtocol>
+            /**
+             * @brief Cancels all pending operations on a resolver instance.
+             * @tparam TProtocol Resolver protocol type.
+             * @param resolver Resolver shared pointer to cancel/reset.
+             * @return true when cancellation post is scheduled.
+             */
             static bool CancelAllResolver(std::shared_ptr<boost::asio::ip::basic_resolver<TProtocol>>& resolver) noexcept {
                 std::shared_ptr<boost::asio::ip::basic_resolver<TProtocol>> i = std::move(resolver);
                 if (NULLPTR == i) {
@@ -2210,6 +2613,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Performs full shutdown and releases all runtime resources.
+             */
             void VirtualEthernetSwitcher::Finalize() noexcept {
                 std::shared_ptr<boost::asio::ip::tcp::resolver> tresolver;
                 std::shared_ptr<boost::asio::ip::udp::resolver> uresolver;
@@ -2271,6 +2677,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Closes and clears all active TCP acceptors.
+             */
             void VirtualEthernetSwitcher::CloseAllAcceptors() noexcept {
                 for (int i = NetworkAcceptorCategories_Min; i < NetworkAcceptorCategories_Max; i++) {
                     std::shared_ptr<boost::asio::ip::tcp::acceptor>& acceptor = acceptors_[i];
@@ -2284,6 +2693,10 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Stops and disposes periodic timer if present.
+             * @return true when a timer existed and was disposed.
+             */
             bool VirtualEthernetSwitcher::CloseAlwaysTimeout() noexcept {
                 TimerPtr timeout = std::move(timeout_);
                 if (timeout) {
@@ -2295,6 +2708,11 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Creates and loads firewall policy from file.
+             * @param firewall_rules Rule file path.
+             * @return true when firewall instance is created.
+             */
             bool VirtualEthernetSwitcher::CreateFirewall(const ppp::string& firewall_rules) noexcept {
                 if (disposed_) {
                     return false;
@@ -2310,6 +2728,10 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Creates periodic timer driving maintenance tasks.
+             * @return true when timer starts successfully.
+             */
             bool VirtualEthernetSwitcher::CreateAlwaysTimeout() noexcept {
                 if (disposed_) {
                     return false;
@@ -2337,16 +2759,28 @@ namespace ppp {
                 return false;
             }
 
+            /**
+             * @brief Updates all exchangers with current tick timestamp.
+             * @param now Current tick count.
+             */
             void VirtualEthernetSwitcher::TickAllExchangers(UInt64 now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 ppp::collections::Dictionary::UpdateAllObjects2(exchangers_, now);
             }
 
+            /**
+             * @brief Updates all transient network connections for aging checks.
+             * @param now Current tick count.
+             */
             void VirtualEthernetSwitcher::TickAllConnections(UInt64 now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 Dictionary::UpdateAllObjects(connections_, now);
             }
 
+            /**
+             * @brief Expires stale IPv6 leases and prunes orphaned request records.
+             * @param now Current tick count.
+             */
             void VirtualEthernetSwitcher::TickIPv6Leases(UInt64 now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 for (auto it = ipv6_leases_.begin(); it != ipv6_leases_.end();) {
@@ -2384,12 +2818,21 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Removes lease/request state for a session.
+             * @param session_id Session identifier.
+             */
             void VirtualEthernetSwitcher::RevokeIPv6Lease(const Int128& session_id) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 ipv6_leases_.erase(session_id);
                 ipv6_requests_.erase(session_id);
             }
 
+            /**
+             * @brief Periodic maintenance entry called by switch timer.
+             * @param now Current tick count.
+             * @return true while switch remains active.
+             */
             bool VirtualEthernetSwitcher::OnTick(UInt64 now) noexcept {
                 for (SynchronizedObjectScope scope(syncobj_);;) {
                     if (disposed_) {
@@ -2418,6 +2861,13 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Applies updated session information to an active exchanger.
+             * @param session_id Session identifier.
+             * @param info Information payload from managed control plane.
+             * @param y Coroutine context.
+             * @return true when update is delivered and validated.
+             */
             bool VirtualEthernetSwitcher::OnInformation(const Int128& session_id, const std::shared_ptr<VirtualEthernetInformation>& info, YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;
@@ -2462,6 +2912,13 @@ namespace ppp {
                 return bok;
             }
 
+            /**
+             * @brief Updates stored client IPv6 request and recomputes assignment.
+             * @param session_id Session identifier.
+             * @param request Client-requested extension fields.
+             * @param response Receives updated server response extension fields.
+             * @return true when response contains any extension value.
+             */
             bool VirtualEthernetSwitcher::UpdateIPv6Request(const Int128& session_id, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept {
                 IPv6RequestEntry entry;
                 entry.Present = request.RequestedIPv6Address.is_v6();
@@ -2516,6 +2973,11 @@ namespace ppp {
                 return response.HasAny();
             }
 
+            /**
+             * @brief Removes and disposes a registered transient network connection.
+             * @param connection Raw connection key pointer.
+             * @return true when a matching connection is removed.
+             */
             bool VirtualEthernetSwitcher::DeleteConnection(const VirtualEthernetNetworkTcpipConnection* connection) noexcept {
                 VirtualEthernetNetworkTcpipConnectionPtr ntcp;
                 if (connection) {
@@ -2531,6 +2993,11 @@ namespace ppp {
                 return false;
             }
 
+            /**
+             * @brief Parses configured DNS endpoint with validity fallbacks.
+             * @param dnserver_endpoint Endpoint string from configuration.
+             * @return Sanitized UDP endpoint.
+             */
             boost::asio::ip::udp::endpoint VirtualEthernetSwitcher::ParseDNSEndPoint(const ppp::string& dnserver_endpoint) noexcept {
                 boost::asio::ip::address dnsserverIP = boost::asio::ip::address_v4::any();
                 int dnsserverPort = PPP_DNS_SYS_PORT;
@@ -2557,6 +3024,11 @@ namespace ppp {
                 return dnsserverEP;
             }
 
+            /**
+             * @brief Gets local bind endpoint for a listener category.
+             * @param categories Listener category.
+             * @return Bound endpoint or wildcard/min-port fallback.
+             */
             boost::asio::ip::tcp::endpoint VirtualEthernetSwitcher::GetLocalEndPoint(NetworkAcceptorCategories categories) noexcept {
                 boost::system::error_code ec;
                 if (categories == NetworkAcceptorCategories_Udpip) {
@@ -2582,6 +3054,11 @@ namespace ppp {
                 return IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(IPEndPoint::Any(IPEndPoint::MinPort));
             }
 
+            /**
+             * @brief Finds NAT mapping information for an IPv4 address.
+             * @param ip IPv4 address key.
+             * @return NAT mapping entry or null.
+             */
             VirtualEthernetSwitcher::NatInformationPtr VirtualEthernetSwitcher::FindNatInformation(uint32_t ip) noexcept {
                 if (IPEndPoint::IsInvalid(IPEndPoint(ip, IPEndPoint::MinPort))) {
                     return NULLPTR;
@@ -2591,6 +3068,13 @@ namespace ppp {
                 return Dictionary::FindObjectByKey(nats_, ip);
             }
 
+            /**
+             * @brief Adds or refreshes NAT ownership for an IPv4 address.
+             * @param exchanger Session exchanger owning mapping.
+             * @param ip IPv4 address.
+             * @param mask IPv4 subnet mask.
+             * @return NAT mapping entry when ownership is accepted.
+             */
             VirtualEthernetSwitcher::NatInformationPtr VirtualEthernetSwitcher::AddNatInformation(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, uint32_t ip, uint32_t mask) noexcept {
                 if (IPEndPoint::IsInvalid(IPEndPoint(mask, IPEndPoint::MinPort))) {
                     return NULLPTR;
@@ -2643,6 +3127,12 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Removes NAT mapping when owned by specified exchanger.
+             * @param key Exchanger raw pointer owner key.
+             * @param ip IPv4 address mapping key.
+             * @return true when mapping is removed.
+             */
             bool VirtualEthernetSwitcher::DeleteNatInformation(VirtualEthernetExchanger* key, uint32_t ip) noexcept {
                 if (NULLPTR == key) {
                     return false;
@@ -2673,6 +3163,10 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Returns number of currently registered exchangers.
+             * @return Exchanger count.
+             */
             int VirtualEthernetSwitcher::GetAllExchangerNumber() noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return static_cast<int>(exchangers_.size());

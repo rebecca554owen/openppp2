@@ -278,8 +278,13 @@
     <ClCompile Include="common\lwip\core\timeouts.c" />
     <ClCompile Include="common\lwip\core\udp.c" />
     <ClCompile Include="common\lwip\my\sys_arch.c" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="ppp\app\ApplicationConfig.cpp" />
+    <ClCompile Include="ppp\app\ApplicationHelp.cpp" />
+    <ClCompile Include="ppp\app\ApplicationInitialize.cpp" />
+    <ClCompile Include="ppp\app\ApplicationMainLoop.cpp" />
+    <ClCompile Include="ppp\app\ApplicationNetwork.cpp" />
     <ClCompile Include="ppp\app\PppApplication.cpp" />
-    <ClCompile Include="ppp\app\PppMain.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.cpp" />
@@ -626,6 +631,7 @@
     <ClInclude Include="ppp\auxiliary\JsonAuxiliary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h" />
     <ClInclude Include="ppp\app\PppApplication.h" />
+    <ClInclude Include="ppp\app\PppApplicationInternal.h" />
     <ClInclude Include="ppp\auxiliary\StringAuxiliary.h" />
     <ClInclude Include="ppp\auxiliary\UriAuxiliary.h" />
     <ClInclude Include="ppp\cryptography\Ciphertext.h" />

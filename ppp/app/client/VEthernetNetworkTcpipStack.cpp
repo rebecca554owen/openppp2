@@ -5,9 +5,16 @@
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
 
+/**
+ * @file VEthernetNetworkTcpipStack.cpp
+ * @brief Implements client-side TCP/IP stack entry points.
+ * @license GPL-3.0
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
+            /** @brief Initializes stack state from the owning network switcher. */
             VEthernetNetworkTcpipStack::VEthernetNetworkTcpipStack(const std::shared_ptr<VEthernetNetworkSwitcher>& ethernet) noexcept
                 : VNetstack()
                 , Ethernet(ethernet)
@@ -15,6 +22,9 @@ namespace ppp {
 
             }
 
+            /**
+             * @brief Creates a connection handler when exchanger state is established.
+             */
             std::shared_ptr<VEthernetNetworkTcpipStack::TapTcpClient> VEthernetNetworkTcpipStack::BeginAcceptClient(const boost::asio::ip::tcp::endpoint& localEP, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
                 using NetworkState = VEthernetExchanger::NetworkState;
 
@@ -50,11 +60,13 @@ namespace ppp {
                 return connection;
             }
 
+            /** @brief Returns socket connect timeout in milliseconds. */
             uint64_t VEthernetNetworkTcpipStack::GetMaxConnectTimeout() noexcept {
                 uint64_t tcp_connect_timeout = (uint64_t)configuration_->tcp.connect.timeout;
                 return (tcp_connect_timeout + 1) * 1000;
             }
 
+            /** @brief Returns established inactivity timeout in milliseconds. */
             uint64_t VEthernetNetworkTcpipStack::GetMaxEstablishedTimeout() noexcept {
                 uint64_t tcp_inactive_timeout = (uint64_t)configuration_->tcp.inactive.timeout;
                 return (tcp_inactive_timeout + 1) * 1000;

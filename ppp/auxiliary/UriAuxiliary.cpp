@@ -1,3 +1,7 @@
+/**
+ * @file UriAuxiliary.cpp
+ * @brief URI parsing and percent-encoding helper implementations.
+ */
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/net/Ipep.h>
@@ -33,11 +37,27 @@ namespace ppp {
 #endif
 #endif
 #endif
+        /**
+         * @brief Resolve host and port through Boost.Asio DNS resolver.
+         * @param host_string Host name to resolve.
+         * @param port_number Target port.
+         * @param y Coroutine yield context.
+         * @return Resolved endpoint, or invalid endpoint on failure.
+         */
         static ppp::net::IPEndPoint UriAuxiliary_ResolveEndPointWithBoost(const ppp::string& host_string, int port_number, ppp::coroutines::YieldContext& y) noexcept {
             boost::asio::ip::udp::endpoint result = ppp::coroutines::asio::GetAddressByHostName<boost::asio::ip::udp>(host_string.data(), port_number, y);
             return ppp::net::IPEndPoint::ToEndPoint(result);
         }
 
+        /**
+         * @brief Resolve an endpoint from host/address text with optional DNS lookup.
+         * @param host_string Host part from URI.
+         * @param address_string Explicit address override if present.
+         * @param port_number Parsed destination port.
+         * @param y Coroutine yield context.
+         * @param resolver Whether DNS fallback resolution is allowed.
+         * @return Parsed or resolved endpoint.
+         */
         static ppp::net::IPEndPoint UriAuxiliary_ResolveEndPoint(const ppp::string& host_string, const ppp::string& address_string, int port_number, ppp::coroutines::YieldContext& y, bool resolver) noexcept {
             ppp::net::IPEndPoint remoteEP(ppp::net::IPEndPoint::NoneAddress, port_number);
             if (address_string.empty()) {
@@ -72,6 +92,9 @@ namespace ppp {
 #endif
 #endif
 
+        /**
+         * @brief Parse URI and return normalized text.
+         */
         ppp::string UriAuxiliary::Parse(
             const ppp::string&                                              url,
             ppp::string&                                                    hostname,
@@ -85,6 +108,9 @@ namespace ppp {
             return UriAuxiliary::Parse(url, hostname, address, path, port, protocol, abs, y);
         }
 
+        /**
+         * @brief Parse URI and optionally output absolute normalized URI.
+         */
         ppp::string UriAuxiliary::Parse(
             const ppp::string&                                              url,
             ppp::string&                                                    hostname,
@@ -98,6 +124,19 @@ namespace ppp {
             return UriAuxiliary::Parse(url, hostname, address, path, port, protocol, abs, y, true);
         }
 
+        /**
+         * @brief Parse URI components and normalize host/address/port fields.
+         * @param url Input URI string.
+         * @param hostname Output host name part.
+         * @param address Output resolved/parsed address string.
+         * @param path Output path part.
+         * @param port Output port number.
+         * @param protocol Output protocol type.
+         * @param abs Optional output for normalized absolute URI.
+         * @param y Coroutine yield context.
+         * @param resolver Whether DNS resolution should be attempted.
+         * @return Normalized URI string, or empty string on parse failure.
+         */
         ppp::string UriAuxiliary::Parse(
             const ppp::string&                                              url,
             ppp::string&                                                    hostname,
@@ -132,6 +171,9 @@ namespace ppp {
                 return ""; 
             }
 
+            /**
+             * @brief Accept only known protocol schemes and map them to ProtocolType.
+             */
             ppp::string proto_string = url_string.substr(0, scheme_sep);
             ppp::string rest = url_string.substr(scheme_sep + 3); 
 
@@ -175,6 +217,9 @@ namespace ppp {
             if (port_sep != ppp::string::npos) {
                 std::size_t right_bracket = host_string.rfind(']');
                 if (right_bracket == ppp::string::npos || port_sep > right_bracket) {
+                    /**
+                     * @brief Parse explicit port and enforce valid endpoint bounds.
+                     */
                     ppp::string port_str = host_string.substr(port_sep + 1);
                     port_str = LTrim(RTrim(port_str));
 
@@ -195,6 +240,9 @@ namespace ppp {
             ppp::string address_string;
             std::size_t left_bracket = host_string.find('[');
             if (left_bracket != ppp::string::npos) {
+                /**
+                 * @brief Extract bracketed address payload (typically IPv6 literal).
+                 */
                 std::size_t right_bracket = host_string.find(']', left_bracket);
                 if (right_bracket == ppp::string::npos || left_bracket > right_bracket) {
                     return "";
@@ -205,6 +253,9 @@ namespace ppp {
                 host_string = LTrim(RTrim(host_string));
             }
 
+            /**
+             * @brief Assign default ports only for HTTP/WebSocket protocol families.
+             */
             host_string = LTrim(RTrim(host_string));
             if (port_number <= IPEndPoint::MinPort || port_number > IPEndPoint::MaxPort) {
                 if (protocol_type == ProtocolType_Http || protocol_type == ProtocolType_WebSocket) {
@@ -233,6 +284,9 @@ namespace ppp {
             port = port_number;
             protocol = protocol_type;
 
+            /**
+             * @brief Build normalized URI using bracket notation for IPv6 addresses.
+             */
             ppp::string normalized = proto_string + "://";
             bool is_ipv6 = (address_string.find(':') != ppp::string::npos);  
             if (is_ipv6 && !address_string.empty()) {
@@ -265,6 +319,11 @@ namespace ppp {
             return normalized;
         }
 
+        /**
+         * @brief Percent-encode URI component text.
+         * @param input Raw component text.
+         * @return Encoded text where reserved bytes are escaped.
+         */
         ppp::string UriAuxiliary::Encode(const ppp::string& input) noexcept {
             ppp::string encoded;
             for (std::size_t i = 0, length = input.length(); i < length; i++) {
@@ -284,6 +343,11 @@ namespace ppp {
             return encoded;
         }
 
+        /**
+         * @brief Decode percent-encoded URI component text.
+         * @param input Encoded component text.
+         * @return Decoded text.
+         */
         ppp::string UriAuxiliary::Decode(const ppp::string& input) noexcept {
             ppp::string decoded;
             for (std::size_t i = 0, length = input.length(); i < length; i++) {

@@ -5,10 +5,21 @@
 
 #include <json/json.h>
 
+/**
+ * @file AppConfiguration.h
+ * @brief Application configuration model and serialization APIs.
+ */
+
 namespace ppp {
     namespace configurations {
+        /**
+         * @brief Stores runtime and networking configuration for the application.
+         */
         class AppConfiguration final {
         public:
+            /**
+             * @brief Port mapping rule configuration.
+             */
             struct MappingConfiguration final {
                 bool                                                        protocol_tcp_or_udp;
                 ppp::string                                                 local_ip;
@@ -17,6 +28,9 @@ namespace ppp {
                 int                                                         remote_port;
             };
 
+            /**
+             * @brief Route source configuration for client route imports.
+             */
             struct RouteConfiguration final {
 #if defined(_LINUX)
                 ppp::string                                                 nic;
@@ -26,6 +40,9 @@ namespace ppp {
                 ppp::string                                                 vbgp;
             };
 
+            /**
+             * @brief IPv6 address assignment mode for server-side data plane.
+             */
             enum IPv6Mode {
                 IPv6Mode_None = 0,
                 IPv6Mode_Nat66 = 1,
@@ -183,23 +200,56 @@ namespace ppp {
                 int                                                         update_interval;
             }                                                               vbgp;
         public:
+            /**
+             * @brief Initializes configuration fields to default values.
+             */
             AppConfiguration() noexcept;
 
         public:
+            /**
+             * @brief Resets all fields to built-in defaults.
+             */
             void                                                            Clear() noexcept;
+            /**
+             * @brief Loads configuration data from a JSON object.
+             * @param json Source JSON object.
+             * @return True when loading and normalization succeed.
+             */
             bool                                                            Load(Json::Value& json) noexcept;
+            /**
+             * @brief Loads configuration data from a JSON file path.
+             * @param path Path to the configuration file.
+             * @return True when loading and normalization succeed.
+             */
             bool                                                            Load(const ppp::string& path) noexcept;
 
         public:
+            /**
+             * @brief Internal LCG modifier slot identifiers.
+             */
             enum LcgmodType {
                 LCGMOD_TYPE_TRANSMISSION,
                 LCGMOD_TYPE_STATIC,
                 LCGMOD_TYPE_MAX
             };
+            /**
+             * @brief Gets the computed LCG modifier for a type.
+             * @param tp Modifier type.
+             * @return Computed modifier value.
+             */
             int                                                             Lcgmod(LcgmodType tp) noexcept { return _lcgmods[(int)tp]; }
 
         public:
+            /**
+             * @brief Gets the current buffer allocator.
+             * @return Shared pointer to the allocator.
+             */
             std::shared_ptr<ppp::threading::BufferswapAllocator>            GetBufferAllocator() noexcept { return this->_BufferAllocator; }
+            /**
+             * @brief Replaces the current buffer allocator.
+             * @param allocator New allocator instance.
+             * @return Previous allocator instance.
+             */
             std::shared_ptr<ppp::threading::BufferswapAllocator>            SetBufferAllocator(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<ppp::threading::BufferswapAllocator> result = std::move(this->_BufferAllocator);
                 this->_BufferAllocator = allocator;
@@ -207,10 +257,22 @@ namespace ppp {
             }
 
         public:
+            /**
+             * @brief Serializes configuration to a JSON value.
+             * @return JSON object representation.
+             */
             Json::Value                                                     ToJson() noexcept;
+            /**
+             * @brief Serializes configuration to a JSON string.
+             * @return JSON string representation.
+             */
             ppp::string                                                     ToString() noexcept;
 
         private:
+            /**
+             * @brief Validates and normalizes loaded values.
+             * @return True after normalization completes.
+             */
             bool                                                            Loaded() noexcept;
 
         private:
@@ -219,7 +281,17 @@ namespace ppp {
         };
 
         namespace extensions {
+            /**
+             * @brief Checks whether protocol and transport cipher settings are present.
+             * @param configuration Configuration instance to check.
+             * @return True when required cipher fields are all non-empty.
+             */
             bool                                                            IsHaveCiphertext(const AppConfiguration& configuration) noexcept;
+            /**
+             * @brief Pointer overload for @ref IsHaveCiphertext.
+             * @param configuration Optional configuration pointer.
+             * @return True when pointer is valid and ciphertext fields are present.
+             */
             inline bool                                                     IsHaveCiphertext(const AppConfiguration* configuration) noexcept { return NULLPTR != configuration ? IsHaveCiphertext(*configuration) : false; }
         }
     }

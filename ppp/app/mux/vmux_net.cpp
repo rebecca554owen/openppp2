@@ -6,7 +6,16 @@
 #include "ppp/app/server/VirtualEthernetNetworkTcpipConnection.h"
 #include "ppp/collections/Dictionary.h"
 
+/**
+ * @file vmux_net.cpp
+ * @brief Implements vmux network multiplexing, handshake, and packet forwarding.
+ * @license GPL-3.0
+ */
+
 namespace vmux {
+    /**
+     * @brief Constructs a vmux network core with runtime mode/capacity settings.
+     */
     vmux_net::vmux_net(const ContextPtr& context, const StrandPtr strand, uint16_t max_connections, bool server_mode, bool acceleration) noexcept {
         assert(max_connections > 0 && "The value of max_connections must be greater than 0.");
 
@@ -34,6 +43,9 @@ namespace vmux {
         m->context_                   = context;
     }
 
+    /**
+     * @brief Destroys the vmux network and releases runtime resources.
+     */
     vmux_net::~vmux_net() noexcept {
         // finalize without relying on shared_from_this() (destructor
         // context may not have shared ownership). Prefer callers to
@@ -41,6 +53,9 @@ namespace vmux {
         finalize();
     }
 
+    /**
+     * @brief Finalizes queues, sockets, and linklayers, then marks disposed.
+     */
     void vmux_net::finalize() noexcept {
         vmux_linklayer_vector rx_links;
         tx_packet_ssqueue tx_queue;
@@ -91,12 +106,16 @@ namespace vmux {
         }
     }
 
+    /** @brief Returns the first active linklayer connection, if available. */
     vmux_net::VirtualEthernetTcpipConnectionPtr vmux_net::get_linklayer() noexcept {
         vmux_linklayer_vector::iterator tail = rx_links_.begin();
         vmux_linklayer_vector::iterator endl = rx_links_.end();
         return tail != endl ? (*tail)->connection : NULLPTR;
     }
 
+    /**
+     * @brief Performs first-time-transfer sequence initialization/validation.
+     */
     bool vmux_net::ftt(uint32_t seq, uint32_t ack) noexcept {
         SynchronizationObjectScope __SCOPE__(syncobj_);
         if (base_.disposed_) {
@@ -112,6 +131,7 @@ namespace vmux {
         return (status_.tx_seq_ == seq) && (status_.rx_ack_ == ack);
     }
 
+    /** @brief Produces a randomized signed identifier encoded as uint32_t. */
     uint32_t vmux_net::ftt_random_aid(int min, int max) noexcept {
         int a = ppp::RandomNext();
         int b = a & 1;
@@ -123,6 +143,7 @@ namespace vmux {
         }
     }
 
+    /** @brief Posts deferred close/finalize work onto the vmux strand. */
     void vmux_net::close_exec() noexcept {
         std::shared_ptr<vmux_net> self = shared_from_this();
         vmux_post_exec(context_, strand_,
@@ -131,6 +152,9 @@ namespace vmux {
             });
     }
 
+    /**
+     * @brief Writes a packet via transmission and dispatches completion on vmux strand.
+     */
     static bool transmission_write(
         std::shared_ptr<vmux_net>                                           self,
         const vmux_net::ITransmissionPtr&                                   transmission, 
@@ -163,6 +187,9 @@ namespace vmux {
             });
     }
     
+    /**
+     * @brief Sends one packet through the specified underlying linklayer.
+     */
     bool vmux_net::underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const PostInternalAsynchronousCallback& posted_ac) noexcept {
         if (NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
             return false;
@@ -209,6 +236,9 @@ namespace vmux {
             });
     }
 
+    /**
+     * @brief Periodically updates timeout state and closes stale sockets.
+     */
     bool vmux_net::update() noexcept {
         if (base_.disposed_) {
             return false;
@@ -242,6 +272,12 @@ namespace vmux {
                     }
                 }
 
+                /**
+                 * @brief Complex maintenance step:
+                 * - close per-socket idle/connect-timeout entries,
+                 * - enforce global mux inactivity timeout,
+                 * - schedule heartbeat keepalive when established.
+                 */
                 uint64_t max_mux_inactive_timeout = ((uint64_t)AppConfiguration->mux.inactive.timeout) * 1000ULL;
                 uint64_t max_mux_connect_timeout = ((uint64_t)AppConfiguration->mux.connect.timeout) * 1000ULL;
 
@@ -261,6 +297,7 @@ namespace vmux {
             });
     }
 
+    /** @brief Selects the next randomized heartbeat timeout window. */
     void vmux_net::switch_to_next_heartbeat_timeout() noexcept {
         int min = std::max<int>(0, AppConfiguration->mux.keep_alived[0]);
         int max = std::max<int>(0, AppConfiguration->mux.keep_alived[1]);
@@ -277,6 +314,9 @@ namespace vmux {
         status_.heartbeat_timeout_ = ppp::RandomNext(min, max + 1);
     }
 
+    /**
+     * @brief Processes in-order/out-of-order packets and advances ACK state.
+     */
     bool vmux_net::packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept {
         // Prepare the ack frames.
         if (base_.disposed_) {
@@ -317,6 +357,11 @@ namespace vmux {
             return true;
         }
         elif(packet_less<uint32_t>::after(seq, status_.rx_ack_)) {
+            /**
+             * @brief Complex reorder path:
+             * buffers future packets by sequence and replays contiguous packets once
+             * the missing sequence is received.
+             */
             // Protect against absurd packet sizes and allocate within limit.
             // 'length' here includes the vmux_hdr; ensure it's at least a header
             // and does not exceed header + max_buffers_size.
@@ -339,6 +384,7 @@ namespace vmux {
         }
     }
 
+    /** @brief Delivers payload data to one logical vmux socket. */
     void vmux_net::packet_input_read(uint32_t connection_id, Byte* buffer, int buffer_size, uint64_t now) noexcept {
         vmux_skt_ptr skt = get_connection(connection_id);
         if (NULLPTR != skt) {
@@ -351,6 +397,9 @@ namespace vmux {
         }
     }
 
+    /**
+     * @brief Dispatches an incoming vmux command frame to its handler.
+     */
     bool vmux_net::packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now) noexcept {
         buffer_size -= sizeof(vmux_hdr);
         if (buffer_size < 0) {
@@ -423,6 +472,9 @@ namespace vmux {
         return true;
     }
     
+    /**
+     * @brief Handles remote SYN by creating and accepting a vmux socket instance.
+     */
     bool vmux_net::process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept {
         if (base_.disposed_) {
             return false;
@@ -448,6 +500,7 @@ namespace vmux {
         return skt->accept(template_string(host, host_size));
     }
 
+    /** @brief Generates a non-zero vmux connection identifier. */
     uint32_t vmux_net::generate_id() noexcept {
         static std::atomic<uint32_t> aid = ftt_random_aid(1, INT32_MAX);
 
@@ -459,6 +512,7 @@ namespace vmux {
         }
     }
 
+    /** @brief Looks up a vmux socket by logical connection identifier. */
     vmux_net::vmux_skt_ptr vmux_net::get_connection(uint32_t connection_id) noexcept {
         vmux_skt_ptr skt;
         if (connection_id != 0) {
@@ -472,6 +526,9 @@ namespace vmux {
         return skt;
     }
 
+    /**
+     * @brief Removes a vmux socket only when pointer identity matches the caller.
+     */
     vmux_net::vmux_skt_ptr vmux_net::release_connection(uint32_t connection_id, vmux_skt* refer_pointer) noexcept {
         vmux_skt_ptr skt;
         if (connection_id != 0) {
@@ -488,6 +545,9 @@ namespace vmux {
         return skt;
     }
 
+    /**
+     * @brief Queues or directly dispatches a prepared packet frame for transmit.
+     */
     bool vmux_net::post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
         if (NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
             return false;
@@ -521,6 +581,7 @@ namespace vmux {
         return process_tx_all_packets();
     }
 
+    /** @brief Drains queued packets across currently available transmit linklayers. */
     bool vmux_net::process_tx_all_packets() noexcept {
         vmux_linklayer_list::iterator linklayer_tail = tx_links_.begin();
         vmux_linklayer_list::iterator linklayer_endl = tx_links_.end();
@@ -549,6 +610,9 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Builds a vmux frame from command/payload and schedules transmit.
+     */
     bool vmux_net::post_internal(Byte cmd, const void* buffer, int buffer_size, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
         if (NULLPTR != buffer && buffer_size < 0) {
             return false;
@@ -583,6 +647,9 @@ namespace vmux {
         return post_internal(packet_managed, packet_length, acceleration, posted_ac);
     }
 
+    /**
+     * @brief Adds a new transport linklayer and optionally starts full forwarding.
+     */
     bool vmux_net::add_linklayer(const VirtualEthernetTcpipConnectionPtr& connection, vmux_linklayer_ptr& linklayer, const vmux_native_add_linklayer_after_success_before_callback& cb) noexcept {
         if (NULLPTR == connection) {
             return false;
@@ -630,6 +697,11 @@ namespace vmux {
         uint64_t now = now_tick();
         active(now);
 
+        /**
+         * @brief Complex startup block:
+         * once enough linklayers are attached, spawn one forwarding coroutine per
+         * linklayer and execute handshake + forwarding lifecycle on each.
+         */
         std::shared_ptr<vmux_net> self = shared_from_this();
         for (vmux_linklayer_ptr& linklayer : rx_links_) {
 
@@ -661,6 +733,9 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Performs server/client handshake for one attached linklayer.
+     */
     bool vmux_net::handshake(const vmux_linklayer_ptr& linklayer, uint16_t connection_id, ppp::coroutines::YieldContext& y) noexcept {
         if (base_.disposed_) {
             return false;
@@ -676,6 +751,7 @@ namespace vmux {
             return false;
         }
 
+        /** @brief Packed handshake acknowledgement payload carrying receive id. */
 #pragma pack(push, 1)
         typedef struct 
 #if defined(__GNUC__) || defined(__clang__)
@@ -718,6 +794,7 @@ namespace vmux {
         return true;
     }
 
+    /** @brief Updates mux established state once enough linklayers are opened. */
     void vmux_net::linklayer_established() noexcept {
         SynchronizationObjectScope __SCOPE__(syncobj_);
         if (!base_.established_) {
@@ -732,6 +809,9 @@ namespace vmux {
         }
     }
 
+    /**
+     * @brief Runs continuous read/dispatch forwarding on one linklayer.
+     */
     bool vmux_net::forwarding(const vmux_linklayer_ptr& linklayer, ppp::coroutines::YieldContext& y) noexcept {
         if (base_.disposed_) {
             return false;
@@ -790,6 +870,7 @@ namespace vmux {
         return any;
     }
 
+    /** @brief Refreshes activity on the underlying linklayer connection. */
     void vmux_net::linklayer_update(const vmux_linklayer_ptr& linklayer) noexcept {
         VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
         if (connection->IsLinked()) {
@@ -797,6 +878,7 @@ namespace vmux {
         }
     }
 
+    /** @brief Validates preconditions for initiating a logical vmux connect. */
     bool vmux_net::connect_require(
         const std::shared_ptr<boost::asio::ip::tcp::socket>& sk,
         const template_string&                               host,
@@ -817,6 +899,9 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Coroutine-friendly connect helper that waits for async completion.
+     */
     bool vmux_net::connect_yield(
         ppp::coroutines::YieldContext&                       y,
         const ContextPtr&                                    context,
@@ -863,6 +948,9 @@ namespace vmux {
         return status->load() > 0;
     }
 
+    /**
+     * @brief Starts an asynchronous logical vmux connection creation workflow.
+     */
     bool vmux_net::connect(const ContextPtr& context, const StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& sk, const template_string& host, int port, const ConnectAsynchronousCallback& ac) noexcept {
         if (NULLPTR == context || !connect_require(sk, host, port)) {
             return false;

@@ -3,6 +3,11 @@
 #include <ppp/io/MemoryStream.h>
 #include <ppp/collections/Dictionary.h>
 
+/**
+ * @file IPFragment.cpp
+ * @brief Implements IPv4 fragmentation reassembly and output splitting logic.
+ */
+
 using ppp::io::MemoryStream;
 using ppp::net::packet::IPFlags;
 using ppp::net::packet::IPFrame;
@@ -11,6 +16,11 @@ using ppp::net::packet::BufferSegment;
 namespace ppp {
     namespace net {
         namespace packet {
+            /**
+             * @brief Builds a stable key for IPv4 fragment reassembly buckets.
+             * @param packet Fragment packet used to derive key components.
+             * @return 128-bit key composed from source, destination, and identifier.
+             */
             static Int128 FragmentKey(const std::shared_ptr<IPFrame>& packet) noexcept {
                 uint64_t low = static_cast<uint64_t>(packet->Source) |
                                (static_cast<uint64_t>(packet->Destination) << 32);
@@ -18,6 +28,11 @@ namespace ppp {
                 return MAKE_OWORD(low, high);
             }
 
+            /**
+             * @brief Accepts an incoming IP packet and reassembles it if fragmented.
+             * @param packet Incoming IP packet.
+             * @return True when handled as fragmented traffic, otherwise false.
+             */
             bool IPFragment::Input(const std::shared_ptr<IPFrame>& packet) noexcept {
                 if ((packet->Flags & IPFlags::IP_MF) != 0 || ((packet->Flags & IPFlags::IP_OFFMASK) != 0 && packet->GetFragmentOffset() > 0)) {
                     std::shared_ptr<BufferSegment> payload = packet->Payload;
@@ -57,6 +72,7 @@ namespace ppp {
                                 shared_frames.emplace_back(packet);
                             }
                             else {
+                                /** Keep fragments sorted by ascending fragment offset. */
                                 while (index > 0) {
                                     IPFramePtr left = shared_frames[index - 1];
                                     if (packet->GetFragmentOffset() >= left->GetFragmentOffset()) {
@@ -69,6 +85,7 @@ namespace ppp {
                                 shared_frames.emplace(shared_frames.begin() + index, packet);
                             }
 
+                            /** Verify all received fragments form a continuous byte range. */
                             bool fullFragementOffset = true;
                             size_t count = shared_frames.size();
                             for (size_t index = 0; index < count; index++) {
@@ -101,6 +118,7 @@ namespace ppp {
                                 return false;
                             }
 
+                            /** Concatenate payloads in offset order into a contiguous buffer. */
                             MemoryStream ms(buffer, nextFragementOffset);
                             for (size_t index = 0, count = frames.size(); index < count; index++) {
                                 std::shared_ptr<BufferSegment> payload = frames[index]->Payload;
@@ -142,6 +160,11 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Splits an IP packet into fragments and emits serialized subpackets.
+             * @param packet Source IP packet.
+             * @return True when all fragments are produced and emitted, otherwise false.
+             */
             bool IPFragment::Output(const IPFrame* packet) noexcept {
                 typedef std::shared_ptr<BufferSegment>   Buffer;
 
@@ -179,6 +202,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Releases callbacks and clears pending reassembly state. */
             void IPFragment::Release() noexcept {
                 PacketInput = NULLPTR;
                 PacketOutput = NULLPTR;
@@ -187,6 +211,11 @@ namespace ppp {
                 IPV4_SUBPACKAGES_.clear();
             }
 
+            /**
+             * @brief Removes expired fragment subpackages.
+             * @param now Current timestamp in milliseconds.
+             * @return Number of removed subpackages.
+             */
             int IPFragment::Update(uint64_t now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return ppp::collections::Dictionary::PredicateAllObjects(
@@ -196,6 +225,10 @@ namespace ppp {
                     }, IPV4_SUBPACKAGES_);
             }
 
+            /**
+             * @brief Raises the packet input event.
+             * @param e Event payload carrying the reassembled packet.
+             */
             void IPFragment::OnInput(PacketInputEventArgs& e) noexcept {
                 PacketInputEventHandler eh = PacketInput;
                 if (eh) {
@@ -203,6 +236,10 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Raises the packet output event.
+             * @param e Event payload carrying serialized fragment bytes.
+             */
             void IPFragment::OnOutput(PacketOutputEventArgs& e) noexcept {
                 PacketOutputEventHandler eh = PacketOutput;
                 if (eh) {

@@ -12,6 +12,11 @@
 namespace ppp {
     namespace coroutines {
         namespace asio {
+            /**
+             * @file asio.h
+             * @brief Provides coroutine-friendly Boost.Asio helper wrappers.
+             */
+
 #if defined(_WIN32)
 #pragma optimize("", off)
 #pragma optimize("gsyb2", on) /* /O1 = /Og /Os /Oy /Ob2 /GF /Gy */
@@ -35,6 +40,14 @@ namespace ppp {
 #endif
 #endif
             template <typename Handler = std::nullptr_t>
+            /**
+             * @brief Atomically sets completion state, runs callback, and resumes coroutine.
+             * @tparam Handler Optional callback type.
+             * @param y Yield context to resume.
+             * @param status Shared atomic state initialized to `-1`.
+             * @param b Result value written as `1` or `0`.
+             * @param handler Optional completion callback.
+             */
             static void                                                         R(YieldContext& y, std::atomic<int>& status, bool b, const Handler& handler = NULLPTR) noexcept {
                 int k = -1;
                 int v = b ? 1 : 0;
@@ -49,6 +62,10 @@ namespace ppp {
             }
 
             template <typename AsyncWriteStream, typename MutableBufferSequence>
+            /**
+             * @brief Performs `boost::asio::async_read` and blocks the coroutine until completion.
+             * @return `true` when exactly the requested byte count is read.
+             */
             bool                                                                async_read(AsyncWriteStream& stream, const MutableBufferSequence& buffers, YieldContext& y) noexcept {
                 if (!buffers.data() || !buffers.size()) {
                     return false;
@@ -69,6 +86,10 @@ namespace ppp {
             }
 
             template <typename AsyncWriteStream, typename ConstBufferSequence>
+            /**
+             * @brief Performs `boost::asio::async_write` and blocks the coroutine until completion.
+             * @return `true` on success.
+             */
             bool                                                                async_write(AsyncWriteStream& stream, const ConstBufferSequence& buffers, YieldContext& y) noexcept {
                 if (!buffers.data() || !buffers.size()) {
                     return false;
@@ -89,6 +110,10 @@ namespace ppp {
             }
 
             template <typename AsyncWriteStream, typename MutableBufferSequence>
+            /**
+             * @brief Performs `async_read_some` and blocks the coroutine until completion.
+             * @return Number of bytes read, or `-1` on failure.
+             */
             int                                                                 async_read_some(AsyncWriteStream& stream, const MutableBufferSequence& buffers, YieldContext& y) noexcept {
                 int len = -1;
                 if (!buffers.data() || !buffers.size()) {
@@ -108,10 +133,23 @@ namespace ppp {
                 return len;
             }
 
+            /**
+             * @brief Suspends the coroutine for the requested duration.
+             * @param y Yield context.
+             * @param milliseconds Sleep duration in milliseconds.
+             * @return `true` when timeout scheduling succeeds.
+             */
             inline bool                                                         async_sleep(YieldContext& y, int milliseconds) noexcept {
                 return ppp::threading::Timer::Timeout(milliseconds, y);
             }
 
+            /**
+             * @brief Asynchronously connects a TCP socket and waits in coroutine style.
+             * @param socket Target TCP socket.
+             * @param remoteEP Remote endpoint.
+             * @param y Yield context.
+             * @return `true` on successful connect.
+             */
             inline bool                                                         async_connect(boost::asio::ip::tcp::socket& socket, const boost::asio::ip::tcp::endpoint& remoteEP, YieldContext& y) noexcept {
                 boost::asio::ip::address address = remoteEP.address();
                 if (ppp::net::IPEndPoint::IsInvalid(address)) {
@@ -138,14 +176,18 @@ namespace ppp {
             }
 
             template <class AsyncSocket, class TProtocol>
+            /**
+             * @brief Opens a socket protocol with platform-specific safety handling.
+             * @return `true` when the socket opens successfully.
+             */
             bool                                                                async_open(YieldContext& y, AsyncSocket& socket, const TProtocol& protocol) noexcept {
-                // Android platform fatal system network underlying library bug, if in stackful coroutine, call socket, connect function will crash directly, 
-                // In order to solve this problem, need to delegate to the android framework thread (Fwmark) to call, 
-                // Will ensure that the program does not crash. It's just... Inexplicable.
-                // 
-                // Refer:
-                //  https://android.googlesource.com/platform/frameworks/base.git/+/android-4.2.2_r1/core/jni/AndroidRuntime.cpp
-                //  https://android.googlesource.com/platform/system/netd/+/master/client/FwmarkClient.cpp
+                /**
+                 * @brief Android-specific workaround.
+                 *
+                 * Some Android platform versions can crash when `socket.open` is
+                 * executed directly inside stackful coroutine context. To avoid this,
+                 * open is delegated to the framework-driven executor thread.
+                 */
 #if defined(_ANDROID)
                 bool ok = false;
                 boost::asio::post(socket.get_executor(),
@@ -171,6 +213,13 @@ namespace ppp {
             }
             
             template <class TProtocol>
+            /**
+             * @brief Resolves a host name to endpoint and waits coroutine-style.
+             * @param hostname Host name to resolve.
+             * @param port Target port.
+             * @param y Yield context.
+             * @return Resolved endpoint, or wildcard endpoint when resolve fails.
+             */
             boost::asio::ip::basic_endpoint<TProtocol>                          GetAddressByHostName(const char* hostname, int port, YieldContext& y) noexcept {
                 typedef boost::asio::ip::basic_resolver<TProtocol>              protocol_resolver;
                 typedef ppp::net::IPEndPoint                                    IPEndPoint;

@@ -4,6 +4,11 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/collections/Dictionary.h>
 
+/**
+ * @file Firewall.cpp
+ * @brief Implements firewall rule parsing and runtime matching for ports, domains, and IP segments.
+ */
+
 using ppp::collections::Dictionary;
 using ppp::io::File;
 using ppp::net::Ipep;
@@ -13,16 +18,33 @@ namespace ppp
 {
     namespace net
     {
+        /**
+         * @brief Builds a 32-bit mask from a CIDR prefix.
+         * @param prefix Prefix length in bits.
+         * @param Unused type selector for overload resolution.
+         * @return The computed IPv4 mask.
+         */
         static UInt32 FirewallPrefixMask(int prefix, UInt32) noexcept
         {
             return prefix ? ~0u << (32 - prefix) : 0u;
         }
 
+        /**
+         * @brief Builds a 128-bit mask from a CIDR prefix.
+         * @param prefix Prefix length in bits.
+         * @param Unused type selector for overload resolution.
+         * @return The computed IPv6-compatible mask.
+         */
         static Int128 FirewallPrefixMask(int prefix, Int128) noexcept
         {
             return PrefixMask128(prefix);
         }
 
+        /**
+         * @brief Adds a protocol-agnostic blocked port rule.
+         * @param port Target port.
+         * @return true if inserted; otherwise false.
+         */
         bool Firewall::DropNetworkPort(int port) noexcept
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
@@ -34,6 +56,12 @@ namespace ppp
             return ports_.emplace(port).second;
         }
 
+        /**
+         * @brief Adds a protocol-specific blocked port rule.
+         * @param port Target port.
+         * @param tcp_or_udp true for TCP, false for UDP.
+         * @return true if inserted; otherwise false.
+         */
         bool Firewall::DropNetworkPort(int port, bool tcp_or_udp) noexcept
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
@@ -52,8 +80,18 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Adds a blocked IPv4/IPv6 network segment rule.
+         * @param ip Address used to compute network base.
+         * @param prefix CIDR prefix.
+         * @return true if rule table changed; otherwise false.
+         */
         bool Firewall::DropNetworkSegment(const boost::asio::ip::address& ip, int prefix) noexcept
         {
+            /**
+             * @brief Inserts or tightens a stored segment rule.
+             * @details If the key already exists, the smaller prefix is kept to preserve the stricter range.
+             */
             auto set_network_segments = [](NetworkSegmentTable& m, Int128 k, int prefix) noexcept -> bool
                 {
                     auto tail = m.find(k);
@@ -114,6 +152,11 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Adds a blocked domain rule after normalization.
+         * @param host Host or domain input.
+         * @return true if inserted; otherwise false.
+         */
         bool Firewall::DropNetworkDomains(const ppp::string& host) noexcept
         {
             if (host.empty())
@@ -133,6 +176,7 @@ namespace ppp
             }
         }
 
+        /** @brief Clears all configured firewall rules. */
         void Firewall::Clear() noexcept
         {
             SynchronizedObjectScope scope(syncobj_);
@@ -143,6 +187,12 @@ namespace ppp
             network_segments_.clear();
         }
 
+        /**
+         * @brief Tests whether a port is blocked by global or protocol-specific rules.
+         * @param port Target port.
+         * @param tcp_or_udp true for TCP lookup, false for UDP lookup.
+         * @return true if blocked; otherwise false.
+         */
         bool Firewall::IsDropNetworkPort(int port, bool tcp_or_udp) noexcept
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
@@ -169,6 +219,15 @@ namespace ppp
         }
 
         template <typename T>
+        /**
+         * @brief Checks whether an IP belongs to any blocked segment.
+         * @tparam T Address integer type (UInt32 for IPv4, Int128 for IPv6).
+         * @param ip Original address value (unused, kept for call-site symmetry).
+         * @param __ip Address as integer in host order.
+         * @param max_prefix Maximum prefix length for the address family.
+         * @param network_segments Segment table containing network base to prefix mappings.
+         * @return true if any configured segment matches; otherwise false.
+         */
         static bool Firewall_IsDropNetworkSegment(const boost::asio::ip::address& ip, T __ip, int max_prefix, Firewall::NetworkSegmentTable& network_segments) noexcept
         {
             static constexpr int MIN_PREFIX_VALUE = ppp::net::native::MIN_PREFIX_VALUE;
@@ -197,6 +256,11 @@ namespace ppp
             return false;
         }
 
+        /**
+         * @brief Tests whether an IP matches a blocked CIDR segment.
+         * @param ip IPv4 or IPv6 address.
+         * @return true if blocked; otherwise false.
+         */
         bool Firewall::IsDropNetworkSegment(const boost::asio::ip::address& ip) noexcept
         {
             if (ip.is_v4())
@@ -226,6 +290,11 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Tests whether a host is blocked by domain or IP rules.
+         * @param host Host or address string.
+         * @return true if blocked; otherwise false.
+         */
         bool Firewall::IsDropNetworkDomains(const ppp::string& host) noexcept
         {
             if (host.empty())
@@ -256,6 +325,12 @@ namespace ppp
             return IsSameNetworkDomains(host_lower, contains);
         }
 
+        /**
+         * @brief Performs exact and suffix-based domain matching.
+         * @param host Normalized host name.
+         * @param contains Callback used to test candidate domain keys.
+         * @return true if any candidate matches; otherwise false.
+         */
         bool Firewall::IsSameNetworkDomains(const ppp::string& host, const ppp::function<bool(const ppp::string& s)>& contains) noexcept
         {
             if (host.empty())
@@ -263,13 +338,13 @@ namespace ppp
                 return false;
             }
             
-            // Direct hit
+            /** @brief Fast path for exact domain match. */
             if (contains(host))
             {
                 return true;
             }
 
-            // Segment hit
+            /** @brief Split host labels to evaluate suffix-based domain matches. */
             ppp::vector<ppp::string> lables;
             if (Tokenize<ppp::string>(host, lables, ".") < 1)
             {
@@ -294,6 +369,7 @@ namespace ppp
             for (std::size_t i = 1, l = label_size - 1; i < l; i++)
             {
                 ppp::string next;
+                /** @brief Rebuild suffix candidate from current label to the end. */
                 for (std::size_t j = i; j < label_size; j++) 
                 {
                     ppp::string label = lables[j];
@@ -317,6 +393,12 @@ namespace ppp
             return contains(*lables.rbegin());
         }
 
+        /**
+         * @brief Parses and inserts an IP/CIDR drop command payload.
+         * @param fw Target firewall.
+         * @param line Rule payload text.
+         * @return true if a rule is accepted; otherwise false.
+         */
         static bool LoadWithRulesDropIP(Firewall* fw, ppp::string& line) noexcept
         {
             boost::system::error_code ec;
@@ -343,6 +425,7 @@ namespace ppp
                 return false;
             }
 
+            /** @brief Parse CIDR address and prefix from `address/prefix`. */
             ppp::string host = line.substr(0, slash_index);
             host = LTrim<ppp::string>(RTrim<ppp::string>(host));
             if (host.empty())
@@ -365,6 +448,7 @@ namespace ppp
                 prefix = atoi(cidr.data());
             }
 
+            /** @brief Clamp prefix to the legal range for the detected address family. */
             if (ip.is_v4())
             {
                 if (prefix < 0 || prefix > 32)
@@ -387,6 +471,12 @@ namespace ppp
             return fw->DropNetworkSegment(ip, prefix);
         }
 
+        /**
+         * @brief Parses and inserts a port drop command payload.
+         * @param fw Target firewall.
+         * @param line Rule payload text.
+         * @return true if a rule is accepted; otherwise false.
+         */
         static bool LoadWithRulesDropPort(Firewall* fw, ppp::string& line) noexcept
         {
             int32_t network_port = atoi(line.data());
@@ -410,11 +500,22 @@ namespace ppp
             return fw->DropNetworkPort(network_port);
         }
 
+        /**
+         * @brief Parses and inserts a domain drop command payload.
+         * @param fw Target firewall.
+         * @param line Rule payload text.
+         * @return true if a rule is accepted; otherwise false.
+         */
         static bool LoadWithRulesDropDns(Firewall* fw, ppp::string& line) noexcept
         {
             return fw->DropNetworkDomains(line);
         }
 
+        /**
+         * @brief Loads rule text from a file path and parses it.
+         * @param path Rule file path.
+         * @return true if at least one rule is loaded; otherwise false.
+         */
         bool Firewall::LoadWithFile(const ppp::string& path) noexcept
         {
             if (path.empty())
@@ -432,6 +533,11 @@ namespace ppp
             return LoadWithRules(rules);
         }
 
+        /**
+         * @brief Parses rule text and inserts accepted drop commands.
+         * @param rules Multiline rule configuration.
+         * @return true if at least one rule is loaded; otherwise false.
+         */
         bool Firewall::LoadWithRules(const ppp::string& rules) noexcept
         {
             typedef bool(*DropProc)(Firewall* fw, ppp::string& line);
@@ -454,7 +560,9 @@ namespace ppp
 
             struct
             {
+                /** @brief Command keyword after `drop` (ip/port/dns). */
                 ppp::string drop_command;
+                /** @brief Parsing and insertion routine for the command payload. */
                 DropProc drop_proc;
             } 
             drop_commands[] = 
@@ -468,6 +576,7 @@ namespace ppp
             ppp::string drop_headers = "drop";
             for (ppp::string& line : lines)
             {
+                /** @brief Strip trailing inline comments before command parsing. */
                 std::size_t index = line.find('#');
                 if (index != ppp::string::npos)
                 {
@@ -517,6 +626,7 @@ namespace ppp
                         break;
                     }
 
+                    /** @brief Record whether at least one rule is accepted successfully. */
                     any |= i.drop_proc(this, line);
                 }
             }

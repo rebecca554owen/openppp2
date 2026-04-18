@@ -17,19 +17,28 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 
+/**
+ * @file VEthernetNetworkTcpipConnection.cpp
+ * @brief Implements TCP/IP forwarding selection for virtual Ethernet sessions.
+ * @license GPL-3.0
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
+            /** @brief Initializes session state and marks it active. */
             VEthernetNetworkTcpipConnection::VEthernetNetworkTcpipConnection(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand) noexcept
                 : TapTcpClient(context, strand)
                 , exchanger_(exchanger) {
                 Update();
             }
 
+            /** @brief Finalizes owned forwarding channels. */
             VEthernetNetworkTcpipConnection::~VEthernetNetworkTcpipConnection() noexcept {
                 Finalize();
             }
 
+            /** @brief Disposes any active VPN/rinetd/vmux connection objects. */
             void VEthernetNetworkTcpipConnection::Finalize() noexcept {
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_); 
                 std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_); 
@@ -48,6 +57,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Schedules cleanup on the proper executor and disposes the base client.
+             */
             void VEthernetNetworkTcpipConnection::Dispose() noexcept {
                 if (IsDisposed()) {
                     return;
@@ -75,6 +87,10 @@ namespace ppp {
                 TapTcpClient::Dispose();
             }
 
+            /**
+             * @brief Runs whichever forwarding path is currently active.
+             * @return true when forwarding loop runs successfully.
+             */
             bool VEthernetNetworkTcpipConnection::Loopback(ppp::coroutines::YieldContext& y) noexcept {
                 // If the connection is interrupted while the coroutine is working, 
                 // Or closed during other asynchronous processes or coroutines, do not perform meaningless processing.
@@ -102,6 +118,10 @@ namespace ppp {
                 return false;
             }
 
+            /**
+             * @brief Builds forwarding to the peer using rinetd, vmux, or VPN transport.
+             * @return true when one forwarding path is prepared successfully.
+             */
             bool VEthernetNetworkTcpipConnection::ConnectToPeer(ppp::coroutines::YieldContext& y) noexcept {
                 using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<TapTcpClient>;
 
@@ -180,13 +200,13 @@ namespace ppp {
 #pragma optimize("", off)
 #pragma optimize("gsyb2", on) /* /O1 = /Og /Os /Oy /Ob2 /GF /Gy */
 #else
-// TRANSMISSIONO1 compiler macros are defined to perform O1 optimizations, 
-// Otherwise gcc compiler version If <= 7.5.X, 
-// The O1 optimization will also be applied, 
-// And the other cases will not be optimized, 
-// Because this will cause the program to crash, 
-// Which is a fatal BUG caused by the gcc compiler optimization. 
-// Higher-version compilers should not optimize the code for gcc compiling this section.
+/**
+ * @brief Applies conservative compiler optimization for coroutine-sensitive code paths.
+ *
+ * For older GCC versions (<= 7.5.x), O1 is used to avoid known optimizer-induced
+ * crashes in this section. For newer versions, optimization is disabled here to
+ * keep runtime behavior stable across toolchains.
+ */
 #if defined(__clang__)
 #pragma clang optimize off
 #else
@@ -198,6 +218,7 @@ namespace ppp {
 #endif
 #endif
 #endif
+            /** @brief Starts established-stage forwarding coroutine execution. */
             bool VEthernetNetworkTcpipConnection::Establish() noexcept {
                 return Spawn(
                     [this](ppp::coroutines::YieldContext& y) noexcept {
@@ -205,6 +226,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Starts peer setup coroutine before accept acknowledgement. */
             bool VEthernetNetworkTcpipConnection::BeginAccept() noexcept {
                 return Spawn(
                     [this](ppp::coroutines::YieldContext& y) noexcept {
@@ -212,6 +234,10 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Posts a coroutine launcher to the session strand.
+             * @return true when posting succeeds.
+             */
             bool VEthernetNetworkTcpipConnection::Spawn(const ppp::function<bool(ppp::coroutines::YieldContext&)>& coroutine) noexcept {
                 if (IsDisposed()) {
                     return false;
@@ -268,6 +294,9 @@ namespace ppp {
 #endif
 #endif
 
+            /**
+             * @brief Tunes accepted socket options and delegates to base accept end.
+             */
             bool VEthernetNetworkTcpipConnection::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
                 if (NULLPTR == socket) {
                     return false;

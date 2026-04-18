@@ -4,9 +4,22 @@
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
 
+/**
+ * @file websocket_ssl_write_websocket.cpp
+ * @brief Implements asynchronous write dispatch for SSL WebSocket sessions.
+ */
+
 namespace ppp {
     namespace net {
         namespace asio {
+            /**
+             * @brief Queues an asynchronous write operation on the SSL WebSocket.
+             * @param buffer Source buffer that contains bytes to send.
+             * @param offset Zero-based byte offset into @p buffer where sending starts.
+             * @param length Number of bytes to send.
+             * @param cb Completion callback that receives whether sending succeeded.
+             * @return true if the operation is posted to the executor; otherwise false.
+             */
             bool sslwebsocket::Write(const void* buffer, int offset, int length, const AsynchronousWriteCallback& cb) noexcept {
                 if (NULLPTR == buffer || offset < 0 || length < 1) {
                     return false;
@@ -29,6 +42,9 @@ namespace ppp {
                 ppp::threading::Executors::ContextPtr context = context_;
                 ppp::threading::Executors::StrandPtr strand = strand_;
 
+                /**
+                 * @brief Executes websocket async_write on the serialized executor strand.
+                 */
                 auto complete_do_async_write_callback = [self, this, cb, buffer, offset, length, ssl_websocket, context, strand]() noexcept {
                     ssl_websocket->async_write(boost::asio::buffer((Byte*)buffer + offset, length),
                         [self, this, cb](const boost::system::error_code& ec, size_t sz) noexcept {

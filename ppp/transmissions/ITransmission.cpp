@@ -1,5 +1,10 @@
 #include <ppp/transmissions/ITransmission.h>
 
+/**
+ * @file ITransmission.cpp
+ * @brief Implements encrypted packet framing, handshake, and transmission I/O helpers.
+ */
+
 // Cryptographic and I/O utilities.
 #include <ppp/cryptography/ssea.h>
 #include <ppp/io/Stream.h>
@@ -49,14 +54,29 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // ITransmissionBridge – encapsulates all low‑level I/O and encryption logic.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Internal bridge for unified read/write, encoding, and decoding workflows.
+         */
         class ITransmissionBridge final {
         public:
-            // Read raw bytes (no decryption) – delegates to derived class.
+            /**
+             * @brief Reads raw bytes from the transport implementation.
+             * @param transmission Active transmission instance.
+             * @param y Coroutine yield context.
+             * @param length Number of bytes to read.
+             * @return Raw bytes on success; null on failure.
+             */
             static std::shared_ptr<Byte> ReadBytes(ITransmission* transmission, YieldContext& y, int length) noexcept {
                 return transmission->DoReadBytes(y, length);
             }
 
-            // Read binary message, applying full packet decryption if ciphers present.
+            /**
+             * @brief Reads a binary packet and decrypts it when ciphers are configured.
+             * @param transmission Active transmission instance.
+             * @param y Coroutine yield context.
+             * @param outlen Output plaintext length.
+             * @return Decrypted payload on success; null on failure.
+             */
             static std::shared_ptr<Byte> ReadBinary(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 bool safest = !transmission->handshaked_;      // Pre‑handshake: use safest mode.
                 CiphertextPtr EVP_protocol = transmission->protocol_;
@@ -76,13 +96,19 @@ namespace ppp {
                 }
             }
 
-            // Encrypt binary data without base94 (used internally after handshake).
+            /**
+             * @brief Encrypts binary payload using packet-level framing.
+             */
             static std::shared_ptr<Byte> EncryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept;
 
-            // Decrypt binary data without base94.
+            /**
+             * @brief Decrypts binary payload produced by packet-level framing.
+             */
             static std::shared_ptr<Byte> DecryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept;
 
-            // High‑level encrypt: optionally applies base94 encoding.
+            /**
+             * @brief Encrypts payload and conditionally applies base94 envelope.
+             */
             static std::shared_ptr<Byte> Encrypt(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
                 std::shared_ptr<Byte> packet = EncryptBinary(transmission, data, datalen, outlen);
                 if (NULLPTR != packet) {
@@ -103,7 +129,9 @@ namespace ppp {
                 }
             }
 
-            // High‑level decrypt: optionally strips base94 encoding.
+            /**
+             * @brief Decodes optional base94 envelope and decrypts payload.
+             */
             static std::shared_ptr<Byte> Decrypt(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
                 std::shared_ptr<Byte> packet;
                 AppConfigurationPtr& cfg = transmission->configuration_;
@@ -127,7 +155,9 @@ namespace ppp {
                 }
             }
 
-            // High‑level read: selects base94 or binary path based on handshake state.
+            /**
+             * @brief Reads one message using pre/post-handshake decode strategy.
+             */
             static std::shared_ptr<Byte> Read(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 outlen = 0;
                 if (transmission->disposed_) {
@@ -209,7 +239,9 @@ namespace ppp {
 #endif
 #endif
 
-            // Low‑level write: encrypts the packet then calls WriteBytes on the transmission.
+            /**
+             * @brief Encrypts packet bytes and dispatches asynchronous transport write.
+             */
             static bool Write(ITransmission* transmission, const void* packet, int packet_length, const ITransmission::AsynchronousWriteBytesCallback& cb) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -233,9 +265,9 @@ namespace ppp {
             }
 
         private:
-            // -------------------------------------------------------------------------
-            // Base94 header encoding/decoding helpers.
-            // -------------------------------------------------------------------------
+            /**
+             * @brief Encodes payload length into randomized base94 framing header bytes.
+             */
             static ppp::string base94_encode_length(ITransmission* transmission, const AppConfigurationPtr& configuration, int length, int kf) noexcept {
                 const int MOD = configuration->Lcgmod(ITransmission::AppConfiguration::LCGMOD_TYPE_TRANSMISSION);
                 const int KF_MOD = abs(kf % MOD);
@@ -302,6 +334,9 @@ namespace ppp {
                 return (N - KF_MOD + MOD) % MOD;   // reverse obfuscation
             }
 
+            /**
+             * @brief Restores obfuscated base94 header bytes to canonical form.
+             */
             static void base94_decode_kf(Byte* h) noexcept {
                 Byte& k = h[0];
                 Byte& f = h[1];
@@ -375,6 +410,9 @@ namespace ppp {
                 return ssea::base94_decode(allocator, payload, payload_length, kf, outlen);
             }
 
+            /**
+             * @brief Reads compact base94 header and extracts payload length.
+             */
             static int base94_decode_length_rn(ITransmission* transmission, YieldContext& y) noexcept {
                 std::shared_ptr<Byte> packet = ReadBytes(transmission, y, EVP_HEADER_XSS);
                 if (NULLPTR == packet) {
@@ -389,6 +427,9 @@ namespace ppp {
                 return len > 0 ? len : -1;
             }
 
+            /**
+             * @brief Reads extended base94 header and validates checksum payload length.
+             */
             static int base94_decode_length_r1(ITransmission* transmission, YieldContext& y) noexcept {
                 std::shared_ptr<Byte> packet = ReadBytes(transmission, y, EVP_HEADER_XSS + EVP_HEADER_MSS);
                 if (NULLPTR == packet) {
@@ -419,6 +460,9 @@ namespace ppp {
                 return payload_length;
             }
 
+            /**
+             * @brief Selects base94 header parser according to negotiated frame mode.
+             */
             static int base94_decode_length(ITransmission* transmission, YieldContext& y) noexcept {
                 if (transmission->frame_rn_) {
                     return base94_decode_length_rn(transmission, y);
@@ -427,6 +471,9 @@ namespace ppp {
                 return base94_decode_length_r1(transmission, y);
             }
 
+            /**
+             * @brief Reads and decodes one base94-framed payload from the transport.
+             */
             static std::shared_ptr<Byte> base94_decode(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 outlen = 0;
                 int payload_length = base94_decode_length(transmission, y);
@@ -449,6 +496,9 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // Packet encryption/decryption helpers.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Builds and encrypts packet header containing payload length metadata.
+         */
         static std::shared_ptr<Byte> Transmission_Header_Encrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -496,6 +546,9 @@ namespace ppp {
                 APP->key.kf, output) != EVP_header_length ? NULLPTR : output;
         }
 
+        /**
+         * @brief Decrypts packet header and returns decoded payload length.
+         */
         static int Transmission_Header_Decrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -531,6 +584,9 @@ namespace ppp {
             return len + 1;   // add back the adjustment
         }
 
+        /**
+         * @brief Applies optional masked/shuffle payload transforms before framing.
+         */
         static void Transmission_Payload_Encrypt_Partial(
             const AppConfigurationPtr&                  APP,
             int                                         kf,
@@ -547,6 +603,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Encrypts payload transform stage and optional delta encoding.
+         */
         static std::shared_ptr<Byte> Transmission_Payload_Encrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -574,6 +633,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Reverses optional masked/shuffle transforms on payload bytes.
+         */
         static void Transmission_Payload_Decrypt_Partial(
             const AppConfigurationPtr&                  APP,
             int                                         kf,
@@ -590,6 +652,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Decrypts framed payload and reverses transport obfuscation layers.
+         */
         static std::shared_ptr<Byte> Transmission_Payload_Decrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -615,6 +680,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Concatenates encrypted header and payload into one packet buffer.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Pack(
             const std::shared_ptr<BufferswapAllocator>& allocator,
             const std::shared_ptr<Byte>&                EVP_header,
@@ -637,6 +705,9 @@ namespace ppp {
             return packet;
         }
 
+        /**
+         * @brief Encrypts plaintext payload and assembles transmission packet bytes.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Encrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -693,6 +764,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Decrypts full transmission packet into plaintext payload bytes.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Decrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -742,6 +816,9 @@ namespace ppp {
             return payload;
         }
 
+        /**
+         * @brief Reads header and payload from transport and decrypts to plaintext.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Read(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -789,6 +866,9 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // Handshake helpers.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Packs handshake session identifier into obfuscated transport payload.
+         */
         static std::shared_ptr<Byte> Transmission_Handshake_Pack_SessionId(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -861,6 +941,9 @@ namespace ppp {
             return msg;
         }
 
+        /**
+         * @brief Unpacks handshake session identifier and filters dummy packets.
+         */
         static Int128 Transmission_Handshake_Unpack_SessionId(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<Byte>&                packet_managed,
@@ -897,6 +980,9 @@ namespace ppp {
             return ppp::Int128FromString(std::string_view(reinterpret_cast<char*>(p), packet_length), 10);
         }
 
+        /**
+         * @brief Sends one handshake session identifier packet.
+         */
         static bool Transmission_Handshake_SessionId(
             const AppConfigurationPtr&                  APP,
             ITransmission*                              transmission,
@@ -912,6 +998,9 @@ namespace ppp {
             return ITransmissionBridge::Write(transmission, y, pkt.get(), len);
         }
 
+        /**
+         * @brief Receives handshake session identifier, skipping dummy handshake frames.
+         */
         static Int128 Transmission_Handshake_SessionId(
             const AppConfigurationPtr&                  APP,
             ITransmission*                              transmission,
@@ -934,6 +1023,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Exchanges randomized handshake noise packets before real handshake values.
+         */
         bool Transmission_Handshake_Nop(
             const AppConfigurationPtr&                  APP,
             ITransmission*                              transmission,
@@ -961,6 +1053,9 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // ITransmission implementation.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Initializes transmission state and optional protocol/transport ciphers.
+         */
         ITransmission::ITransmission(const ContextPtr& context, const StrandPtr& strand,
             const AppConfigurationPtr& configuration) noexcept
             : IAsynchronousWriteIoQueue(NULLPTR != configuration ? configuration->GetBufferAllocator() : NULLPTR)
@@ -975,10 +1070,16 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Destroys transmission and finalizes internal resources.
+         */
         ITransmission::~ITransmission() noexcept {
             Finalize();
         }
 
+        /**
+         * @brief Finalizes runtime state, cancels timers, and clears optional helpers.
+         */
         void ITransmission::Finalize() noexcept {
             DeadlineTimerPtr t = std::move(timeout_);
             disposed_ = true;
@@ -990,18 +1091,30 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Reads one message using bridge decode workflow.
+         */
         std::shared_ptr<Byte> ITransmission::Read(YieldContext& y, int& outlen) noexcept {
             return ITransmissionBridge::Read(this, y, outlen);
         }
 
+        /**
+         * @brief Writes one message using coroutine-aware bridge workflow.
+         */
         bool ITransmission::Write(YieldContext& y, const void* packet, int packet_length) noexcept {
             return ITransmissionBridge::Write(this, y, packet, packet_length);
         }
 
+        /**
+         * @brief Writes one message using callback-based bridge workflow.
+         */
         bool ITransmission::Write(const void* packet, int packet_length, const AsynchronousWriteCallback& cb) noexcept {
             return ITransmissionBridge::Write(this, packet, packet_length, cb);
         }
 
+        /**
+         * @brief Encrypts caller-provided buffer into framed transmission bytes.
+         */
         std::shared_ptr<Byte> ITransmission::Encrypt(Byte* data, int datalen, int& outlen) noexcept {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
@@ -1016,6 +1129,9 @@ namespace ppp {
             return ITransmissionBridge::Encrypt(this, data, datalen, outlen);
         }
 
+        /**
+         * @brief Decrypts framed transmission bytes into plaintext payload.
+         */
         std::shared_ptr<Byte> ITransmission::Decrypt(Byte* data, int datalen, int& outlen) noexcept {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
@@ -1030,6 +1146,9 @@ namespace ppp {
             return ITransmissionBridge::Decrypt(this, data, datalen, outlen);
         }
 
+        /**
+         * @brief Posts asynchronous cleanup of transmission and write queue resources.
+         */
         void ITransmission::Dispose() noexcept {
             auto self = shared_from_this();
             auto ctx = GetContext();
@@ -1041,6 +1160,9 @@ namespace ppp {
                 });
         }
 
+        /**
+         * @brief Runs client-side handshake state machine and negotiates mux mode.
+         */
         Int128 ITransmission::InternalHandshakeClient(YieldContext& y, bool& mux) noexcept {
             if (!Transmission_Handshake_Nop(configuration_, this, y)) {
                 return 0;
@@ -1078,6 +1200,9 @@ namespace ppp {
             return 0;
         }
 
+        /**
+         * @brief Runs server-side handshake state machine and validates peer state.
+         */
         bool ITransmission::InternalHandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
             if (!Transmission_Handshake_Nop(configuration_, this, y)) {
                 return false;
@@ -1123,6 +1248,9 @@ namespace ppp {
             return handshaked_;
         }
 
+        /**
+         * @brief Clears and cancels active handshake timeout timer.
+         */
         void ITransmission::InternalHandshakeTimeoutClear() noexcept {
             DeadlineTimerPtr t = std::move(timeout_);
             if (NULLPTR != t) {
@@ -1130,6 +1258,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Creates and arms handshake timeout timer with configuration jitter.
+         */
         bool ITransmission::InternalHandshakeTimeoutSet() noexcept {
             if (disposed_) {
                 return false;
@@ -1191,6 +1322,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Executes client handshake with timeout protection.
+         */
         Int128 ITransmission::HandshakeClient(YieldContext& y, bool& mux) noexcept {
             mux = false;
             if (!InternalHandshakeTimeoutSet()) {
@@ -1202,6 +1336,9 @@ namespace ppp {
             return sid;
         }
 
+        /**
+         * @brief Executes server handshake with timeout protection.
+         */
         bool ITransmission::HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
             if (session_id == 0) {
                 return false;
@@ -1219,6 +1356,9 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // ITransmissionBridge binary encrypt/decrypt implementations.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Encrypts payload via packet encryption path selected by cipher state.
+         */
         std::shared_ptr<Byte> ITransmissionBridge::EncryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
             bool safest = !transmission->handshaked_;
             auto& cfg = transmission->configuration_;
@@ -1233,6 +1373,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Decrypts payload via packet decryption path selected by cipher state.
+         */
         std::shared_ptr<Byte> ITransmissionBridge::DecryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
             bool safest = !transmission->handshaked_;
             auto& cfg = transmission->configuration_;

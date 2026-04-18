@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file WebSocket.h
+ * @brief Generic Beast websocket handshake helper for client/server flows.
+ */
+
 #include <ppp/stdafx.h>
 #include <ppp/IDisposable.h>
 #include <ppp/net/IPEndPoint.h>
@@ -8,15 +13,32 @@
 namespace ppp {
     namespace net {
         namespace asio {
-            namespace templates {
+                namespace templates {
                 namespace websocket {
+                    /** @brief Beast dynamic HTTP body type used during websocket handshake. */
                     typedef boost::beast::http::dynamic_body                    dynamic_body;
+                    /** @brief HTTP request type used to read upgrade requests on server side. */
                     typedef boost::beast::http::request<dynamic_body>           http_request;
 
+                    /**
+                     * @brief Validates whether a requested URL path matches the configured websocket root.
+                     * @param root Expected root path.
+                     * @param sw Request target from HTTP upgrade request.
+                     * @return True when the request path is accepted.
+                     */
                     bool                                                        CheckRequestPath(ppp::string& root, const boost::beast::string_view& sw) noexcept;
+                    /**
+                     * @brief Extracts client IP address text from proxy forwarding headers.
+                     * @param req HTTP upgrade request.
+                     * @return Parsed client address string, or empty string if unavailable.
+                     */
                     ppp::string                                                 GetAddressString(http_request& req) noexcept;
                 }
 
+                /**
+                 * @brief Generic websocket handshake runner for both client and server roles.
+                 * @tparam T Beast websocket stream type.
+                 */
                 template <class T>
                 class WebSocket : public IDisposable {
                 public:
@@ -26,6 +48,13 @@ namespace ppp {
                     typedef ppp::net::asio::templates::websocket::http_request  http_request;
 
                 public:
+                    /**
+                     * @brief Constructs a handshake helper bound to an existing websocket stream.
+                     * @param websocket Underlying websocket stream.
+                     * @param binary Whether websocket frames use binary mode.
+                     * @param host Host used for client handshake.
+                     * @param path Expected websocket path.
+                     */
                     WebSocket(
                         T&                                                      websocket,
                         bool                                                    binary,
@@ -39,13 +68,22 @@ namespace ppp {
                     virtual ~WebSocket()                                        noexcept = default;
 
                 protected:
+                    /** @brief Stores remote address text extracted from request headers. */
                     virtual void                                                SetAddressString(const ppp::string& address) noexcept = 0;
+                    /** @brief Customizes outbound client handshake request headers. */
                     virtual void                                                Decorator(boost::beast::websocket::request_type& req) noexcept {}
+                    /** @brief Customizes outbound server handshake response headers. */
                     virtual void                                                Decorator(boost::beast::websocket::response_type& res) noexcept {
                         res.set(boost::beast::http::field::server, BOOST_BEAST_VERSION_STRING);
                     }
 
                 public:
+                    /**
+                     * @brief Executes websocket handshake as client or server.
+                     * @param handshaked_client True for client-side handshake, false for server-side upgrade handling.
+                     * @param y Coroutine yield context used by async operations.
+                     * @return True when handshake succeeds.
+                     */
                     bool                                                        Run(bool handshaked_client, YieldContext& y) noexcept {
                         if (host_.empty() || path_.empty()) {
                             return false;
@@ -91,6 +129,12 @@ namespace ppp {
 
                             // Receive the HTTP response is do OK.
                             if (ok) {
+                                /**
+                                 * @brief Server-side upgrade acceptance flow.
+                                 *
+                                 * Verifies the request path, emits a 404 response when rejected,
+                                 * and on success completes async_accept then records proxied client IP.
+                                 */
                                 // Set suggested timeout settings for the websocket.
                                 websocket_.set_option(
                                     boost::beast::websocket::stream_base::timeout::suggested(

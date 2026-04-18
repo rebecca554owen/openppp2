@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+/**
+ * @file VirtualEthernetLogger.cpp
+ * @brief Implementation of structured virtual Ethernet event logging.
+ */
+
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/DateTime.h>
 #include <ppp/io/File.h>
@@ -19,18 +26,24 @@ namespace ppp {
     namespace app {
         namespace protocol {
             namespace logger_detail {
+    /** @brief Maximum queued lines before oldest entries are dropped. */
     static constexpr std::size_t kMaxPendingLines = 4096;
+    /** @brief Maximum active log file size before rotation. */
     static constexpr std::size_t kMaxLogFileBytes = 64ULL * 1024ULL * 1024ULL;
+    /** @brief Number of rotated archive days to retain. */
     static constexpr int kMaxArchiveDays = 14;
 
+    /** @brief Builds integer day key in `YYYYMMDD` format. */
     static int LOGGER_DAY_KEY(ppp::DateTime now) noexcept {
         return now.Year() * 10000 + now.Month() * 100 + now.Day();
     }
 
+    /** @brief Formats timestamp in fixed millisecond precision. */
     static ppp::string LOGGER_NOW_ISO(ppp::DateTime now) noexcept {
         return now.ToString("yyyy-MM-dd HH:mm:ss.fff");
     }
 
+    /** @brief Converts session GUID to uppercase braced string. */
     static ppp::string LOGGER_GUID(ppp::Int128 guid) noexcept {
         ppp::string s = "{";
         ppp::string guid_text = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(guid);
@@ -39,6 +52,7 @@ namespace ppp {
         return s;
     }
 
+    /** @brief Converts packet direction enum to stable text token. */
     static const char* LOGGER_DIRECTION(ppp::app::protocol::VirtualEthernetLogger::PacketDirection direction) noexcept {
         using PacketDirection = ppp::app::protocol::VirtualEthernetLogger::PacketDirection;
         switch (direction) {
@@ -55,6 +69,7 @@ namespace ppp {
         }
     }
 
+    /** @brief Escapes string for JSON value context. */
     static ppp::string LOGGER_JSON_ESCAPE(const ppp::string& in) noexcept {
         ppp::string out;
         out.reserve(in.size() + 16);
@@ -83,6 +98,7 @@ namespace ppp {
         return out;
     }
 
+    /** @brief Converts packet prefix bytes into uppercase hex sample. */
     static ppp::string LOGGER_JSON_HEX(const void* data, int length) noexcept {
         static const char kHex[] = "0123456789ABCDEF";
 
@@ -102,6 +118,7 @@ namespace ppp {
         return out;
     }
 
+    /** @brief Maps L3/L4 protocol number to display token. */
     static ppp::string LOGGER_PROTOCOL_NAME(int protocol) noexcept {
         switch (protocol) {
         case ppp::net::native::ip_hdr::IP_PROTO_TCP:
@@ -117,6 +134,26 @@ namespace ppp {
         }
     }
 
+    static const char* LOGGER_TRANSPORT_NAME(int protocol) noexcept {
+        switch (protocol) {
+        case ppp::net::native::ip_hdr::IP_PROTO_TCP:
+            return "TCP";
+        case ppp::net::native::ip_hdr::IP_PROTO_UDP:
+            return "UDP";
+        case ppp::net::native::ip_hdr::IP_PROTO_ICMP:
+        case IPPROTO_ICMPV6:
+            return "ICMP";
+        default:
+            return "OTHER";
+        }
+    }
+
+    static ppp::string LOGGER_IP_STRING(const boost::asio::ip::address& ip) noexcept {
+        std::string ip_std = ip.to_string();
+        return ppp::string(ip_std.data(), ip_std.size());
+    }
+
+    /** @brief Formats endpoint using IPv4/IPv6-safe notation. */
     static ppp::string LOGGER_ENDPOINT(const boost::asio::ip::address& ip, int port) noexcept {
         std::string ip_std = ip.to_string();
         ppp::string ip_string(ip_std.data(), ip_std.size());
@@ -131,14 +168,17 @@ namespace ppp {
         return ppp::string();
     }
 
+    /** @brief Formats TCP endpoint into string. */
     static ppp::string LOGGER_ENDPOINT(const boost::asio::ip::tcp::endpoint& ep) noexcept {
         return LOGGER_ENDPOINT(ep.address(), ep.port());
     }
 
+    /** @brief Formats UDP endpoint into string. */
     static ppp::string LOGGER_ENDPOINT(const boost::asio::ip::udp::endpoint& ep) noexcept {
         return LOGGER_ENDPOINT(ep.address(), ep.port());
     }
 
+    /** @brief Extracts optional X-Forwarded-For and transport family. */
     static ppp::string GetXForwardedFor(const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, ppp::string* protocol) noexcept {
         if (ppp::transmissions::IWebsocketTransmission* ws = dynamic_cast<ppp::transmissions::IWebsocketTransmission*>(transmission.get()); ws) {
             if (auto p = ws->GetSocket(); p) {
@@ -167,6 +207,7 @@ namespace ppp {
         return ppp::string();
     }
 
+    /** @brief Builds source endpoint text including transport and proxy hints. */
     static ppp::string GetRemoteEndPoint(const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
         ppp::string log = ppp::net::IPEndPoint::ToEndPoint(transmission->GetRemoteEndPoint()).ToString();
         ppp::string protocol;
@@ -180,6 +221,7 @@ namespace ppp {
         return log;
     }
 
+    /** @brief Removes file path if it exists. */
     static bool LOGGER_DELETE_FILE(const ppp::string& path) noexcept {
         if (path.empty()) {
             return false;
@@ -188,6 +230,7 @@ namespace ppp {
         return ::remove(path.data()) == 0;
     }
 
+    /** @brief Parses `YYYYMMDD` day key from rotated archive file name. */
     static int LOGGER_PARSE_DAYKEY_FROM_NAME(const ppp::string& base_name, const ppp::string& file_name) noexcept {
         if (base_name.empty() || file_name.size() <= base_name.size() + 9) {
             return -1;
@@ -219,6 +262,7 @@ namespace ppp {
         return value;
     }
 
+    /** @brief Returns file name without extension. */
     static ppp::string LOGGER_BASE_NAME(const ppp::string& file_name) noexcept {
         std::size_t dot = file_name.find_last_of('.');
         if (dot == ppp::string::npos || dot == 0) {
@@ -228,6 +272,7 @@ namespace ppp {
         return file_name.substr(0, dot);
     }
 
+    /** @brief Returns file extension without dot. */
     static ppp::string LOGGER_EXTENSION(const ppp::string& file_name) noexcept {
         std::size_t dot = file_name.find_last_of('.');
         if (dot == ppp::string::npos || dot + 1 >= file_name.size()) {
@@ -246,6 +291,7 @@ namespace ppp {
         namespace protocol {
             using namespace logger_detail;
 
+            /** @brief Constructs logger and prepares active log file. */
             VirtualEthernetLogger::VirtualEthernetLogger(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& log_path) noexcept
                 : log_context_(context) {
                 if (NULLPTR == context || log_path.empty()) {
@@ -277,10 +323,12 @@ namespace ppp {
                 OpenLogFile();
             }
 
+            /** @brief Flushes and closes logger resources. */
             VirtualEthernetLogger::~VirtualEthernetLogger() noexcept {
                 Finalize();
             }
 
+            /** @brief Opens active log file and initializes size/day metadata. */
             bool VirtualEthernetLogger::OpenLogFile() noexcept {
                 if (log_path_.empty()) {
                     return false;
@@ -307,10 +355,12 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Returns whether logger can currently write entries. */
             bool VirtualEthernetLogger::Valid() noexcept {
                 return NULLPTR != log_file_ && NULLPTR != log_context_ && !log_path_.empty();
             }
 
+            /** @brief Schedules asynchronous finalization on logger context. */
             void VirtualEthernetLogger::Dispose() noexcept {
                 std::shared_ptr<VirtualEthernetLogger> self = GetReference();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -334,6 +384,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Performs synchronous flush/close and resets state. */
             void VirtualEthernetLogger::Finalize() noexcept {
                 FlushPending();
 
@@ -349,6 +400,7 @@ namespace ppp {
                 log_file_day_key_ = -1;
             }
 
+            /** @brief Ensures active file exists and rotates if day/size threshold is reached. */
             bool VirtualEthernetLogger::EnsureLogFile(std::size_t incoming_bytes) noexcept {
                 if (NULLPTR == log_file_) {
                     if (!OpenLogFile()) {
@@ -370,6 +422,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Rotates active file to dated archive and opens a new one. */
             void VirtualEthernetLogger::RotateLogFile(int day_key) noexcept {
                 FILE* f = std::exchange(log_file_, NULLPTR);
                 if (NULLPTR != f) {
@@ -401,6 +454,7 @@ namespace ppp {
                 CleanupArchives();
             }
 
+            /** @brief Removes oldest archive files beyond retention policy. */
             void VirtualEthernetLogger::CleanupArchives() noexcept {
                 ppp::vector<ppp::string> files;
                 if (!ppp::io::File::GetAllFileNames(log_directory_.data(), false, files)) {
@@ -434,6 +488,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Adds a line to pending queue with bound on memory growth. */
             bool VirtualEthernetLogger::EnqueueLine(ppp::string line) noexcept {
                 if (line.empty()) {
                     return false;
@@ -452,6 +507,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Flushes pending lines to disk in FIFO order. */
             void VirtualEthernetLogger::FlushPending() noexcept {
                 if (pending_lines_.empty()) {
                     return;
@@ -479,6 +535,7 @@ namespace ppp {
                 pending_lines_.clear();
             }
 
+            /** @brief Copies caller buffer and dispatches asynchronous write. */
             bool VirtualEthernetLogger::Write(const void* s, int length, const ppp::function<void(bool)>& cb) noexcept {
                 if (NULLPTR == s || length < 1) {
                     if (cb) {
@@ -500,6 +557,7 @@ namespace ppp {
                 return Write(buffer, length, cb);
             }
 
+            /** @brief Enqueues owned line and flushes in logger strand/context. */
             bool VirtualEthernetLogger::Write(const std::shared_ptr<Byte>& s, int length, const ppp::function<void(bool)>& cb) noexcept {
                 if (NULLPTR == s || length < 1) {
                     if (cb) {
@@ -540,6 +598,11 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Logs one packet event with lightweight protocol parsing.
+             * @details The parser extracts protocol, endpoints and payload size best-effort,
+             * then writes one JSON line with a packet byte sample.
+             */
             bool VirtualEthernetLogger::Packet(Int128 guid, const void* packet, int packet_length, PacketDirection direction) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -550,6 +613,12 @@ namespace ppp {
                 ppp::string protocol = "unknown";
                 ppp::string src;
                 ppp::string dst;
+                ppp::string src_ip;
+                ppp::string dst_ip;
+
+                int transport_protocol_number = -1;
+                int source_port = 0;
+                int destination_port = 0;
 
                 int payload_bytes = 0;
                 bool checksum_ok = true;
@@ -560,12 +629,12 @@ namespace ppp {
                 ppp::net::native::ip_hdr* v4 = ppp::net::native::ip_hdr::Parse(packet, packet_size);
                 if (NULLPTR != v4) {
                     ipv6_packet = false;
-                    protocol = LOGGER_PROTOCOL_NAME(ppp::net::native::ip_hdr::IPH_PROTO(v4));
-                    boost::asio::ip::address src_ip = ppp::net::Ipep::ToAddress(v4->src);
-                    boost::asio::ip::address dst_ip = ppp::net::Ipep::ToAddress(v4->dest);
-
-                    int source_port = 0;
-                    int destination_port = 0;
+                    transport_protocol_number = ppp::net::native::ip_hdr::IPH_PROTO(v4);
+                    protocol = LOGGER_PROTOCOL_NAME(transport_protocol_number);
+                    boost::asio::ip::address src_address = ppp::net::Ipep::ToAddress(v4->src);
+                    boost::asio::ip::address dst_address = ppp::net::Ipep::ToAddress(v4->dest);
+                    src_ip = LOGGER_IP_STRING(src_address);
+                    dst_ip = LOGGER_IP_STRING(dst_address);
                     int hdr_len = ppp::net::native::ip_hdr::IPH_HL(v4) * 4;
                     if (hdr_len < 20) {
                         hdr_len = 20;
@@ -576,7 +645,7 @@ namespace ppp {
                         l4_len = 0;
                     }
 
-                    if (ppp::net::native::ip_hdr::IPH_PROTO(v4) == ppp::net::native::ip_hdr::IP_PROTO_TCP) {
+                    if (transport_protocol_number == ppp::net::native::ip_hdr::IP_PROTO_TCP) {
                         ppp::net::native::tcp_hdr* tcp = ppp::net::native::tcp_hdr::Parse(v4, packet, packet_length);
                         if (tcp) {
                             source_port = ntohs(tcp->src);
@@ -588,7 +657,7 @@ namespace ppp {
                             payload_bytes = std::max<int>(0, l4_len - tcp_hdr_len);
                         }
                     }
-                    else if (ppp::net::native::ip_hdr::IPH_PROTO(v4) == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
+                    else if (transport_protocol_number == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
                         ppp::net::native::udp_hdr* udp = ppp::net::native::udp_hdr::Parse(v4, packet, packet_length);
                         if (udp) {
                             source_port = ntohs(udp->src);
@@ -600,8 +669,8 @@ namespace ppp {
                         payload_bytes = l4_len;
                     }
 
-                    src = LOGGER_ENDPOINT(src_ip, source_port);
-                    dst = LOGGER_ENDPOINT(dst_ip, destination_port);
+                    src = LOGGER_ENDPOINT(src_address, source_port);
+                    dst = LOGGER_ENDPOINT(dst_address, destination_port);
                 }
                 else {
                     boost::asio::ip::address_v6 src_v6;
@@ -610,12 +679,53 @@ namespace ppp {
                     int body_length = 0;
                     if (ppp::ipv6::TryParsePacket(const_cast<Byte*>(bytes), packet_length, src_v6, dst_v6, &next_header, &body_length)) {
                         ipv6_packet = true;
+                        transport_protocol_number = next_header;
                         protocol = LOGGER_PROTOCOL_NAME(next_header);
-                        src = LOGGER_ENDPOINT(boost::asio::ip::address(src_v6), 0);
-                        dst = LOGGER_ENDPOINT(boost::asio::ip::address(dst_v6), 0);
-                        payload_bytes = std::max<int>(0, body_length);
+                        boost::asio::ip::address src_address(src_v6);
+                        boost::asio::ip::address dst_address(dst_v6);
+                        src_ip = LOGGER_IP_STRING(src_address);
+                        dst_ip = LOGGER_IP_STRING(dst_address);
+
+                        bool ipv6_l4_parsed = false;
+                        if (body_length > 0 && packet_length >= ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
+                            const Byte* l4 = bytes + ppp::ipv6::IPv6_HEADER_MIN_SIZE;
+                            int l4_len = std::min<int>(body_length, packet_length - ppp::ipv6::IPv6_HEADER_MIN_SIZE);
+                            if (l4_len >= 0) {
+                                if (next_header == ppp::net::native::ip_hdr::IP_PROTO_TCP && l4_len >= static_cast<int>(sizeof(ppp::net::native::tcp_hdr))) {
+                                    const ppp::net::native::tcp_hdr* tcp = reinterpret_cast<const ppp::net::native::tcp_hdr*>(l4);
+                                    source_port = ntohs(tcp->src);
+                                    destination_port = ntohs(tcp->dest);
+                                    int tcp_hdr_len = ppp::net::native::tcp_hdr::TCPH_HDRLEN_BYTES(const_cast<ppp::net::native::tcp_hdr*>(tcp));
+                                    if (tcp_hdr_len < 20 || tcp_hdr_len > l4_len) {
+                                        tcp_hdr_len = 20;
+                                    }
+                                    payload_bytes = std::max<int>(0, l4_len - tcp_hdr_len);
+                                    ipv6_l4_parsed = true;
+                                }
+                                else if (next_header == ppp::net::native::ip_hdr::IP_PROTO_UDP && l4_len >= static_cast<int>(sizeof(ppp::net::native::udp_hdr))) {
+                                    const ppp::net::native::udp_hdr* udp = reinterpret_cast<const ppp::net::native::udp_hdr*>(l4);
+                                    source_port = ntohs(udp->src);
+                                    destination_port = ntohs(udp->dest);
+                                    payload_bytes = std::max<int>(0, l4_len - static_cast<int>(sizeof(ppp::net::native::udp_hdr)));
+                                    ipv6_l4_parsed = true;
+                                }
+                                else {
+                                    payload_bytes = std::max<int>(0, l4_len);
+                                    ipv6_l4_parsed = true;
+                                }
+                            }
+                        }
+
+                        src = LOGGER_ENDPOINT(src_address, source_port);
+                        dst = LOGGER_ENDPOINT(dst_address, destination_port);
+                        if (!ipv6_l4_parsed) {
+                            payload_bytes = std::max<int>(0, body_length);
+                        }
                     }
                 }
+
+                const char* direction_text = LOGGER_DIRECTION(direction);
+                const char* transport_name = LOGGER_TRANSPORT_NAME(transport_protocol_number);
 
                 ppp::string line;
                 line.reserve(512);
@@ -623,7 +733,7 @@ namespace ppp {
                 line += "\"ts\":\"" + LOGGER_JSON_ESCAPE(timestamp) + "\"";
                 line += ",\"event\":\"packet\"";
                 line += ",\"session\":\"" + LOGGER_JSON_ESCAPE(LOGGER_GUID(guid)) + "\"";
-                line += ",\"direction\":\"" + ppp::string(LOGGER_DIRECTION(direction)) + "\"";
+                line += ",\"direction\":\"" + ppp::string(direction_text) + "\"";
                 line += ",\"protocol\":\"" + LOGGER_JSON_ESCAPE(protocol) + "\"";
                 line += ",\"src\":\"" + LOGGER_JSON_ESCAPE(src) + "\"";
                 line += ",\"dst\":\"" + LOGGER_JSON_ESCAPE(dst) + "\"";
@@ -632,15 +742,24 @@ namespace ppp {
                 line += ",\"ipv6\":" + ppp::string(ipv6_packet ? "true" : "false");
                 line += ",\"checksum_ok\":" + ppp::string(checksum_ok ? "true" : "false");
                 line += ",\"sample_hex\":\"" + LOGGER_JSON_ESCAPE(LOGGER_JSON_HEX(packet, packet_length)) + "\"";
+                line += ",\"src_ip\":\"" + LOGGER_JSON_ESCAPE(src_ip) + "\"";
+                line += ",\"dst_ip\":\"" + LOGGER_JSON_ESCAPE(dst_ip) + "\"";
+                line += ",\"transport\":\"" + ppp::string(transport_name) + "\"";
+                line += ",\"src_port\":" + stl::to_string<ppp::string>(source_port);
+                line += ",\"dst_port\":" + stl::to_string<ppp::string>(destination_port);
+                line += ",\"packet_length\":" + stl::to_string<ppp::string>(packet_length);
+                line += ",\"packet_direction\":\"" + ppp::string(direction_text) + "\"";
                 line += "}\n";
 
                 return Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs ARP-like assignment event from raw IPv4 values. */
             bool VirtualEthernetLogger::Arp(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, uint32_t ip, uint32_t mask) noexcept {
                 return this->Arp(guid, transmission, ppp::net::Ipep::ToAddress(ip), ppp::net::Ipep::ToAddress(mask));
             }
 
+            /** @brief Logs ARP-like assignment event with address objects. */
             bool VirtualEthernetLogger::Arp(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::address& ip, const boost::asio::ip::address& mask) noexcept {
                 ppp::DateTime now = ppp::threading::Executors::Now();
                 std::string ip_std = ip.to_string();
@@ -659,6 +778,7 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs connect event including NAT endpoint and destination endpoint. */
             bool VirtualEthernetLogger::Connect(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::tcp::endpoint& natEP, const boost::asio::ip::tcp::endpoint& dstEP, const ppp::string& hostDomain) noexcept {
                 if (NULLPTR == transmission) {
                     return false;
@@ -678,6 +798,7 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs VPN session establishment event. */
             bool VirtualEthernetLogger::Vpn(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
                 if (NULLPTR == transmission) {
                     return false;
@@ -695,6 +816,7 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs DNS-related domain event. */
             bool VirtualEthernetLogger::Dns(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const ppp::string& hostDomain) noexcept {
                 ppp::DateTime now = ppp::threading::Executors::Now();
                 ppp::string line;
@@ -709,6 +831,7 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs UDP port mapping event. */
             bool VirtualEthernetLogger::Port(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::udp::endpoint& inEP, const boost::asio::ip::udp::endpoint& natEP) noexcept {
                 ppp::DateTime now = ppp::threading::Executors::Now();
                 ppp::string line;
@@ -724,6 +847,7 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs mapping connect event between public and remote endpoints. */
             bool VirtualEthernetLogger::MPConnect(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::tcp::endpoint& publicEP, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
                 ppp::DateTime now = ppp::threading::Executors::Now();
                 ppp::string line;
@@ -739,6 +863,7 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /** @brief Logs mapping entry registration with transport type. */
             bool VirtualEthernetLogger::MPEntry(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::tcp::endpoint& publicEP, bool protocol_tcp_or_udp) noexcept {
                 ppp::DateTime now = ppp::threading::Executors::Now();
                 ppp::string line;

@@ -15,10 +15,25 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ppp\app\PppApplication.cpp">
+    <ClCompile Include="main.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="ppp\app\PppMain.cpp">
+    <ClCompile Include="ppp\app\ApplicationConfig.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationHelp.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationInitialize.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationMainLoop.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationNetwork.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\PppApplication.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\stdafx.cpp">
@@ -1263,6 +1278,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\PppApplication.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\PppApplicationInternal.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\transmissions\ITransmissionStatistics.h">

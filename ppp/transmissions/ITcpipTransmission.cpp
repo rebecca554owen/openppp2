@@ -1,4 +1,9 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
+
+/**
+ * @file ITcpipTransmission.cpp
+ * @brief Implements TCP socket-based transmission read/write and lifecycle logic.
+ */
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
@@ -12,6 +17,9 @@ using ppp::net::IPEndPoint;
 
 namespace ppp {
     namespace transmissions {
+        /**
+         * @brief Constructs a TCP/IP transmission and caches the remote endpoint.
+         */
         ITcpipTransmission::ITcpipTransmission(
             const ContextPtr&                                       context, 
             const StrandPtr&                                        strand,
@@ -34,6 +42,9 @@ namespace ppp {
             Finalize();
         }
  
+        /**
+         * @brief Finalizes the transmission by closing the socket and releasing QoS state.
+         */
         void ITcpipTransmission::Finalize() noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
             disposed_ = true;
@@ -47,6 +58,9 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Schedules asynchronous disposal on the configured executor and strand.
+         */
         void ITcpipTransmission::Dispose() noexcept {
             auto self = shared_from_this();
             ppp::threading::Executors::ContextPtr context = GetContext();
@@ -59,10 +73,20 @@ namespace ppp {
             ITransmission::Dispose();
         }
 
+        /**
+         * @brief Returns the cached remote endpoint.
+         * @return Peer TCP endpoint.
+         */
         boost::asio::ip::tcp::endpoint ITcpipTransmission::GetRemoteEndPoint() noexcept {
             return remoteEP_;
         }
 
+        /**
+         * @brief Reads bytes through the QoS-managed path.
+         * @param y Coroutine yield context.
+         * @param length Number of bytes to read.
+         * @return Read buffer on success; null on failure.
+         */
         std::shared_ptr<Byte> ITcpipTransmission::DoReadBytes(YieldContext& y, int length) noexcept {
             if (disposed_) {
                 return NULLPTR;
@@ -72,6 +96,10 @@ namespace ppp {
             return ITransmissionQoS::DoReadBytes(y, length, self, *this, this->QoS);
         }
 
+        /**
+         * @brief Migrates the socket to another scheduler when requested by Executors.
+         * @return true if migration succeeds; otherwise false.
+         */
         bool ITcpipTransmission::ShiftToScheduler() noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (!socket || !socket->is_open()) {
@@ -96,6 +124,12 @@ namespace ppp {
             return ok;
         }
 
+        /**
+         * @brief Performs an exact-length asynchronous read from the TCP socket.
+         * @param y Coroutine yield context.
+         * @param length Number of bytes required.
+         * @return Read buffer on success; null on failure.
+         */
         std::shared_ptr<Byte> ITcpipTransmission::ReadBytes(YieldContext& y, int length) noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (!socket || !socket->is_open()) {
@@ -130,6 +164,14 @@ namespace ppp {
             return packet;
         }
 
+        /**
+         * @brief Queues an asynchronous socket write on the transmission executor.
+         * @param packet Buffer that owns payload memory.
+         * @param offset Offset to the first byte to send.
+         * @param packet_length Number of bytes to send.
+         * @param cb Completion callback receiving success state.
+         * @return true if the write task is posted; otherwise false.
+         */
         bool ITcpipTransmission::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (!socket || !socket->is_open()) {

@@ -4,8 +4,20 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file IWebsocketTransmission.cpp
+ * @brief Implements websocket handshake and HTTP header decoration helpers.
+ */
+
 namespace ppp {
     namespace transmissions {
+        /**
+         * @brief Applies all configured HTTP headers to a websocket request/response.
+         * @tparam R Beast HTTP message type supporting set(name, value).
+         * @param headers Source header map.
+         * @param r Target request/response object.
+         * @return true if at least one header set is attempted.
+         */
         template <typename R>
         static inline bool DecoratorWebsocketAllHeaders(ppp::map<ppp::string, ppp::string>& headers, R& r) noexcept {
             if (headers.empty()) {
@@ -21,6 +33,12 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Decorates websocket handshake response for web clients.
+         * @param configuration Runtime app configuration.
+         * @param res Websocket HTTP response object.
+         * @return true if response headers are decorated.
+         */
         static inline bool DecoratorWebsocketResponseToWebclient(const ITransmission::AppConfigurationPtr& configuration, boost::beast::websocket::response_type& res) noexcept {
             if (NULLPTR == configuration) {
                 return false;
@@ -45,12 +63,18 @@ namespace ppp {
 
         }
 
+        /**
+         * @brief Performs websocket handshake using override or configuration endpoint.
+         */
         bool IWebsocketTransmission::HandshakeWebsocket(
             const AppConfigurationPtr&                              configuration,
             const std::shared_ptr<ppp::net::asio::websocket>&       socket,
             HandshakeType                                           handshake_type,
             YieldContext&                                           y) noexcept {
 
+            /**
+             * @brief Uses instance overrides when both Host and Path are available.
+             */
             ppp::string host = std::move(this->Host);
             ppp::string path = std::move(this->Path);
 
@@ -63,6 +87,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Applies configured custom headers to websocket requests.
+         */
         bool IWebsocketTransmission::Decorator(boost::beast::websocket::request_type& req) noexcept {
             auto configuration = GetConfiguration();
             if (NULLPTR == configuration) {
@@ -72,6 +99,9 @@ namespace ppp {
             return DecoratorWebsocketAllHeaders(configuration->websocket.http.request, req);
         }
         
+        /**
+         * @brief Applies configured custom headers/content to websocket responses.
+         */
         bool IWebsocketTransmission::Decorator(boost::beast::websocket::response_type& res) noexcept {
             return DecoratorWebsocketResponseToWebclient(GetConfiguration(), res);
         }
@@ -85,12 +115,18 @@ namespace ppp {
 
         }
 
+        /**
+         * @brief Performs TLS websocket handshake using override or configuration endpoint.
+         */
         bool ISslWebsocketTransmission::HandshakeWebsocket(
             const AppConfigurationPtr&                              configuration,
             const std::shared_ptr<ppp::net::asio::sslwebsocket>&    socket,
             HandshakeType                                           handshake_type,
             YieldContext&                                           y) noexcept {
 
+            /**
+             * @brief Uses instance overrides when both Host and Path are available.
+             */
             ppp::string host = std::move(this->Host);
             ppp::string path = std::move(this->Path);
 
@@ -122,6 +158,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Applies configured custom headers to TLS websocket requests.
+         */
         bool ISslWebsocketTransmission::Decorator(boost::beast::websocket::request_type& req) noexcept {
             auto configuration = GetConfiguration();
             if (NULLPTR == configuration) {
@@ -131,6 +170,9 @@ namespace ppp {
             return DecoratorWebsocketAllHeaders(configuration->websocket.http.request, req);
         }
 
+        /**
+         * @brief Applies configured custom headers/content to TLS websocket responses.
+         */
         bool ISslWebsocketTransmission::Decorator(boost::beast::websocket::response_type& res) noexcept {
             return DecoratorWebsocketResponseToWebclient(GetConfiguration(), res);
         }

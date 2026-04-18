@@ -1,5 +1,5 @@
 /*
- * Header for OpenPPP2 system NAT (eBPF TC based NAT).
+ * Header for OPENPPP2 system NAT (eBPF TC based NAT).
  *
  * This API provides functions to attach/detach an eBPF program to the TC egress
  * hook of a network interface, and to manage NAT rules in a pinned BPF map.

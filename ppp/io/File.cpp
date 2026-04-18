@@ -2,6 +2,11 @@
 #include <ppp/io/MemoryStream.h>
 #include <ppp/text/Encoding.h>
 
+/**
+ * @file File.cpp
+ * @brief Implements cross-platform file and path utility helpers.
+ */
+
 #if defined(_WIN32)
 #include <windows/ppp/win32/Win32Native.h>
 #endif
@@ -14,6 +19,11 @@
 
 namespace ppp {
     namespace io {
+        /**
+         * @brief Gets file length in bytes.
+         * @param path File path.
+         * @return File size, or `~0` when unavailable.
+         */
         int File::GetLength(const char* path) noexcept {
             if (NULLPTR == path) {
                 return ~0;
@@ -31,6 +41,11 @@ namespace ppp {
             return length;
         }
 
+        /**
+         * @brief Checks whether a regular file exists.
+         * @param path File path.
+         * @return `true` when file exists and is not a directory.
+         */
         bool File::Exists(const char* path) noexcept {
             if (NULLPTR == path) {
                 return false;
@@ -44,6 +59,13 @@ namespace ppp {
             return access(path, F_OK) == 0;
         }
 
+        /**
+         * @brief Writes binary content to a file.
+         * @param path Destination file path.
+         * @param data Source buffer.
+         * @param length Number of bytes to write.
+         * @return `true` on success.
+         */
         bool File::WriteAllBytes(const char* path, const void* data, int length) noexcept {
             if (NULLPTR == path || length < 0) {
                 return false;
@@ -67,6 +89,12 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Tests whether a file can be opened with requested access.
+         * @param path File path.
+         * @param access_ Requested access flags.
+         * @return `true` when access check succeeds.
+         */
         bool File::CanAccess(const char* path, FileAccess access_) noexcept {
 #if defined(_WIN32)
             if (NULLPTR == path) {
@@ -111,12 +139,20 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Detects encoding from initial byte markers.
+         * @param p Input byte buffer.
+         * @param length Buffer length.
+         * @param offset Receives number of leading marker bytes consumed.
+         * @return One value from `ppp::text::Encoding` constants.
+         */
         int File::GetEncoding(const void* p, int length, int& offset) noexcept {
             offset = 0;
             if (NULLPTR == p || length < 3) {
                 return ppp::text::Encoding::ASCII;
             }
             
+            /** Check common BOM signatures to determine text encoding. */
             // byte[] Unicode = new byte[] { 0xFF, 0xFE, 0x41 };
             // byte[] UnicodeBIG = new byte[] { 0xFE, 0xFF, 0x00 };
             // byte[] UTF8 = new byte[] { 0xEF, 0xBB, 0xBF }; // BOM
@@ -138,6 +174,11 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Reads a full file as text and strips detected BOM bytes.
+         * @param path File path.
+         * @return File content as string, or empty string on failure.
+         */
         ppp::string File::ReadAllText(const char* path) noexcept {
             int file_length = 0;
             std::shared_ptr<Byte> file_content = File::ReadAllBytes(path, file_length);
@@ -160,6 +201,12 @@ namespace ppp {
             return ppp::string(file_content_memory, file_length);
         }
 
+        /**
+         * @brief Reads all bytes from a file into memory.
+         * @param path File path.
+         * @param length Receives number of bytes read; `~0` when failed.
+         * @return Shared byte buffer containing file data.
+         */
         std::shared_ptr<Byte> File::ReadAllBytes(const char* path, int& length) noexcept {
             length = ~0;
             if (NULLPTR == path) {
@@ -174,6 +221,7 @@ namespace ppp {
             MemoryStream stream_;
             char buff_[1400];
 
+            /** Read in chunks to avoid allocating based on uncertain file size. */
             for (;;) {
                 size_t count_ = fread(buff_, 1, sizeof(buff_), file_);
                 if (count_ == 0) {
@@ -189,6 +237,10 @@ namespace ppp {
             return stream_.GetBuffer();
         }
 
+        /**
+         * @brief Returns platform-specific directory separator.
+         * @return "\\" on Windows, otherwise "/".
+         */
         ppp::string File::GetSeparator() noexcept {
 #if defined(_WIN32)
             return "\\";
@@ -197,6 +249,11 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Normalizes a path string for current platform conventions.
+         * @param path Input path.
+         * @return Rewritten path prefixed with relative marker when needed.
+         */
         ppp::string File::RewritePath(const char* path) noexcept {
             ppp::string rewrite_path;
             if (NULLPTR != path && *path != '\x0') {
@@ -209,6 +266,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** Convert to Windows separators and collapse duplicates. */
             rewrite_path = Replace<ppp::string>(rewrite_path, "/", "\\");
             rewrite_path = Replace<ppp::string>(rewrite_path, "\\\\", "\\");
             
@@ -217,6 +275,7 @@ namespace ppp {
                 rewrite_path = ".\\" + rewrite_path;
             }
 #else
+            /** Convert to Unix separators and collapse duplicates. */
             rewrite_path = Replace<ppp::string>(rewrite_path, "\\", "/");
             rewrite_path = Replace<ppp::string>(rewrite_path, "//", "/");
 
@@ -228,6 +287,11 @@ namespace ppp {
             return rewrite_path;
         }
 
+        /**
+         * @brief Resolves an absolute path where possible.
+         * @param path Input path.
+         * @return Full path string, or empty string when unresolved.
+         */
         ppp::string File::GetFullPath(const char* path) noexcept {
             if (NULLPTR == path || *path == '\x0') {
                 path = "./";
@@ -252,6 +316,9 @@ namespace ppp {
 
             ppp::string dir = path;
             ppp::vector<ppp::string> segments;
+            /**
+             * Walk upward until a resolvable parent is found, then append skipped tail segments.
+             */
             for (;;) {
                 std::size_t index = dir.rfind('/');
                 if (index == ppp::string::npos) {
@@ -289,6 +356,12 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Reads all lines from a text file.
+         * @param path File path.
+         * @param lines Output container for lines.
+         * @return Number of tokens appended to `lines`.
+         */
         int File::ReadAllLines(const char* path, ppp::vector<ppp::string>& lines) noexcept {
             ppp::string content = ppp::io::File::ReadAllText(path);
             if (content.empty()) {
@@ -298,6 +371,11 @@ namespace ppp {
             return Tokenize<ppp::string>(content, lines, "\r\n");
         }
 
+        /**
+         * @brief Deletes a file from disk.
+         * @param path File path.
+         * @return `true` when deletion succeeds.
+         */
         bool File::Delete(const char* path) noexcept {
             if (NULLPTR == path || *path == '\x0') {
                 return false;
@@ -315,6 +393,12 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Creates a new file with specified byte size.
+         * @param path File path.
+         * @param size Target file size.
+         * @return `true` when file creation and resize succeed.
+         */
         bool File::Create(const char* path, size_t size) noexcept {
             if (NULLPTR == path || *path == '\x0') {
                 return false;
@@ -336,6 +420,13 @@ namespace ppp {
         }
 
         template <class TDirectoryIterator>
+        /**
+         * @brief Collects regular file names from a directory iterator type.
+         * @tparam TDirectoryIterator Iterator type (recursive or non-recursive).
+         * @param path Directory path.
+         * @param out Output file path list.
+         * @return `true` when traversal succeeds.
+         */
         static bool FILE_GetAllFileNames(const char* path, ppp::vector<ppp::string>& out) noexcept {
             if (NULLPTR == path || *path == '\x0') {
                 return false;
@@ -345,6 +436,7 @@ namespace ppp {
                 boost::filesystem::path dir(path);
                 TDirectoryIterator endl{};
                 TDirectoryIterator tail(dir);
+                /** Iterate each entry and keep regular files only. */
                 for (; tail != endl; tail++) {
                     auto& entry = *tail;
                     if (boost::filesystem::is_regular_file(entry)) {
@@ -359,6 +451,13 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Lists file names in a directory, optionally recursively.
+         * @param path Directory path.
+         * @param recursion `true` for recursive traversal.
+         * @param out Output file path list.
+         * @return `true` when traversal succeeds.
+         */
         bool File::GetAllFileNames(const char* path, bool recursion, ppp::vector<ppp::string>& out) noexcept {
             if (recursion) {
                 return FILE_GetAllFileNames<boost::filesystem::recursive_directory_iterator>(path, out);
@@ -368,6 +467,11 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Creates directory hierarchy represented by `path`.
+         * @param path Directory path.
+         * @return `true` if directory already exists or creation succeeds.
+         */
         bool File::CreateDirectories(const char* path) noexcept {
             if (NULLPTR == path || *path == '\x0') {
                 return false;
@@ -388,6 +492,11 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Returns parent directory part of a path.
+         * @param path Input path.
+         * @return Parent path string, or empty string if invalid.
+         */
         ppp::string File::GetParentPath(const char* path) noexcept {
             ppp::string s = File::RewritePath(path);
             if (s.empty()) {
@@ -403,6 +512,11 @@ namespace ppp {
             return s.substr(0, i);
         }
 
+        /**
+         * @brief Returns filename part of a path.
+         * @param path Input path.
+         * @return File name string, or empty string if invalid.
+         */
         ppp::string File::GetFileName(const char* path) noexcept {
             ppp::string s = File::File::RewritePath(path);
             if (s.empty()) {

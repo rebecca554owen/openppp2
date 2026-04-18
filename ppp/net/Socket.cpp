@@ -1,3 +1,8 @@
+/**
+ * @file Socket.cpp
+ * @brief Cross-platform socket utility implementations for PPP networking.
+ */
+
 // https://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
 // #define ENOENT           2      /* No such file or directory */
 // #define EAGAIN          11      /* Try again */
@@ -67,6 +72,9 @@
 
 namespace ppp {
     namespace net {
+        /**
+         * @brief Converts a native sockaddr into Boost.Asio address and endpoint.
+         */
         static bool Socket_ConvertSockaddrToEndpoint(const struct sockaddr* addr, boost::asio::ip::address& address, boost::asio::ip::tcp::endpoint& endpoint) noexcept {
             const struct sockaddr_in* in4 = (const struct sockaddr_in*)addr;
             const struct sockaddr_in6* in6 = (const struct sockaddr_in6*)addr;
@@ -88,6 +96,12 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Obtains peer or local endpoint from a file descriptor.
+         * @param endpoint Output endpoint value.
+         * @param fd Native socket descriptor.
+         * @param getpeername_or_getsockname true for getpeername, false for getsockname.
+         */
         static bool Socket_GetPeerNameOrGetSocketName(boost::asio::ip::tcp::endpoint& endpoint, int fd, bool getpeername_or_getsockname) noexcept {
             int err = -1;
             union {
@@ -111,24 +125,36 @@ namespace ppp {
             return Socket_ConvertSockaddrToEndpoint((struct sockaddr*)&address, boost_address, endpoint);
         }
 
+        /**
+         * @brief Gets local endpoint information for a native socket.
+         */
         boost::asio::ip::tcp::endpoint Socket::GetLocalEndPoint(int fd) noexcept {
             boost::asio::ip::tcp::endpoint endpoint;
             Socket_GetPeerNameOrGetSocketName(endpoint, fd, false);
             return endpoint;
         }
 
+        /**
+         * @brief Gets remote peer endpoint information for a native socket.
+         */
         boost::asio::ip::tcp::endpoint Socket::GetRemoteEndPoint(int fd) noexcept {
             boost::asio::ip::tcp::endpoint endpoint;
             Socket_GetPeerNameOrGetSocketName(endpoint, fd, true);
             return endpoint;
         }
 
+        /**
+         * @brief Polls socket state with millisecond timeout.
+         */
         bool Socket::Poll(int s, int milliSeconds, SelectMode mode) noexcept {
             int64_t microSeconds = milliSeconds;
             microSeconds *= 1000;
             return Socket::PolH(s, microSeconds, mode);
         }
 
+        /**
+         * @brief Polls socket state with microsecond timeout.
+         */
         bool Socket::PolH(int s, int64_t microSeconds, SelectMode mode) noexcept {
             if (s == -1) {
                 return false;
@@ -200,6 +226,7 @@ namespace ppp {
             return false;
         }
 
+        /** @brief Cancels pending asynchronous operations on UDP socket. */
         void Socket::Cancel(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -211,6 +238,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Cancels pending asynchronous operations on TCP socket. */
         void Socket::Cancel(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -222,6 +250,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Cancels pending asynchronous accept operations. */
         void Socket::Cancel(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (s.is_open()) {
@@ -233,6 +262,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Cancels pending UDP resolver operations. */
         void Socket::Cancel(const boost::asio::ip::udp::resolver& resolver) noexcept {
             boost::asio::ip::udp::resolver& s = constantof(resolver);
             try {
@@ -241,6 +271,7 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
+        /** @brief Cancels pending TCP resolver operations. */
         void Socket::Cancel(const boost::asio::ip::tcp::resolver& resolver) noexcept {
             boost::asio::ip::tcp::resolver& s = constantof(resolver);
             try {
@@ -249,6 +280,7 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
+        /** @brief Cancels pending deadline timer operations. */
         void Socket::Cancel(const boost::asio::deadline_timer& deadline_timer) noexcept {
             boost::asio::deadline_timer& t = constantof(deadline_timer);
             boost::system::error_code ec;
@@ -258,24 +290,28 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
+        /** @brief Shared-pointer UDP socket cancel overload. */
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::udp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 Cancel(*socket);
             }
         }
 
+        /** @brief Shared-pointer TCP socket cancel overload. */
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 Cancel(*socket);
             }
         }
 
+        /** @brief Shared-pointer acceptor cancel overload. */
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::tcp::acceptor>& acceptor) noexcept {
             if (NULLPTR != acceptor) {
                 Cancel(*acceptor);
             }
         }
 
+        /** @brief Shared-pointer UDP socket close overload. */
         bool Socket::Closesocket(const std::shared_ptr<boost::asio::ip::udp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 return Closesocket(*socket);
@@ -285,6 +321,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Shared-pointer TCP socket close overload. */
         bool Socket::Closesocket(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 return Closesocket(*socket);
@@ -294,6 +331,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Shared-pointer acceptor close overload. */
         bool Socket::Closesocket(const std::shared_ptr<boost::asio::ip::tcp::acceptor>& acceptor) noexcept {
             if (NULLPTR != acceptor) {
                 return Closesocket(*acceptor);
@@ -303,6 +341,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Performs half-close on native socket send channel.
+         */
         void Socket::Shutdown(int fd) noexcept {
             if (fd != -1) {
                 int how;
@@ -316,6 +357,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Closes a native socket descriptor.
+         */
         void Socket::Closesocket(int fd) noexcept {
             if (fd != -1) {
 #if defined(_WIN32)
@@ -326,6 +370,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Queries system default IPv4 TTL value.
+         */
         int Socket::GetDefaultTTL() noexcept {
             static constexpr int DFL_TTL = 64;
 
@@ -367,6 +414,9 @@ namespace ppp {
         // Otherwise, the QEMU user mode VM frantically reports error logs.
         SOCKET_RESTRICTIONS Socket::SOCKET_RESTRICTIONS_; 
 
+        /**
+         * @brief Probes platform socket option support at startup.
+         */
         SOCKET_RESTRICTIONS::SOCKET_RESTRICTIONS() noexcept 
             : IPV6_TCLASS_ON(true)
             , IP_TOS_ON(true)
@@ -412,6 +462,9 @@ namespace ppp {
         }
 
 #if defined(_LINUX)
+        /**
+         * @brief Validates IPv4 IP_TOS availability on current runtime.
+         */
         bool SOCKET_RESTRICTIONS::ValidV4(int sockfd) noexcept {
             int tos = IPTOS_LOWDELAY;
             int err = ::setsockopt(sockfd, SOL_IP, IP_TOS, (char*)&tos, sizeof(tos));
@@ -423,6 +476,9 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Validates IPv6 traffic-class option availability.
+         */
         bool SOCKET_RESTRICTIONS::ValidV6(int sockfd) noexcept {
             int tos = IPTOS_LOWDELAY;
 #if defined(IPV6_TCLASS)
@@ -437,6 +493,9 @@ namespace ppp {
         }
 #endif  
 
+        /**
+         * @brief Applies DSCP/TOS hints to a socket.
+         */
         bool Socket::SetTypeOfService(int fd, int tos) noexcept {
             if (fd == -1) {
                 return false;
@@ -469,6 +528,9 @@ namespace ppp {
             return any;
         }
 
+        /**
+         * @brief Configures SIGPIPE behavior where supported.
+         */
         bool Socket::SetSignalPipeline(int fd, bool sigpipe) noexcept {
             int err = 0;
             if (fd == -1) {
@@ -482,6 +544,9 @@ namespace ppp {
             return err == 0;
         }
 
+        /**
+         * @brief Enables or disables SO_REUSEADDR.
+         */
         bool Socket::ReuseSocketAddress(int fd, bool reuse) noexcept {
             if (fd == -1) {
                 return false;
@@ -493,6 +558,9 @@ namespace ppp {
 
         /* TCP MSS values – what’s changed?
          * https://blog.apnic.net/2019/07/31/tcp-mss-values-whats-changed/ 
+         */
+        /**
+         * @brief Gets TCP maximum segment size from socket options.
          */
         int Socket::GetTcpMss(int fd) noexcept {
             if (fd == -1) {
@@ -509,6 +577,9 @@ namespace ppp {
             return mss;
         }
 
+        /**
+         * @brief Sets TCP MSS with conservative min/max clamping.
+         */
         bool Socket::SetTcpMss(int fd, int mss) noexcept {
             static constexpr int TCP_MIN_MSS = 536;
             static constexpr int TCP_MAX_MSS = 1460;
@@ -528,6 +599,9 @@ namespace ppp {
             return err == 0;
         }
 
+        /**
+         * @brief Enables TCP keepalive and optional platform-specific tunables.
+         */
         bool Socket::SetKeepAlive(int fd, bool enable, int idle_seconds, int interval_seconds, int probe_count) noexcept {
             if (fd == -1) {
                 return false;
@@ -577,6 +651,9 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Applies send/receive socket buffer sizes when values are provided.
+         */
         bool Socket::SetWindowSizeIfNotZero(int sockfd, int cwnd, int rwnd) noexcept {
             if (sockfd == -1) {
                 return false;
@@ -598,6 +675,9 @@ namespace ppp {
             return any;
         }
         
+        /**
+         * @brief Applies default low-level options to a native socket handle.
+         */
         void Socket::AdjustDefaultSocketOptional(int sockfd, bool in4) noexcept {
             if (sockfd != -1) {
                 uint8_t tos = SOCKET_RESTRICTIONS_.IP_TOS_DEFAULT_FLASH ? IPTOS_LOWDELAY : 0;
@@ -639,6 +719,9 @@ namespace ppp {
                 ::setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
 #endif
 
+                /**
+                 * @brief Keepalive rationale for long-idle forwarded sessions.
+                 */
                 // User-space forwarders such as rinetd often reclaim idle TCP
                 // sessions earlier than NAT devices. Keepalive prevents VMUX
                 // sub-links from being silently dropped while the mux is idle.
@@ -648,6 +731,9 @@ namespace ppp {
 
         // https://source.android.google.cn/devices/tech/debug/native-crash?hl=zh-cn
         // https://android.googlesource.com/platform/bionic/+/master/docs/fdsan.md
+        /**
+         * @brief Gracefully closes a TCP socket.
+         */
         bool Socket::Closesocket(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -666,6 +752,9 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Closes a TCP acceptor.
+         */
         bool Socket::Closesocket(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (s.is_open()) {
@@ -679,6 +768,9 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Closes a UDP socket.
+         */
         bool Socket::Closesocket(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -692,6 +784,9 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Returns native handle of an open TCP socket.
+         */
         int Socket::GetHandle(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (!socket.is_open()) {
@@ -707,6 +802,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Returns native handle of an open TCP acceptor.
+         */
         int Socket::GetHandle(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (!s.is_open()) {
@@ -722,6 +820,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Returns native handle of an open UDP socket.
+         */
         int Socket::GetHandle(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (!s.is_open()) {
@@ -737,6 +838,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Starts loopback accept recursion for shared-pointer acceptor API.
+         */
         bool Socket::AcceptLoopbackAsync(
             const AsioTcpAcceptor&                                  acceptor,
             const AcceptLoopbackCallback&                           callback,
@@ -765,6 +869,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Internal accept loop implementation for callback and scheduler modes.
+         */
         static bool SocketAcceptLoopbackAsync(
             const boost::asio::ip::tcp::acceptor&                   acceptor,
             const Socket::AcceptLoopbackCallback&                   callback,
@@ -808,6 +915,9 @@ namespace ppp {
                                 return;
                             }
 
+                            /**
+                             * @brief Complex accept path with socket setup and delegation.
+                             */
                             bool success = false;
                             do { /* boost::system::errc::connection_aborted */
                                 if (ec) { /* ECONNABORTED */
@@ -858,6 +968,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Starts loopback accept recursion using simple callback mode.
+         */
         bool Socket::AcceptLoopbackAsync(
             const boost::asio::ip::tcp::acceptor&                   acceptor,
             const AcceptLoopbackCallback&                           callback,
@@ -870,6 +983,9 @@ namespace ppp {
             return SocketAcceptLoopbackAsync(acceptor, callback, context, ac);
         }
 
+        /**
+         * @brief Starts loopback accept recursion using scheduler callback mode.
+         */
         bool Socket::AcceptLoopbackSchedulerAsync(const boost::asio::ip::tcp::acceptor& acceptor, const AcceptLoopbackSchedulerCallback& callback) noexcept {
             if (!callback) {
                 return false;
@@ -878,6 +994,9 @@ namespace ppp {
             return SocketAcceptLoopbackAsync(acceptor, NULLPTR, NULLPTR, callback);
         }
 
+        /**
+         * @brief Opens, configures, binds, and listens on a TCP acceptor.
+         */
         bool Socket::OpenAcceptor(
             const boost::asio::ip::tcp::acceptor&                   acceptor,
             const boost::asio::ip::address&                         listenIP,
@@ -951,6 +1070,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Opens/configures/binds a UDP socket for listening.
+         */
         bool Socket::OpenSocket(
             const boost::asio::ip::udp::socket&                     socket,
             const boost::asio::ip::address&                         listenIP,
@@ -1011,6 +1133,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Applies default and transport-specific options to a TCP socket.
+         */
         void Socket::AdjustSocketOptional(const boost::asio::ip::tcp::socket& socket, bool in4, bool fastOpen, bool noDealy) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -1026,6 +1151,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Applies default options to a UDP socket.
+         */
         void Socket::AdjustSocketOptional(const boost::asio::ip::udp::socket& socket, bool in4) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -1037,6 +1165,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Toggles non-blocking mode on native descriptor.
+         */
         bool Socket::SetNonblocking(int fd, bool nonblocking) noexcept {
             if (fd == -1) {
                 return false;
@@ -1063,6 +1194,9 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Cancels and closes a POSIX stream descriptor.
+         */
         bool Socket::Closestream(boost::asio::posix::stream_descriptor* stream) noexcept {
             if (NULLPTR == stream) {
                 return false;
@@ -1086,6 +1220,9 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Applies default options to an already-open TCP socket.
+         */
         bool Socket::AdjustDefaultSocketOptional(boost::asio::ip::tcp::socket& socket, bool turbo) noexcept {
             bool opened = socket.is_open();
             if (!opened) {
@@ -1113,6 +1250,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Determines local IPv4 source address for a destination.
+         */
         uint32_t Socket::GetBestInterfaceIP(uint32_t destination) noexcept {
             int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
             if (sock_fd == -1) {

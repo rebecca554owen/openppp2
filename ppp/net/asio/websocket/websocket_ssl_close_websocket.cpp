@@ -4,14 +4,27 @@
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
 
+/**
+ * @file websocket_ssl_close_websocket.cpp
+ * @brief Implements close and scheduler-shift operations for SSL WebSocket sessions.
+ */
+
 namespace ppp {
     namespace net {
         namespace asio {
+            /**
+             * @brief Disposes the SSL WebSocket and closes underlying transport layers.
+             * @return This function does not return a value.
+             * @note Close and shutdown are dispatched onto the configured executor context.
+             */
             void sslwebsocket::Dispose() noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
                 ppp::threading::Executors::StrandPtr strand = strand_;
 
+                /**
+                 * @brief Performs asynchronous websocket close and TLS shutdown in order.
+                 */
                 ppp::threading::Executors::Post(context, strand,
                     [self, this, context, strand]() noexcept {
                         std::shared_ptr<SslvWebSocket> ssl_websocket = std::move(ssl_websocket_);
@@ -31,6 +44,10 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Moves the underlying TCP socket to a scheduler-managed context.
+             * @return true if the socket is successfully moved; otherwise false.
+             */
             bool sslwebsocket::ShiftToScheduler() noexcept {
                 std::shared_ptr<SslvWebSocket> ssl_websocket = ssl_websocket_;
                 if (NULLPTR == ssl_websocket) {

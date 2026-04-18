@@ -1,7 +1,10 @@
-// ITransmission.h
+/**
+ * @file ITransmission.h
+ * @brief Declares the base encrypted transmission abstraction.
+ */
 #pragma once
 
-// Project precompiled header and core dependencies
+/** @brief Project precompiled header and core dependencies. */
 #include <ppp/stdafx.h>
 #include <ppp/Int128.h>
 #include <ppp/cryptography/Ciphertext.h>
@@ -16,101 +19,174 @@
 namespace ppp {
     namespace transmissions {
 
-        // Core transmission interface providing encrypted, handshaked, coroutine‑aware I/O.
+        /**
+         * @brief Base class for encrypted, handshaked, coroutine-aware transport I/O.
+         */
         class ITransmission : public ppp::net::asio::IAsynchronousWriteIoQueue {
-            // Bridge class (defined in .cpp) accesses private state for static helpers.
+            /** @brief Bridge helper that implements internal static read/write logic. */
             friend class ITransmissionBridge;
-            // QoS manager needs internal access for priority and rate limiting.
+            /** @brief QoS helper requires direct access to transmission internals. */
             friend class ITransmissionQoS;
 
-            // Boost deadline timer for handshake timeouts.
+            /** @brief Deadline timer type used for handshake timeout control. */
             typedef boost::asio::deadline_timer                                                     DeadlineTimer;
+            /** @brief Shared deadline timer pointer. */
             typedef std::shared_ptr<DeadlineTimer>                                                  DeadlineTimerPtr;
 
         public:
-            // Public type aliases for configuration, cipher, coroutine context, etc.
+            /** @brief Application configuration type. */
             typedef ppp::configurations::AppConfiguration                                           AppConfiguration;
+            /** @brief Shared application configuration pointer. */
             typedef std::shared_ptr<AppConfiguration>                                               AppConfigurationPtr;
+            /** @brief Symmetric cipher wrapper type. */
             typedef ppp::cryptography::Ciphertext                                                   Ciphertext;
+            /** @brief Shared cipher pointer. */
             typedef std::shared_ptr<Ciphertext>                                                     CiphertextPtr;
+            /** @brief Coroutine yield context type. */
             typedef ppp::coroutines::YieldContext                                                   YieldContext;
+            /** @brief Shared io_context pointer type. */
             typedef std::shared_ptr<boost::asio::io_context>                                        ContextPtr;
+            /** @brief Shared strand pointer for serialized callback execution. */
             typedef std::shared_ptr<boost::asio::strand<boost::asio::io_context::executor_type>>    StrandPtr;
+            /** @brief Asynchronous write completion callback type. */
             typedef ppp::function<void(bool)>                                                       AsynchronousWriteBytesCallback, AsynchronousWriteCallback;
 
         public:
-            // Constructor stores context, strand and configuration; creates ciphers if enabled.
+            /**
+             * @brief Initializes transmission context, strand, and cipher configuration.
+             * @param context Shared io_context used by async operations.
+             * @param strand Shared strand used for serialized state access.
+             * @param configuration Application-level transmission configuration.
+             */
             ITransmission(const ContextPtr& context, const StrandPtr& strand,
                 const AppConfigurationPtr& configuration) noexcept;
-            // Virtual destructor ensures proper cleanup in derived classes.
+            /** @brief Virtual destructor for polymorphic cleanup. */
             virtual ~ITransmission() noexcept;
 
         public:
-            // Statistics and QoS controllers – may be set by derived classes or users.
+            /** @brief Optional traffic statistics sink. */
             std::shared_ptr<ITransmissionStatistics> Statistics;
+            /** @brief Optional QoS coordinator used by derived transports. */
             std::shared_ptr<ITransmissionQoS> QoS;
 
         public:
-            // Simple inline accessors (noexcept for performance).
+            /** @brief Gets current transmission configuration. */
             AppConfigurationPtr                                                                     GetConfiguration() noexcept { return configuration_; }
+            /** @brief Gets mutable shared io_context reference. */
             ContextPtr&                                                                             GetContext() noexcept { return context_; }
+            /** @brief Gets mutable shared strand reference. */
             StrandPtr&                                                                              GetStrand() noexcept { return strand_; }
 
         public:
-            // Override of base Dispose to perform graceful shutdown and resource cleanup.
+            /** @brief Disposes transmission resources asynchronously. */
             virtual void                                                                            Dispose() noexcept override;
-            // Force execution onto the correct scheduler/strand (pure virtual).
+            /** @brief Moves transport execution to its scheduler if required. */
             virtual bool                                                                            ShiftToScheduler() noexcept = 0;
-            // Return remote endpoint (pure virtual).
+            /** @brief Returns remote TCP endpoint information. */
             virtual boost::asio::ip::tcp::endpoint                                                  GetRemoteEndPoint() noexcept = 0;
 
         public:
-            // Client handshake: returns session ID and sets mux flag.
+            /**
+             * @brief Runs the client-side handshake sequence.
+             * @param y Coroutine yield context.
+             * @param mux Output flag indicating negotiated multiplexing capability.
+             * @return Negotiated session identifier, or zero on failure.
+             */
             virtual Int128                                                                          HandshakeClient(YieldContext& y, bool& mux) noexcept;
-            // Server handshake: accepts a session ID and mux flag.
+            /**
+             * @brief Runs the server-side handshake sequence.
+             * @param y Coroutine yield context.
+             * @param session_id Session identifier provided by upper layer.
+             * @param mux Requested multiplexing behavior.
+             * @return true if handshake succeeds; otherwise false.
+             */
             virtual bool                                                                            HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept;
 
         public:
-            // High‑level encryption/decryption (may apply base94 when needed).
+            /**
+             * @brief Encrypts plaintext payload into transmission packet bytes.
+             * @param data Input payload pointer.
+             * @param datalen Input payload length.
+             * @param outlen Output encrypted length.
+             * @return Encrypted packet buffer, or null on failure.
+             */
             std::shared_ptr<Byte>                                                                   Encrypt(Byte* data, int datalen, int& outlen) noexcept;
+            /**
+             * @brief Decrypts packet bytes into plaintext payload.
+             * @param data Input packet pointer.
+             * @param datalen Input packet length.
+             * @param outlen Output plaintext length.
+             * @return Decrypted payload buffer, or null on failure.
+             */
             std::shared_ptr<Byte>                                                                   Decrypt(Byte* data, int datalen, int& outlen) noexcept;
-            // Coroutine‑aware read that returns decrypted payload.
+            /**
+             * @brief Reads and decrypts one payload from the underlying transport.
+             * @param y Coroutine yield context.
+             * @param outlen Output payload length.
+             * @return Decrypted payload buffer, or null on failure.
+             */
             virtual std::shared_ptr<Byte>                                                           Read(YieldContext& y, int& outlen) noexcept;
-            // Coroutine‑aware write that encrypts and sends payload.
+            /**
+             * @brief Encrypts and writes payload bytes using coroutine flow.
+             * @param y Coroutine yield context.
+             * @param packet Payload pointer.
+             * @param packet_length Payload length.
+             * @return true if write succeeds; otherwise false.
+             */
             virtual bool                                                                            Write(YieldContext& y, const void* packet, int packet_length) noexcept;
-            // Callback‑based asynchronous write (non‑yielding version).
+            /**
+             * @brief Encrypts and writes payload bytes using callback flow.
+             * @param packet Payload pointer.
+             * @param packet_length Payload length.
+             * @param cb Completion callback.
+             * @return true if write is scheduled; otherwise false.
+             */
             virtual bool                                                                            Write(const void* packet, int packet_length, const AsynchronousWriteCallback& cb) noexcept;
 
         protected:
-            // Low‑level raw byte read – must be implemented by derived classes.
+            /**
+             * @brief Reads raw bytes from derived transport implementation.
+             * @param y Coroutine yield context.
+             * @param length Number of bytes to read.
+             * @return Raw byte buffer, or null on failure.
+             */
             virtual std::shared_ptr<Byte>                                                           DoReadBytes(YieldContext& y, int length) noexcept = 0;
 
         private:
-            // Internal cleanup (called from destructor and Dispose).
+            /** @brief Performs internal resource cleanup. */
             void                                                                                    Finalize() noexcept;
-            // Cancel and release handshake timeout timer.
+            /** @brief Cancels and releases the handshake timeout timer. */
             void                                                                                    InternalHandshakeTimeoutClear() noexcept;
-            // Arm handshake timeout with random jitter.
+            /** @brief Arms handshake timeout with randomized jitter. */
             bool                                                                                    InternalHandshakeTimeoutSet() noexcept;
-            // Core client handshake logic (after timeout armed).
+            /** @brief Executes core client handshake steps. */
             Int128                                                                                  InternalHandshakeClient(YieldContext& y, bool& mux) noexcept;
-            // Core server handshake logic (after timeout armed).
+            /** @brief Executes core server handshake steps. */
             bool                                                                                    InternalHandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept;
 
         private:
-            // Bitfields (unsigned int for well‑defined behavior) – compact state flags.
+            /** @brief Set when transmission is disposed. */
             unsigned int                                                                            disposed_ : 1;      // true if transmission is disposed.
+            /** @brief Set after receive path switches to simple header mode. */
             unsigned int                                                                            frame_rn_ : 1;      // true if receive‑side simple header mode active.
+            /** @brief Set after transmit path switches to simple header mode. */
             unsigned int                                                                            frame_tn_ : 1;      // true if transmit‑side simple header mode active.
+            /** @brief Handshake completion state flag storage. */
             unsigned int                                                                            handshaked_ : 5;    // true if handshake completed.
 
+            /** @brief Backing io_context for async operation dispatch. */
             ContextPtr                                                                              context_;           // Asio io_context (never null after construction).
+            /** @brief Strand for serialized asynchronous state transitions. */
             StrandPtr                                                                               strand_;            // Strand for thread‑safe state access.
+            /** @brief Active handshake timeout timer, if armed. */
             DeadlineTimerPtr                                                                        timeout_;           // Handshake timeout timer (reset after success).
+            /** @brief Optional protocol-layer cipher instance. */
             CiphertextPtr                                                                           protocol_;          // Protocol‑layer cipher (optional).
+            /** @brief Optional transport-layer cipher instance. */
             CiphertextPtr                                                                           transport_;         // Transport‑layer cipher (optional).
+            /** @brief Shared immutable transmission configuration. */
             AppConfigurationPtr                                                                     configuration_;     // Configuration (never null after construction).
         };
 
-    } // namespace transmissions
-} // namespace ppp
+    } /** namespace transmissions */
+} /** namespace ppp */

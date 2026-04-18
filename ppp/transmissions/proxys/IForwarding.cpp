@@ -1,4 +1,9 @@
 #include <ppp/transmissions/proxys/IForwarding.h>
+
+/**
+ * @file IForwarding.cpp
+ * @brief Implements local-to-proxy forwarding, including HTTP CONNECT and SOCKS5 handshake flows.
+ */
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/IDisposable.h>
 #include <ppp/collections/Dictionary.h>
@@ -30,6 +35,9 @@ namespace ppp {
             using ppp::threading::Executors;
             using ppp::threading::BufferswapAllocator;
 
+            /**
+             * @brief Represents one bidirectional forwarding pair between local client and upstream proxy socket.
+             */
             class IForwarding::ProxyConnection final : public std::enable_shared_from_this<ProxyConnection> {
             public:
 #if defined(_WIN32)
@@ -45,6 +53,7 @@ namespace ppp {
                 std::shared_ptr<IForwarding>                                forwarding_;
 
             public:
+                /** @brief Creates a forwarding pair controller bound to the caller scheduler. */
                 ProxyConnection(const std::shared_ptr<IForwarding>& forwarding, const IForwarding::AppConfigurationPtr& configuration, const Socket::AsioContext& context, const Socket::AsioStrandPtr& strand) noexcept 
                     : disposed_(false)
                     , timeout_(UINT64_MAX)
@@ -59,6 +68,7 @@ namespace ppp {
                 }
 
             public:
+                /** @brief Schedules asynchronous disposal on the configured context/strand. */
                 void                                                        Dispose() noexcept {
                     auto self = shared_from_this();
                     ppp::threading::Executors::ContextPtr context = context_;
@@ -82,6 +92,7 @@ namespace ppp {
                         forwarding->TryRemove(this, false);
                     }
                 }
+                /** @brief Starts full-duplex forwarding between two connected sockets. */
                 bool                                                        Forward(const std::shared_ptr<boost::asio::ip::tcp::socket>& inx, const std::shared_ptr<boost::asio::ip::tcp::socket>& iny) noexcept {
                     if (disposed_) {
                         return false;
@@ -117,6 +128,7 @@ namespace ppp {
 #endif
                     return Forward(x, y, buffers_[0]) && Forward(y, x, buffers_[1]);
                 }
+                /** @brief Refreshes inactivity deadline after successful traffic activity. */
                 void                                                        Update() noexcept {
                     uint64_t now = ppp::threading::Executors::GetTickCount();
                     timeout_ = now + (UInt64)configuration_->tcp.inactive.timeout * 1000;
@@ -124,6 +136,7 @@ namespace ppp {
                 bool                                                        IsPortAging(uint64_t now) noexcept { return disposed_ || now >= timeout_; }
 
             private:
+                /** @brief Runs one asynchronous read-write relay cycle from x to y and reschedules itself. */
                 bool                                                        Forward(
                     const std::shared_ptr<boost::asio::ip::tcp::socket>&    x, 
                     const std::shared_ptr<boost::asio::ip::tcp::socket>&    y,
@@ -179,6 +192,7 @@ namespace ppp {
                 Finalize();
             }
 
+            /** @brief Resets upstream proxy and destination state to safe defaults. */
             void IForwarding::ResetSS() noexcept {
                 server_.protocol = ProtocolType_HttpProxy;
                 server_.port = IPEndPoint::MinPort;
@@ -190,6 +204,7 @@ namespace ppp {
                 local_endpoint_ = server_.endpoint;
             }
 
+            /** @brief Schedules final cleanup on the bound context. */
             void IForwarding::Dispose() noexcept {
                 ContextPtr context = context_;
                 if (NULLPTR == context) {
@@ -204,6 +219,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Sets the tunnel destination host/port validated by endpoint constraints. */
             IForwarding& IForwarding::SetRemoteEndPoint(const ppp::string& host, int port) noexcept {
                 if (disposed_ || host.empty() || port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
                     server_.host = "";
@@ -217,6 +233,9 @@ namespace ppp {
                 return *this;
             }
 
+            /**
+             * @brief Disposes a tracked value by calling Dispose() when available, otherwise closes it as a socket.
+             */
             template <class T> 
             static bool IFORWARDING_DISPOSING(T& p) noexcept {
                 if (p) {
@@ -236,6 +255,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Thread-safe helper that removes an object from a table and optionally disposes it. */
             template <class TValue, class TKey, class TMap>
             static bool IFORWARDING_TRY_REMOVE(IForwarding::SynchronizedObject& lck, TMap& map, TKey key, bool disposing) noexcept {
                 TValue r;
@@ -258,6 +278,7 @@ namespace ppp {
                 return b;
             }
 
+            /** @brief Thread-safe helper that inserts an object into a table when service is active. */
             template <class TValue, class TKey, class TMap>
             static bool IFORWARDING_TRY_ADD(bool& disposed, IForwarding::SynchronizedObject& lck, TMap& map, TKey* key, const TValue& value) noexcept {
                 if (NULLPTR == key) {
@@ -296,12 +317,14 @@ namespace ppp {
                 return IFORWARDING_TRY_ADD(disposed_, syncobj_, timers_, timer.get(), timer);
             }
 
+            /** @brief Carries payload bytes that follow HTTP response headers during CONNECT handshake. */
             typedef struct {
                 std::shared_ptr<Byte>   buffer;
                 int                     offset;
                 int                     length;
             } IForwarding_HttpOverflowByteArray;
 
+            /** @brief Validates an HTTP CONNECT success status line from buffered headers. */
             static bool IFORWARDING_HTTP_VERIFY_HANDSHAKE_RESPONSE_PACKET(MemoryStream& protocol_array) noexcept {
                 ppp::vector<ppp::string> headers;
                 if (!VEthernetHttpProxyConnection::ProtocolReadHeaders(protocol_array, headers, NULLPTR)) {
@@ -352,6 +375,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Reads and validates HTTP CONNECT response headers and captures post-header overflow bytes. */
             static bool IFORWARDING_HTTP_VERIFY_HANDSHAKE_RESPONSE_PACKET(IForwarding_HttpOverflowByteArray& ov, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, YieldContext& y) noexcept {
                 if (NULLPTR == socket || !socket->is_open()) {
                     return false;
@@ -395,6 +419,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Reads and validates upstream HTTP CONNECT response packet. */
             bool IForwarding::HTTP_ReadHandshakePacket(
                 const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, 
                 YieldContext&                                        y,
@@ -421,6 +446,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Sends HTTP CONNECT request to upstream HTTP proxy server. */
             bool IForwarding::HTTP_SendHandshakePacket(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, YieldContext& y) noexcept {
                 // Refer: https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/CONNECT
                 // The HTTP CONNECT method starts two-way communications with the requested resource. It can be used to open a tunnel.
@@ -463,6 +489,7 @@ namespace ppp {
             //
             // Considering that large enterprises also build their own DNS servers, 
             // They use self-built DNS servers to resolve internal IP addresses for the HTTP/socks proxy server.
+            /** @brief Parses and validates proxy URI, producing normalized URL/protocol/endpoint outputs. */
             static bool IFORWARDING_VERIFY_PROXY_URI(const ppp::string& in, ppp::string& server_url, boost::asio::ip::tcp::endpoint& output_endpoint, IForwarding::ProtocolType& output_protocol) noexcept {
                 typedef ppp::auxiliary::UriAuxiliary::ProtocolType ProtocolType;
 
@@ -511,6 +538,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Opens a loopback acceptor and stores the bound local endpoint. */
             bool IForwarding::OpenAcceptor() noexcept {
                 if (disposed_) {
                     return false;
@@ -544,6 +572,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Removes embedded credentials from proxy URI and returns stripped URL. */
             static ppp::string IFORWARDING_REWRITE_PROXY_URI(const ppp::string& url, ppp::string& username, ppp::string& password) noexcept {
                 username = "";
                 password = "";
@@ -585,6 +614,7 @@ namespace ppp {
                 return new_url;
             }
 
+            /** @brief Initializes proxy settings from configuration and opens local acceptor. */
             int IForwarding::OpenInternal() noexcept {
                 if (NULLPTR == context_ || NULLPTR == configuration_) {
                     return -1;
@@ -611,6 +641,7 @@ namespace ppp {
                 return OpenAcceptor() ? 1 : 0;
             }
 
+            /** @brief Starts asynchronous loopback accept dispatch. */
             bool IForwarding::LoopAcceptSocket() noexcept {
                 auto self = shared_from_this();
                 return Socket::AcceptLoopbackSchedulerAsync(acceptor_, 
@@ -624,6 +655,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Opens forwarding service and begins accepting connections when configured. */
             bool IForwarding::Open() noexcept {
                 if (disposed_) {
                     return false;
@@ -641,6 +673,7 @@ namespace ppp {
                 return false;
             }
         
+            /** @brief Creates a tracked timeout timer and invokes handler once on expiry. */
             IForwarding::TimerPtr IForwarding::SetTimeoutHandler(const std::shared_ptr<boost::asio::io_context>& context, int milliseconds, const ppp::function<void()>& handler) noexcept {
                 if (NULLPTR == context || disposed_) {
                     return NULLPTR;
@@ -674,6 +707,7 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /** @brief Creates and configures a new asynchronous socket for upstream proxy connect. */
             std::shared_ptr<boost::asio::ip::tcp::socket> IForwarding::NewAsynchronousSocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::net::Socket::AsioStrandPtr& strand) noexcept {
                 if (NULLPTR == context) {
                     return NULLPTR;
@@ -706,6 +740,7 @@ namespace ppp {
                 return remote_socket;
             }
 
+            /** @brief Applies platform-specific upstream socket preparation before handshake. */
             bool IForwarding::PROXY_SOCKET_SPECIAL_PROCESS(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, YieldContext& y, ProxyConnection& proxy_connection) noexcept {
                 if (NULLPTR == socket || !socket->is_open()) {
                     return false;
@@ -735,6 +770,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Connects to upstream proxy and performs protocol-specific tunnel handshake. */
             bool IForwarding::ConnectToProxyServer(
                 const std::shared_ptr<boost::asio::io_context>&         context, 
                 const ppp::net::Socket::AsioStrandPtr&                  strand,
@@ -794,6 +830,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Spawns coroutine to connect accepted local socket to upstream proxy. */
             bool IForwarding::ConnectToProxyServer(const std::shared_ptr<boost::asio::io_context>& context, const ppp::net::Socket::AsioStrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, Timer* timeout_key) noexcept {
                 if (NULLPTR == context || NULLPTR == socket) {
                     return false;
@@ -843,6 +880,7 @@ namespace ppp {
                 return spawned;
             }
 
+            /** @brief Handles one accepted local socket and initiates proxy bridge setup. */
             bool IForwarding::ProcessAcceptSocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::net::Socket::AsioStrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
                 if (!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
                     return false;
@@ -865,6 +903,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Registers timeout that closes a socket on connect/handshake deadline expiry. */
             IForwarding::Timer* IForwarding::SetTimeoutAutoClosesocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::net::Socket::AsioStrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
                 if (NULLPTR == context || disposed_) {
                     return NULLPTR;
@@ -884,6 +923,7 @@ namespace ppp {
                     }).get();
             }
 
+            /** @brief Returns normalized loopback local endpoint for clients. */
             boost::asio::ip::tcp::endpoint IForwarding::GetLocalEndPoint() noexcept {
                 boost::asio::ip::address address_ip = local_endpoint_.address();
                 if (address_ip.is_v4()) {
@@ -897,11 +937,13 @@ namespace ppp {
                 }
             }
 
+            /** @brief Updates timeout aging for all active proxy connections. */
             void IForwarding::Update(UInt64 now) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 Dictionary::UpdateAllObjects(connections_, now);
             }
 
+            /** @brief Releases all tracked sockets, timers, and proxy connections. */
             void IForwarding::Finalize() noexcept {
                 ProxyConnectionTable connections;
                 SocketTable sockets;
@@ -932,6 +974,7 @@ namespace ppp {
                 Dictionary::ReleaseAllObjects(connections);
             }
         
+            /** @brief Appends serialized IPv4/IPv6 bytes into SOCKS request buffer. */
             template <class Address>
             static inline void IFORWARDING_SOCKS_HANDSHAKE_CONCAT_ADDRESS(Byte* data, int& length, const Address& address) noexcept {
                 auto bytes = address.to_bytes();
@@ -941,6 +984,7 @@ namespace ppp {
                 length += bsize;
             }
 
+            /** @brief Performs SOCKS5 method negotiation, optional auth, and CONNECT request/response exchange. */
             bool IForwarding::SOCKS_Handshake(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, YieldContext& y) noexcept {
 
                 if (NULLPTR == socket || !socket->is_open()) {
@@ -956,12 +1000,13 @@ namespace ppp {
                     method = 2;
                 }
 
-                /*
-                    +----+----------+----------+
-                    | VER | NMETHODS | METHODS |
-                    +----+----------+----------+
-                    | 1 | 1 | 1 to 255 |
-                    +----+----------+----------+
+                /**
+                 * @details SOCKS5 method negotiation packet format:
+                 * +----+----------+----------+
+                 * | VER | NMETHODS | METHODS |
+                 * +----+----------+----------+
+                 * | 1  |    1     | 1 to 255 |
+                 * +----+----------+----------+
                  */
                 static constexpr Byte ver = 5;
 
@@ -990,10 +1035,10 @@ namespace ppp {
                         return false;
                     }
 
-                    /*
-                     * If the socks5 server does not require password authentication, then set method to 0, 
-                     * Otherwise determine if socks5 has selected the user password authentication method.
-                    */
+                    /**
+                     * @details If the server selects `0x00`, no authentication is required.
+                     * Otherwise, the selected method must match user/password auth (`0x02`) when configured.
+                     */
                     Byte auth = data[1];
                     if (auth == 0) {
                         method = 0;
@@ -1006,7 +1051,7 @@ namespace ppp {
                     return false;
                 }
 
-                // Process user password authentication.
+                /** @details Perform RFC 1929 username/password sub-negotiation when required. */
                 if (method != 0) {
                     static constexpr Byte auth = 1;
 
@@ -1049,15 +1094,16 @@ namespace ppp {
                     }
                 }
 
-                // Process connect to destination.
+                /** @details Build and send SOCKS5 CONNECT request for domain, IPv4, or IPv6 target. */
                 for (;;) {
-                    /*
-                        +----+-----+-------+------+----------+----------+
-    　　                |VER | CMD |　RSV　| ATYP | DST.ADDR | DST.PORT |
-    　　                +----+-----+-------+------+----------+----------+
-    　　                | 1　| 　1 | X'00' | 　1　| Variable |　　 2　　|
-    　　                +----+-----+-------+------+----------+----------+
-                    */
+                    /**
+                     * @details CONNECT request packet format:
+                     * +----+-----+-------+------+----------+----------+
+                     * |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+                     * +----+-----+-------+------+----------+----------+
+                     * | 1  |  1  | X'00' |  1   | Variable |    2     |
+                     * +----+-----+-------+------+----------+----------+
+                     */
 
                     int length = 0;
                     data[length++] = ver;
@@ -1103,11 +1149,14 @@ namespace ppp {
                     break;
                 }
             
-                // +----+-----+-------+------+----------+----------+
-                // |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-                // +----+-----+-------+------+----------+----------+
-                // | 1  |  1  | X'00' |  1   | Variable |    2     |
-                // +----+-----+-------+------+----------+----------+
+                /**
+                 * @details Validate SOCKS5 CONNECT response header and consume bound address/port fields:
+                 * +----+-----+-------+------+----------+----------+
+                 * |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+                 * +----+-----+-------+------+----------+----------+
+                 * | 1  |  1  | X'00' |  1   | Variable |    2     |
+                 * +----+-----+-------+------+----------+----------+
+                 */
                 for (;;) {
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 4), y)) {
                         return false;

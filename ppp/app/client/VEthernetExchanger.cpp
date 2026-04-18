@@ -22,6 +22,12 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 
+/**
+ * @file VEthernetExchanger.cpp
+ * @brief Client-side virtual Ethernet exchanger implementation.
+ * @details Licensed under GPL-3.0.
+ */
+
 typedef ppp::app::protocol::VirtualEthernetInformation              VirtualEthernetInformation;
 typedef ppp::app::protocol::VirtualEthernetPacket                   VirtualEthernetPacket;
 typedef ppp::collections::Dictionary                                Dictionary;
@@ -40,11 +46,16 @@ typedef ppp::transmissions::ISslWebsocketTransmission               ISslWebsocke
 namespace ppp {
     namespace app {
         namespace client {
+            /** @brief Minimum keepalive echo interval in milliseconds. */
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT = 1000;
+            /** @brief Maximum keepalive echo interval in milliseconds. */
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT = 5000;
+            /** @brief Hard timeout threshold before keepalive is considered stale. */
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MMX_TIMEOUT = SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT << 2;
+            /** @brief Reserved ACK identifier used for static-echo keepalive signaling. */
             static constexpr int STATIC_ECHO_KEEP_ALIVED_ID              = IPEndPoint::NoneAddress - 1;
 
+            /** @brief Constructs exchanger and initializes optional static-echo ciphers. */
             VEthernetExchanger::VEthernetExchanger(
                 const VEthernetNetworkSwitcherPtr&      switcher,
                 const AppConfigurationPtr&              configuration,
@@ -74,10 +85,12 @@ namespace ppp {
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
             }
 
+            /** @brief Finalizes exchanger on destruction. */
             VEthernetExchanger::~VEthernetExchanger() noexcept {
                 Finalize();
             }
 
+            /** @brief Sends requested IPv6 information extensions to the remote endpoint. */
             bool VEthernetExchanger::SendRequestedIPv6Configuration(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR == transmission || NULLPTR == configuration) {
@@ -105,6 +118,7 @@ namespace ppp {
                 return DoInformation(transmission, envelope, y);
             }
 
+            /** @brief Disposes and releases all owned runtime objects. */
             void VEthernetExchanger::Finalize() noexcept {
                 VirtualEthernetMappingPortTable mappings;
                 VEthernetDatagramPortTable datagrams;
@@ -112,6 +126,7 @@ namespace ppp {
                 DeadlineTimerTable deadline_timers;
                 std::shared_ptr<vmux::vmux_net> mux;
 
+                /** @brief Atomically swaps internal tables/resources before releasing outside lock. */
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     disposed_ = true;
@@ -148,6 +163,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Posts exchanger finalization to execution context. */
             void VEthernetExchanger::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -157,6 +173,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Creates a transport object based on selected protocol type. */
             VEthernetExchanger::ITransmissionPtr VEthernetExchanger::NewTransmission(
                 const ContextPtr&                                                   context,
                 const StrandPtr&                                                    strand,
@@ -187,6 +204,7 @@ namespace ppp {
                 return transmission;
             }
 
+            /** @brief Creates and configures an asynchronous TCP socket. */
             std::shared_ptr<boost::asio::ip::tcp::socket> VEthernetExchanger::NewAsynchronousSocket(const ContextPtr& context, const StrandPtr& strand, const boost::asio::ip::tcp& protocol, ppp::coroutines::YieldContext& y) noexcept {
                 if (disposed_) {
                     return NULLPTR;
@@ -216,6 +234,7 @@ namespace ppp {
                 return socket;
             }
 
+            /** @brief Resolves, validates, and caches the remote server endpoint. */
             bool VEthernetExchanger::GetRemoteEndPoint(YieldContext* y, ppp::string& hostname, ppp::string& address, ppp::string& path, int& port, ProtocolType& protocol_type, ppp::string& server, boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
                 if (disposed_) {
                     return false;
@@ -292,6 +311,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Opens a transport connection to current remote endpoint. */
             VEthernetExchanger::ITransmissionPtr VEthernetExchanger::OpenTransmission(const ContextPtr& context, const StrandPtr& strand, YieldContext& y) noexcept {
                 boost::asio::ip::tcp::endpoint remoteEP;
                 ppp::string hostname;
@@ -342,6 +362,7 @@ namespace ppp {
                 return NewTransmission(context, strand, socket, protocol_type, hostname, path);
             }
 
+            /** @brief Starts main asynchronous exchanger loop. */
             bool VEthernetExchanger::Open() noexcept {
                 if (disposed_) {
                     return false;
@@ -366,6 +387,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Schedules periodic maintenance tasks on exchanger context. */
             bool VEthernetExchanger::Update() noexcept {
                 if (disposed_) {
                     return false;
@@ -390,6 +412,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Executes keepalive timeout logic for established state. */
             bool VEthernetExchanger::DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept {
                 if (disposed_) {
                     return false;
@@ -408,6 +431,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Connects and handshakes a child transmission for mux use. */
             VEthernetExchanger::ITransmissionPtr VEthernetExchanger::ConnectTransmission(const ContextPtr& context, const StrandPtr& strand, YieldContext& y) noexcept {
                 if (NULLPTR == context) {
                     return NULLPTR;
@@ -439,6 +463,7 @@ namespace ppp {
             }
 
 #if defined(_ANDROID)
+            /** @brief Waits until Android protector JNI context becomes available. */
             bool VEthernetExchanger::AwaitJniAttachThread(const ContextPtr& context, YieldContext& y) noexcept {
                 // On the Android platform, when the VPN tunnel transport layer is enabled, 
                 // Ensure that the JVM thread has been attached to the PPP. Otherwise, the link cannot be protected, 
@@ -462,6 +487,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Runs connect-handshake-run-reconnect loop until disposed. */
             bool VEthernetExchanger::Loopback(const ContextPtr& context, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (!configuration) {
@@ -473,6 +499,7 @@ namespace ppp {
                 }
 #endif
                 bool run_once = false;
+                /** @brief Main lifecycle loop for connection establishment and reconnection. */
                 while (!disposed_) {
                     ExchangeToConnectingState(); {
                         ITransmissionPtr transmission = OpenTransmission(context, y);
@@ -506,6 +533,7 @@ namespace ppp {
                 return run_once;
             }
 
+            /** @brief Maintains vmux session and negotiates mux when required. */
             bool VEthernetExchanger::DoMuxEvents() noexcept {
                 bool successes = false;
                 while (!disposed_) {
@@ -615,6 +643,7 @@ namespace ppp {
                 return successes;
             }
 
+            /** @brief Derives mux state from current vmux runtime object. */
             VEthernetExchanger::NetworkState VEthernetExchanger::GetMuxNetworkState() noexcept {
                 if (disposed_) {
                     return NetworkState_Reconnecting;
@@ -636,6 +665,7 @@ namespace ppp {
                 return NetworkState_Connecting;
             }
 
+            /** @brief Establishes all required vmux child linklayers. */
             bool VEthernetExchanger::MuxConnectAllLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<vmux::vmux_net>& mux) noexcept {
                 using ppp::app::protocol::VirtualEthernetTcpipConnection;
                 
@@ -718,6 +748,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Removes a deadline timer from tracking table and cancels it. */
             bool VEthernetExchanger::ReleaseDeadlineTimer(const boost::asio::deadline_timer* deadline_timer) noexcept {
                 if (NULLPTR == deadline_timer) {
                     return false;
@@ -738,6 +769,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Creates and tracks one asynchronous deadline timer. */
             bool VEthernetExchanger::NewDeadlineTimer(const ContextPtr& context, int64_t timeout, const ppp::function<void(bool)>& event) noexcept {
                 std::shared_ptr<boost::asio::deadline_timer> t = make_shared_object<boost::asio::deadline_timer>(*context);
                 if (NULLPTR == t) {
@@ -771,6 +803,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Transitions state to established and initializes keepalive schedule. */
             void VEthernetExchanger::ExchangeToEstablishState() noexcept {
                 uint64_t now = Executors::GetTickCount();
                 sekap_last_ = now;
@@ -779,12 +812,14 @@ namespace ppp {
                 reconnection_count_ = 0;
             }
 
+            /** @brief Transitions state to connecting. */
             void VEthernetExchanger::ExchangeToConnectingState() noexcept {
                 sekap_last_ = 0;
                 sekap_next_ = 0;
                 network_state_.exchange(NetworkState_Connecting);
             }
 
+            /** @brief Transitions state to reconnecting and increments retry count. */
             void VEthernetExchanger::ExchangeToReconnectingState() noexcept {
                 sekap_last_ = 0;
                 sekap_next_ = 0;
@@ -792,6 +827,7 @@ namespace ppp {
                 reconnection_count_++;
             }
 
+            /** @brief Registers all configured FRP mapping ports. */
             bool VEthernetExchanger::RegisterAllMappingPorts() noexcept {
                 if (disposed_) {
                     return false;
@@ -805,6 +841,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Unregisters and disposes all FRP mapping ports. */
             void VEthernetExchanger::UnregisterAllMappingPorts() noexcept {
                 VirtualEthernetMappingPortTable mappings; {
                     SynchronizedObjectScope scope(syncobj_);
@@ -815,14 +852,17 @@ namespace ppp {
                 ppp::collections::Dictionary::ReleaseAllObjects(mappings);
             }
 
+            /** @brief Rejects unsolicited LAN messages for security hardening. */
             bool VEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
+            /** @brief Forwards NAT payload from remote side to local switcher output. */
             bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 return switcher_->Output(packet, packet_length);
             }
 
+            /** @brief Handles mux negotiation callback and starts vmux linking. */
             bool VEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept {
                 std::shared_ptr<vmux::vmux_net> mux = mux_;
                 if (NULLPTR != mux) {
@@ -847,12 +887,14 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Adapts base information payload to extended envelope handler. */
             bool VEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
                 InformationEnvelope envelope;
                 envelope.Base = information;
                 return OnInformation(transmission, envelope, y);
             }
 
+            /** @brief Updates cached information and notifies network switcher. */
             bool VEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 if (NULLPTR == context) {
@@ -875,26 +917,32 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Rejects unsolicited push events for security hardening. */
             bool VEthernetExchanger::OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
+            /** @brief Rejects unsolicited connect events for security hardening. */
             bool VEthernetExchanger::OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
+            /** @brief Rejects unsolicited connect-ack events for security hardening. */
             bool VEthernetExchanger::OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
+            /** @brief Rejects unsolicited disconnect events for security hardening. */
             bool VEthernetExchanger::OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
+            /** @brief Rejects unsupported static callback variant. */
             bool VEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
+            /** @brief Applies static session parameters received from server. */
             bool VEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {                
                 if (remote_port < IPEndPoint::MinPort || remote_port > IPEndPoint::MaxPort) {
                     return false;
@@ -920,6 +968,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles ACK echo callback from server. */
             bool VEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept {
                 if (ack_id != 0) {
                     switcher_->ERORTE(ack_id);
@@ -928,16 +977,19 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles packet echo callback from server. */
             bool VEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 switcher_->Output(packet, packet_length);
                 return true;
             }
 
+            /** @brief Handles UDP callback packet delivered by remote exchanger. */
             bool VEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 ReceiveFromDestination(sourceEP, destinationEP, packet, packet_length);
                 return true;
             }
 
+            /** @brief Routes inbound UDP payload to matching datagram port or switcher. */
             bool VEthernetExchanger::ReceiveFromDestination(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length) noexcept {
                 if (disposed_) {
                     return false;
@@ -960,6 +1012,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Sends UDP packet using source-bound datagram relay port. */
             bool VEthernetExchanger::SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
@@ -982,6 +1035,7 @@ namespace ppp {
                 return datagram->SendTo(packet, packet_size, destinationEP);
             }
 
+            /** @brief Sends ACK-based keepalive/echo packet through active transport. */
             bool VEthernetExchanger::Echo(int ack_id) noexcept {
                 if (disposed_) {
                     return false;
@@ -1000,6 +1054,7 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Sends packet-based echo payload through active transport. */
             bool VEthernetExchanger::Echo(const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
@@ -1022,6 +1077,7 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Sends NAT payload packet through active transport. */
             bool VEthernetExchanger::Nat(const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
@@ -1044,6 +1100,7 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Announces local LAN information to remote exchanger when needed. */
             int VEthernetExchanger::EchoLanToRemoteExchanger(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (disposed_) {
                     return -1;
@@ -1072,6 +1129,7 @@ namespace ppp {
                 return -1;
             }
 
+            /** @brief Creates and registers datagram relay port for source endpoint. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::AddNewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -1106,6 +1164,7 @@ namespace ppp {
                 return datagram;
             }
 
+            /** @brief Allocates a new datagram relay port object. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -1118,16 +1177,19 @@ namespace ppp {
                 return make_shared_object<VEthernetDatagramPort>(exchanger, transmission, sourceEP);
             }
 
+            /** @brief Returns datagram relay port by source endpoint key. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return Dictionary::FindObjectByKey(datagrams_, sourceEP);
             }
 
+            /** @brief Removes and returns datagram relay port by source endpoint key. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
             }
 
+            /** @brief Sends scheduled keepalive echo and handles stale-link timeout. */
             bool VEthernetExchanger::SendEchoKeepAlivePacket(UInt64 now, bool immediately) noexcept {
                 if (network_state_ != NetworkState_Established) {
                     return false;
@@ -1152,6 +1214,7 @@ namespace ppp {
                 return Echo(0);
             }
 
+            /** @brief Processes incoming linklayer packet and refreshes keepalive timer. */
             bool VEthernetExchanger::PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept {
                 bool successed = VirtualEthernetLinklayer::PacketInput(transmission, p, packet_length, y);
                 if (successed) {
@@ -1163,6 +1226,7 @@ namespace ppp {
                 return successed;
             }
 
+            /** @brief Registers one configured FRP mapping endpoint. */
             bool VEthernetExchanger::RegisterMappingPort(ppp::configurations::AppConfiguration::MappingConfiguration& mapping) noexcept {
                 if (disposed_) {
                     return false;
@@ -1205,15 +1269,18 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Creates one FRP mapping port object bound to this exchanger. */
             VEthernetExchanger::VirtualEthernetMappingPortPtr VEthernetExchanger::NewMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 class VIRTUAL_ETHERNET_MAPPING_PORT final : public VirtualEthernetMappingPort {
                 public:
+                    /** @brief Constructs mapping port implementation bound to exchanger linklayer. */
                     VIRTUAL_ETHERNET_MAPPING_PORT(const std::shared_ptr<VirtualEthernetLinklayer>& linklayer, const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port) noexcept
                         : VirtualEthernetMappingPort(linklayer, transmission, tcp, in, remote_port) {
 
                     }
 
                 public:
+                    /** @brief Defers parent-table removal and then disposes base resources. */
                     virtual void Dispose() noexcept override {
                         // Defer parent-table removal so Dispose() never runs child finalization
                         // while the exchanger lock is held.
@@ -1249,11 +1316,13 @@ namespace ppp {
                 return make_shared_object<VIRTUAL_ETHERNET_MAPPING_PORT>(self, transmission, tcp, in, remote_port);
             }
 
+            /** @brief Returns FRP mapping port by direction/protocol/port key. */
             VEthernetExchanger::VirtualEthernetMappingPortPtr VEthernetExchanger::GetMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return VirtualEthernetMappingPort::FindMappingPort(mappings_, in, tcp, remote_port);
             }
 
+            /** @brief Dispatches FRP UDP payload callback to mapped client port. */
             bool VEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
 #if defined(_ANDROID)
                 AppConfigurationPtr configuration = GetConfiguration();
@@ -1278,6 +1347,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Dispatches FRP TCP connect callback to mapped client port. */
             bool VEthernetExchanger::OnFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept {
 #if defined(_ANDROID)
                 Post(
@@ -1296,6 +1366,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Dispatches FRP TCP disconnect callback to mapped client port. */
             bool VEthernetExchanger::OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1305,6 +1376,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Dispatches FRP TCP payload callback to mapped client port. */
             bool VEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1314,6 +1386,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Closes static-echo sockets and resets static-session state. */
             void VEthernetExchanger::StaticEchoClean() noexcept {
                 for (int i = 0; i < arraysizeof(static_echo_sockets_); i++) {
                     std::shared_ptr<StaticEchoDatagarmSocket>& r = static_echo_sockets_[i];
@@ -1331,6 +1404,7 @@ namespace ppp {
                 static_echo_transport_   = NULLPTR;
             }
 
+            /** @brief Returns whether static-echo data path is currently usable. */
             bool VEthernetExchanger::StaticEchoAllocated() noexcept {
                 if (disposed_) {
                     return false;
@@ -1344,6 +1418,7 @@ namespace ppp {
                 return socket->is_open() && static_echo_timeout_ != 0 && static_echo_session_id_ != 0 && static_echo_remote_port_ != 0;
             }
 
+            /** @brief Rotates static-echo active socket when keepalive window expires. */
             bool VEthernetExchanger::StaticEchoSwapAsynchronousSocket() noexcept {
                 if (disposed_) {
                     return false;
@@ -1419,6 +1494,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Sends static-echo gateway keepalive marker packet. */
             bool VEthernetExchanger::StaticEchoGatewayServer(int ack_id) noexcept {
                 if (disposed_) {
                     return false;
@@ -1439,6 +1515,7 @@ namespace ppp {
                 return StaticEchoPacketToRemoteExchanger(packet.get());
             }
 
+            /** @brief Allocates static-echo sockets and negotiates static mode remotely. */
             bool VEthernetExchanger::StaticEchoAllocatedToRemoteExchanger(YieldContext& y) noexcept {
                 StaticEchoClean();
                 if (disposed_) {
@@ -1487,6 +1564,7 @@ namespace ppp {
                 return DoStatic(transmission, y);
             }
 
+            /** @brief Computes next timeout used for static-echo socket rotation. */
             bool VEthernetExchanger::StaticEchoNextTimeout() noexcept {
                 if (disposed_) {
                     return false;
@@ -1532,6 +1610,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Packs and sends an IP frame over static-echo transport. */
             bool VEthernetExchanger::StaticEchoPacketToRemoteExchanger(const ppp::net::packet::IPFrame* packet) noexcept {
                 if (NULLPTR == packet || packet->AddressesFamily != AddressFamily::InterNetwork) {
                     return false;
@@ -1562,6 +1641,7 @@ namespace ppp {
                 return StaticEchoPacketToRemoteExchanger(messages, message_length);
             }
 
+            /** @brief Packs and sends a UDP frame over static-echo transport. */
             bool VEthernetExchanger::StaticEchoPacketToRemoteExchanger(const std::shared_ptr<ppp::net::packet::UdpFrame>& frame) noexcept {
                 if (NULLPTR == frame || frame->AddressesFamily != AddressFamily::InterNetwork) {
                     return false;
@@ -1604,6 +1684,7 @@ namespace ppp {
                 return StaticEchoPacketToRemoteExchanger(packet, packet_length);
             }
 
+            /** @brief Sends a pre-packed static-echo packet to selected remote endpoint. */
             bool VEthernetExchanger::StaticEchoPacketToRemoteExchanger(const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -1644,6 +1725,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Decodes and decrypts incoming static-echo packet. */
             std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket> VEthernetExchanger::StaticEchoReadPacket(const void* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return NULLPTR;
@@ -1667,6 +1749,7 @@ namespace ppp {
                     packet_length);
             }
 
+            /** @brief Injects decoded static-echo packet into local output path. */
             bool VEthernetExchanger::StaticEchoPacketInput(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet) noexcept {
                 if (NULLPTR == packet || disposed_) {
                     return false;
@@ -1729,6 +1812,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Handles one static-echo receive completion and updates statistics. */
             int VEthernetExchanger::StaticEchoYieldReceiveForm(Byte* incoming_packet, int incoming_traffic) noexcept {
                 std::shared_ptr<VirtualEthernetPacket> packet = StaticEchoReadPacket(incoming_packet, incoming_traffic);
                 if (NULLPTR != packet) {
@@ -1743,6 +1827,7 @@ namespace ppp {
                 return incoming_traffic;
             }
 
+            /** @brief Suspends coroutine for timeout using tracked deadline timer. */
             bool VEthernetExchanger::Sleep(int64_t timeout, const ContextPtr& context, YieldContext& y) noexcept {
                 using atomic_int = std::atomic<int>;
 
@@ -1768,6 +1853,7 @@ namespace ppp {
                 return status->load() > 0;
             }
             
+            /** @brief Starts or continues async receive loop for static-echo socket. */
             bool VEthernetExchanger::StaticEchoLoopbackSocket(const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
                 if (disposed_) {
                     return false;
@@ -1807,6 +1893,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Adds static-echo remote endpoint into balance set/list. */
             bool VEthernetExchanger::StaticEchoAddRemoteEndPoint(boost::asio::ip::udp::endpoint& remoteEP) noexcept {
                 boost::asio::ip::udp::endpoint destinationEP = Ipep::V4ToV6(remoteEP);
                 boost::asio::ip::address destinationIP = destinationEP.address();
@@ -1824,6 +1911,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Chooses remote endpoint for next static-echo transmission. */
             boost::asio::ip::udp::endpoint VEthernetExchanger::StaticEchoGetRemoteEndPoint() noexcept {
                 std::shared_ptr<aggligator::aggligator> aggligator = switcher_->GetAggligator();
                 if (NULLPTR != aggligator) {
@@ -1862,6 +1950,7 @@ namespace ppp {
                 return Ipep::V4ToV6(destinationEP);
             }
 
+            /** @brief Opens and configures static-echo UDP socket for use. */
             bool VEthernetExchanger::StaticEchoOpenAsynchronousSocket(StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;

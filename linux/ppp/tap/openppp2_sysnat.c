@@ -1,5 +1,5 @@
 /*
- * Implementation of OpenPPP2 system NAT (eBPF TC based NAT).
+ * Implementation of OPENPPP2 system NAT (eBPF TC based NAT).
  *
  * Provides functions to attach/detach an eBPF program to the TC egress hook
  * of a network interface, and to manage NAT rules stored in a pinned BPF map.

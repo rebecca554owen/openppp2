@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file VirtualEthernetTcpMss.h
+ * @brief Helpers for computing and clamping TCP MSS in tunneled IPv4/IPv6 packets.
+ */
+
 #include <ppp/stdafx.h>
 #include <ppp/net/native/ip.h>
 #include <ppp/net/native/tcp.h>
@@ -9,6 +14,12 @@
 namespace ppp {
     namespace app {
         namespace protocol {
+            /**
+             * @brief Computes a dynamic TCP MSS value from tunnel overhead.
+             * @param ipv4 True to use IPv4 header sizing and clamp range; false for IPv6.
+             * @param tunnel_overhead Extra encapsulation overhead in bytes.
+             * @return A bounded MSS value suitable for SYN option clamping.
+             */
             static inline unsigned short ComputeDynamicTcpMss(bool ipv4, int tunnel_overhead) noexcept {
                 int base_mtu = ppp::tap::ITap::Mtu;
                 tunnel_overhead = std::max<int>(0, tunnel_overhead);
@@ -25,6 +36,13 @@ namespace ppp {
                 return (unsigned short)mss;
             }
 
+            /**
+             * @brief Clamps the MSS option in an IPv4 TCP SYN packet.
+             * @param packet Raw packet buffer containing an IPv4 packet.
+             * @param packet_length Packet length in bytes.
+             * @param mss_value Maximum MSS value allowed after clamping.
+             * @return True if MSS is changed and checksums are updated; otherwise false.
+             */
             static inline bool ClampTcpMssIPv4(Byte* packet, int packet_length, unsigned short mss_value) noexcept {
                 if (NULLPTR == packet || packet_length < (int)sizeof(ppp::net::native::ip_hdr)) {
                     return false;
@@ -56,6 +74,9 @@ namespace ppp {
                 int options_length = tcp_header_length - ppp::net::native::tcp_hdr::TCP_HLEN;
                 bool changed = false;
 
+                /**
+                 * @brief Walks TCP options until EOL, malformed entry, or MSS option.
+                 */
                 for (int i = 0; i < options_length;) {
                     Byte kind = options[i];
                     if (kind == 0) {
@@ -98,6 +119,13 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Clamps the MSS option in an IPv6 TCP SYN packet.
+             * @param packet Raw packet buffer containing an IPv6 packet.
+             * @param packet_length Packet length in bytes.
+             * @param mss_value Maximum MSS value allowed after clamping.
+             * @return True if MSS is changed and TCP checksum is updated; otherwise false.
+             */
             static inline bool ClampTcpMssIPv6(Byte* packet, int packet_length, unsigned short mss_value) noexcept {
                 if (NULLPTR == packet || packet_length < 40 + ppp::net::native::tcp_hdr::TCP_HLEN) {
                     return false;
@@ -129,6 +157,9 @@ namespace ppp {
                 int options_length = tcp_header_length - ppp::net::native::tcp_hdr::TCP_HLEN;
                 bool changed = false;
 
+                /**
+                 * @brief Walks TCP options until EOL, malformed entry, or MSS option.
+                 */
                 for (int i = 0; i < options_length;) {
                     Byte kind = options[i];
                     if (kind == 0) {

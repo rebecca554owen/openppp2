@@ -7,9 +7,20 @@
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
 
+/**
+ * @file VirtualEthernetNetworkTcpipConnection.cpp
+ * @brief Implements session transport acceptance and mux link attachment.
+ */
+
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Constructs a server-side session transport wrapper.
+             * @param switcher Parent switcher that owns connection registration.
+             * @param id Session identifier.
+             * @param transmission Underlying transmission channel.
+             */
             VirtualEthernetNetworkTcpipConnection::VirtualEthernetNetworkTcpipConnection(
                 const std::shared_ptr<VirtualEthernetSwitcher>& switcher,
                 const Int128&                                   id,
@@ -26,10 +37,14 @@ namespace ppp {
                 Update();
             }
 
+            /** @brief Finalizes resources during object destruction. */
             VirtualEthernetNetworkTcpipConnection::~VirtualEthernetNetworkTcpipConnection() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Schedules cleanup on the connection strand/context.
+             */
             void VirtualEthernetNetworkTcpipConnection::Dispose() noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
@@ -41,6 +56,9 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Releases active protocol/transmission handles and unregisters self.
+             */
             void VirtualEthernetNetworkTcpipConnection::Finalize() noexcept {
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_); 
                 ITransmissionPtr transmission = std::move(transmission_); 
@@ -57,6 +75,11 @@ namespace ppp {
                 switcher_->DeleteConnection(this);
             }
 
+            /**
+             * @brief Accepts and runs a protocol connection for this session.
+             * @param y Coroutine context for accept/run operations.
+             * @return true when run succeeds or mux takeover is active; otherwise false.
+             */
             bool VirtualEthernetNetworkTcpipConnection::Run(ppp::coroutines::YieldContext& y) noexcept {
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection = AcceptConnection(y);
                 if (NULLPTR == connection) {
@@ -71,9 +94,20 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Creates a protocol connection object and performs accept handshake.
+             * @param y Coroutine context used for handshake I/O.
+             * @return Shared protocol connection on success; null otherwise.
+             */
             std::shared_ptr<VirtualEthernetNetworkTcpipConnection::VirtualEthernetTcpipConnection> VirtualEthernetNetworkTcpipConnection::AcceptConnection(ppp::coroutines::YieldContext& y) noexcept {
+                /**
+                 * @brief Session-specialized TCP/IP connection implementation.
+                 */
                 class VirtualEthernetTcpipConnection final : public ppp::app::protocol::templates::TVEthernetTcpipConnection<VirtualEthernetNetworkTcpipConnection> {
                 public:
+                    /**
+                     * @brief Constructs a protocol connection bound to outer session context.
+                     */
                     VirtualEthernetTcpipConnection(
                         const std::shared_ptr<VirtualEthernetNetworkTcpipConnection>&   connection,
                         const AppConfigurationPtr&                                      configuration,
@@ -86,6 +120,10 @@ namespace ppp {
                     }
 
                 public:
+                    /**
+                     * @brief Retrieves firewall rules from the owning switcher.
+                     * @return Shared firewall object used for connection filtering.
+                     */
                     virtual std::shared_ptr<ppp::net::Firewall>                         GetFirewall() noexcept {
                         std::shared_ptr<VirtualEthernetNetworkTcpipConnection> connection = GetConnection();
                         std::shared_ptr<VirtualEthernetSwitcher> switcher = connection->GetSwitcher();
@@ -123,6 +161,9 @@ namespace ppp {
                     return NULLPTR;
                 }
 
+                /**
+                 * @brief Accept callback may switch this connection into mux mode.
+                 */
                 bool ok = 
                     connection->Accept(y, transmission, switcher_->GetLogger(),
                         [this, &connection, &y](uint32_t vlan, uint32_t seq, uint32_t ack) noexcept {
@@ -137,6 +178,15 @@ namespace ppp {
                 return connection;
             }
 
+            /**
+             * @brief Validates mux handshake and registers a linklayer binding.
+             * @param connection Newly accepted protocol connection.
+             * @param vlan Negotiated mux vlan.
+             * @param seq Negotiated sequence number.
+             * @param ack Negotiated acknowledgement number.
+             * @param y Coroutine context for mux suspension points.
+             * @return true if the mux linklayer is attached; otherwise false.
+             */
             bool VirtualEthernetNetworkTcpipConnection::AcceptMuxLinklayer(const std::shared_ptr<VirtualEthernetTcpipConnection>& connection, uint32_t vlan, uint32_t seq, uint32_t ack, ppp::coroutines::YieldContext& y) noexcept {
                 std::shared_ptr<VirtualEthernetExchanger> exchanger = switcher_->GetExchanger(id_);
                 if (NULLPTR == exchanger) {
@@ -155,6 +205,9 @@ namespace ppp {
                 }
 
                 std::shared_ptr<VirtualEthernetNetworkTcpipConnection> self = shared_from_this();
+                /**
+                 * @brief Yield into mux scheduler while installing connection callbacks.
+                 */
                 return mux->do_yield(y,
                     [self, this, mux, connection, exchanger, vlan, seq, ack]() noexcept -> bool {
                         vmux::vmux_net::vmux_linklayer_ptr linklayer;
@@ -172,6 +225,9 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Updates timeout according to connect vs linked state.
+             */
             void VirtualEthernetNetworkTcpipConnection::Update() noexcept {
                 using Executors = ppp::threading::Executors;
 

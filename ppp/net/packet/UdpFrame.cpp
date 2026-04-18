@@ -2,11 +2,22 @@
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/UdpFrame.h>
 
+/**
+ * @file UdpFrame.cpp
+ * @brief Implements UDP frame parsing and IPv4 encapsulation.
+ */
+
 using namespace ppp::net::native;
 
 namespace ppp {
     namespace net {
         namespace packet {
+            /**
+             * @brief Encapsulates this UDP frame into an IPv4 packet.
+             * @param allocator Buffer allocator for temporary and payload storage.
+             * @return Generated IPv4 frame, or null on validation/allocation failure.
+             * @throws std::runtime_error When address family is unsupported.
+             */
             std::shared_ptr<IPFrame> UdpFrame::ToIp(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) {
                 if (this->AddressesFamily != AddressFamily::InterNetwork) {
                     throw std::runtime_error("UDP frames of this address family type are not supported.");
@@ -44,6 +55,7 @@ namespace ppp {
                     message_size_,
                     this->Source.GetAddress(),
                     this->Destination.GetAddress());
+                /** @note UDP checksum of zero is represented as 0xFFFF on the wire. */
                 if (pseudo_checksum == 0) {
                     pseudo_checksum = 0xffff;
                 }
@@ -71,6 +83,11 @@ namespace ppp {
                 return packet;
             }
 
+            /**
+             * @brief Parses a UDP datagram from an IPv4 payload.
+             * @param frame Source IPv4 frame.
+             * @return Parsed UDP frame or null if validation fails.
+             */
             std::shared_ptr<UdpFrame> UdpFrame::Parse(const IPFrame* frame) noexcept {
                 if (NULLPTR == frame) {
                     return NULLPTR;
@@ -101,6 +118,7 @@ namespace ppp {
                 }
 
 #if defined(PACKET_CHECKSUM)
+                /** @details Validate checksum only when checksum checks are enabled. */
                 if (udphdr->chksum != 0) {
                     UInt32 pseudo_checksum = inet_chksum_pseudo((unsigned char*)udphdr,
                         ip_hdr::IP_PROTO_UDP,

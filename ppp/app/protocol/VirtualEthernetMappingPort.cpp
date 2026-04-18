@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+/**
+ * @file VirtualEthernetMappingPort.cpp
+ * @brief FRP mapping port runtime for TCP/UDP forwarding paths.
+ */
+
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
@@ -15,12 +22,12 @@
 namespace ppp {
     namespace app {
         namespace protocol {
-            // Maximum buffer size for UDP packets
+            /** @brief Maximum UDP payload buffer size used by forwarding loops. */
             static constexpr int PPP_UDP_BUFFER_SIZE = 65000;
-            // Maximum buffer size for TCP packets (same as UDP for simplicity)
+            /** @brief Maximum TCP buffer size used by forwarding loops. */
             static constexpr int PPP_TCP_BUFFER_SIZE = PPP_UDP_BUFFER_SIZE;
 
-            // Constructor: initializes the mapping port with given parameters
+            /** @brief Constructs a mapping port bound to one FRP endpoint definition. */
             VirtualEthernetMappingPort::VirtualEthernetMappingPort(const std::shared_ptr<VirtualEthernetLinklayer>& linklayer, const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port) noexcept
                 : disposed_(FALSE)                      // Initially not disposed
                 , linklayer_(linklayer)                 // Store linklayer reference
@@ -33,52 +40,52 @@ namespace ppp {
                 buffer_allocator_ = configuration_->GetBufferAllocator(); // Get buffer allocator
             }
 
-            // Destructor: ensures final cleanup
+            /** @brief Destroys mapping port and releases sockets/state. */
             VirtualEthernetMappingPort::~VirtualEthernetMappingPort() noexcept {
                 Finalize();     // Release all resources
             }
 
-            // Returns the associated IO context
+            /** @brief Returns IO context used by this mapping runtime. */
             std::shared_ptr<boost::asio::io_context> VirtualEthernetMappingPort::GetContext() noexcept {
                 return context_;
             }
 
-            // Returns the linklayer instance
+            /** @brief Returns owning link-layer instance. */
             std::shared_ptr<VirtualEthernetLinklayer> VirtualEthernetMappingPort::GetLinklayer() noexcept {
                 return linklayer_;
             }
 
-            // Returns the transmission instance
+            /** @brief Returns transport used to exchange FRP control/data frames. */
             VirtualEthernetMappingPort::ITransmissionPtr VirtualEthernetMappingPort::GetTransmission() noexcept {
                 return transmission_;
             }
 
-            // Returns true if the network protocol is TCP
+            /** @brief Returns true when this mapping uses TCP transport. */
             bool VirtualEthernetMappingPort::ProtocolIsTcpNetwork() noexcept {
                 return tcp_;
             }
 
-            // Returns true if the network protocol is UDP
+            /** @brief Returns true when this mapping uses UDP transport. */
             bool VirtualEthernetMappingPort::ProtocolIsUdpNetwork() noexcept {
                 return !tcp_;
             }
 
-            // Returns true if the network IP version is IPv4
+            /** @brief Returns true when mapping uses IPv4 direction. */
             bool VirtualEthernetMappingPort::ProtocolIsNetworkV4() noexcept {
                 return in_;
             }
 
-            // Returns true if the network IP version is IPv6
+            /** @brief Returns true when mapping uses IPv6 direction. */
             bool VirtualEthernetMappingPort::ProtocolIsNetworkV6() noexcept {
                 return !in_;
             }
 
-            // Returns the remote port number
+            /** @brief Returns externally exposed mapping port number. */
             int VirtualEthernetMappingPort::GetRemotePort() noexcept {
                 return remote_port_;
             }
 
-            // Finalizes the mapping port: closes sockets and clears dictionaries
+            /** @brief Finalizes mapping role objects and closes all sockets. */
             void VirtualEthernetMappingPort::Finalize() noexcept {
                 int disposed = disposed_.exchange(TRUE);   // Atomically set disposed flag to TRUE and get previous value
                 transmission_.reset();                     // Release transmission reference
@@ -103,7 +110,7 @@ namespace ppp {
                 }
             }
 
-            // Public dispose method calls Finalize
+            /** @brief Public disposable entry that delegates to `Finalize()`. */
             void VirtualEthernetMappingPort::Dispose() noexcept {
                 Finalize();
             }
@@ -111,7 +118,11 @@ namespace ppp {
 #if defined(VIRTUALETHERNETMAPPINGPORT_SOCKET_OPENNETWORKSOCKET)
 #error "Compiler macro "OPENNETWORKSOCKET" definition conflict found, please check the project C/C++ code implementation for problems."
 #else
-// Helper macro to open a network socket (TCP or UDP) for the server
+/**
+ * @brief Opens and configures server network socket for UDP/TCP role.
+ * @details The macro centralizes endpoint family selection, socket options,
+ * bind validation, and endpoint publication for both stream and datagram paths.
+ */
 #define VIRTUALETHERNETMAPPINGPORT_SOCKET_OPENNETWORKSOCKET(SERVER_OBJ, PROTOCOL, SOCKET_OBJECT)           \
                 auto& socket = SOCKET_OBJECT;                                                              \
                 if (socket.is_open()) {                                                                    \
@@ -164,7 +175,7 @@ namespace ppp {
                     ppp::net::IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(                                \
                             ppp::net::IPEndPoint::ToEndPoint(local_ep));
 
-            // Opens a UDP socket for the server (datagram mode)
+            /** @brief Opens server UDP socket for datagram mapping mode. */
             bool VirtualEthernetMappingPort::OpenNetworkSocketDatagram() noexcept {
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {                     // Server must exist
@@ -176,7 +187,7 @@ namespace ppp {
                 return true;
             }
 
-            // Opens a TCP acceptor for the server (stream mode)
+            /** @brief Opens server TCP acceptor for stream mapping mode. */
             bool VirtualEthernetMappingPort::OpenNetworkSocketStream() noexcept {
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {                     // Server must exist
@@ -190,7 +201,7 @@ namespace ppp {
 #undef VIRTUALETHERNETMAPPINGPORT_SOCKET_OPENNETWORKSOCKET
 #endif
 
-            // Opens the FRP server side (listening for incoming FRP connections)
+            /** @brief Starts FRP server mode and begins accept/receive loops. */
             bool VirtualEthernetMappingPort::OpenFrpServer(const VirtualEthernetLoggerPtr& logger) noexcept {
                 // Validate remote port range
                 if (remote_port_ <= ppp::net::IPEndPoint::MinPort || remote_port_ > ppp::net::IPEndPoint::MaxPort) {
@@ -273,7 +284,7 @@ namespace ppp {
                 return false;
             }
 
-            // Returns the bound endpoint of the FRP server (if any)
+            /** @brief Returns currently bound server endpoint, or wildcard fallback. */
             boost::asio::ip::tcp::endpoint VirtualEthernetMappingPort::BoundEndPointOfFrpServer() noexcept {
                 std::shared_ptr<Server> server = server_;
                 if (server) {
@@ -284,7 +295,7 @@ namespace ppp {
                 return boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v4::any(), ppp::net::IPEndPoint::MinPort);
             }
 
-            // Starts the UDP receive loop for the server (datagram mode)
+            /** @brief Starts/continues UDP receive loop in server mode. */
             bool VirtualEthernetMappingPort::LoopbackFrpServer() noexcept {
                 if (disposed_) {
                     return false;
@@ -317,7 +328,7 @@ namespace ppp {
                 return true;
             }
 
-            // Updates the mapping port: cleans up timed-out connections
+            /** @brief Updates child connection/datagram timeout states. */
             bool VirtualEthernetMappingPort::Update(UInt64 now) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
@@ -340,7 +351,7 @@ namespace ppp {
                 return true;
             }
 
-            // Generates a new unique connection ID
+            /** @brief Generates a non-zero connection identifier. */
             int VirtualEthernetMappingPort::NewId() noexcept {
                 static std::atomic<unsigned int> aid = /*ATOMIC_FLAG_INIT*/RandomNext();   // Start with random value
 
@@ -352,7 +363,7 @@ namespace ppp {
                 }
             }
 
-            // Server::Connection constructor
+            /** @brief Constructs server-side stream connection state object. */
             VirtualEthernetMappingPort::Server::Connection::Connection(const std::shared_ptr<VirtualEthernetMappingPort>& mapping_port, const std::shared_ptr<Server>& server, int connection_id, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept
                 : IAsynchronousWriteIoQueue(mapping_port->buffer_allocator_)   // Base class initialization
                 , connection_stated_(0)                   // Initial state: 0 = not connected
@@ -366,12 +377,12 @@ namespace ppp {
                 Update();                                 // Set initial timeout
             }
 
-            // Server::Connection destructor
+            /** @brief Destroys server connection and finalizes resources. */
             VirtualEthernetMappingPort::Server::Connection::~Connection() noexcept {
                 Finalize(false);                           // Clean up without sending disconnect
             }
 
-            // Initiates connection to the FRP client (remote side)
+            /** @brief Initiates FRP-side connect request for accepted local socket. */
             bool VirtualEthernetMappingPort::Server::Connection::ConnectToFrpClient() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 0) {               // Must be in initial state
@@ -404,7 +415,7 @@ namespace ppp {
                 return true;
             }
 
-            // Sends data to the FRP client (remote side)
+            /** @brief Sends stream payload to FRP peer. */
             bool VirtualEthernetMappingPort::Server::Connection::SendToFrpClient(const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
@@ -444,7 +455,7 @@ namespace ppp {
                 return ok;
             }
 
-            // Sends data to the FRP user (local TCP client)
+            /** @brief Sends stream payload to local accepted TCP client. */
             bool VirtualEthernetMappingPort::Server::Connection::SendToFrpUser(const void* packet, int packet_size) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {               // Must be active
@@ -470,7 +481,7 @@ namespace ppp {
                     });
             }
 
-            // Implements the actual asynchronous write operation
+            /** @brief Performs asynchronous write on local TCP socket. */
             bool VirtualEthernetMappingPort::Server::Connection::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {               // Must be active
@@ -499,7 +510,7 @@ namespace ppp {
                 return true;
             }
 
-            // Finalizes the server connection: closes socket and removes from dictionary
+            /** @brief Finalizes server connection and optionally notifies peer disconnect. */
             void VirtualEthernetMappingPort::Server::Connection::Finalize(bool disconnect) noexcept {
                 int connection_state = connection_stated_.exchange(4);   // Set state to 4 (dead)
                 if (connection_state != 4) {               // If not already finalizing
@@ -533,7 +544,7 @@ namespace ppp {
                 }
             }
 
-            // Callback when connection to FRP client is successfully established
+            /** @brief Handles FRP connect acknowledgment for server-side connection. */
             bool VirtualEthernetMappingPort::Server::Connection::OnConnectOK(Byte error_code) noexcept {
                 int except = 1;                              // Expected state: connecting (1)
                 if (!connection_stated_.compare_exchange_strong(except, 2)) {   // Transition to state 2 (connected)
@@ -566,7 +577,7 @@ namespace ppp {
                 return ForwardFrpUserToFrpClient();
             }
 
-            // Starts asynchronous reading from the local TCP socket (FRP user) and forwards to FRP client
+            /** @brief Starts relay loop from local TCP user to FRP peer. */
             bool VirtualEthernetMappingPort::Server::Connection::ForwardFrpUserToFrpClient() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {
@@ -605,7 +616,7 @@ namespace ppp {
                 return true;
             }
 
-            // Finds a mapping port by its properties in the given dictionary
+            /** @brief Finds mapping instance by direction/protocol/remote-port key. */
             std::shared_ptr<VirtualEthernetMappingPort> VirtualEthernetMappingPort::FindMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port) noexcept {
                 uint32_t key = GetHashCode(in, tcp, remote_port);
                 Ptr ptr;
@@ -614,7 +625,7 @@ namespace ppp {
                 return ptr;
             }
 
-            // Deletes a mapping port from the dictionary and returns it
+            /** @brief Removes mapping instance by direction/protocol/remote-port key. */
             std::shared_ptr<VirtualEthernetMappingPort> VirtualEthernetMappingPort::DeleteMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port) noexcept {
                 uint32_t key = GetHashCode(in, tcp, remote_port);
                 Ptr ptr;
@@ -623,7 +634,7 @@ namespace ppp {
                 return ptr;
             }
 
-            // Adds a mapping port to the dictionary
+            /** @brief Adds mapping instance into keyed dictionary. */
             bool VirtualEthernetMappingPort::AddMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port, const Ptr& mapping_port) noexcept {
                 if (NULLPTR == mapping_port) {
                     return false;
@@ -633,7 +644,7 @@ namespace ppp {
                 return ppp::collections::Dictionary::TryAdd(mappings, key, mapping_port);
             }
 
-            // Helper template to retrieve a connection from a dictionary by ID (common for server and client)
+            /** @brief Retrieves connection by ID from role table with disposal checks. */
             template <typename TConnectionPtr, typename TDisposed, typename TConnectionTable>
             static inline TConnectionPtr MAPPINGPORT_GetConnection(TDisposed& disposed_, TConnectionTable& table_, int connection_id) noexcept {
                 int disposed = disposed_.load();
@@ -660,17 +671,17 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            // Retrieves a server-side connection by ID
+            /** @brief Retrieves server-side connection by connection ID. */
             VirtualEthernetMappingPort::Server::ConnectionPtr VirtualEthernetMappingPort::Server_GetConnection(int connection_id) noexcept {
                 return MAPPINGPORT_GetConnection<Server::ConnectionPtr>(disposed_, server_, connection_id);
             }
 
-            // Retrieves a client-side connection by ID
+            /** @brief Retrieves client-side connection by connection ID. */
             VirtualEthernetMappingPort::Client::ConnectionPtr VirtualEthernetMappingPort::Client_GetConnection(int connection_id) noexcept {
                 return MAPPINGPORT_GetConnection<Client::ConnectionPtr>(disposed_, client_, connection_id);
             }
 
-            // Retrieves a client-side datagram port by NAT endpoint key
+            /** @brief Retrieves client-side datagram port by NAT endpoint key. */
             VirtualEthernetMappingPort::Client::DatagramPortPtr VirtualEthernetMappingPort::Client_GetDatagramPort(const boost::asio::ip::udp::endpoint& nat_key) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
@@ -696,7 +707,7 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            // Server constructor: initializes sockets and buffer
+            /** @brief Constructs server role state and allocates receive buffer. */
             VirtualEthernetMappingPort::Server::Server(VirtualEthernetMappingPort* owner) noexcept
                 : socket_udp_(*owner->context_)      // UDP socket with owner's IO context
                 , socket_tcp_(*owner->context_) {    // TCP acceptor with owner's IO context
@@ -704,7 +715,7 @@ namespace ppp {
                 socket_source_buf_ = ppp::threading::Executors::GetCachedBuffer(owner->context_);
             }
 
-            // Called when FRP server receives a successful connection acknowledgment
+            /** @brief Handles FRP connect acknowledgment in server role. */
             bool VirtualEthernetMappingPort::Server_OnFrpConnectOK(int connection_id, Byte error_code) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
@@ -719,7 +730,7 @@ namespace ppp {
                 return ok;
             }
 
-            // Called when FRP server receives a disconnect request
+            /** @brief Handles FRP disconnect event in server role. */
             bool VirtualEthernetMappingPort::Server_OnFrpDisconnect(int connection_id) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
@@ -730,7 +741,7 @@ namespace ppp {
                 return true;
             }
 
-            // Called when FRP server receives a data push from the client
+            /** @brief Handles FRP stream payload in server role. */
             bool VirtualEthernetMappingPort::Server_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
@@ -745,7 +756,7 @@ namespace ppp {
                 return ok;
             }
 
-            // Called when FRP server needs to send a UDP datagram to a remote endpoint
+            /** @brief Sends UDP payload from server role to local remote endpoint. */
             bool VirtualEthernetMappingPort::Server_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -784,7 +795,11 @@ namespace ppp {
                 return true;
             }
 
-            // Accepts a new incoming TCP connection from an FRP user (local client)
+            /**
+             * @brief Accepts local TCP user socket and binds it to a new FRP connection.
+             * @details The method allocates a connection ID, creates relay state,
+             * starts FRP connect negotiation, and emits mapping logs on success.
+             */
             bool VirtualEthernetMappingPort::Server_AcceptFrpUserSocket(const std::shared_ptr<Server>& server, const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioTcpSocket& socket) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
@@ -857,7 +872,7 @@ namespace ppp {
                 return false;   // No free connection ID found
             }
 
-            // Sends a UDP packet to the FRP client (remote side) via linklayer
+            /** @brief Sends UDP payload from server role to FRP peer via link layer. */
             bool VirtualEthernetMappingPort::Server_SendToFrpClient(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -890,7 +905,7 @@ namespace ppp {
                 return false;
             }
 
-            // Opens the FRP client side (connects to local destination)
+            /** @brief Starts FRP client mode and registers mapping entry. */
             bool VirtualEthernetMappingPort::OpenFrpClient(const boost::asio::ip::address& local_ip, int local_port) noexcept {
                 // Validate ports
                 if (remote_port_ <= ppp::net::IPEndPoint::MinPort || remote_port_ > ppp::net::IPEndPoint::MaxPort) {
@@ -952,7 +967,7 @@ namespace ppp {
                 return false;
             }
 
-            // Client::Connection constructor
+            /** @brief Constructs client-side stream connection state. */
             VirtualEthernetMappingPort::Client::Connection::Connection(const std::shared_ptr<VirtualEthernetMappingPort>& mapping_port, const std::shared_ptr<Client>& client, int connection_id) noexcept
                 : IAsynchronousWriteIoQueue(mapping_port->buffer_allocator_)   // Base class init
                 , connection_stated_(0)                   // Initial state
@@ -966,12 +981,12 @@ namespace ppp {
                 Update();                                 // Set initial timeout
             }
 
-            // Client::Connection destructor
+            /** @brief Destroys client-side connection and finalizes resources. */
             VirtualEthernetMappingPort::Client::Connection::~Connection() noexcept {
                 Finalize(false);
             }
 
-            // Connects to the destination server (local TCP service)
+            /** @brief Connects client role to local destination TCP service. */
             bool VirtualEthernetMappingPort::Client::Connection::ConnectToDestinationServer() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 0) {               // Must be initial
@@ -1043,7 +1058,7 @@ namespace ppp {
                 return true;
             }
 
-            // Finalizes the client connection: closes socket and removes from dictionary
+            /** @brief Finalizes client connection and optionally notifies peer disconnect. */
             void VirtualEthernetMappingPort::Client::Connection::Finalize(bool disconnect) noexcept {
                 std::shared_ptr<ITransmission> transmission = std::move(transmission_);
      
@@ -1078,7 +1093,7 @@ namespace ppp {
                 }
             }
 
-            // Callback when connection to destination server succeeds or fails
+            /** @brief Handles async connect result and sends FRP connect acknowledgment. */
             bool VirtualEthernetMappingPort::Client::Connection::OnConnectedOK(bool ok) noexcept {
                 int except = 1;                                  // Expected state: connecting
                 if (!connection_stated_.compare_exchange_strong(except, 2)) {   // Transition to state 2 (connected)
@@ -1129,7 +1144,7 @@ namespace ppp {
                 return Loopback();
             }
 
-            // Starts asynchronous reading from the destination server socket and forwards to FRP server
+            /** @brief Starts relay loop from destination socket back to FRP peer. */
             bool VirtualEthernetMappingPort::Client::Connection::Loopback() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {
@@ -1183,7 +1198,7 @@ namespace ppp {
                 return true;
             }
 
-            // Sends data to the destination server (local TCP service)
+            /** @brief Sends FRP stream payload to local destination TCP service. */
             bool VirtualEthernetMappingPort::Client::Connection::SendToDestinationServer(const void* packet, int packet_size) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {                    // Must be active
@@ -1209,7 +1224,7 @@ namespace ppp {
                     });
             }
 
-            // Implements the actual asynchronous write for client connection
+            /** @brief Performs asynchronous write on destination TCP socket. */
             bool VirtualEthernetMappingPort::Client::Connection::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {
@@ -1237,7 +1252,7 @@ namespace ppp {
                 return true;
             }
 
-            // Called when FRP client receives a connection request
+            /** @brief Handles inbound FRP connect request in client role. */
             bool VirtualEthernetMappingPort::Client_OnFrpConnect(int connection_id) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR != connection) {
@@ -1268,7 +1283,7 @@ namespace ppp {
                 return ok;
             }
 
-            // Called when FRP client receives a disconnect request
+            /** @brief Handles inbound FRP disconnect in client role. */
             bool VirtualEthernetMappingPort::Client_OnFrpDisconnect(int connection_id) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR == connection) {
@@ -1279,7 +1294,7 @@ namespace ppp {
                 return true;
             }
 
-            // Called when FRP client receives a data push from the server
+            /** @brief Handles inbound FRP stream payload in client role. */
             bool VirtualEthernetMappingPort::Client_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR == connection) {
@@ -1294,7 +1309,11 @@ namespace ppp {
                 return ok;
             }
 
-            // Called when FRP client needs to send a UDP datagram to a remote endpoint
+            /**
+             * @brief Handles inbound FRP UDP payload in client role.
+             * @details Reuses or lazily creates a NAT-keyed datagram port instance,
+             * then forwards payload to local destination endpoint.
+             */
             bool VirtualEthernetMappingPort::Client_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -1342,13 +1361,13 @@ namespace ppp {
                 return false;
             }
 
-            // Client constructor: initializes default values
+            /** @brief Constructs client role state with default address-family marker. */
             VirtualEthernetMappingPort::Client::Client() noexcept
                 : local_in_(false) {
                 // Empty
             }
 
-            // Client::DatagramPort constructor
+            /** @brief Constructs datagram relay port bound to one NAT endpoint key. */
             VirtualEthernetMappingPort::Client::DatagramPort::DatagramPort(const std::shared_ptr<VirtualEthernetMappingPort>& mapping_port, const std::shared_ptr<Client>& client, const boost::asio::ip::udp::endpoint& natEP) noexcept
                 : disposed_(FALSE)
                 , socket_(*mapping_port->context_)         // UDP socket with owner's IO context
@@ -1363,12 +1382,12 @@ namespace ppp {
                 Update();                                  // Set initial timeout
             }
 
-            // DatagramPort destructor
+            /** @brief Destroys datagram relay port and releases socket resources. */
             VirtualEthernetMappingPort::Client::DatagramPort::~DatagramPort() noexcept {
                 Dispose();
             }
 
-            // Disposes the datagram port: closes socket and removes from dictionary
+            /** @brief Disposes datagram relay port and unregisters NAT key. */
             void VirtualEthernetMappingPort::Client::DatagramPort::Dispose() noexcept {
                 int disposed = disposed_.exchange(TRUE);
                 if (disposed != TRUE) {
@@ -1382,7 +1401,7 @@ namespace ppp {
                 }
             }
 
-            // Sends a UDP packet to the destination server (via FRP)
+            /** @brief Sends UDP payload from local datagram socket to FRP peer. */
             bool VirtualEthernetMappingPort::Client::DatagramPort::SendToDestinationServer(const void* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -1414,7 +1433,7 @@ namespace ppp {
                 return ok;
             }
 
-            // Starts the asynchronous receive loop on the UDP socket
+            /** @brief Starts/continues async receive loop on datagram relay socket. */
             bool VirtualEthernetMappingPort::Client::DatagramPort::Loopback() noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
@@ -1449,7 +1468,7 @@ namespace ppp {
                 return true;
             }
 
-            // Opens the UDP socket and starts the loopback
+            /** @brief Opens datagram relay socket and starts loopback flow. */
             bool VirtualEthernetMappingPort::Client::DatagramPort::Open() noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
@@ -1487,7 +1506,7 @@ namespace ppp {
                 return opened;
             }
 
-            // Sends a UDP packet to the remote endpoint (local network) via the UDP socket
+            /** @brief Sends UDP payload to local destination endpoint via relay socket. */
             bool VirtualEthernetMappingPort::Client::DatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {

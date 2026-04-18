@@ -1,4 +1,8 @@
 // Definition of _Hash_bytes. -*- C++ -*-
+/**
+ * @file hash_bytes.cpp
+ * @brief Implements Murmur-style and FNV-1a byte hashing primitives.
+ */
 // Copyright (C) 2010-2014 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
@@ -36,6 +40,11 @@
 
 namespace ppp
 {
+    /**
+     * @brief Loads one machine word from a potentially unaligned address.
+     * @param p Pointer to byte buffer.
+     * @return Word-sized value copied from memory.
+     */
     inline std::size_t unaligned_load(const char* p)
     {
         std::size_t result;
@@ -48,8 +57,12 @@ namespace ppp
     }
 
 #if defined(_M_X64) || defined(__x86_64__) || defined(__aarch64__) || (defined(__WORDSIZE) && __WORDSIZE == 64)
-    // 64-bit platform
-    // Loads n bytes, where 1 <= n < 8.
+    /**
+     * @brief Loads 1..7 bytes into a word on 64-bit targets.
+     * @param p Pointer to tail bytes.
+     * @param n Byte count in range [1, 7].
+     * @return Packed value built from the input bytes.
+     */
     inline std::size_t load_bytes(const char* p, int n)
     {
         std::size_t result = 0;
@@ -60,13 +73,22 @@ namespace ppp
         return result;
     }
 
+    /**
+     * @brief Applies a Murmur-style shift/xor mixing step (64-bit variant).
+     * @param v Input value.
+     * @return Mixed value.
+     */
     inline std::size_t shift_mix(std::size_t v)
     {
         return v ^ (v >> 47);
     }
 #else
-    // 32-bit platform
-    // Loads n bytes, where 1 <= n < 4.
+    /**
+     * @brief Loads 1..3 bytes into a word on 32-bit targets.
+     * @param p Pointer to tail bytes.
+     * @param n Byte count in range [1, 3].
+     * @return Packed value built from the input bytes.
+     */
     inline std::size_t load_bytes(const char* p, int n)
     {
         std::size_t result = 0;
@@ -77,6 +99,11 @@ namespace ppp
         return result;
     }
 
+    /**
+     * @brief Applies a Murmur-style shift/xor mixing step (32-bit variant).
+     * @param v Input value.
+     * @return Mixed value.
+     */
     inline std::size_t shift_mix(std::size_t v)
     {
         return v ^ (v >> 16);
@@ -89,14 +116,21 @@ namespace ppp
     namespace hash
     {
 #if defined(_M_X64) || defined(__x86_64__) || defined(__aarch64__) || (defined(__WORDSIZE) && __WORDSIZE == 64)
-        // Implementation of Murmur hash for 64-bit platforms
+        /**
+         * @brief Computes Murmur-style hash on 64-bit platforms.
+         * @param ptr Pointer to input bytes.
+         * @param len Input length in bytes.
+         * @param seed Initial seed value.
+         * @return Computed hash value.
+         */
         size_t _Hash_bytes(const void* ptr, size_t len, size_t seed) noexcept
         {
             static const size_t mul = (((size_t)0xc6a4a793UL) << 32UL)
                 + (size_t)0x5bd1e995UL;
             const char* const buf = static_cast<const char*>(ptr);
-            // Remove the bytes not divisible by the sizeof(size_t).  This
-            // allows the main loop to process the data as 64-bit integers.
+            /**
+             * @brief Aligns processing length so the main loop handles whole machine words.
+             */
             const size_t len_aligned = len & ~0x7ULL;
             const char* const end = buf + len_aligned;
             size_t hash = seed ^ (len * mul);
@@ -117,7 +151,13 @@ namespace ppp
             return hash;
         }
 
-        // Implementation of FNV hash for 64-bit platforms
+        /**
+         * @brief Computes FNV-1a hash on 64-bit platforms.
+         * @param ptr Pointer to input bytes.
+         * @param len Input length in bytes.
+         * @param hash Initial hash value.
+         * @return Computed hash value.
+         */
         size_t _Fnv_hash_bytes(const void* ptr, size_t len, size_t hash) noexcept
         {
             const char* cptr = static_cast<const char*>(ptr);
@@ -130,13 +170,21 @@ namespace ppp
         }
 
 #else
-        // Implementation of Murmur hash for 32-bit platforms
+        /**
+         * @brief Computes Murmur-style hash on 32-bit platforms.
+         * @param ptr Pointer to input bytes.
+         * @param len Input length in bytes.
+         * @param seed Initial seed value.
+         * @return Computed hash value.
+         */
         size_t _Hash_bytes(const void* ptr, size_t len, size_t seed) noexcept
         {
             const size_t m = 0x5bd1e995;
             size_t hash = seed ^ len;
             const char* buf = static_cast<const char*>(ptr);
-            // Mix 4 bytes at a time into the hash.
+            /**
+             * @brief Mixes 4-byte chunks into the running hash state.
+             */
             while (len >= 4)
             {
                 size_t k = unaligned_load(buf);
@@ -148,7 +196,9 @@ namespace ppp
                 buf += 4;
                 len -= 4;
             }
-            // Handle the last few bytes of the input array.
+            /**
+             * @brief Handles the trailing 1..3 bytes.
+             */
             switch (len)
             {
             case 3:
@@ -161,14 +211,22 @@ namespace ppp
                 hash ^= static_cast<unsigned char>(buf[0]);
                 hash *= m;
             };
-            // Do a few final mixes of the hash.
+            /**
+             * @brief Performs Murmur finalization mixing.
+             */
             hash ^= hash >> 13;
             hash *= m;
             hash ^= hash >> 15;
             return hash;
         }
 
-        // Implementation of FNV hash for 32-bit platforms
+        /**
+         * @brief Computes FNV-1a hash on 32-bit platforms.
+         * @param ptr Pointer to input bytes.
+         * @param len Input length in bytes.
+         * @param hash Initial hash value.
+         * @return Computed hash value.
+         */
         size_t _Fnv_hash_bytes(const void* ptr, size_t len, size_t hash) noexcept
         {
             const char* cptr = static_cast<const char*>(ptr);

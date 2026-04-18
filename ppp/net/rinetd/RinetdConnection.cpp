@@ -1,3 +1,8 @@
+/**
+ * @file RinetdConnection.cpp
+ * @brief Implements socket lifecycle and forwarding for rinetd relay sessions.
+ */
+
 #include <ppp/net/rinetd/RinetdConnection.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
@@ -11,6 +16,9 @@
 namespace ppp {
     namespace net {
         namespace rinetd {
+            /**
+             * @brief Initializes relay state and optional platform QoS helpers.
+             */
             RinetdConnection::RinetdConnection(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& local_socket) noexcept
                 : disposed_(false)
                 , connected_(false)
@@ -28,10 +36,16 @@ namespace ppp {
                 Update();
             }
 
+            /**
+             * @brief Destructor that enforces final cleanup.
+             */
             RinetdConnection::~RinetdConnection() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Schedules finalization onto the configured execution context.
+             */
             void RinetdConnection::Dispose() noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
@@ -43,6 +57,9 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Updates absolute timeout for connect or inactivity phase.
+             */
             void RinetdConnection::Update() noexcept {
                 uint64_t now = ppp::threading::Executors::GetTickCount();
                 if (remote_buffer_) {
@@ -53,6 +70,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Releases QoS objects and closes both relay sockets.
+             */
             void RinetdConnection::Finalize() noexcept {
 #if defined(_WIN32)
                 for (std::shared_ptr<ppp::net::QoSS>& qoss : qoss_) {
@@ -65,6 +85,9 @@ namespace ppp {
                 ppp::net::Socket::Closesocket(remote_socket_);
             }
  
+            /**
+             * @brief Opens and connects the remote socket endpoint.
+             */
             bool RinetdConnection::Open(const boost::asio::ip::tcp::endpoint& remoteEP, ppp::coroutines::YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;
@@ -105,6 +128,12 @@ namespace ppp {
                     return false;
                 }
 
+                /**
+                 * @brief Linux-specific physical-network protection for non-loopback peers.
+                 *
+                 * IPv4 remote sockets may be protected to avoid routing loops with virtual
+                 * adapters, while IPv6 is intentionally excluded by original design notes.
+                 */
 #if defined(_WIN32)
                 if (ppp::net::Socket::IsDefaultFlashTypeOfService()) {
                     qoss_[1] = ppp::net::QoSS::New(socket->native_handle(), remoteIP, remotePort);
@@ -136,6 +165,9 @@ namespace ppp {
                 return connect_ok;
             }
 
+            /**
+             * @brief Allocates forwarding buffers and starts both relay directions.
+             */
             bool RinetdConnection::Run() noexcept {
                 if (disposed_) {
                     return false;
@@ -164,6 +196,12 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Starts one asynchronous forwarding loop.
+             *
+             * The callback chain performs read->write recursion and disposes the whole
+             * connection whenever either direction encounters EOF or an I/O error.
+             */
             bool RinetdConnection::ForwardXToY(boost::asio::ip::tcp::socket* socket, boost::asio::ip::tcp::socket* to, Byte* buffer) noexcept {
                 if (disposed_) {
                     return false;

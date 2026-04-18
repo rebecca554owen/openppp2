@@ -1,3 +1,9 @@
+/**
+ * @file PppApplication.h
+ * @brief Declares the main PPP application lifecycle and runtime orchestration interface.
+ * @license GPL-3.0
+ */
+
 #pragma once
 
 #include <ppp/stdafx.h>
@@ -6,24 +12,22 @@
 #include <ppp/transmissions/ITransmissionStatistics.h>
 
 namespace ppp {
-    namespace configurations {
-        class AppConfiguration;
-    }
+namespace configurations {
+class AppConfiguration;
+}
 
-    namespace threading {
-        class BufferswapAllocator;
-        class Timer;
-    }
+namespace threading {
+class BufferswapAllocator;
+class Timer;
+}
 
-    namespace app {
-        namespace server {
-            class VirtualEthernetSwitcher;
-        }
+namespace app {
+namespace server {
+class VirtualEthernetSwitcher;
+}
 
-        namespace client {
-            class VEthernetNetworkSwitcher;
-        }
-    }
+namespace client {
+class VEthernetNetworkSwitcher;
 }
 
 struct NetworkInterface;
@@ -32,6 +36,21 @@ class PppApplication : public std::enable_shared_from_this<PppApplication> {
 public:
     PppApplication() noexcept;
     virtual ~PppApplication() noexcept;
+
+public:
+    /**
+     * @brief Gets the process-wide PPP application singleton instance.
+     * @return Reference to `ppp::app::PppApplication` singleton.
+     */
+    static PppApplication& GetInstance() noexcept;
+
+    /**
+     * @brief Runs application startup, argument preparation, and executor dispatch.
+     * @param argc Command-line argument count.
+     * @param argv Command-line argument vector.
+     * @return Process exit code produced by the application runtime.
+     */
+    int Run(int argc, char** argv) noexcept;
 
 public:
     int Main(int argc, const char* argv[]) noexcept;
@@ -91,4 +110,5 @@ private:
     ppp::transmissions::ITransmissionStatistics transmission_statistics_;
 };
 
-int RunPppApplicationMain(int argc, const char* argv[]) noexcept;
+} // namespace app
+} // namespace ppp

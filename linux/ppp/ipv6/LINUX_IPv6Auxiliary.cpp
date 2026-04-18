@@ -1,8 +1,17 @@
+/**
+ * @file LINUX_IPv6Auxiliary.cpp
+ * @brief Linux IPv6 auxiliary routines for server/client route, firewall, and sysctl lifecycle handling.
+ *
+ * This unit provides IPv6 environment preparation and teardown for Linux PPP workflows,
+ * including route management, ip6tables rule orchestration, and sysctl snapshot persistence.
+ */
 #include <linux/ppp/ipv6/IPv6Auxiliary.h>
 #include <ppp/ipv6/IPv6Packet.h>
 
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/auxiliary/JsonAuxiliary.h>
+#include <ppp/io/File.h>
 #include <common/unix/UnixAfx.h>
 #include <linux/ppp/tap/TapLinux.h>
 
@@ -72,6 +81,240 @@ namespace {
         return system(command.data()) == 0;
     }
 
+    /**
+     * @brief Gets the on-disk path used to persist IPv6 sysctl snapshots.
+     * @return Absolute snapshot file path.
+     */
+    static ppp::string GetIPv6SysctlSnapshotPath() noexcept {
+        return "/tmp/openppp2_ipv6_sysctl_snapshot.json";
+    }
+
+    static bool IsSafeSysctlKey(const ppp::string& value) noexcept {
+        if (value.empty()) {
+            return false;
+        }
+
+        for (char ch : value) {
+            bool ok =
+                (ch >= 'a' && ch <= 'z') ||
+                (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == '.' || ch == '_' || ch == '-';
+            if (!ok) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static bool IsSafeSysctlValue(const ppp::string& value) noexcept {
+        if (value.empty()) {
+            return false;
+        }
+
+        for (char ch : value) {
+            bool ok =
+                (ch >= 'a' && ch <= 'z') ||
+                (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == '.' || ch == '_' || ch == '-' || ch == '/';
+            if (!ok) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Reads a sysctl value by key using `sysctl -n`.
+     * @param key Sysctl key to query.
+     * @param value Receives the trimmed sysctl value on success.
+     * @return true if the key is valid and a non-empty value is read; otherwise false.
+     */
+    static bool ReadSysctlValue(const ppp::string& key, ppp::string& value) noexcept {
+        value.clear();
+        if (!IsSafeSysctlKey(key)) {
+            return false;
+        }
+
+        char command[512];
+        snprintf(command, sizeof(command), "sysctl -n %s 2>/dev/null", key.data());
+
+        FILE* pipe = popen(command, "r");
+        if (NULLPTR == pipe) {
+            return false;
+        }
+
+        char buffer[256];
+        ppp::string line;
+        if (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+            line = buffer;
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+                line.pop_back();
+            }
+        }
+
+        pclose(pipe);
+        if (line.empty()) {
+            return false;
+        }
+
+        value = line;
+        return true;
+    }
+
+    /**
+     * @brief Applies a sysctl key/value pair via `sysctl -w`.
+     * @param key Sysctl key to update.
+     * @param value Value to assign.
+     * @return true when the command succeeds; otherwise false.
+     */
+    static bool ApplySysctlValue(const ppp::string& key, const ppp::string& value) noexcept {
+        if (!IsSafeSysctlKey(key) || !IsSafeSysctlValue(value)) {
+            return false;
+        }
+
+        char command[768];
+        snprintf(command, sizeof(command), "sysctl -w %s=%s >/dev/null 2>&1", key.data(), value.data());
+        return LinuxExecuteCommand(command);
+    }
+
+    /**
+     * @brief Loads previously captured sysctl values from the snapshot file.
+     * @param snapshot Receives validated key/value pairs.
+     * @return true if at least one valid entry is loaded; otherwise false.
+     */
+    static bool LoadSysctlSnapshot(ppp::unordered_map<ppp::string, ppp::string>& snapshot) noexcept {
+        snapshot.clear();
+        ppp::string path = GetIPv6SysctlSnapshotPath();
+        if (!ppp::io::File::Exists(path.data())) {
+            return false;
+        }
+
+        ppp::string content = ppp::io::File::ReadAllText(path.data());
+        if (content.empty()) {
+            return false;
+        }
+
+        Json::Value root = ppp::auxiliary::JsonAuxiliary::FromString(content);
+        if (!root.isObject()) {
+            return false;
+        }
+
+        Json::Value sysctl = root["sysctl"];
+        if (!sysctl.isObject()) {
+            return false;
+        }
+
+        for (Json::ValueConstIterator it = sysctl.begin(); it != sysctl.end(); ++it) {
+            Json::String key_json = it.name();
+            ppp::string key(key_json.data(), key_json.size());
+            ppp::string value = ppp::auxiliary::JsonAuxiliary::AsString(*it);
+            if (!IsSafeSysctlKey(key) || !IsSafeSysctlValue(value)) {
+                continue;
+            }
+            snapshot[key] = value;
+        }
+
+        return !snapshot.empty();
+    }
+
+    /**
+     * @brief Persists sysctl key/value pairs to the snapshot file in JSON format.
+     * @param snapshot Sysctl values to serialize.
+     * @return true if the snapshot is written successfully; otherwise false.
+     */
+    static bool SaveSysctlSnapshot(const ppp::unordered_map<ppp::string, ppp::string>& snapshot) noexcept {
+        if (snapshot.empty()) {
+            return false;
+        }
+
+        Json::Value root(Json::objectValue);
+        root["version"] = 1;
+
+        Json::Value sysctl(Json::objectValue);
+        for (const auto& kv : snapshot) {
+            if (!IsSafeSysctlKey(kv.first) || !IsSafeSysctlValue(kv.second)) {
+                continue;
+            }
+            sysctl[kv.first] = kv.second;
+        }
+
+        if (sysctl.empty()) {
+            return false;
+        }
+
+        root["sysctl"] = sysctl;
+        ppp::string text = ppp::auxiliary::JsonAuxiliary::ToString(root);
+        if (text.empty()) {
+            return false;
+        }
+
+        ppp::string path = GetIPv6SysctlSnapshotPath();
+        return ppp::io::File::WriteAllBytes(path.data(), text.data(), static_cast<int>(text.size()));
+    }
+
+    /**
+     * @brief Restores sysctl values from the persisted snapshot file.
+     * @param delete_on_success Whether to delete the snapshot file after a full successful restore.
+     * @return true when all restored keys are applied (or no snapshot exists); otherwise false.
+     */
+    static bool RestoreSysctlFromSnapshotFile(bool delete_on_success) noexcept {
+        ppp::unordered_map<ppp::string, ppp::string> snapshot;
+        if (!LoadSysctlSnapshot(snapshot)) {
+            return true;
+        }
+
+        bool all_ok = true;
+        for (const auto& kv : snapshot) {
+            if (!ApplySysctlValue(kv.first, kv.second)) {
+                all_ok = false;
+            }
+        }
+
+        if (all_ok && delete_on_success) {
+            ppp::string path = GetIPv6SysctlSnapshotPath();
+            ppp::io::File::Delete(path.data());
+        }
+        return all_ok;
+    }
+
+    /**
+     * @brief Captures current server IPv6-related sysctl values before mutation.
+     * @param mode Active IPv6 server mode.
+     * @param uplink_name Resolved uplink interface name for mode-specific keys.
+     * @param snapshot Receives captured sysctl values.
+     * @return true when all required keys are captured; otherwise false.
+     */
+    static bool CaptureServerSysctlSnapshot(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& uplink_name, ppp::unordered_map<ppp::string, ppp::string>& snapshot) noexcept {
+        snapshot.clear();
+
+        ppp::vector<ppp::string> keys;
+        keys.emplace_back("net.ipv6.conf.all.forwarding");
+        keys.emplace_back("net.ipv6.conf.default.forwarding");
+
+        if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua && !uplink_name.empty()) {
+            keys.emplace_back("net.ipv6.conf." + uplink_name + ".accept_ra");
+        }
+
+        for (const ppp::string& key : keys) {
+            ppp::string value;
+            if (!ReadSysctlValue(key, value)) {
+                return false;
+            }
+            snapshot[key] = value;
+        }
+
+        return !snapshot.empty();
+    }
+
+    /**
+     * @brief Extracts the interface name from an IPv6 route line.
+     * @param route Raw route line (e.g. output from `ip -6 route`).
+     * @return Parsed interface name after `dev`, or empty if not found/unsafe.
+     */
     static ppp::string ExtractRouteInterface(const ppp::string& route) noexcept {
         static const char token[] = " dev ";
 
@@ -90,6 +333,10 @@ namespace {
         return interface_name;
     }
 
+    /**
+     * @brief Reads all current IPv6 default routes from the system.
+     * @return Route lines returned by `ip -6 route show default`.
+     */
     static ppp::vector<ppp::string> ReadDefaultRoutes() noexcept {
         return ppp::unix__::UnixAfx::ExecuteShellCommandLines("ip -6 route show default");
     }
@@ -206,6 +453,14 @@ namespace {
     }
 
 
+    /**
+     * @brief Removes IPv6 forwarding/NAT rules and transit interface state.
+     * @param mode Active server IPv6 mode.
+     * @param prefix IPv6 prefix used for rule targeting.
+     * @param prefix_length Prefix length in bits.
+     * @param preferred_nic Preferred uplink interface hint.
+     * @param transit_ifname Transit interface to flush.
+     */
     static void CleanupServerRules(ppp::configurations::AppConfiguration::IPv6Mode mode, const ppp::string& prefix, int prefix_length, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
         ppp::string uplink_name = ResolveIpv6UplinkInterface(preferred_nic);
         if (!uplink_name.empty() && !IsSafeShellToken(uplink_name)) {
@@ -259,6 +514,10 @@ namespace ppp {
     namespace linux {
         namespace ipv6 {
             namespace auxiliary {
+                /**
+                 * @brief Reads the first available IPv6 default route line.
+                 * @return First non-empty default route entry, or empty if unavailable.
+                 */
                 ppp::string ReadDefaultRoute() noexcept {
                     FILE* pipe = popen("ip -6 route show default", "r");
                     if (NULLPTR == pipe) {
@@ -303,6 +562,11 @@ namespace ppp {
                     return ppp::string(network.data(), network.size());
                 }
 
+                /**
+                 * @brief Applies a full IPv6 default route expression via `ip -6 route replace`.
+                 * @param route Route payload to apply.
+                 * @return true when the command executes successfully; otherwise false.
+                 */
                 bool ApplyDefaultRouteCommand(const ppp::string& route) noexcept {
                     if (route.empty() || !IsSafeShellRoute(route)) {
                         return false;
@@ -313,6 +577,13 @@ namespace ppp {
                     return system(command) == 0;
                 }
 
+                /**
+                 * @brief Prepares Linux IPv6 server networking state for NAT66 or GUA mode.
+                 * @param configuration Runtime application configuration.
+                 * @param preferred_nic Preferred uplink interface hint.
+                 * @param transit_ifname Transit interface used for route/address flushing.
+                 * @return true if environment setup succeeds or mode does not require setup; otherwise false.
+                 */
                 bool PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
                     if (NULLPTR == configuration) {
                         return false;
@@ -326,9 +597,14 @@ namespace ppp {
 
                     ppp::string prefix;
                     int prefix_length = 0;
-                    if (!NormalizeIpv6Prefix(ipv6.cidr, ipv6.prefix_length, prefix, prefix_length) && mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
+                    bool normalized = NormalizeIpv6Prefix(ipv6.cidr, ipv6.prefix_length, prefix, prefix_length);
+                    if (!normalized && mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
                         prefix = ppp::ipv6::IPV6_DEFAULT_PREFIX;
                         prefix_length = ppp::ipv6::IPv6_DEFAULT_PREFIX_LENGTH;
+                    }
+                    else if (!normalized) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
+                        return false;
                     }
 
                     if (!prefix.empty() && !IsSafeShellToken(prefix)) {
@@ -336,33 +612,53 @@ namespace ppp {
                         return false;
                     }
 
-                    CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
-
-                    char sysctl_command[512];
-                    snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 > /dev/null 2>&1");
-                    if (!LinuxExecuteCommand(sysctl_command)) {
+                    if (!RestoreSysctlFromSnapshotFile(true)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardingEnableFailed);
-                        return false;
                     }
+
+                    CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
 
                     ppp::string uplink_name = ResolveIpv6UplinkInterface(preferred_nic);
                     char ip6tables_command[3072];
                     if (!uplink_name.empty() && !IsSafeShellToken(uplink_name)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                        RestoreSysctlFromSnapshotFile(false);
+                        return false;
+                    }
+
+                    ppp::unordered_map<ppp::string, ppp::string> sysctl_snapshot;
+                    if (!CaptureServerSysctlSnapshot(mode, uplink_name, sysctl_snapshot) || !SaveSysctlSnapshot(sysctl_snapshot)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardingEnableFailed);
+                        CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                        RestoreSysctlFromSnapshotFile(false);
+                        return false;
+                    }
+
+                    char sysctl_command[512];
+                    snprintf(sysctl_command, sizeof(sysctl_command), "sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 > /dev/null 2>&1");
+                    if (!LinuxExecuteCommand(sysctl_command)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardingEnableFailed);
+                        RestoreSysctlFromSnapshotFile(false);
                         return false;
                     }
 
                     if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua && !uplink_name.empty()) {
                         char accept_ra_command[512];
                         snprintf(accept_ra_command, sizeof(accept_ra_command), "sysctl -w net.ipv6.conf.%s.accept_ra=2 > /dev/null 2>&1", uplink_name.data());
-                        LinuxExecuteCommand(accept_ra_command);
+                        if (!LinuxExecuteCommand(accept_ra_command)) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardingEnableFailed);
+                            CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                            RestoreSysctlFromSnapshotFile(false);
+                            return false;
+                        }
                     }
 
                     ppp::string forward_rules = BuildIpv6ForwardRules(true, prefix, prefix_length);
                     if (forward_rules.empty()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardRuleApplyFailed);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                        RestoreSysctlFromSnapshotFile(false);
                         return false;
                     }
 
@@ -373,12 +669,14 @@ namespace ppp {
 
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardRuleApplyFailed);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                        RestoreSysctlFromSnapshotFile(false);
                         return false;
                     }
 
                     if (!SupportsIp6tablesNatTable()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6Nat66Unavailable);
                         CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                        RestoreSysctlFromSnapshotFile(false);
                         return false;
                     }
 
@@ -407,9 +705,16 @@ namespace ppp {
 
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardRuleApplyFailed);
                     CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                    RestoreSysctlFromSnapshotFile(false);
                     return false;
                 }
 
+                /**
+                 * @brief Finalizes Linux IPv6 server networking and restores prior sysctl state.
+                 * @param configuration Runtime application configuration.
+                 * @param preferred_nic Preferred uplink interface hint.
+                 * @param transit_ifname Transit interface used for route/address flushing.
+                 */
                 void FinalizeServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
                     if (NULLPTR == configuration) {
                         return;
@@ -433,6 +738,9 @@ namespace ppp {
                     }
 
                     CleanupServerRules(mode, prefix, prefix_length, preferred_nic, transit_ifname);
+                    if (!RestoreSysctlFromSnapshotFile(true)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ForwardingEnableFailed);
+                    }
                 }
 
                 void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {

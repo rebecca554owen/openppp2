@@ -4,28 +4,43 @@
 namespace ppp {
     namespace net {
         namespace asio {
+            /**
+             * @file IAsynchronousWriteIoQueue.cpp
+             * @brief Implements serialized asynchronous write queue lifecycle and dispatch.
+             */
+
+            /** @brief Initializes queue state and stores allocator reference. */
             IAsynchronousWriteIoQueue::IAsynchronousWriteIoQueue(const std::shared_ptr<BufferswapAllocator>& allocator) noexcept
                 : BufferAllocator(allocator)
                 , disposed_(false)
                 , sending_(false) {
-                
+
             }
 
+            /** @brief Releases resources and fails all pending write operations. */
             IAsynchronousWriteIoQueue::~IAsynchronousWriteIoQueue() noexcept {
                 Finalize();
             }
 
+            /** @brief Public disposal entry that finalizes queue state. */
             void IAsynchronousWriteIoQueue::Dispose() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Finalizes queue state and forwards failure to pending callbacks.
+             *
+             * The pending queue is moved out under lock, then callbacks are invoked without
+             * holding the synchronization object to avoid lock re-entrancy issues.
+             */
             void IAsynchronousWriteIoQueue::Finalize() noexcept {
-                AsynchronousWriteIoContextQueue queues; 
+                AsynchronousWriteIoContextQueue queues;
                 for (;;) {
+                    /** @brief Atomically transition to disposed state and detach pending queue. */
                     SynchronizedObjectScope scope(syncobj_);
                     disposed_ = true;
                     sending_ = false;
-                    
+
                     queues = std::move(queues_);
                     queues_.clear();
                     break;
@@ -36,6 +51,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Creates a shared copy of raw bytes using configured allocator strategy. */
             std::shared_ptr<Byte> IAsynchronousWriteIoQueue::Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen) noexcept {
                 if (NULLPTR == data || datalen < 1) {
                     return NULLPTR;
@@ -57,6 +73,7 @@ namespace ppp {
                 return chunk;
             }
 
+            /** @brief Coroutine-based write wrapper that dispatches through callback path. */
             bool IAsynchronousWriteIoQueue::WriteBytes(YieldContext& y, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
                 if (disposed_) {
                     return false;
@@ -68,6 +85,12 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Enqueues a write context or dispatches immediately when idle.
+             *
+             * Requests are serialized via @ref sending_ and @ref queues_ to guarantee
+             * ordered completion callbacks.
+             */
             bool IAsynchronousWriteIoQueue::WriteBytes(const std::shared_ptr<Byte>& packet, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 IAsynchronousWriteIoQueue* const q = this;
                 if (q->disposed_) {
@@ -93,6 +116,7 @@ namespace ppp {
 
                 bool ok = false;
                 while (NULLPTR != q) {
+                    /** @brief Serialize either direct dispatch or deferred enqueue. */
                     SynchronizedObjectScope scope(q->syncobj_);
                     if (q->sending_) {
                         if (q->disposed_) {
@@ -117,6 +141,12 @@ namespace ppp {
                 return false;
             }
 
+            /**
+             * @brief Attempts to start writing the provided context.
+             *
+             * On completion, this schedules progression to the next queued write and disposes
+             * the queue when progression fails.
+             */
             bool IAsynchronousWriteIoQueue::DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept {
                 if (disposed_) {
                     return false;
@@ -145,6 +175,12 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Advances the queue to the next pending write context.
+             *
+             * Returns 1 when another write is started, 0 when queue is empty, and -1 on
+             * disposal or unrecoverable write start failure.
+             */
             int IAsynchronousWriteIoQueue::DoTryWriteBytesNext() noexcept {
                 bool ok = false;
                 std::shared_ptr<AsynchronousWriteIoContext> context;
@@ -175,7 +211,7 @@ namespace ppp {
                 if (ok) {
                     return 1;
                 }
-                
+
                 context->Forward(false);
                 return -1;
             }

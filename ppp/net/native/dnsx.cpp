@@ -8,6 +8,8 @@
 // All public functions are re‑entrant, exception‑neutral, and produce no
 // undefined behavior even when presented with arbitrary byte sequences.
 // =======================================================================================
+/// @file dnsx.cpp
+/// @brief DNS query host extraction with safe RFC 1035 name decoding.
 
 #include <ppp/stdafx.h>
 #include <ppp/net/native/checksum.h>
@@ -182,6 +184,15 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Legacy compatibility wrapper (ExtractName) using the new safe implementation.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Backward-compatible wrapper around @ref ExtractNameEx.
+                /// @param szEncodedStr Pointer to encoded DNS name.
+                /// @param pusEncodedStrLen [out] Wire bytes consumed by the name.
+                /// @param szDotStr Output buffer for decoded dot-separated name.
+                /// @param nDotStrSize Size of @p szDotStr in bytes.
+                /// @param szPacketStartPos Packet start pointer.
+                /// @param szPacketEndPos Packet end pointer (one-past-last).
+                /// @param ppDecodePos [in/out] Parser cursor after decoding.
+                /// @return true on success; false on malformed or truncated data.
                 static bool ExtractName(char*                                               szEncodedStr,
                     uint16_t*                                                               pusEncodedStrLen,
                     char*                                                                   szDotStr,
@@ -291,6 +302,11 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Public API: ExtractHostY – uses default first predicate, custom second predicate.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Extracts query host with default header predicate and custom final predicate.
+                /// @param szPacketStartPos Pointer to DNS packet bytes.
+                /// @param nPacketLength Packet length in bytes.
+                /// @param fPredicateE Predicate applied to decoded name and query fields.
+                /// @return Extracted host name, or empty string on failure/rejection.
                 ppp::string ExtractHostY(const Byte*                                        szPacketStartPos,
                     int                                                                     nPacketLength,
                     const ppp::function<bool(dns_hdr*, ppp::string&, uint16_t, uint16_t)>&  fPredicateE) noexcept
@@ -309,6 +325,11 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Public API: ExtractHostX – uses custom first predicate, default second predicate.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Extracts query host with custom header predicate and default final predicate.
+                /// @param szPacketStartPos Pointer to DNS packet bytes.
+                /// @param nPacketLength Packet length in bytes.
+                /// @param fPredicateB Predicate applied to DNS header before decoding.
+                /// @return Extracted host name, or empty string on failure/rejection.
                 ppp::string ExtractHostX(const Byte*        szPacketStartPos,
                     int                                     nPacketLength,
                     const ppp::function<bool(dns_hdr*)>&    fPredicateB) noexcept
@@ -324,6 +345,10 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Public API: ExtractHost – simplest version, using both default predicates.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Extracts query host using default header and query predicates.
+                /// @param szPacketStartPos Pointer to DNS packet bytes.
+                /// @param nPacketLength Packet length in bytes.
+                /// @return Extracted host name, or empty string on parse failure.
                 ppp::string ExtractHost(const Byte* szPacketStartPos, int nPacketLength) noexcept
                 {
                     // Default first predicate: standard query (QR=0, OPCODE=0).

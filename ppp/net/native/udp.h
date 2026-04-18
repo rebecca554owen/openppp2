@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file udp.h
+ * @brief Defines the native IPv4 UDP header layout and parser.
+ */
+
 #include <memory>
 #include <vector>
 
@@ -15,12 +20,23 @@ namespace ppp {
 #endif
             udp_hdr {
             public:
+                /** @brief Source UDP port in network byte order. */
                 unsigned short                  src;
+                /** @brief Destination UDP port in network byte order. */
                 unsigned short                  dest;  /* src/dest UDP ports */
+                /** @brief UDP datagram length in bytes, in network byte order. */
                 unsigned short                  len;
+                /** @brief UDP checksum in network byte order. */
                 unsigned short                  chksum;
 
             public:
+                /**
+                 * @brief Parses a UDP header from an IPv4 packet payload.
+                 * @param iphdr Parsed IPv4 header associated with @p packet.
+                 * @param packet Pointer to the full packet buffer.
+                 * @param size Packet size in bytes.
+                 * @return Pointer to a valid UDP header on success, otherwise nullptr.
+                 */
                 static struct udp_hdr*          Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept;
             };
 #pragma pack(pop)

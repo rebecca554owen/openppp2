@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file stdafx.h
+ * @brief Central PPP precompiled header and cross-platform utility declarations.
+ */
+
 #include <stdio.h>
 #include <stddef.h>
 #include <string.h>
@@ -316,6 +321,13 @@
 #endif
 
 template <typename T, int N>
+/**
+ * @brief Gets compile-time array length.
+ * @tparam T Array element type.
+ * @tparam N Array length.
+ * @param Unnamed C-array reference.
+ * @return Number of elements in the array.
+ */
 constexpr int                                                               arraysizeof(T (&)[N]) noexcept {
     return N;
 }
@@ -443,7 +455,9 @@ static constexpr const char*                                                PPP_
 };
 
 namespace ppp {
+    /** @brief Unsigned 8-bit byte alias. */
     typedef unsigned char                                                   Byte;
+    /** @brief Signed 8-bit byte alias. */
     typedef signed char                                                     SByte;
     typedef signed short int                                                Int16;
     typedef signed int                                                      Int32;
@@ -456,10 +470,14 @@ namespace ppp {
     typedef bool                                                            Boolean;
     typedef signed char                                                     Char;
 
+    /** @brief Global runtime switch used by bootstrap routines. */
     extern bool                                                             RT;
 }
 
 namespace std {
+    /**
+     * @brief Compatibility wrapper matching Windows `_snprintf` naming.
+     */
     inline int                                                              _snprintf(char* const _Buffer, size_t const _BufferCount, char const* const _Format, ...) noexcept {
         va_list ap;
         va_start(ap, _Format);
@@ -470,6 +488,9 @@ namespace std {
 }
 
 namespace stl {
+    /**
+     * @brief Minimal integral constant implementation used by PPP traits.
+     */
     template <class T, T V>
     struct integral_constant {
         static constexpr T value = V;
@@ -528,12 +549,14 @@ namespace stl {
     template <class T>
     struct is_same<T, T> : true_type {};
 
+    /** @brief Type trait indicating whether a type is `std::shared_ptr<T>`. */
     template <typename T>
     struct is_shared_ptr : false_type {};
 
     template <typename T>
     struct is_shared_ptr<std::shared_ptr<T>> : true_type {};
 
+    /** @brief Type trait indicating whether a type is `std::unique_ptr<T>`. */
     template <typename T>
     struct is_unique_ptr : false_type {};
 
@@ -649,34 +672,42 @@ namespace stl {
     template <typename T>
     using if_string = std::enable_if_t<is_string<T>::value, T>;
 
+    /** @brief Converts string-like object to another string-like type. */
     template <typename TOUT, typename TIN>
     TOUT                                                                    transform(const TIN& s) noexcept {
         return TOUT(s.data(), s.size());
     }
 
+    /** @brief Converts floating value to string-like destination type. */
     template <typename TString>
     TString                                                                 to_string(float num) noexcept {
         char buf[536];
         return snprintf(buf, sizeof(buf), "%f", num) > 0 ? buf : "";
     }
 
+    /** @brief Converts floating value to string-like destination type. */
     template <typename TString>
     TString                                                                 to_string(double num) noexcept {
         char buf[536];
         return snprintf(buf, sizeof(buf), "%lf", num) > 0 ? buf : "";
     }
 
+    /** @brief Converts floating value to string-like destination type. */
     template <typename TString>
     TString                                                                 to_string(long double num) noexcept {
         char buf[536];
         return snprintf(buf, sizeof(buf), "%Lf", num) > 0 ? buf : "";
     }
 
+    /** @brief Converts boolean value to textual `true` or `false`. */
     template <typename TString>
     constexpr TString                                                       to_string(bool v) noexcept {
         return v ? "true" : "false";
     }
 
+    /**
+     * @brief Converts integral value to text in arbitrary radix [2, 36].
+     */
     template <typename TString, typename TNumber>
     TString                                                                 to_string(TNumber num, int radix = 10) noexcept {
         static constexpr char hex[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -728,6 +759,9 @@ namespace stl {
         return TString(p, m - p - 1);
     }
 
+    /**
+     * @brief Parses textual number in arbitrary radix [2, 36].
+     */
     template <typename TNumber, typename TString>
     TNumber                                                                 to_number(const TString& v, int radix) noexcept 
     {
@@ -1651,6 +1685,16 @@ namespace ppp {
 
     ppp::string                                                             PaddingLeftAllLines(std::size_t padding_length, char padding_char, const ppp::string& s, int* line_count = NULLPTR) noexcept;
 
+    /**
+     * @brief Finds the first occurrence index of a subsequence using KMP.
+     * @tparam T Element type.
+     * @param next Workspace array storing the KMP next table.
+     * @param src Source sequence buffer.
+     * @param src_len Source sequence length.
+     * @param sub Pattern sequence buffer.
+     * @param sub_len Pattern sequence length.
+     * @return Zero-based index if found, otherwise `-1`.
+     */
     template <typename T>
     int                                                                     FindIndexOf(int* next, T* src, int src_len, T* sub, int sub_len) noexcept {
         static constexpr auto FindNextOf = 
@@ -1699,6 +1743,12 @@ namespace ppp {
         }
     }
 
+    /**
+     * @brief Allocates a shared array-like buffer with PPP allocator semantics.
+     * @tparam T Element type.
+     * @param length Number of elements.
+     * @return Shared pointer with custom deleter, or `NULLPTR` on failure.
+     */
     template <typename T>
     std::shared_ptr<T>                                                      make_shared_alloc(int length) noexcept {
         static_assert(sizeof(T) > 0, "can't make pointer to incomplete type");
@@ -1720,6 +1770,13 @@ namespace ppp {
         return std::shared_ptr<T>(p, Mfree);
     }
 
+    /**
+     * @brief Constructs an object in PPP-managed memory and wraps it in `shared_ptr`.
+     * @tparam T Object type.
+     * @tparam A Constructor argument types.
+     * @param args Forwarded constructor arguments.
+     * @return Shared pointer to the constructed object.
+     */
     template <typename T, typename... A>
     std::shared_ptr<T>                                                      make_shared_object(A&&... args) noexcept {
         static_assert(sizeof(T) > 0, "can't make pointer to incomplete type");
@@ -1737,6 +1794,13 @@ namespace ppp {
             });
     }
 
+    /**
+     * @brief Constructs an object and exposes it as a shared `void*` holder.
+     * @tparam T Object type.
+     * @tparam A Constructor argument types.
+     * @param args Forwarded constructor arguments.
+     * @return Shared pointer owning the object memory through a `void*` view.
+     */
     template <typename T, typename... A>
     std::shared_ptr<void*>                                                  make_shared_void_pointer(A&&... args) noexcept {
         static_assert(sizeof(T) > 0, "can't make pointer to incomplete type");
@@ -1755,17 +1819,24 @@ namespace ppp {
             });
     }
 
+    /**
+     * @brief Wraps a raw pointer as non-owning shared pointer.
+     */
     template <typename T>
     std::shared_ptr<T>                                                      wrap_shared_pointer(const T* v) noexcept {
         return NULLPTR != v ? std::shared_ptr<T>(constantof(v), [](T*) noexcept {}) : NULLPTR;
     }
 
+    /**
+     * @brief Wraps a raw pointer as non-owning shared pointer tied to reference lifetime.
+     */
     template <typename T, typename Reference>
     std::shared_ptr<T>                                                      wrap_shared_pointer(const T* v, const Reference& reference) noexcept {
         return NULLPTR != v ? std::shared_ptr<T>(constantof(v), [reference](T*) noexcept {}) : NULLPTR;
     }
 
     namespace global {
+        /** @brief Performs global one-time initialization sequence. */
         void cctor() noexcept;
     }
 
@@ -1776,9 +1847,15 @@ namespace ppp {
     template <typename Signature>
     class function;
 
+    /**
+     * @brief Thread-safe function wrapper compatible with function pointers and callables.
+     * @tparam R Return type.
+     * @tparam Args Parameter types.
+     */
     template <typename R, typename... Args>
     class function<R(Args...)> {
     public:
+        /** @brief Raw function pointer type. */
         using Function = R(*)(Args...);
 
     public:
@@ -1851,8 +1928,9 @@ namespace ppp {
             using TFunctionConst = typename std::decay<decltype(*this)>::type;
             using TFunctionMutable = typename std::remove_const<TFunctionConst>::type;
 
-            // Calls still first synchronize the destination function address, 
-            // held from the  function object or wrap a reference to the calling object onto the stack.
+            /**
+             * @brief Snapshot callable targets under lock before invoking.
+             */
             do {
                 Function f = NULLPTR;
                 std::shared_ptr<ICallable> i;
@@ -1872,16 +1950,16 @@ namespace ppp {
                 }
             } while (false);
 
-            // It may be a thread-safe issue to throw an exception for the caller to catch 
-            // if the current function object is not a null pointer.
+            /** @brief Report invalid call when no target is bound. */
             throw std::runtime_error("Cannot call a function with an null address delegated.");
         }
         virtual void                                                        invoke(Args... args) const {
             using TFunctionConst = typename std::decay<decltype(*this)>::type;
             using TFunctionMutable = typename std::remove_const<TFunctionConst>::type;
 
-            // Calls still first synchronize the destination function address, 
-            // held from the  function object or wrap a reference to the calling object onto the stack.
+            /**
+             * @brief Snapshot callable targets under lock before invoking.
+             */
             do {
                 Function f = NULLPTR;
                 std::shared_ptr<ICallable> i;
@@ -1903,8 +1981,7 @@ namespace ppp {
                 }
             } while (false);
 
-            // It may be a thread-safe issue to throw an exception for the caller to catch 
-            // if the current function object is not a null pointer.
+            /** @brief Report invalid call when no target is bound. */
             throw std::runtime_error("Cannot call a function with an null address delegated.");
         }
 
@@ -1930,10 +2007,12 @@ namespace ppp {
                 break;
             }
 
-            // Formally replace the values on both sides, but in the process of exchange, 
-            // high concurrency may occur and the newly written field values will be overwritten, 
-            // there will be new and old data overwriting problems, developers need to use the function carefully, 
-            // or ensure the linearity of the logic outside.
+            /**
+             * @brief Commit swapped snapshots back to each function object.
+             *
+             * This operation is lock-protected per step but not globally atomic
+             * across both objects.
+             */
             for (;;) {
                 LockScope<typename std::decay<decltype(*this)>::type> left_scope(*this);
                 this->f_ = reft_f;
@@ -2050,6 +2129,7 @@ namespace ppp {
             virtual ~ICallable() noexcept = default;
 
         public:
+            /** @brief Invokes stored callable target. */
             virtual R                                                       Invoke(Args&&... args) const = 0;
         };
 
@@ -2077,10 +2157,12 @@ namespace ppp {
         template <typename T>
         class LockScope {
         public:
+            /** @brief Acquires object lock at scope entry. */
             LockScope(T& obj) noexcept
                 : obj_(obj) {
                 obj_.lock();
             }
+            /** @brief Releases object lock at scope exit. */
             ~LockScope() noexcept {
                 obj_.unlock();
             }

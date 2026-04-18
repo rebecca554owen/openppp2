@@ -6,6 +6,11 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VirtualInternetControlMessageProtocolStatic.cpp
+ * @brief Implements static-echo ICMP forwarding for virtual sessions.
+ */
+
 typedef ppp::coroutines::YieldContext               YieldContext;
 typedef std::shared_ptr<boost::asio::io_context>    ContextPtr;
 typedef ppp::net::packet::BufferSegment             BufferSegment;
@@ -14,16 +19,32 @@ typedef ppp::app::protocol::VirtualEthernetPacket   VirtualEthernetPacket;
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Creates static ICMP forwarder and caches switcher reference.
+             * @param exchanger Exchanger providing static-echo session metadata.
+             * @param configuration App configuration for allocator initialization.
+             * @param context I/O context used by the protocol engine.
+             */
             VirtualInternetControlMessageProtocolStatic::VirtualInternetControlMessageProtocolStatic(const VirtualEthernetExchangerPtr& exchanger, const AppConfigurationPtr& configuration, const std::shared_ptr<boost::asio::io_context>& context) noexcept
                 : InternetControlMessageProtocol(configuration->GetBufferAllocator(), context)
                 , exchanger_(exchanger) {
                 switcher_ = exchanger->GetSwitcher();
             }
 
+            /**
+             * @brief Returns the current configuration from the owning exchanger.
+             * @return Shared pointer to application configuration.
+             */
             VirtualInternetControlMessageProtocolStatic::AppConfigurationPtr VirtualInternetControlMessageProtocolStatic::GetConfiguration() noexcept {
                 return exchanger_->GetConfiguration();
             }
 
+            /**
+             * @brief Packs an IP frame and sends it via static echo UDP socket.
+             * @param packet IP frame to transmit.
+             * @param destinationEP Destination endpoint metadata.
+             * @return true when packet is sent successfully; otherwise false.
+             */
             bool VirtualInternetControlMessageProtocolStatic::Output(const IPFrame* packet, const IPEndPoint& destinationEP) noexcept {
                 if (NULLPTR == packet) {
                     return false;
@@ -60,6 +81,9 @@ namespace ppp {
                     return false;
                 }
 
+                /**
+                 * @brief Sends packed bytes with end-of-record semantics.
+                 */
                 boost::system::error_code ec;
                 socket.send_to(boost::asio::buffer(packet_output.get(), packet_length),
                     exchanger_->static_echo_source_ep_, boost::asio::socket_base::message_end_of_record, ec);

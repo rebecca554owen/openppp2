@@ -41,6 +41,9 @@ namespace ppp {
             // Constructor / Destructor
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Constructs an SNI/HTTP host based forwarding proxy.
+             */
             sniproxy::sniproxy(int                                              cdn,
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<boost::asio::io_context>&                 context,
@@ -59,6 +62,9 @@ namespace ppp {
                     configuration_->tcp.rwnd);
             }
 
+            /**
+             * @brief Releases all socket and timer resources.
+             */
             sniproxy::~sniproxy() noexcept {
                 close();
             }
@@ -67,6 +73,9 @@ namespace ppp {
             // Static helpers
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Checks whether the incoming bytes look like an HTTP request line.
+             */
             bool sniproxy::be_http(const void* p) noexcept {
                 const char* data = static_cast<const char*>(p);
                 if (NULLPTR == data) {
@@ -83,6 +92,9 @@ namespace ppp {
                     (0 == strncasecmp(data, "PATCH ", 6));
             }
 
+            /**
+             * @brief Posts a callback onto the proxy strand.
+             */
             bool sniproxy::post(const ppp::function<void()>& callback) noexcept {
                 if (NULLPTR == callback) {
                     return false;
@@ -92,10 +104,17 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Returns whether close/dispose was already executed.
+             */
             bool sniproxy::is_disposed() const noexcept {
                 return disposed_.load(std::memory_order_acquire);
             }
 
+            /**
+             * @brief Performs case-insensitive host/domain match.
+             * @return true for exact match or subdomain match.
+             */
             bool sniproxy::be_host(ppp::string host, ppp::string domain) noexcept {
                 if (host.empty() || domain.empty()) {
                     return false;
@@ -126,12 +145,18 @@ namespace ppp {
             // TLS record helpers
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Reads a 16-bit big-endian unsigned value.
+             */
             UInt16 sniproxy::fetch_uint16(Byte*& data) noexcept {
                 UInt16 r = (static_cast<UInt16>(data[0]) << 8) | static_cast<UInt16>(data[1]);
                 data += 2;
                 return r;
             }
 
+            /**
+             * @brief Reads a 24-bit big-endian length field.
+             */
             int sniproxy::fetch_length(Byte*& data) noexcept {
                 int r = (static_cast<int>(data[0]) << 16) |
                     (static_cast<int>(data[1]) << 8) |
@@ -140,6 +165,9 @@ namespace ppp {
                 return r;
             }
 
+            /**
+             * @brief Parses TLS ClientHello extensions and extracts SNI host_name.
+             */
             ppp::string sniproxy::fetch_sniaddr(size_t tls_payload) noexcept {
                 Byte* data = reinterpret_cast<Byte*>(local_socket_buf_);
                 Byte* end = data + tls_payload;
@@ -291,6 +319,9 @@ namespace ppp {
             // TLS handshake
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Handles TLS pre-read, SNI extraction, and initial forwarding setup.
+             */
             bool sniproxy::do_tlsvd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
                 tls_hdr* hdr = reinterpret_cast<tls_hdr*>(local_socket_buf_);
                 if (0x16 != hdr->Content_Type) {
@@ -328,6 +359,9 @@ namespace ppp {
             // HTTP handshake
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Handles HTTP header read, Host extraction, and forwarding setup.
+             */
             bool sniproxy::do_httpd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
                 auto response = std::make_shared<boost::asio::streambuf>();
                 if (NULLPTR == response) {
@@ -378,6 +412,9 @@ namespace ppp {
                     messages_);
             }
 
+            /**
+             * @brief Parses and normalizes HTTP Host header into host and port.
+             */
             bool sniproxy::do_httpd_handshake_host_trim(MemoryStream& messages_, ppp::string& host, int& port) noexcept {
                 port = PPP_HTTP_SYS_PORT; // default HTTP port
                 host = do_httpd_handshake_host(messages_);
@@ -440,6 +477,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Extracts Host from HTTP request line/headers block.
+             */
             ppp::string sniproxy::do_httpd_handshake_host(MemoryStream& messages_) noexcept {
                 int size = messages_.GetPosition();
                 if (size < 4) {
@@ -524,6 +564,9 @@ namespace ppp {
             // Connection and forwarding
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Resolves target, connects remote socket, and starts bidirectional relay.
+             */
             bool sniproxy::do_connect_and_forward_to_host(
                 ppp::coroutines::YieldContext&          y,
                 const ppp::string                       hostname_,
@@ -649,6 +692,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Returns configured plaintext WebSocket listen port.
+             */
             int sniproxy::do_forward_websocket_port() const noexcept {
                 return configuration_->websocket.listen.ws;
             }
@@ -657,6 +703,9 @@ namespace ppp {
             // Timeout management
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Disposes one-shot handshake timeout timer.
+             */
             void sniproxy::clear_timeout() noexcept {
                 if (timeout_) {
                     timeout_->Dispose();
@@ -664,6 +713,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Rearms inactivity timer according to TCP settings.
+             */
             void sniproxy::reset_inactivity_timer() noexcept {
                 cancel_inactivity_timer();
 
@@ -681,6 +733,9 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Cancels inactivity timeout timer if present.
+             */
             void sniproxy::cancel_inactivity_timer() noexcept {
                 if (inactivity_timer_) {
                     inactivity_timer_->Dispose();
@@ -692,6 +747,9 @@ namespace ppp {
             // Data forwarding (bidirectional)
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Starts asynchronous forwarding loop from client to upstream.
+             */
             bool sniproxy::local_to_remote() noexcept {
                 if (is_disposed() || !socket_is_open()) {
                     return false;
@@ -734,6 +792,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Starts asynchronous forwarding loop from upstream to client.
+             */
             bool sniproxy::remote_to_local() noexcept {
                 if (is_disposed() || !socket_is_open()) {
                     return false;
@@ -776,10 +837,16 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Returns whether both relay endpoints are currently open.
+             */
             bool sniproxy::socket_is_open() const noexcept {
                 return local_socket_ && local_socket_->is_open() && remote_socket_.is_open();
             }
 
+            /**
+             * @brief Idempotently closes sockets and cancels all timers.
+             */
             void sniproxy::close() noexcept {
                 bool expected = false;
                 if (!disposed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -803,6 +870,9 @@ namespace ppp {
             // Handshake entry point
             // -----------------------------------------------------------------------------
 
+            /**
+             * @brief Probes protocol and dispatches TLS or HTTP handshake path.
+             */
             bool sniproxy::do_handshake(ppp::coroutines::YieldContext& y) noexcept {
                 const int hdr_sz = sizeof(tls_hdr); // 5 bytes
                 if (!ppp::coroutines::asio::async_read(*local_socket_,
@@ -842,6 +912,9 @@ namespace ppp {
                 return do_httpd_handshake(y, ms);
             }
 
+            /**
+             * @brief Starts handshake coroutine and guard timeout timer.
+             */
             bool sniproxy::handshake() noexcept {
                 if ((NULLPTR == local_socket_) || (NULLPTR == context_)) {
                     return false;

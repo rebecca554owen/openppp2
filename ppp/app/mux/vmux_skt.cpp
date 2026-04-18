@@ -1,7 +1,18 @@
 #include "vmux_skt.h"
 #include "vmux_net.h"
 
+/**
+ * @file vmux_skt.cpp
+ * @brief Implementation of vmux logical socket bridging and forwarding.
+ * @license GPL-3.0
+ */
+
 namespace vmux {
+    /**
+     * @brief Initialize a vmux logical socket state.
+     * @param mux Parent vmux multiplexer instance.
+     * @param connection_id Non-zero logical connection id.
+     */
     vmux_skt::vmux_skt(const std::shared_ptr<vmux_net>& mux, uint32_t connection_id) noexcept {
         assert(connection_id != 0 && "The connect_id cannot be set to 0.");
 
@@ -24,10 +35,16 @@ namespace vmux {
         skt->tx_context_              = mux_->context_;
     }
 
+    /** @brief Finalize vmux socket resources on destruction. */
     vmux_skt::~vmux_skt() noexcept {
         finalize();
     }
 
+    /**
+     * @brief Release runtime resources and notify close state once.
+     * @details This function is idempotent and can be called from multiple
+     * closure paths; internal flags guard against duplicated FIN behavior.
+     */
     void vmux_skt::finalize() noexcept {
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket;
         bool fin = false;
@@ -74,6 +91,7 @@ namespace vmux {
         }
     }
 
+    /** @brief Schedule socket finalization on vmux executor. */
     void vmux_skt::close() noexcept {
         std::shared_ptr<vmux_skt> self = shared_from_this();
         vmux_post_exec(mux_->context_, mux_->strand_,
@@ -82,6 +100,10 @@ namespace vmux {
             });
     }
 
+    /**
+     * @brief Take and clear the one-shot connect callback.
+     * @return Stored callback when available; otherwise empty callback.
+     */
     vmux_skt::ConnectAsynchronousCallback vmux_skt::clear_event() noexcept {
         ConnectAsynchronousCallback cb;
         if (!status_.connecton_) {
@@ -93,6 +115,10 @@ namespace vmux {
         return cb;
     }
 
+    /**
+     * @brief Notify connect completion callback.
+     * @param ok true when connect path succeeded.
+     */
     void vmux_skt::on_connected(bool ok) noexcept {
         ConnectAsynchronousCallback connect_ac = clear_event();
         if (NULLPTR != connect_ac) {
@@ -100,6 +126,12 @@ namespace vmux {
         }
     }
 
+    /**
+     * @brief Validate target and start asynchronous local TCP connect.
+     * @param host Destination hostname or IP.
+     * @param port Destination TCP port.
+     * @return true if coroutine task is spawned.
+     */
     bool vmux_skt::accept(const template_string& host, int port) noexcept {
         if (status_.disposed_) {
             return false;
@@ -155,6 +187,10 @@ namespace vmux {
         return ppp::coroutines::YieldContext::Spawn(mux_->BufferAllocator.get(), *context, strand.get(), process);
     }
 
+    /**
+     * @brief Start forwarding from local socket to remote peer.
+     * @return true if forward scheduling succeeds.
+     */
     bool vmux_skt::run() noexcept {
         if (status_.disposed_) {
             return false;
@@ -179,6 +215,11 @@ namespace vmux {
             });
     }
 
+    /**
+     * @brief Adjust receive congestion window and advertise acceleration state.
+     * @param value Positive to increase queued bytes, negative to decrease.
+     * @return true if state update and optional signaling succeed.
+     */
     bool vmux_skt::rx_congestions(int64_t value) noexcept {
         if (value == 0) {
             return true;
@@ -216,6 +257,11 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Parse host:port text and dispatch to structured accept overload.
+     * @param host_and_port Host and port text, including IPv6 bracket form.
+     * @return true if parsing and accept start succeed.
+     */
     bool vmux_skt::accept(const template_string& host_and_port) noexcept {
         if (host_and_port.empty()) {
             return false;
@@ -252,6 +298,15 @@ namespace vmux {
         return accept(host, port);
     }
 
+    /**
+     * @brief Send vmux SYN command and register async connect callback.
+     * @param context Target execution context for local socket operations.
+     * @param strand Optional strand for serialized local socket operations.
+     * @param host Destination host.
+     * @param port Destination port.
+     * @param ac Completion callback.
+     * @return true when SYN is posted successfully.
+     */
     bool vmux_skt::connect(const ContextPtr& context, const StrandPtr& strand, const template_string& host, int port, const ConnectAsynchronousCallback& ac) noexcept {
         if (NULLPTR == ac || NULLPTR == context) {
             return false;
@@ -297,6 +352,11 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Finalize connect result after receiving SYN-ACK status.
+     * @param successed true when peer reports accepted connection.
+     * @return true when post-connect forwarding can continue.
+     */
     bool vmux_skt::connect_ok(bool successed) noexcept {
         if (status_.disposed_) {
             return false;
@@ -327,6 +387,12 @@ namespace vmux {
         return forward_to_rx_socket();
     }
 
+    /**
+     * @brief Queue inbound peer payload and flush to local socket.
+     * @param payload Payload bytes from vmux frame.
+     * @param payload_size Payload size in bytes.
+     * @return true when payload is accepted for forwarding.
+     */
     bool vmux_skt::input(Byte* payload, int payload_size) noexcept {
         if (status_.disposed_) {
             return false;
@@ -362,6 +428,13 @@ namespace vmux {
         return forward_to_tx_socket(fpacket.buffer, fpacket.buffer_size, &packet_tail);
     }
 
+    /**
+     * @brief Send local payload to remote vmux peer.
+     * @param packet Payload pointer.
+     * @param packet_length Payload length.
+     * @param ac Completion callback for post status.
+     * @return true when frame posting starts successfully.
+     */
     bool vmux_skt::send_to_peer(const void* packet, int packet_length, const SendAsynchronousCallback& ac) noexcept {
         if (NULLPTR == packet || packet_length < 1) {
             return false;
@@ -394,6 +467,13 @@ namespace vmux {
         }
     }
 
+    /**
+     * @brief Coroutine wrapper for @ref send_to_peer.
+     * @param packet Payload pointer.
+     * @param packet_length Payload length.
+     * @param y Yield context.
+     * @return true on successful send completion.
+     */
     bool vmux_skt::send_to_peer_yield(const void* packet, int packet_length, ppp::coroutines::YieldContext& y) noexcept {
         using atomic_boolean = std::atomic<int>;
 
@@ -424,6 +504,13 @@ namespace vmux {
         return status->load() > 0;
     }
 
+    /**
+     * @brief Resolve address, apply policy checks, and connect local TCP socket.
+     * @param host Destination host.
+     * @param remote_port Destination port.
+     * @param y Yield context for asynchronous steps.
+     * @return true when local connect succeeds and vmux is notified.
+     */
     bool vmux_skt::do_accept(const template_string& host, int remote_port, ppp::coroutines::YieldContext& y) noexcept {
         if (status_.disposed_) {
             return false;
@@ -433,6 +520,11 @@ namespace vmux {
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         std::shared_ptr<ppp::net::Firewall> firewall = mux_->Firewall;
 
+        /**
+         * @brief Connection pipeline.
+         * @details Performs DNS resolution, firewall validation, socket setup,
+         * optional platform protections, async connect, and logging.
+         */
         while (NULLPTR != tx_socket) {
 
             boost::system::error_code ec;
@@ -549,7 +641,7 @@ namespace vmux {
             break;
         }
 
-        // FUNC AFTER: RST or OPENED.
+        /** @brief Final handshake response dispatch: reset or opened state. */
         if (mux_->post(vmux_net::cmd_syn_ok, &err, 1, connection_id_)) {
             if (connect_ok(err == 'A')) {
                 return true;
@@ -560,6 +652,12 @@ namespace vmux {
         return false;
     }
 
+    /**
+     * @brief Post async write on socket executor.
+     * @tparam T1 Socket type.
+     * @tparam T2 Buffer sequence type.
+     * @tparam T3 Completion handler type.
+     */
     template <class T1, class T2, class T3>
     static inline void vmux_skt_async_write(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
         if (socket == NULLPTR) {
@@ -572,6 +670,12 @@ namespace vmux {
             });
     }
 
+    /**
+     * @brief Post async read_some on socket executor.
+     * @tparam T1 Socket type.
+     * @tparam T2 Mutable buffer sequence type.
+     * @tparam T3 Completion handler type.
+     */
     template <class T1, class T2, class T3>
     static inline void vmux_skt_async_read_some(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
         if (socket == NULLPTR) {
@@ -584,6 +688,10 @@ namespace vmux {
             });
     }
 
+    /**
+     * @brief Read local socket payload and push it to remote vmux peer.
+     * @return true when read pipeline remains active.
+     */
     bool vmux_skt::forward_to_rx_socket() noexcept {
         if (status_.disposed_) {
             return false;
@@ -654,6 +762,11 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Toggle transmit acceleration behavior.
+     * @param acceleration true to continue active reads from local socket.
+     * @return true when state transition is applied.
+     */
     bool vmux_skt::tx_acceleration(bool acceleration) noexcept {
         if (status_.disposed_) {
             return false;
@@ -663,6 +776,13 @@ namespace vmux {
         return acceleration ? forward_to_rx_socket() : true;
     }
 
+    /**
+     * @brief Write queued vmux payload into local TCP socket.
+     * @param payload Payload buffer.
+     * @param payload_size Payload size.
+     * @param packet_tail Optional queue iterator consumed on send start.
+     * @return true when write pipeline remains active.
+     */
     bool vmux_skt::forward_to_tx_socket(const std::shared_ptr<Byte>& payload, int payload_size, packet_queue::iterator* packet_tail) noexcept {
         if (NULLPTR == payload || payload_size < 1) {
             return false;
@@ -735,6 +855,10 @@ namespace vmux {
         return true;
     }
 
+    /**
+     * @brief Notify activity and propagate tick update to parent mux.
+     * @param now Current tick value.
+     */
     void vmux_skt::active(uint64_t now) noexcept {
         ActiveEventHandler h = active_event; 
         if (NULLPTR != h) {

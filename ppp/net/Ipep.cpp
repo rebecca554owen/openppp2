@@ -2,6 +2,11 @@
 #include <stdint.h>
 #include <string.h>
 
+/**
+ * @file Ipep.cpp
+ * @brief Implementations for endpoint parsing, resolution, and address normalization helpers.
+ */
+
 #if defined(_WIN32)
 #include <WinSock2.h>
 #else
@@ -27,6 +32,9 @@
 
 namespace ppp {
     namespace net {
+        /**
+         * @brief Parses endpoint text and resolves host when needed.
+         */
         IPEndPoint Ipep::GetEndPoint(const ppp::string& address, bool resolver) noexcept {
             int destinationPort = IPEndPoint::MinPort;
             ppp::string destinationIP;
@@ -39,6 +47,10 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Parses textual endpoint into host and port.
+         * @details Supports IPv4/domain forms (`host:port`) and bracketed IPv6 forms (`[host]:port`).
+         */
         bool Ipep::ParseEndPoint(const ppp::string& address, ppp::string& destinationAddress, int& destinationPort) noexcept {
             destinationPort = IPEndPoint::MinPort;
             destinationAddress.clear();
@@ -102,11 +114,13 @@ namespace ppp {
             return true;
         }
 
+        /** @brief Parses endpoint text into a UDP endpoint. */
         boost::asio::ip::udp::udp::endpoint Ipep::ParseEndPoint(const ppp::string& address) noexcept {
             ppp::string* destinationAddress = NULLPTR;
             return Ipep::ParseEndPoint(address, destinationAddress);
         }
 
+        /** @brief Parses endpoint text into a UDP endpoint and optional host output. */
         boost::asio::ip::udp::udp::endpoint Ipep::ParseEndPoint(const ppp::string& address, ppp::string* destinationAddress) noexcept {
             int destinationPort = IPEndPoint::MinPort;
             ppp::string destinationIP;
@@ -135,11 +149,13 @@ namespace ppp {
             return boost::asio::ip::udp::udp::endpoint(ip, destinationPort);
         }
 
+        /** @brief Converts endpoint to canonical printable `host:port` format. */
         ppp::string Ipep::ToIpepAddress(const IPEndPoint& ep) noexcept {
             const IPEndPoint* ip = addressof(ep);
             return ToIpepAddress(ip);
         }
 
+        /** @brief Pointer overload for endpoint-to-string conversion. */
         ppp::string Ipep::ToIpepAddress(const IPEndPoint* ep) noexcept {
             if (NULLPTR == ep) {
                 return "0.0.0.0:0";
@@ -160,6 +176,10 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Resolves host using native `getaddrinfo`.
+         * @details Prefers IPv4 records and falls back to IPv6 records.
+         */
         static IPEndPoint Ipep_GetEndPointWithNative(const ppp::string& host, int port) noexcept {
             struct AddrinfoDeleter final {
                 void operator()(struct addrinfo* p) const noexcept {
@@ -202,12 +222,17 @@ namespace ppp {
             return IPEndPoint(IPEndPoint::AnyAddress, port);
         }
 
+        /** @brief Resolves host using Boost resolver on provided io_context. */
         static IPEndPoint Ipep_GetEndPointWithBoost(boost::asio::io_context& context, const ppp::string& host, int port) noexcept {
             boost::asio::ip::tcp::resolver resolver(context);
             boost::asio::ip::tcp::endpoint result = ppp::net::asio::GetAddressByHostName(resolver, host.data(), port);
             return IPEndPoint::ToEndPoint(result);
         }
 
+        /**
+         * @brief Internal endpoint resolver shared by public overloads.
+         * @details Tries direct IP parsing first, then optional DNS resolution via Boost or native APIs.
+         */
         static IPEndPoint Ipep_GetEndPoint(boost::asio::io_context* pcontext, const ppp::string& host, int port, bool resolver) noexcept {
             if (port < IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
                 port = IPEndPoint::MinPort;
@@ -241,16 +266,22 @@ namespace ppp {
             return IPEndPoint(IPEndPoint::AnyAddress, port);
         }
 
+        /** @brief Resolves host using caller-provided io_context. */
         IPEndPoint Ipep::GetEndPoint(boost::asio::io_context& context, const ppp::string& host, int port, bool resolver) noexcept {
             boost::asio::io_context* pcontext = addressof(context);
             return Ipep_GetEndPoint(pcontext, host, port, resolver);
         }
 
+        /** @brief Resolves host without explicit io_context. */
         IPEndPoint Ipep::GetEndPoint(const ppp::string& host, int port, bool resolver) noexcept {
             boost::asio::io_context* pcontext = NULLPTR;
             return Ipep_GetEndPoint(pcontext, host, port, resolver);
         }
 
+        /**
+         * @brief Validates whether input can be treated as host/domain text.
+         * @details Accepts IP literals, `localhost`, and segmented domain-like names.
+         */
         bool Ipep::IsDomainAddress(const ppp::string& domain) noexcept {
             if (domain.empty()) {
                 return false;
@@ -304,6 +335,7 @@ namespace ppp {
             return true;
         }
 
+        /** @brief Parses comma-separated endpoint strings and emits normalized addresses. */
         bool Ipep::ToEndPoint(const ppp::string& addresses, ppp::vector<ppp::string>& out) noexcept {
             if (addresses.empty()) {
                 return false;
@@ -338,21 +370,25 @@ namespace ppp {
             return success;
         }
 
+        /** @brief Converts IPv4 integer value to Boost address. */
         boost::asio::ip::address Ipep::ToAddress(uint32_t ip) noexcept {
             IPEndPoint ipep(ip, IPEndPoint::MinPort);
             return IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(ipep).address();
         }
 
 #if defined(_WIN32)
+        /** @brief Sets interface DNS servers on Windows. */
         bool Ipep::SetDnsAddresses(int interface_index, const ppp::vector<ppp::string>& addresses) noexcept {
             return ppp::win32::network::SetDnsAddresses(interface_index, addresses);
         }
 #else
+        /** @brief Sets DNS servers on Unix-like systems. */
         bool Ipep::SetDnsAddresses(const ppp::vector<ppp::string>& addresses) noexcept {
             return ppp::unix__::UnixAfx::SetDnsAddresses(addresses);
         }
 #endif
 
+        /** @brief Converts IPv4 integers to textual address list. */
         void Ipep::ToAddresses(const ppp::vector<uint32_t>& in, ppp::vector<ppp::string>& out) noexcept {
             out.resize(in.size());
             std::transform(in.begin(), in.end(), out.begin(),
@@ -361,6 +397,7 @@ namespace ppp {
                 });
         }
 
+        /** @brief Converts textual IPv4 addresses to integer list. */
         void Ipep::ToAddresses(const ppp::vector<ppp::string>& in, ppp::vector<uint32_t>& out) noexcept {
             out.resize(in.size());
             std::transform(in.begin(), in.end(), out.begin(),
@@ -369,6 +406,7 @@ namespace ppp {
                 });
         }
 
+        /** @brief Converts IPv4 integer list to Boost address list. */
         void Ipep::ToAddresses(const ppp::vector<uint32_t>& in, ppp::vector<boost::asio::ip::address>& out) noexcept {
             out.resize(in.size());
             std::transform(in.begin(), in.end(), out.begin(),
@@ -377,6 +415,9 @@ namespace ppp {
                 });
         }
 
+        /**
+         * @brief Parses textual IP address and applies multicast/broadcast filtering.
+         */
         boost::asio::ip::address Ipep::ToAddress(const ppp::string& ip, bool boardcast) noexcept {
             if (ip.empty()) {
                 return boost::asio::ip::address_v4::any();
@@ -407,6 +448,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Joins addresses into comma-separated string representation. */
         ppp::string Ipep::ToAddresses(ppp::vector<boost::asio::ip::address>& addresses) noexcept {
             ppp::string addresses_string;
             for (boost::asio::ip::address& address : addresses) {
@@ -420,11 +462,15 @@ namespace ppp {
             return addresses_string;
         }
 
+        /** @brief Extracts addresses from text without additional predicate. */
         int Ipep::ToAddresses(const ppp::string& addresses, ppp::vector<boost::asio::ip::address>& out) noexcept {
             ppp::function<bool(boost::asio::ip::address&)> predicate;
             return ToAddresses(addresses, out, predicate);
         }
 
+        /**
+         * @brief Extracts unique IPv4/IPv6 literals from arbitrary input text.
+         */
         int Ipep::ToAddresses(const ppp::string& addresses, ppp::vector<boost::asio::ip::address>& out, const ppp::function<bool(boost::asio::ip::address&)>& predicate) noexcept {
 #if defined(_WIN32)
             using std_sregex_iterator = std::sregex_iterator;
@@ -473,11 +519,13 @@ namespace ppp {
             return events;
         }
 
+        /** @brief Extracts valid unicast-like addresses from text. */
         int Ipep::ToAddresses2(const ppp::string& addresses, ppp::vector<boost::asio::ip::address>& out) noexcept {
             ppp::function<bool(boost::asio::ip::address&)> predicate;
             return ToAddresses2(addresses, out, predicate);
         }
 
+        /** @brief Predicate-aware overload that also excludes invalid endpoint addresses. */
         int Ipep::ToAddresses2(const ppp::string& addresses, ppp::vector<boost::asio::ip::address>& out, const ppp::function<bool(boost::asio::ip::address&)>& predicate) noexcept {
             return ToAddresses(addresses, out,
                 [&predicate](boost::asio::ip::address& address) noexcept -> bool {
@@ -494,6 +542,9 @@ namespace ppp {
                 });
         }
 
+        /**
+         * @brief Parses DNS addresses and optionally guarantees at least two entries.
+         */
         int Ipep::ToDnsAddresses(const ppp::string& s, ppp::vector<boost::asio::ip::address>& out, bool at_least_two) noexcept {
             static constexpr const char* DEFAULT_DNS_ADDRESSES[] = { PPP_PREFERRED_DNS_SERVER_1, PPP_PREFERRED_DNS_SERVER_2 };
 
@@ -528,6 +579,7 @@ namespace ppp {
             return static_cast<int>(out.size() - last);
         }
 
+        /** @brief Converts prefix or netmask text into CIDR prefix length. */
         int Ipep::NetmaskToPrefix(const ppp::string& cidr_number_string) noexcept {
             static constexpr int ERR_PREFIX_VALUE = ppp::net::native::MIN_PREFIX_VALUE - 1;
 
@@ -557,6 +609,7 @@ namespace ppp {
             return ERR_PREFIX_VALUE;
         }
 
+        /** @brief Parses CIDR string into address and prefix components. */
         bool Ipep::ParseCidr(const ppp::string& cidr_ip_string, boost::asio::ip::address& destination, int& cidr) noexcept {
             destination = boost::asio::ip::address_v4::any();
             cidr = ppp::net::native::MIN_PREFIX_VALUE;
@@ -599,10 +652,12 @@ namespace ppp {
             return true;
         }
 
+        /** @brief Parses CIDR string into @ref AddressRange structure. */
         bool Ipep::ParseCidr(const ppp::string& cidr_ip_string, AddressRange& address_range) noexcept {
             return ParseCidr(cidr_ip_string, address_range.Address, address_range.Cidr);
         }
 
+        /** @brief Parses all CIDR lines from a text block and deduplicates results. */
         int Ipep::ParseAllCidrs(const ppp::string& cidr_ip_strings, ppp::vector<AddressRange>& address_ranges) noexcept {
             if (cidr_ip_strings.empty()) {
                 return 0;
@@ -633,6 +688,7 @@ namespace ppp {
             return events;
         }
 
+        /** @brief Loads CIDR text from file and parses all entries. */
         int Ipep::ParseAllCidrsFromFileName(const ppp::string& file_name, ppp::vector<AddressRange>& address_ranges) noexcept {
             ppp::string cidr_ip_strings = ppp::io::File::ReadAllText(file_name.data());
             if (cidr_ip_strings.empty()) {
@@ -643,18 +699,21 @@ namespace ppp {
             }
         }
 
+        /** @brief Converts address vector to string vector. */
         ppp::vector<ppp::string> Ipep::AddressesTransformToStrings(const ppp::vector<boost::asio::ip::address>& in) noexcept {
             ppp::vector<ppp::string> out;
             AddressesTransformToStrings(in, out);
             return out;
         }
 
+        /** @brief Converts string vector to address vector. */
         ppp::vector<boost::asio::ip::address> Ipep::StringsTransformToAddresses(const ppp::vector<ppp::string>& in) noexcept {
             ppp::vector<boost::asio::ip::address> out;
             StringsTransformToAddresses(in, out);
             return out;
         }
 
+        /** @brief In-place conversion from addresses to textual representations. */
         void Ipep::AddressesTransformToStrings(const ppp::vector<boost::asio::ip::address>& in, ppp::vector<ppp::string>& out) noexcept {
             out.resize(in.size());
             std::transform(in.begin(), in.end(), out.begin(),
@@ -663,6 +722,7 @@ namespace ppp {
                 });
         }
 
+        /** @brief In-place parsing of textual addresses into Boost addresses. */
         void Ipep::StringsTransformToAddresses(const ppp::vector<ppp::string>& in, ppp::vector<boost::asio::ip::address>& out) noexcept {
             out.clear();
             for (const ppp::string& address_string : in) {
@@ -683,6 +743,7 @@ namespace ppp {
         }
 
         template <typename T>
+        /** @brief Returns numeric address value, with Int128 specialization for IPv6 bytes. */
         static typename std::enable_if<std::is_same<T, Int128>::value, T>::type StaticGetIPAddressNumber(const IPEndPoint& ep) noexcept {
             int address_bytes_size = 0;
             Byte* address_bytes = ep.GetAddressBytes(address_bytes_size);
@@ -695,11 +756,16 @@ namespace ppp {
         }
 
         template <typename T>
+        /** @brief Returns numeric address value for non-Int128 types (IPv4 path). */
         static typename std::enable_if<!std::is_same<T, Int128>::value, T>::type StaticGetIPAddressNumber(const IPEndPoint& ep) noexcept {
             return ep.GetAddress();
         }
 
         template <typename T>
+        /**
+         * @brief Normalizes host/gateway addresses inside subnet boundaries.
+         * @details Chooses fallback host addresses when current values are out of usable range.
+         */
         static boost::asio::ip::address StaticFixedIPAddress(IPEndPoint& ipEP, IPEndPoint& gwEP, IPEndPoint& maskEP, int MAX_PREFIX_ADDRESS, bool fixGw) noexcept {
             T __mask = StaticGetIPAddressNumber<T>(maskEP);
             int prefix = IPEndPoint::NetmaskToPrefix((unsigned char*)&reinterpret_cast<const char&>(__mask), sizeof(__mask));
@@ -714,6 +780,9 @@ namespace ppp {
 
             __mask = Ipep::NetworkToHostOrder<T>(__mask);
 
+            /**
+             * @brief Compute usable host interval from network and mask.
+             */
             T __ip = Ipep::NetworkToHostOrder<T>(StaticGetIPAddressNumber<T>(ipEP));
             T __networkIP = __ip & __mask;
             T __boardcastIP = __networkIP | (~__networkIP & 0xff);
@@ -748,6 +817,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Fixes IP address based on mask and implicit gateway strategy. */
         boost::asio::ip::address Ipep::FixedIPAddress(const boost::asio::ip::address& ip, const boost::asio::ip::address& mask) noexcept {
             IPEndPoint ipEP = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(ip, IPEndPoint::MinPort));
             IPEndPoint maskEP = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(mask, IPEndPoint::MinPort));
@@ -766,6 +836,7 @@ namespace ppp {
             return ip;
         }
 
+        /** @brief Fixes IP address with explicit gateway and mask validation. */
         boost::asio::ip::address Ipep::FixedIPAddress(const boost::asio::ip::address& ip, const boost::asio::ip::address& gw, const boost::asio::ip::address& mask) noexcept {
             IPEndPoint ipEP = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(ip, IPEndPoint::MinPort));
             IPEndPoint gwEP = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(gw, IPEndPoint::MinPort));
@@ -791,6 +862,10 @@ namespace ppp {
             return ip;
         }
 
+        /**
+         * @brief Performs lightweight QUIC packet structure validation.
+         * @details Checks long-header shape for Initial/Handshake packets and validates bounds.
+         */
         bool Ipep::PacketIsQUIC(const IPEndPoint& destinationEP, Byte* p, int length) noexcept {
             if (NULLPTR == p || length < 1) {
                 return false;
@@ -802,6 +877,7 @@ namespace ppp {
 
             Byte* l = p + length; // QUIC IETF
             Byte kf = *p++;
+            /** @brief Bounds-check helper for parser cursor. */
             auto require = [l](const Byte* current, int count) noexcept -> bool {
                 return current <= l && count >= 0 && (l - current) >= count;
             };
@@ -891,6 +967,10 @@ namespace ppp {
             return p == l;
         }
 
+        /**
+         * @brief Asynchronously resolves host and returns endpoint through callback.
+         * @details Tries direct IP, optional virtual DNS, then system resolver.
+         */
         bool Ipep::GetAddressByHostName(boost::asio::io_context& context, const ppp::string& hostname, int port, const GetAddressByHostNameCallback& callback) noexcept {
             if (NULLPTR == callback) {
                 return false;

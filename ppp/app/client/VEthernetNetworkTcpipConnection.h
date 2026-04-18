@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file VEthernetNetworkTcpipConnection.h
+ * @brief Declares TCP/IP connection bridging for the virtual Ethernet client.
+ * @license GPL-3.0
+ */
+
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/ethernet/VNetstack.h>
@@ -20,6 +26,12 @@
 namespace ppp {
     namespace app {
         namespace client {
+            /**
+             * @brief Per-session TCP client used by the virtual Ethernet TCP/IP stack.
+             *
+             * This type decides how a peer connection is handled (rinetd loopback,
+             * vmux channel, or VPN transmission) and then runs the selected data path.
+             */
             class VEthernetNetworkTcpipConnection : public ppp::ethernet::VNetstack::TapTcpClient {
             public:
                 typedef ppp::app::protocol::VirtualEthernetTcpipConnection  VirtualEthernetTcpipConnection;
@@ -27,14 +39,30 @@ namespace ppp {
                 typedef ppp::configurations::AppConfiguration               AppConfiguration;
 
             public:
+                /**
+                 * @brief Constructs a TCP/IP session wrapper bound to an exchanger.
+                 */
                 VEthernetNetworkTcpipConnection(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand) noexcept;
+                /**
+                 * @brief Releases owned forwarding resources.
+                 */
                 virtual ~VEthernetNetworkTcpipConnection() noexcept;
 
             public:
+                /**
+                 * @brief Returns the owning exchanger instance.
+                 */
                 std::shared_ptr<VEthernetExchanger>                         GetExchanger() noexcept { return exchanger_; }
+                /**
+                 * @brief Disposes this connection and queued asynchronous resources.
+                 */
                 virtual void                                                Dispose() noexcept override;
 
             public:
+                /**
+                 * @brief Attempts to establish an rinetd forwarding connection.
+                 * @return 0 on success, 1 when bypass is not applicable, -1 on failure.
+                 */
                 template <class TReference>
                 static int                                                  Rinetd(
                     const std::shared_ptr<TReference>&                      reference,
@@ -57,8 +85,14 @@ namespace ppp {
                         return 1;
                     }
 
+                    /**
+                     * @brief rinetd adapter that forwards lifecycle events to the owner.
+                     */
                     class VEthernetRinetdConnection final : public RinetdConnection {
                     public:
+                        /**
+                         * @brief Initializes the adapter with owner and socket references.
+                         */
                         VEthernetRinetdConnection(
                             const std::shared_ptr<TReference>&                              owner,
                             const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration, 
@@ -74,9 +108,11 @@ namespace ppp {
                         }
 
                     public:
+                        /** @brief Disposes the underlying rinetd connection. */
                         virtual void                                                        Dispose() noexcept override {
                             RinetdConnection::Dispose();
                         }
+                        /** @brief Refreshes owner activity on transport activity. */
                         virtual void                                                        Update() noexcept override {
                             std::shared_ptr<TReference> owner = owner_;
                             if (NULLPTR != owner) {
@@ -85,6 +121,7 @@ namespace ppp {
                         }
 
                     private:
+                        /** @brief Releases the owner reference and disposes it once. */
                         void                                                                Finalize() noexcept {
                             std::shared_ptr<TReference> owner = std::move(owner_);
                             if (NULLPTR != owner) {
@@ -115,6 +152,10 @@ namespace ppp {
                     return 0;
                 }
 
+                /**
+                 * @brief Attempts to open a vmux socket to a host and port.
+                 * @return 0 on success, 1 when vmux path is unavailable, -1 on failure.
+                 */
                 template <class TReference>
                 static int                                                  Mux(
                     const std::shared_ptr<TReference>&                      reference,
@@ -177,6 +218,10 @@ namespace ppp {
                     return 1;
                 }
 
+                /**
+                 * @brief Attempts to open a vmux socket to a remote endpoint.
+                 * @return 0 on success, 1 when vmux path is unavailable, -1 on failure.
+                 */
                 template <class TReference>
                 static int                                                  Mux(
                     const std::shared_ptr<TReference>&                      reference,
@@ -191,14 +236,21 @@ namespace ppp {
                 }
 
             protected:
+                /** @brief Starts the established-session data forwarding stage. */
                 virtual bool                                                Establish() noexcept override;
+                /** @brief Starts peer connection setup before TAP accept acknowledge. */
                 virtual bool                                                BeginAccept() noexcept override;
+                /** @brief Applies accepted-socket options before final accept handling. */
                 virtual bool                                                EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept override;
 
             private:
+                /** @brief Releases active forwarding channels. */
                 void                                                        Finalize() noexcept;
+                /** @brief Runs the currently selected forwarding path. */
                 bool                                                        Loopback(ppp::coroutines::YieldContext& y) noexcept;
+                /** @brief Selects and builds a forwarding path to the peer. */
                 bool                                                        ConnectToPeer(ppp::coroutines::YieldContext& y) noexcept;
+                /** @brief Schedules a coroutine on the configured executor/strand. */
                 bool                                                        Spawn(const ppp::function<bool(ppp::coroutines::YieldContext&)>& coroutine) noexcept;
 
             private:

@@ -1,3 +1,8 @@
+/**
+ * @file websocket_async_sslv_websocket.cpp
+ * @brief Implements async SSLv WebSocket lifecycle and SSL handle access.
+ */
+
 #include <ppp/net/asio/websocket/websocket_async_sslv_websocket.h>
 #include <ppp/net/asio/websocket/websocket_accept_sslv_websocket.h>
 
@@ -8,6 +13,22 @@ namespace ppp {
             typedef sslwebsocket::SslvWebSocket                             SslvWebSocket;
             typedef std::shared_ptr<SslvWebSocket>                          SslvWebSocketPtr;
 
+            /**
+             * @brief Initializes an asynchronous SSLv WebSocket wrapper.
+             * @param reference Owner reference used for coordinated disposal.
+             * @param tcp_socket Underlying TCP socket shared pointer.
+             * @param ssl_context SSL context used to configure TLS behavior.
+             * @param ssl_websocket Wrapped SSL WebSocket stream storage.
+             * @param verify_peer Whether to verify the remote peer certificate.
+             * @param binary Whether WebSocket frames are handled as binary.
+             * @param host Target host name used by upper-layer connection logic.
+             * @param path WebSocket request path used during handshake.
+             * @param certificate_file Certificate file path.
+             * @param certificate_key_file Private key file path.
+             * @param certificate_chain_file Certificate chain file path.
+             * @param certificate_key_password Password for private key loading.
+             * @param ciphersuites TLS cipher suite configuration string.
+             */
             AsyncSslvWebSocket::AsyncSslvWebSocket(
                 const std::shared_ptr<sslwebsocket>&                        reference,
                 std::shared_ptr<boost::asio::ip::tcp::socket>&              tcp_socket,
@@ -29,6 +50,9 @@ namespace ppp {
 
             }
 
+            /**
+             * @brief Disposes the owner reference to terminate connection resources.
+             */
             void AsyncSslvWebSocket::Dispose() noexcept {
                 std::shared_ptr<sslwebsocket> reference = std::move(reference_);
                 if (reference) {
@@ -36,6 +60,10 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Gets the native OpenSSL SSL handle from the wrapped stream.
+             * @return Native SSL handle when available; otherwise nullptr.
+             */
             SSL* AsyncSslvWebSocket::GetSslHandle() noexcept {
                 SslvWebSocketPtr& ssl_websocket = GetSslSocket();
                 if (NULLPTR == ssl_websocket) {

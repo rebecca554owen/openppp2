@@ -11,6 +11,11 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VirtualEthernetDatagramPort.cpp
+ * @brief Implements dynamic UDP relay port behavior for virtual ethernet traffic.
+ */
+
 typedef ppp::coroutines::YieldContext                   YieldContext;
 typedef ppp::net::IPEndPoint                            IPEndPoint;
 typedef ppp::net::Socket                                Socket;
@@ -20,6 +25,9 @@ typedef ppp::app::protocol::VirtualEthernetPacket       VirtualEthernetPacket;
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Initializes relay state and acquires a reusable receive buffer.
+             */
             VirtualEthernetDatagramPort::VirtualEthernetDatagramPort(const VirtualEthernetExchangerPtr& exchanger, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept
                 : disposed_(false)
                 , onlydns_(true)
@@ -37,10 +45,16 @@ namespace ppp {
                 Update();
             }
 
+            /**
+             * @brief Ensures asynchronous resources are finalized.
+             */
             VirtualEthernetDatagramPort::~VirtualEthernetDatagramPort() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Closes socket, sends a close signal when needed, and unregisters this port.
+             */
             void VirtualEthernetDatagramPort::Finalize() noexcept {
                 std::shared_ptr<ITransmission> transmission = std::move(transmission_); 
                 if (sendto_ && !finalize_) {
@@ -59,6 +73,9 @@ namespace ppp {
                 exchanger_->ReleaseDatagramPort(sourceEP_);
             }
 
+            /**
+             * @brief Dispatches finalization to the owning io_context thread.
+             */
             void VirtualEthernetDatagramPort::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -68,6 +85,10 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Opens and configures the UDP socket, then starts async receive loop.
+             * @return True if opening and initialization succeed.
+             */
             bool VirtualEthernetDatagramPort::Open() noexcept {
                 if (disposed_) {
                     return false;
@@ -103,6 +124,10 @@ namespace ppp {
                 return success;
             }
 
+            /**
+             * @brief Starts one asynchronous receive cycle for relay traffic.
+             * @return True if receive operation is scheduled.
+             */
             bool VirtualEthernetDatagramPort::Loopback() noexcept {
                 if (disposed_) {
                     return false;
@@ -117,6 +142,9 @@ namespace ppp {
                 socket_.async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), remoteEP_,
                     [self, this](const boost::system::error_code& ec, std::size_t sz) noexcept {
                         bool disposing = true;
+                        /**
+                         * @brief Handles one datagram and decides whether to continue loopback.
+                         */
                         while (ec == boost::system::errc::success) {
                             int bytes_transferred = static_cast<int>(sz);
                             if (bytes_transferred < 1) {
@@ -159,6 +187,10 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Parses DNS response and stores it into namespace cache.
+             * @return True if DNS payload is accepted and cached.
+             */
             bool VirtualEthernetDatagramPort::NamespaceQuery(
                 const std::shared_ptr<VirtualEthernetSwitcher>&     switcher,
                 const void*                                         packet,
@@ -193,6 +225,10 @@ namespace ppp {
                 return cache->Add(queries_key, response, packet_length);
             }
 
+            /**
+             * @brief Tries to answer DNS query from cache via static or dynamic output path.
+             * @return 1 if served, 0 if no cache hit, -1 if output path fails.
+             */
             int VirtualEthernetDatagramPort::NamespaceQuery(
                 const std::shared_ptr<VirtualEthernetSwitcher>&     switcher,
                 VirtualEthernetExchanger*                           exchanger, 
@@ -245,6 +281,10 @@ namespace ppp {
                 return 0;
             }
 
+            /**
+             * @brief Sends outbound UDP payload and refreshes aging timeout.
+             * @return True on successful send.
+             */
             bool VirtualEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;

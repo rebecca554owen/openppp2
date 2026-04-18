@@ -2950,8 +2950,6 @@ inline EncodingType encoding_type(const Request &req, const Response &res) {
   if (!ret) { return EncodingType::None; }
 
   const auto &s = req.get_header_value("Accept-Encoding");
-  (void)(s);
-
 #ifdef CPPHTTPLIB_BROTLI_SUPPORT
   // TODO: 'Accept-Encoding' has br, not br;q=0
   ret = s.find("br") != std::string::npos;

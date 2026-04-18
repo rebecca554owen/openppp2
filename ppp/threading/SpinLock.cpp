@@ -1,16 +1,32 @@
 #include <ppp/threading/SpinLock.h>
 #include <ppp/threading/Thread.h>
 
+/**
+ * @file SpinLock.cpp
+ * @brief Implements spin lock and recursive spin lock behavior.
+ */
+
 namespace ppp
 {
     namespace threading
     {
+        /**
+         * @brief Shared try-enter loop helper for lock-like objects.
+         * @tparam LockObject Lock type exposing `TryEnter()`.
+         * @param lock Lock instance to acquire.
+         * @param loop Maximum retry attempts; negative means infinite retries.
+         * @param timeout Timeout in milliseconds; negative means no timeout.
+         * @return true if acquired; otherwise false.
+         */
         template <class LockObject>
         static constexpr bool Lock_TryEnter(
             LockObject&                                             lock,
             int                                                     loop,
             int                                                     timeout) noexcept
         {
+            /**
+             * @brief Attempts one acquisition pass and evaluates timeout state.
+             */
             auto tryEnter = 
                 [&lock, timeout](uint64_t last) noexcept -> int
                 {
@@ -54,6 +70,18 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Shared recursive acquisition helper for recursive lock wrappers.
+         * @tparam LockObject Recursive lock wrapper type.
+         * @tparam LockInternalObject Internal non-recursive lock type.
+         * @tparam TryEnterArguments Argument pack forwarded to internal `TryEnter`.
+         * @param lock Recursive lock wrapper.
+         * @param lock_internal Internal lock object.
+         * @param tid Pointer to owner thread identifier storage.
+         * @param reentries Recursive depth counter.
+         * @param arguments Forwarded arguments for internal acquisition.
+         * @return true when acquisition or legal re-entry succeeds; otherwise false.
+         */
         template <class LockObject, class LockInternalObject, typename... TryEnterArguments>
         static constexpr bool RecursiveLock_TryEnter(LockObject&    lock, 
             LockInternalObject&                                     lock_internal, 
@@ -94,12 +122,19 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Constructs an unlocked spin lock.
+         */
         SpinLock::SpinLock() noexcept
             : _(false)
         {
 
         }
 
+        /**
+         * @brief Ensures the lock is not held at destruction time.
+         * @throws std::runtime_error Thrown when the lock is still held.
+         */
         SpinLock::~SpinLock() noexcept(false)
         {
             bool lockTaken = IsLockTaken();
@@ -109,17 +144,27 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Attempts to acquire with loop and timeout controls.
+         */
         bool SpinLock::TryEnter(int loop, int timeout) noexcept
         {
             return Lock_TryEnter(*this, loop, timeout);
         }
 
+        /**
+         * @brief Attempts a single atomic acquisition.
+         */
         bool SpinLock::TryEnter() noexcept 
         {
             int expected = FALSE;
             return _.compare_exchange_strong(expected, TRUE);
         }
 
+        /**
+         * @brief Releases the atomic lock state.
+         * @throws std::runtime_error Thrown when lock ownership state is invalid.
+         */
         void SpinLock::Leave()
         {
             int expected = TRUE;
@@ -130,6 +175,9 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Constructs an unlocked recursive spin lock.
+         */
         RecursiveSpinLock::RecursiveSpinLock() noexcept
             : lockobj_()
             , tid_(0)
@@ -138,16 +186,25 @@ namespace ppp
 
         }
 
+        /**
+         * @brief Attempts to acquire recursively once.
+         */
         bool RecursiveSpinLock::TryEnter() noexcept
         {
             return RecursiveLock_TryEnter(*this, lockobj_, &tid_, reentries_);
         }
 
+        /**
+         * @brief Attempts recursive acquisition with loop and timeout controls.
+         */
         bool RecursiveSpinLock::TryEnter(int loop, int timeout) noexcept
         {
             return RecursiveLock_TryEnter(*this, lockobj_, &tid_, reentries_, loop, timeout);
         }
 
+        /**
+         * @brief Releases one recursion level and unlocks on final release.
+         */
         void RecursiveSpinLock::Leave() 
         {
             int n = --reentries_;

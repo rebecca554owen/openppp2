@@ -12,6 +12,11 @@
 #include <cctype>   // for tolower
 #include <new>      // for std::bad_alloc
 
+/**
+ * @file vdns.cpp
+ * @brief Virtual DNS resolver implementation with async querying and in-memory cache.
+ */
+
 namespace ppp {
     namespace net {
         namespace asio {
@@ -46,6 +51,14 @@ namespace ppp {
                 // Helper: case-insensitive string comparison for DNS domain names.
                 // Returns true if strings are equal ignoring ASCII case.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Compares two strings using ASCII case-insensitive rules.
+                 * @tparam TStringA Left string type exposing size/operator[].
+                 * @tparam TStringB Right string type exposing size/operator[].
+                 * @param a Left operand.
+                 * @param b Right operand.
+                 * @return True when both strings are equal ignoring case.
+                 */
                 template <typename TStringA, typename TStringB>
                 static bool CaseInsensitiveEqual(const TStringA& a, const TStringB& b) noexcept {
                     if (a.size() != b.size()) {
@@ -68,6 +81,17 @@ namespace ppp {
                 // (case-insensitive). If 'out_hostname' is provided, the normalized (lowercase)
                 // hostname is written.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Parses DNS response packet and extracts A/AAAA addresses.
+                 * @param packet Raw DNS packet bytes.
+                 * @param packet_size Packet length in bytes.
+                 * @param addresses Output set that receives extracted addresses.
+                 * @param ack Output transaction ID from DNS message.
+                 * @param expected_hostname Optional expected hostname for question validation.
+                 * @param out_hostname Optional normalized hostname output.
+                 * @param out_ipv4_or_ipv6 Optional family hint (true: A, false: AAAA).
+                 * @return True when packet decoding succeeds.
+                 */
                 static bool DNS_ProcessAResponseAddresses(Byte*     packet,
                     int                                             packet_size,
                     ppp::unordered_set<boost::asio::ip::address>&   addresses,
@@ -183,6 +207,7 @@ namespace ppp {
                 // Cache record: stores a set of IP addresses, their expiry, and which families exist.
                 // All public methods are thread-safe.
                 // -----------------------------------------------------------------------------
+                /** @brief Thread-safe DNS cache entry for one normalized hostname. */
                 struct NamespaceRecord {
                     bool                                            ipv4 : 1;       // True if at least one IPv4 address is present
                     bool                                            ipv6 : 7;       // True if at least one IPv6 address is present
@@ -194,6 +219,11 @@ namespace ppp {
                     NamespaceRecord() noexcept : ipv4(false), ipv6(false), expired_time(0) {}
 
                     // Thread-safe insertion of a new address (returns true if inserted)
+                    /**
+                     * @brief Inserts an address into this record.
+                     * @param ip Address to insert.
+                     * @return True when the address was newly inserted.
+                     */
                     bool Emplace(const boost::asio::ip::address& ip) noexcept {
                         SynchronizedObjectScope lock(lockobj);
                         try {
@@ -205,12 +235,17 @@ namespace ppp {
                     }
 
                     // Thread-safe check for emptiness
+                    /** @brief Checks whether this record contains no addresses. */
                     bool Empty() const noexcept {
                         SynchronizedObjectScope lock(lockobj);
                         return addresses.empty();
                     }
 
                     // Thread-safe copy of all addresses
+                    /**
+                     * @brief Copies all cached addresses into an output container.
+                     * @param out Destination set.
+                     */
                     void CopyAddresses(ppp::unordered_set<boost::asio::ip::address>& out) const noexcept {
                         SynchronizedObjectScope lock(lockobj);
                         try {
@@ -228,12 +263,14 @@ namespace ppp {
                 // Global cache container – uses a hash map for fast lookup and a linked list
                 // for expiration ordering (LRU). All operations are protected by lockobj.
                 // -----------------------------------------------------------------------------
+                /** @brief Process-wide DNS cache state and transaction-id generator. */
                 struct internal final {
                     SynchronizedObject                                      lockobj;                                    // Guards all members
                     std::atomic<uint16_t>                                   identification = RandomNext(1, UINT16_MAX); // DNS transaction ID generator
                     ppp::unordered_map<ppp::string, NamespaceRecordNodePtr> nr_hmap;                                    // Hostname → cache node
                     ppp::collections::LinkedList<NamespaceRecord>           nr_list;                                    // List for expiration
 
+                    /** @brief Returns singleton internal cache state. */
                     static internal&                                        c() noexcept {
                         static internal i;
                         return i;
@@ -244,6 +281,7 @@ namespace ppp {
                 // DNS_RequestContext – manages a single asynchronous resolution.
                 // All operations are thread-safe relative to the owning io_context.
                 // -----------------------------------------------------------------------------
+                /** @brief Per-query asynchronous DNS request state machine. */
                 struct DNS_RequestContext final : public std::enable_shared_from_this<DNS_RequestContext> {
                     boost::asio::ip::udp::endpoint                                              source;
                     boost::asio::io_context&                                                    executor;
@@ -269,6 +307,10 @@ namespace ppp {
                     // -------------------------------------------------------------------------
                     // Constructor – creates an independent UDP socket (dual-stack).
                     // -------------------------------------------------------------------------
+                    /**
+                     * @brief Creates request context and initializes UDP socket resources.
+                     * @param context IO context used for async send/receive operations.
+                     */
                     explicit DNS_RequestContext(boost::asio::io_context& context) noexcept
                         : executor(context)
                         , timeout_timer(context) {
@@ -293,6 +335,7 @@ namespace ppp {
                     // -------------------------------------------------------------------------
                     // Destructor – cancels all pending operations without invoking the callback.
                     // -------------------------------------------------------------------------
+                    /** @brief Ensures outstanding async operations are cancelled safely. */
                     ~DNS_RequestContext() noexcept {
                         cancel();
                     }
@@ -300,6 +343,7 @@ namespace ppp {
                     // -------------------------------------------------------------------------
                     // Cancel all timers and close the socket. The callback is never called.
                     // -------------------------------------------------------------------------
+                    /** @brief Cancels timers/socket and suppresses callback invocation. */
                     void cancel() noexcept {
                         bool expected = false;
                         if (!completed.compare_exchange_strong(expected, true)) {
@@ -314,7 +358,7 @@ namespace ppp {
                         }
 
                         // Cancel timeout timer – it will not fire after this point.
-                        (void)timeout_timer.expires_from_now(boost::posix_time::seconds(0));
+                        timeout_timer.expires_from_now(boost::posix_time::seconds(0));
 
                         Socket::Cancel(timeout_timer);
                         if (NULLPTR != socket) {
@@ -329,6 +373,10 @@ namespace ppp {
                     // Finish the request – either because all responses arrived or a timeout occurred.
                     // Invokes the user callback exactly once and stores the result in the cache.
                     // -------------------------------------------------------------------------
+                    /**
+                     * @brief Completes a request, dispatches callback, and optionally caches result.
+                     * @param is_timeout True when completion is triggered by timeout.
+                     */
                     void finish(bool is_timeout) noexcept {
                         bool expected = false;
                         if (!completed.compare_exchange_strong(expected, true)) {
@@ -369,6 +417,11 @@ namespace ppp {
                     // Updates the address set and checks whether the request is complete.
                     // This method may be called from multiple threads if io_context runs with >1 thread.
                     // -------------------------------------------------------------------------
+                    /**
+                     * @brief Handles a single inbound DNS response packet.
+                     * @param data Packet payload buffer.
+                     * @param len Packet length in bytes.
+                     */
                     void on_response(const Byte* data, size_t len) noexcept {
                         if (completed.load()) {
                             return;
@@ -428,6 +481,7 @@ namespace ppp {
                     // Store the collected IP addresses into the global cache.
                     // This function is called only after the request has successfully finished.
                     // -------------------------------------------------------------------------
+                    /** @brief Merges resolved addresses into global DNS cache. */
                     void cache() noexcept {
                         int TTL = vdns::ttl;
                         if (TTL < 1) {
@@ -495,6 +549,12 @@ namespace ppp {
                     // Build and send A and AAAA requests to all configured DNS servers.
                     // Returns true if at least one request was sent successfully.
                     // -------------------------------------------------------------------------
+                    /**
+                     * @brief Sends A and AAAA queries to all destination DNS servers.
+                     * @param destinations DNS server endpoints.
+                     * @param timeout_ms Request timeout in milliseconds.
+                     * @return True when at least one query is sent successfully.
+                     */
                     bool send_requests(const ppp::vector<boost::asio::ip::udp::endpoint>& destinations, int timeout_ms) noexcept {
                         if (NULLPTR == socket) {
                             return false;
@@ -574,6 +634,7 @@ namespace ppp {
                     // Asynchronous receive loop – posts a new async_receive_from after each
                     // successful receive, until the request is completed.
                     // -------------------------------------------------------------------------
+                    /** @brief Starts or continues asynchronous UDP receive loop for this request. */
                     void start_receive_loop() noexcept {
                         if (NULLPTR == socket || completed.load()) {
                             return;
@@ -609,6 +670,7 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Initialisation function – must be called early in main().
                 // -----------------------------------------------------------------------------
+                /** @brief Initializes default DNS servers and resets TTL to default. */
                 void vdns_ctor() noexcept {
                     boost::system::error_code ec;
                     ttl = PPP_DEFAULT_DNS_TTL;
@@ -624,6 +686,13 @@ namespace ppp {
                 // Internal helper: normalise hostname and try to look it up in the cache.
                 // Returns true if the hostname is valid; out_node may be null or point to a cache node.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Normalizes hostname and looks up cache node by key.
+                 * @param hostname Input hostname.
+                 * @param out_hostname Normalized lowercase hostname.
+                 * @param out_node Cache node when present.
+                 * @return True when input hostname is valid.
+                 */
                 static bool DNS_ResolveFromCache(const char*    hostname,
                     ppp::string&                                out_hostname,
                     NamespaceRecordNodePtr&                     out_node) noexcept {
@@ -656,6 +725,12 @@ namespace ppp {
                 // Internal callback dispatcher – respects IPv4 preference and returns either
                 // a single address or the whole set.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Dispatches resolve result as first-address or all-address callback.
+                 * @param addresses Resolved/cached address set.
+                 * @param one_cb Optional callback for single preferred address.
+                 * @param all_cb Optional callback for full address set.
+                 */
                 static void DNS_ResolveEventCallback(const ppp::unordered_set<boost::asio::ip::address>&    addresses,
                     const ppp::function<void(const boost::asio::ip::address&)>&                             one_cb,
                     const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>&         all_cb) noexcept {
@@ -689,6 +764,15 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Core asynchronous sending routine – creates a request context and starts transmission.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Allocates and starts a DNS request context.
+                 * @param context IO context that owns async operations.
+                 * @param hostname Normalized hostname to query.
+                 * @param timeout_ms Query timeout in milliseconds.
+                 * @param destinations DNS server endpoints.
+                 * @param cb Completion callback from request context.
+                 * @return True when request context starts successfully.
+                 */
                 static bool DNS_SendToARequestAsync(boost::asio::io_context&    context,
                     const ppp::string&                                          hostname,
                     int                                                         timeout_ms,
@@ -712,6 +796,15 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Public API: ResolveAsync – returns the first IP address (IPv4 preferred).
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Resolves hostname asynchronously and returns one preferred address.
+                 * @param context IO context used for callback posting.
+                 * @param hostname Domain name or literal IP address.
+                 * @param timeout Timeout in milliseconds.
+                 * @param destinations DNS server endpoints.
+                 * @param cb Completion callback.
+                 * @return True when resolve request is accepted.
+                 */
                 bool ResolveAsync(boost::asio::io_context&                      context,
                     const char*                                                 hostname,
                     int                                                         timeout,
@@ -762,6 +855,15 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Public API: ResolveAsync2 – returns all IP addresses.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Resolves hostname asynchronously and returns all discovered addresses.
+                 * @param context IO context used for callback posting.
+                 * @param hostname Domain name or literal IP address.
+                 * @param timeout Timeout in milliseconds.
+                 * @param destinations DNS server endpoints.
+                 * @param cb Completion callback.
+                 * @return True when resolve request is accepted.
+                 */
                 bool ResolveAsync2(boost::asio::io_context&                                         context,
                     const char*                                                                     hostname,
                     int                                                                             timeout,
@@ -809,6 +911,12 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Public API: QueryCache – retrieve a single cached IP address (IPv4 preferred).
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Retrieves a single preferred address from cache.
+                 * @param hostname Domain key.
+                 * @param address Output address.
+                 * @return True when a valid cached address is returned.
+                 */
                 bool QueryCache(const char* hostname, boost::asio::ip::address& address) noexcept {
                     ppp::string hostname_str;
                     NamespaceRecordNodePtr node;
@@ -830,6 +938,13 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Public API: QueryCache2 – build a DNS response message from cached records.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Populates DNS answer section from cache for selected record family.
+                 * @param hostname Domain key.
+                 * @param message Output DNS message object.
+                 * @param af Address family selector.
+                 * @return Normalized hostname on cache hit, otherwise empty.
+                 */
                 ppp::string QueryCache2(const char* hostname, ::dns::Message& message, AddressFamily af) noexcept {
                     bool want_v4 = (AddressFamily::kA == af);
                     bool want_v6 = (AddressFamily::kAAAA == af);
@@ -913,6 +1028,7 @@ namespace ppp {
                 // Public API: UpdateAsync – remove expired cache entries.
                 // Called periodically (e.g., every minute) from a maintenance thread.
                 // -----------------------------------------------------------------------------
+                /** @brief Removes expired entries from the in-memory DNS cache. */
                 void UpdateAsync() noexcept {
                     uint64_t now = Executors::GetTickCount();
                     internal& c = internal::c();
@@ -934,6 +1050,12 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Public API: AddCache – manually insert a DNS response packet into the cache.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Adds or merges cache entry from a raw DNS response packet.
+                 * @param packet DNS packet bytes.
+                 * @param packet_size Packet length in bytes.
+                 * @return True when cache update succeeds.
+                 */
                 bool AddCache(const Byte* packet, int packet_size) noexcept {
                     if (NULLPTR == packet || packet_size < 1) {
                         return false;
@@ -1024,6 +1146,11 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Public API: IsReverseQuery – detect PTR queries for .arpa domains.
                 // -----------------------------------------------------------------------------
+                /**
+                 * @brief Detects reverse-DNS names under ARPA zones.
+                 * @param hostname Hostname to test.
+                 * @return True when hostname matches IPv4/IPv6 reverse-query suffix.
+                 */
                 bool IsReverseQuery(const char* hostname) noexcept {
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV6[] = ".ip6.arpa";
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV4[] = ".in-addr.arpa";

@@ -14,10 +14,20 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VEthernetHttpProxyConnection.cpp
+ * @brief HTTP proxy connection parsing, handshake, and forwarding logic.
+ * @author("OPENPPP2 Team")
+ * @license("GPL-3.0")
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
             namespace proxys {
+                /**
+                 * @brief Holds immutable/shared static data for HTTP parsing.
+                 */
                 class VEthernetHttpProxyConnectionStaticVariable final {
                 public:
                     typedef ppp::unordered_set<ppp::string>                         StringSet;
@@ -29,6 +39,12 @@ namespace ppp {
                     StringMap                                                       proxyHeaderToAgentHeader;
 
                 public:
+                    /**
+                     * @brief Initializes supported methods and header remapping tables.
+                     * @param None.
+                     * @return None.
+                     * @note Also precomputes the maximum method name length.
+                     */
                     VEthernetHttpProxyConnectionStaticVariable() noexcept {
                         protocolMethods.emplace("CONNECT");
                         protocolMethods.emplace("DELETE");
@@ -53,6 +69,12 @@ namespace ppp {
                     }
 
                 public:
+                    /**
+                     * @brief Checks whether a method token is supported.
+                     * @param s HTTP method token in uppercase.
+                     * @return True if method is supported; otherwise false.
+                     * @note Empty method tokens are always rejected.
+                     */
                     bool                                                            IsSupportMethodKey(const ppp::string& s) noexcept {
                         if (s.empty()) {
                             return false;
@@ -66,11 +88,26 @@ namespace ppp {
 
                 static std::shared_ptr<VEthernetHttpProxyConnectionStaticVariable>  gStaticVariable = NULLPTR;
 
-                // VEthernetHttpProxyConnection class's static constructor.
+                /**
+                 * @brief Initializes static variables for HTTP proxy connections.
+                 * @param None.
+                 * @return None.
+                 * @note Called during static initialization flow.
+                 */
                 void VEthernetHttpProxyConnection_cctor() noexcept {
                     gStaticVariable = ppp::make_shared_object<VEthernetHttpProxyConnectionStaticVariable>();
                 }
 
+                /**
+                 * @brief Constructs an HTTP proxy connection.
+                 * @param proxy Owning HTTP proxy switcher.
+                 * @param exchanger Virtual ethernet exchanger.
+                 * @param context Asio I/O context.
+                 * @param strand Serialized executor strand.
+                 * @param socket Accepted client socket.
+                 * @return None.
+                 * @note All parameters are forwarded to the base class.
+                 */
                 VEthernetHttpProxyConnection::VEthernetHttpProxyConnection(
                     const VEthernetHttpProxySwitcherPtr&                    proxy, 
                     const VEthernetExchangerPtr&                            exchanger, 
@@ -81,6 +118,14 @@ namespace ppp {
                     
                 }
 
+                /**
+                 * @brief Converts buffered HTTP bytes into header lines.
+                 * @param ms Source memory stream.
+                 * @param headers Output header line vector.
+                 * @param out_ Optional full raw protocol output.
+                 * @return True when parsing yields at least one line.
+                 * @note Uses CRLF splitting semantics.
+                 */
                 bool VEthernetHttpProxyConnection::ProtocolReadHeaders(ppp::io::MemoryStream& ms, ppp::vector<ppp::string>& headers, ppp::string* out_) noexcept {
                     std::shared_ptr<Byte> protocol = ms.GetBuffer();
                     if (NULLPTR == protocol) {
@@ -101,6 +146,17 @@ namespace ppp {
                     }
                 }
 
+                /**
+                 * @brief Sends an HTTP error response to the client.
+                 * @param socket Target client socket.
+                 * @param protocol HTTP protocol token.
+                 * @param version HTTP version token.
+                 * @param status_code HTTP status code.
+                 * @param status_text HTTP status text.
+                 * @param y Coroutine yield context.
+                 * @return True when response bytes are written successfully.
+                 * @note Falls back to HTTP/1.1 when protocol/version are empty.
+                 */
                 static bool SendHttpProxyErrorResponse(
                     const std::shared_ptr<boost::asio::ip::tcp::socket>& socket,
                     const ppp::string& protocol,
@@ -109,6 +165,14 @@ namespace ppp {
                     const char* status_text,
                     VEthernetHttpProxyConnection::YieldContext& y) noexcept;
 
+                /**
+                 * @brief Builds a ProtocolRoot from current socket header buffer.
+                 * @param ms Memory stream containing HTTP header bytes.
+                 * @param socket Source client socket.
+                 * @param y Coroutine yield context.
+                 * @return Parsed ProtocolRoot on success; null on failure.
+                 * @note Reads request line metadata and all header pairs.
+                 */
                 std::shared_ptr<VEthernetHttpProxyConnection::ProtocolRoot> VEthernetHttpProxyConnection::GetProtocolRootFromSocket(ppp::io::MemoryStream& ms, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, VEthernetHttpProxyConnection::YieldContext& y) noexcept {
                     std::shared_ptr<ProtocolRoot> protocolRoot = make_shared_object<ProtocolRoot>();
                     if (NULLPTR == protocolRoot) {
@@ -131,6 +195,14 @@ namespace ppp {
                     return protocolRoot;
                 }
 
+                /**
+                 * @brief Reads bytes until the HTTP header terminator is found.
+                 * @param protocol_array Destination buffer stream.
+                 * @param y Coroutine yield context.
+                 * @param socket Source TCP socket.
+                 * @return True when "\r\n\r\n" is found; otherwise false.
+                 * @note Uses manual scanning instead of async_read_until.
+                 */
                 static bool ProtocolReadHttpHeaders(ppp::io::MemoryStream& protocol_array, VEthernetHttpProxyConnection::YieldContext& y, boost::asio::ip::tcp::socket& socket) noexcept {
                     char buffers[ppp::tap::ITap::Mtu];
                     for (;;) {
@@ -148,6 +220,7 @@ namespace ppp {
                             return false;
                         }
 
+                        // Detect end-of-headers marker in the growing buffer.
                         int next[4];
                         int index = FindIndexOf(next, (char*)protocol_array_ptr.get(), protocol_array.GetPosition(), (char*)("\r\n\r\n"), 4); 
                         if (index > -1) {
@@ -176,6 +249,14 @@ namespace ppp {
                     return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(response_headers.data(), response_headers.size()), y);
                 }
 
+                /**
+                 * @brief Reads complete HTTP headers from client socket.
+                 * @param headers Destination memory stream.
+                 * @param y Coroutine yield context.
+                 * @param socket Source TCP socket.
+                 * @return True when full headers are read.
+                 * @note Socket must be open before reading.
+                 */
                 bool VEthernetHttpProxyConnection::ProtocolReadAllHeaders(ppp::io::MemoryStream& headers, VEthernetHttpProxyConnection::YieldContext& y, boost::asio::ip::tcp::socket& socket) noexcept {
                     bool opened = socket.is_open();
                     if (!opened) {
@@ -185,6 +266,12 @@ namespace ppp {
                     return ProtocolReadHttpHeaders(headers, y, socket);
                 }
 
+                /**
+                 * @brief Performs request parsing and upstream bridge handshake.
+                 * @param y Coroutine yield context.
+                 * @return True when handshake and initial forwarding succeed.
+                 * @note Sends HTTP error responses for invalid parsing states.
+                 */
                 bool VEthernetHttpProxyConnection::Handshake(YieldContext& y) noexcept {
                     ppp::io::MemoryStream protocol_array;
                     if (IsDisposed()) {
@@ -223,6 +310,7 @@ namespace ppp {
                     }
 
                     int next[4];
+                    // Locate header boundary so trailing bytes can be forwarded.
                     int headers_index = FindIndexOf(next, (char*)protocol_array_ptr.get(), protocol_array_size, (char*)("\r\n\r\n"), arraysizeof(next)); // KMP
                     if (headers_index < 0) {
                         (void)SendHttpProxyErrorResponse(socket_, "HTTP", "1.1", 400, "Bad Request", y);
@@ -251,6 +339,15 @@ namespace ppp {
                     return handshaked;
                 }
 
+                /**
+                 * @brief Finalizes handshake and emits initial tunnel/request payload.
+                 * @param protocolRoot Parsed protocol metadata.
+                 * @param messages Optional buffered payload after headers.
+                 * @param messages_size Payload size.
+                 * @param y Coroutine yield context.
+                 * @return True when follow-up write/forward succeeds.
+                 * @note CONNECT sends a 200 response before data piping.
+                 */
                 bool VEthernetHttpProxyConnection::ProcessHandshaked(const std::shared_ptr<ProtocolRoot>& protocolRoot, const void* messages, int messages_size, YieldContext& y) noexcept {
                     if (IsDisposed()) {
                         return false;
@@ -274,6 +371,8 @@ namespace ppp {
                         return true;
                     }
                     else {
+                        // For normal HTTP proxy mode, rebuild the request head and
+                        // append any buffered body bytes before forwarding upstream.
                         ppp::io::MemoryStream ms;
                         ms.BufferAllocator = this->GetBufferAllocator();
 
@@ -313,6 +412,13 @@ namespace ppp {
                     }
                 }
 
+                /**
+                 * @brief Establishes upstream bridge using parsed protocol target.
+                 * @param protocolRoot Parsed request metadata.
+                 * @param y Coroutine yield context.
+                 * @return True when upstream connection is established.
+                 * @note Returns false when protocolRoot is null.
+                 */
                 bool VEthernetHttpProxyConnection::ConnectBridgeToPeer(const std::shared_ptr<ProtocolRoot>& protocolRoot, YieldContext& y) noexcept {
                     if (NULLPTR == protocolRoot) {
                         return false;
@@ -322,6 +428,12 @@ namespace ppp {
                     return VEthernetLocalProxyConnection::ConnectBridgeToPeer(destinationEP, y);
                 }
 
+                /**
+                 * @brief Resolves host and port from parsed HTTP protocol data.
+                 * @param protocolRoot Parsed request metadata.
+                 * @return Destination endpoint or null on invalid host.
+                 * @note Defaults to port 80 for non-CONNECT requests.
+                 */
                 std::shared_ptr<ppp::app::protocol::AddressEndPoint> VEthernetHttpProxyConnection::GetAddressEndPointByProtocol(const std::shared_ptr<ProtocolRoot>& protocolRoot) noexcept {
                     if (NULLPTR == protocolRoot) {
                         return NULLPTR;
@@ -334,6 +446,7 @@ namespace ppp {
 
                     int port = PPP_HTTP_SYS_PORT; 
                     if (!host.empty()) {
+                        // Handle bracketed IPv6 literal form: [addr]:port.
                         if (host.front() == '[') {
                             std::size_t end = host.find(']');
                             if (end != ppp::string::npos) {
@@ -354,6 +467,7 @@ namespace ppp {
                                 }
                             }
                         }
+                        // Handle common host:port format (IPv4/domain).
                         else if (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
                             port = atoi(p + 1);
                             if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
@@ -368,6 +482,13 @@ namespace ppp {
                     return VEthernetLocalProxyConnection::GetAddressEndPointByProtocol(host, port);
                 }
 
+                /**
+                 * @brief Parses HTTP request line and determines target host.
+                 * @param headers Tokenized HTTP header lines.
+                 * @param protocolRoot Output protocol root.
+                 * @return True when parsing and validation succeed.
+                 * @note Supports CONNECT, origin-form, and absolute-form URIs.
+                 */
                 bool VEthernetHttpProxyConnection::ProtocolReadFirstRoot(const ppp::vector<ppp::string>& headers, const std::shared_ptr<ProtocolRoot>& protocolRoot) noexcept {
                     static const ppp::string CONNECT_TEXT      = "CONNECT";
                     static const ppp::string HTTP_TEXT         = "HTTP";
@@ -427,9 +548,11 @@ namespace ppp {
                         return false;        
                     }
                     elif(protocolRoot->TunnelMode) {
+                        // CONNECT uses host:port directly as request target.
                         protocolRoot->Host = rawUri;
                     }
                     elif(rawUri[0] == '/') {
+                        // Origin-form requests rely on the Host header.
                         protocolRoot->RawUri = header_first;
                         for (std::size_t index = 1, length = headers.size(); index < length; index++) {
                             ppp::string line = LTrim(RTrim(headers[index]));
@@ -466,6 +589,7 @@ namespace ppp {
                         }
                     }
                     else {
+                        // Absolute-form URI: extract host and request path.
                         size_t left_index = rawUri.find(DOUBLE_SLASH_TEXT);
                         if (left_index == ppp::string::npos) {
                             return false;
@@ -516,6 +640,13 @@ namespace ppp {
                     return true;
                 }
 
+                /**
+                 * @brief Parses and normalizes HTTP headers into a map.
+                 * @param headers Tokenized header lines.
+                 * @param s Output header map.
+                 * @return True when parsing completes.
+                 * @note Proxy-specific headers can be removed.
+                 */
                 bool VEthernetHttpProxyConnection::ProtocolReadAllHeaders(const ppp::vector<ppp::string>& headers, ProtocolRoot::HeaderCollection& s) noexcept {
                     for (size_t i = 1, l = headers.size(); i < l; ++i) {
                         const ppp::string& str = headers[i];
@@ -551,6 +682,12 @@ namespace ppp {
                     return true;
                 }
 
+                /**
+                 * @brief Serializes protocol root fields into an HTTP header block.
+                 * @param None.
+                 * @return HTTP request string ending with CRLF CRLF.
+                 * @note Uses Host as URI target in tunnel mode.
+                 */
                 ppp::string VEthernetHttpProxyConnection::ProtocolRoot::ToString() noexcept {
                     ppp::string protocol;
                     if (this->TunnelMode) {

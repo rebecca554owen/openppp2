@@ -1,3 +1,9 @@
+/**
+ * @file VirtualEthernetInformation.cpp
+ * @brief Implements serialization and parsing for virtual ethernet information models.
+ * @license GPL-3.0
+ */
+
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 
 #include <cstring>
@@ -11,6 +17,12 @@ namespace ppp {
                 Clear();
             }
 
+            /**
+             * @brief Converts a virtual ethernet information object into JSON text.
+             * @param information Source information object.
+             * @param styled True for pretty-printed JSON; false for compact JSON.
+             * @return Serialized JSON string.
+             */
             static ppp::string STATIC_TO_STRRING(VirtualEthernetInformation& information, bool styled) noexcept {
                 Json::Value json;
                 information.ToJson(json);
@@ -23,14 +35,17 @@ namespace ppp {
                 }
             }
 
+            /** @brief Serializes this object into formatted JSON text. */
             ppp::string VirtualEthernetInformation::ToString() noexcept {
                 return STATIC_TO_STRRING(*this, true);
             }
 
+            /** @brief Serializes this object into compact JSON text. */
             ppp::string VirtualEthernetInformation::ToJson() noexcept {
                 return STATIC_TO_STRRING(*this, false);
             }
 
+            /** @brief Writes this object fields into a JSON value. */
             void VirtualEthernetInformation::ToJson(Json::Value& json) noexcept {
                 json["BandwidthQoS"]    = stl::to_string<ppp::string>(this->BandwidthQoS);
                 json["ExpiredTime"]     = this->ExpiredTime;
@@ -38,6 +53,7 @@ namespace ppp {
                 json["OutgoingTraffic"] = stl::to_string<ppp::string>(this->OutgoingTraffic);
             }
 
+            /** @brief Builds an information object from a JSON value object. */
             std::shared_ptr<VirtualEthernetInformation> VirtualEthernetInformation::FromJson(const Json::Value& json) noexcept {
                 if (!json.isObject()) {
                     return NULLPTR;
@@ -55,6 +71,7 @@ namespace ppp {
                 return infomartion;
             }
 
+            /** @brief Builds an information object from JSON text. */
             std::shared_ptr<VirtualEthernetInformation> VirtualEthernetInformation::FromJson(const ppp::string& json) noexcept {
                 if (json.empty()) {
                     return NULLPTR;
@@ -64,6 +81,7 @@ namespace ppp {
                 return FromJson(config);
             }
 
+            /** @brief Resets all information fields to defaults. */
             void VirtualEthernetInformation::Clear() noexcept {
                 this->ExpiredTime     = 0;
                 this->BandwidthQoS    = 0;
@@ -71,6 +89,7 @@ namespace ppp {
                 this->OutgoingTraffic = 0;
             }
 
+            /** @brief Resets all IPv6 extension fields to defaults. */
             void VirtualEthernetInformationExtensions::Clear() noexcept {
                 AssignedIPv6Mode = IPv6Mode_None;
                 AssignedIPv6AddressPrefixLength = 0;
@@ -86,6 +105,7 @@ namespace ppp {
                 IPv6StatusMessage.clear();
             }
 
+            /** @brief Returns whether any IPv6 extension field is currently populated. */
             bool VirtualEthernetInformationExtensions::HasAny() const noexcept {
                 return AssignedIPv6Mode != IPv6Mode_None ||
                     AssignedIPv6AddressPrefixLength != 0 ||
@@ -101,6 +121,7 @@ namespace ppp {
                     !IPv6StatusMessage.empty();
             }
 
+            /** @brief Writes IPv6 extension fields to a JSON object. */
             void VirtualEthernetInformationExtensions::ToJson(Json::Value& json) const noexcept {
                 json["AssignedIPv6Mode"] = AssignedIPv6Mode;
                 json["AssignedIPv6AddressPrefixLength"] = AssignedIPv6AddressPrefixLength;
@@ -143,12 +164,14 @@ namespace ppp {
                 }
             }
 
+            /** @brief Serializes IPv6 extension fields into compact JSON text. */
             ppp::string VirtualEthernetInformationExtensions::ToJson() const noexcept {
                 Json::Value json;
                 ToJson(json);
                 return JsonAuxiliary::ToString(json);
             }
 
+            /** @brief Parses IPv6 extensions from JSON text into the target value. */
             bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const ppp::string& json) noexcept {
                 if (json.empty()) {
                     value.Clear();
@@ -158,6 +181,7 @@ namespace ppp {
                 return FromJson(value, JsonAuxiliary::FromString(json));
             }
 
+            /** @brief Parses IPv6 extensions from a JSON object into the target value. */
             bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const Json::Value& json) noexcept {
                 value.Clear();
                 if (!json.isObject()) {
@@ -175,6 +199,12 @@ namespace ppp {
                 value.AssignedIPv6RoutePrefixLength = static_cast<Byte>(JsonAuxiliary::AsInt64(json["AssignedIPv6RoutePrefixLength"], 0));
                 value.IPv6StatusCode = static_cast<Byte>(JsonAuxiliary::AsInt64(json["IPv6StatusCode"], 0));
 
+                /**
+                 * @brief Parse IPv6 address fields with strict validation.
+                 *
+                 * Each candidate string is converted into a boost address and accepted
+                 * only when conversion succeeds and the address family is IPv6.
+                 */
                 boost::system::error_code ec;
                 boost::asio::ip::address address = StringToAddress(JsonAuxiliary::AsString(json["AssignedIPv6Address"]), ec);
                 if (!ec && address.is_v6()) {

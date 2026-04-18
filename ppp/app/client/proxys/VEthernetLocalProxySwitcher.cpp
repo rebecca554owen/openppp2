@@ -10,10 +10,20 @@
 #include <ppp/collections/Dictionary.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VEthernetLocalProxySwitcher.cpp
+ * @brief Implements local proxy listener setup, accept loop, and connection maintenance.
+ * @author OpenPPP Contributors
+ * @license GPL-3.0
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
             namespace proxys {
+                /**
+                 * @brief Initializes switcher state from exchanger-owned configuration.
+                 */
                 VEthernetLocalProxySwitcher::VEthernetLocalProxySwitcher(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept
                     : disposed_(false)
                     , exchanger_(exchanger)
@@ -26,6 +36,9 @@ namespace ppp {
                     Finalize();
                 }
 
+                /**
+                 * @brief Stops timer/acceptor, detaches all connections, and releases references.
+                 */
                 void VEthernetLocalProxySwitcher::Finalize() noexcept {
                     VEthernetLocalProxyConnectionTable connections;
                     for (;;) {
@@ -50,11 +63,17 @@ namespace ppp {
                     ppp::collections::Dictionary::ReleaseAllObjects(connections);
                 }
 
+                /**
+                 * @brief Runs periodic aging checks over tracked connections.
+                 */
                 void VEthernetLocalProxySwitcher::Update(UInt64 now) noexcept {
                     SynchronizedObjectScope scope(syncobj_);
                     ppp::collections::Dictionary::UpdateAllObjects(connections_, now);
                 }
 
+                /**
+                 * @brief Defers switcher teardown onto the switcher context thread.
+                 */
                 void VEthernetLocalProxySwitcher::Dispose() noexcept {
                     auto self = shared_from_this();
                     boost::asio::post(*context_, 
@@ -63,6 +82,9 @@ namespace ppp {
                         });
                 }
 
+                /**
+                 * @brief Opens listening socket and wires accept callback dispatching.
+                 */
                 bool VEthernetLocalProxySwitcher::Open() noexcept {
                     using NetworkState = VEthernetExchanger::NetworkState;
 
@@ -85,6 +107,9 @@ namespace ppp {
                             return false;
                         }
 
+                        /**
+                         * @brief Try preferred bind address first, then IPv6/IPv4 any-address fallbacks.
+                         */
                         for (boost::asio::ip::address& interfaceIP : bind_ips) {
                             if (interfaceIP.is_multicast()) {
                                 continue;
@@ -128,6 +153,9 @@ namespace ppp {
                     acceptor->AcceptSocket = 
                         [self, this](ppp::net::SocketAcceptor*, ppp::net::SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
                             int sockfd = e.Socket;
+                            /**
+                             * @brief Accept callback validates network readiness before scheduling per-socket work.
+                             */
                             while (!disposed_) {
                                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                                 if (NULLPTR == exchanger) {
@@ -165,6 +193,9 @@ namespace ppp {
                     return bok;
                 }
 
+                /**
+                 * @brief Queues tracked-connection removal on the switcher executor.
+                 */
                 void VEthernetLocalProxySwitcher::ReleaseConnection(VEthernetLocalProxyConnection* connection) noexcept {
                     if (NULLPTR != connection) {
                         auto self = shared_from_this();
@@ -176,6 +207,9 @@ namespace ppp {
                     }
                 }
 
+                /**
+                 * @brief Removes one tracked connection entry by pointer identity.
+                 */
                 bool VEthernetLocalProxySwitcher::RemoveConnection(VEthernetLocalProxyConnection* connection) noexcept {
                     VEthernetLocalProxyConnectionPtr r; 
                     if (NULLPTR != connection) {
@@ -186,6 +220,9 @@ namespace ppp {
                     return NULLPTR != r;
                 }
 
+                /**
+                 * @brief Creates an asio socket wrapper from a native accepted descriptor.
+                 */
                 std::shared_ptr<boost::asio::ip::tcp::socket> VEthernetLocalProxySwitcher::NewSocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, int sockfd) noexcept {
                     if (NULLPTR == context) {
                         return NULLPTR;
@@ -216,6 +253,9 @@ namespace ppp {
                     return socket;
                 }
 
+                /**
+                 * @brief Adds connection to synchronized tracking table.
+                 */
                 bool VEthernetLocalProxySwitcher::AddConnection(const std::shared_ptr<VEthernetLocalProxyConnection>& connection) noexcept {
                     if (NULLPTR == connection) {
                         return false;
@@ -225,6 +265,9 @@ namespace ppp {
                     return ppp::collections::Dictionary::TryAdd(connections_, connection.get(), connection);
                 }
 
+                /**
+                 * @brief Builds connection object and starts its coroutine worker.
+                 */
                 bool VEthernetLocalProxySwitcher::ProcessAcceptSocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, int sockfd) noexcept {
                     if (NULLPTR == context) {
                         ppp::net::Socket::Closesocket(sockfd);
@@ -253,6 +296,9 @@ namespace ppp {
                         auto allocator = GetBufferAllocator();
                         auto self = shared_from_this();
 
+                        /**
+                         * @brief Spawn the session coroutine; failed runs self-dispose the connection.
+                         */
                         bok = ppp::coroutines::YieldContext::Spawn(allocator.get(), *context, strand.get(),
                             [self, this, context, strand, connection](ppp::coroutines::YieldContext& y) noexcept {
                                 bool bok = connection->Run(y);
@@ -273,11 +319,17 @@ namespace ppp {
                     return bok;
                 }
 
+                /**
+                 * @brief Returns configured allocator used by new connection coroutines.
+                 */
                 std::shared_ptr<ppp::threading::BufferswapAllocator> VEthernetLocalProxySwitcher::GetBufferAllocator() noexcept {
                     std::shared_ptr<ppp::configurations::AppConfiguration> configuration = configuration_;
                     return NULLPTR != configuration ? configuration->GetBufferAllocator() : NULLPTR;
                 }
 
+                /**
+                 * @brief Creates the always-on 1-second timer for periodic housekeeping.
+                 */
                 bool VEthernetLocalProxySwitcher::CreateAlwaysTimeout() noexcept {
                     if (disposed_) {
                         return false;
@@ -298,6 +350,9 @@ namespace ppp {
                     return timeout->SetInterval(1000) && timeout->Start();
                 }
 
+                /**
+                 * @brief Returns listener endpoint when acceptor is active.
+                 */
                 boost::asio::ip::tcp::endpoint VEthernetLocalProxySwitcher::GetLocalEndPoint() noexcept {
                     std::shared_ptr<ppp::net::SocketAcceptor> acceptor = acceptor_;
                     if (NULLPTR != acceptor) {

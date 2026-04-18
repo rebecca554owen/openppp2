@@ -4,6 +4,13 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 
+/**
+ * @file Rule.cpp
+ * @brief DNS rule loading and host matching implementations.
+ * @author("OPENPPP2 Team")
+ * @license("GPL-3.0")
+ */
+
 #include <boost/regex.h>
 #include <boost/regex.hpp>
 
@@ -15,6 +22,15 @@ namespace ppp
         {
             namespace dns
             {
+                /**
+                 * @brief Loads DNS rules from a file path.
+                 * @param path Rule file path.
+                 * @param rules Relative-domain rule map.
+                 * @param full_rules Full-host rule map.
+                 * @param regexp_rules Regex rule map.
+                 * @return Number of loaded entries.
+                 * @note Returns 0 when path resolution or reading fails.
+                 */
                 int Rule::LoadFile(const ppp::string& path, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept
                 {
                     if (path.empty())
@@ -33,6 +49,15 @@ namespace ppp
                     return Load(texts, rules, full_rules, regexp_rules);
                 }
 
+                /**
+                 * @brief Parses rule lines and populates rule maps.
+                 * @param s Rule text content.
+                 * @param rules Relative-domain rule map.
+                 * @param full_rules Full-host rule map.
+                 * @param regexp_rules Regex rule map.
+                 * @return Number of new entries inserted into the relative map.
+                 * @note Invalid/unsupported lines are skipped silently.
+                 */
                 int Rule::Load(const ppp::string& s, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept
                 {
                     if (s.empty())
@@ -54,6 +79,7 @@ namespace ppp
                     for (std::size_t i = 0, line_count = lines.size(); i < line_count; i++)
                     {
                         ppp::string line = lines[i];
+                        // Strip inline comments and skip pure comment lines.
                         std::size_t index = line.find('#');
                         if (index != ppp::string::npos) 
                         {
@@ -94,6 +120,7 @@ namespace ppp
                         std::size_t host_size = host.size();
                         bool regexp = host_size >= 7 && memcmp(host.data(), "regexp:", 7) == 0;
                         bool full = false;
+                        // Parse host mode: regexp, full host, or relative domain.
                         if (regexp) 
                         {
                             boost::regex pattern;
@@ -137,6 +164,7 @@ namespace ppp
                         }
 
                         bool nic = true;
+                        // Optional third segment controls NIC routing behavior.
                         if (segment_size > 2)
                         {
                             ppp::string& nic_type = segments[2];
@@ -172,6 +200,15 @@ namespace ppp
                     return rules.size() - length;
                 }
 
+                /**
+                 * @brief Gets the best-matching rule for an input host.
+                 * @param s Input host string.
+                 * @param rules Relative-domain rule map.
+                 * @param full_rules Full-host rule map.
+                 * @param regexp_rules Regex rule map.
+                 * @return Matched rule pointer, or null when not found.
+                 * @note IP literal input is ignored and returns null.
+                 */
                 Rule::Ptr Rule::Get(const ppp::string& s, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept 
                 {
                     if (s.empty())
@@ -205,6 +242,7 @@ namespace ppp
                         return rule;
                     }
 
+                    // Apply regexp matching after exact full-host lookup.
                     rule = GetWithRegExp(host_lower, regexp_rules);
                     if (NULLPTR != rule) 
                     {
@@ -214,6 +252,13 @@ namespace ppp
                     return GetWithRelativePath(host_lower, rules);
                 }
 
+                /**
+                 * @brief Performs exact-host lookup in a rule map.
+                 * @param s Host key.
+                 * @param rules Exact match map.
+                 * @return Matched rule pointer, or null.
+                 * @note This function is a direct hash lookup.
+                 */
                 Rule::Ptr Rule::GetWithAbsoluteHost(const ppp::string& s, const ppp::unordered_map<ppp::string, Ptr>& rules) noexcept
                 {
                     auto tail = rules.find(s);
@@ -221,6 +266,13 @@ namespace ppp
                     return tail != endl ? tail->second : NULLPTR;
                 }
 
+                /**
+                 * @brief Matches host against regular-expression rules.
+                 * @param s Host key.
+                 * @param rules Regex rule map.
+                 * @return First matched rule pointer, or null.
+                 * @note Regex compile/match exceptions are swallowed.
+                 */
                 Rule::Ptr Rule::GetWithRegExp(const ppp::string& s, const ppp::unordered_map<ppp::string, Ptr>& rules) noexcept
                 {
                     using boost_sregex_iterator = boost::regex_iterator<ppp::string::const_iterator>;
@@ -259,6 +311,13 @@ namespace ppp
                     return NULLPTR;
                 }
 
+                /**
+                 * @brief Matches host against relative-domain suffix rules.
+                 * @param s Host key.
+                 * @param rules Relative-domain rule map.
+                 * @return Matched rule pointer, or null.
+                 * @note Domain traversal is performed by firewall helper callbacks.
+                 */
                 Rule::Ptr Rule::GetWithRelativePath(const ppp::string& s, const ppp::unordered_map<ppp::string, Ptr>& rules) noexcept
                 {
                     Ptr rule;

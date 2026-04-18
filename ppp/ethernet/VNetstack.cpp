@@ -1,4 +1,8 @@
 #include <ppp/ethernet/VNetstack.h>
+/**
+ * @file VNetstack.cpp
+ * @brief Implements virtual TCP NAT mapping, accept bridge, and flow lifecycle.
+ */
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/native/ip.h>
@@ -35,18 +39,27 @@ typedef tcp_hdr::tcp_state                                      TcpState;
 typedef ppp::collections::Dictionary                            Dictionary;
 
 namespace ppp {
+    /**
+     * @brief SYN/ACK handshake state values used by TapTcpClient.
+     */
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_CLOSED    = 0;
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_SYN_SENT  = 1;
     static constexpr Byte VNETSTACK_SYNC_ACK_STATE_SYN_RECVD = 2;
 
     namespace ethernet {
 #ifdef SYSNAT
+        /**
+         * @brief Returns process-wide lock for SYSNAT driver API calls.
+         */
         static VNetstack::SynchronizedObject& openppp2_sysnat_syncobj() noexcept {
             static VNetstack::SynchronizedObject lock_obj;
             return lock_obj;
         }
 #endif
 
+        /**
+         * @brief Builds LAN-to-WAN flow key from endpoint tuple.
+         */
         static Int128 LAN2WAN_KEY(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_port) noexcept {
             uint64_t src_ep = MAKE_QWORD(src_ip, src_port);
             uint64_t dst_ep = MAKE_QWORD(dst_ip, dst_port);
@@ -54,6 +67,9 @@ namespace ppp {
             return MAKE_OWORD(dst_ep, src_ep);
         }
 
+        /**
+         * @brief Initializes a fresh TCP link record.
+         */
         VNetstack::TapTcpLink::TapTcpLink() noexcept {
             this->dstAddr = 0;
             this->dstPort = 0;
@@ -67,6 +83,9 @@ namespace ppp {
             this->lastTime = Executors::GetTickCount();
         }
 
+        /**
+         * @brief Releases link resources and resets to closed state.
+         */
         void VNetstack::TapTcpLink::Release() noexcept {
             if (this->closed.load(std::memory_order_acquire)) {
                 return;
@@ -78,6 +97,9 @@ namespace ppp {
             this->Update();
         }
 
+        /**
+         * @brief Closes and disposes the associated TAP TCP client.
+         */
         void VNetstack::TapTcpLink::Closing() noexcept {
             if (this->closed.exchange(true, std::memory_order_acq_rel)) {
                 return;
@@ -92,6 +114,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Finds link by NAT-side lookup key.
+         */
         std::shared_ptr<VNetstack::TapTcpLink> VNetstack::FindTcpLink(int key) noexcept {
             SynchronizedObjectScope scope(syncobj_);
 
@@ -106,6 +131,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Finds link by LAN-to-WAN 4-tuple key.
+         */
         std::shared_ptr<VNetstack::TapTcpLink> VNetstack::FindTcpLink(const Int128& key) noexcept {
             SynchronizedObjectScope scope(syncobj_);
 
@@ -120,6 +148,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Allocates or returns NAT mapping for a new LAN-originated flow.
+         */
         std::shared_ptr<VNetstack::TapTcpLink> VNetstack::AllocTcpLink(UInt32 src_ip, int src_port, UInt32 dst_ip, int dst_port) noexcept {
             auto key = LAN2WAN_KEY(src_ip, src_port, dst_ip, dst_port);
             std::shared_ptr<TapTcpLink> link = this->FindTcpLink(key);
@@ -179,17 +210,26 @@ namespace ppp {
             return link;
         }
 
+        /**
+         * @brief Constructs stack with randomized NAT port cursor.
+         */
         VNetstack::VNetstack() noexcept
             : ap_(RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort))
             , lwip_(false) {
 
         }
 
+        /**
+         * @brief Destroys stack and releases all runtime resources.
+         */
         VNetstack::~VNetstack() noexcept {
             ReleaseAllResources();
         }
 
 #ifdef SYSNAT
+        /**
+         * @brief Mounts SYSNAT and attaches it to current TAP interface.
+         */
         static bool SysnatAttachDriver(const std::shared_ptr<ITap>& tap, ppp::string& interface_name) noexcept {
             if (NULLPTR == tap) {
                 return false;
@@ -214,6 +254,9 @@ namespace ppp {
         }
 #endif
 
+        /**
+         * @brief Opens listener, initializes accept callback, and sets runtime mode.
+         */
         bool VNetstack::Open(bool lwip, const int& localPort) noexcept {
             if (localPort < IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort) {
                 return false;
@@ -261,10 +304,16 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Public release entry that frees all resources.
+         */
         void VNetstack::Release() noexcept {
             ReleaseAllResources();
         }
 
+        /**
+         * @brief Releases acceptor, flow tables, and SYSNAT binding state.
+         */
         void VNetstack::ReleaseAllResources() noexcept {
             std::shared_ptr<SocketAcceptor> acceptor;
             WAN2LANTABLE wan2lan;
@@ -303,6 +352,9 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Processes one TCP packet through NAT mapping and state machine.
+         */
         bool VNetstack::Input(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept {
             if (NULLPTR == ip || NULLPTR == tcp || tcp_len < 1) {
                 return false;
@@ -319,6 +371,12 @@ namespace ppp {
             std::shared_ptr<TapTcpLink> link;
             std::shared_ptr<TapTcpClient> c;
 
+            /**
+             * @brief Packet direction handling.
+             * - Gateway destination packets are NAT return traffic (V->Local).
+             * - Non-SYN packets from LAN reuse existing mapping (Local->V).
+             * - SYN packets allocate mapping and start accept path.
+             */
             if (ip->dest == tap->GatewayServer) { // V->Local 
                 if ((link = this->FindTcpLink(tcp->dest))) {
                     link->Update();
@@ -363,9 +421,9 @@ namespace ppp {
                     }
 
                     if (link->state != TcpState::TCP_STATE_SYN_RECEIVED && link->state != TcpState::TCP_STATE_SYN_SENT) {
-                        // Keep handshake-phase links pending instead of turning a transient
-                        // state mismatch into an artificial RST. The peer's TCP retransmission
-                        // will re-enter this path once the accept side becomes ready again.
+                        /**
+                         * @brief Keep handshake links pending to allow retransmission retry.
+                         */
                         link->Update();
                         return true;
                     }
@@ -375,8 +433,9 @@ namespace ppp {
 
                     c = this->BeginAcceptClient(localEP, remoteEP);
                     if (NULLPTR == c) {
-                        // The remote side is not ready yet. Keep the SYN link pending and let
-                        // the peer's TCP retransmission drive a retry instead of emitting RST.
+                        /**
+                         * @brief Defer failure and wait for peer retransmission window.
+                         */
                         link->Update();
                         return true;
                     }
@@ -391,8 +450,9 @@ namespace ppp {
 #endif
 
                     if (!c->BeginAccept()) {
-                        // Preserve the pending SYN so a later retry can complete once the
-                        // remote transport becomes established.
+                        /**
+                         * @brief Preserve pending SYN while outbound connect is transiently unavailable.
+                         */
                         link->Update();
                         return true;
                     }
@@ -409,11 +469,17 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief If mapping is unresolved, send RST and abort processing.
+             */
             if (rst) {
                 this->RST(ip, tcp, tcp_len);
                 return false;
             }
 
+            /**
+             * @brief Advance simplified TCP state for timeout management.
+             */
             if (flags & TcpFlags::TCP_RST) {
                 link->state = TcpState::TCP_STATE_CLOSED;
             }
@@ -439,18 +505,30 @@ namespace ppp {
             return this->Output(lan2wan, ip, tcp, tcp_len, c.get());
         }
 
+        /**
+         * @brief Returns connect-phase timeout in milliseconds.
+         */
         uint64_t VNetstack::GetMaxConnectTimeout() noexcept {
             return 10000;
         }
 
+        /**
+         * @brief Returns finalize-phase timeout in milliseconds.
+         */
         uint64_t VNetstack::GetMaxFinalizeTimeout() noexcept {
             return 20000;
         }
 
+        /**
+         * @brief Returns established idle timeout in milliseconds.
+         */
         uint64_t VNetstack::GetMaxEstablishedTimeout() noexcept {
             return 72000;
         }
 
+        /**
+         * @brief Performs periodic flow timeout scan and cleanup.
+         */
         bool VNetstack::Update(uint64_t now) noexcept {
             const uint64_t MaxEstablishedTimeout = GetMaxEstablishedTimeout();
             const uint64_t MaxFinalizeTimeout = GetMaxFinalizeTimeout();
@@ -459,6 +537,9 @@ namespace ppp {
             std::shared_ptr<TapTcpClient> socket;
             std::shared_ptr<TapTcpLink> link;
 
+            /**
+             * @brief Collect expired links first, then close outside lock.
+             */
             ppp::vector<TapTcpLink::Ptr> releases;
             for (;;) {
                 SynchronizedObjectScope scope(syncobj_);
@@ -549,6 +630,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Rewrites packet as TCP RST response and outputs it.
+         */
         bool VNetstack::RST(ip_hdr* iphdr, tcp_hdr* tcp, int tcp_len) noexcept {
             uint32_t dstAddr = iphdr->dest;
             uint16_t dstPort = tcp->dest;
@@ -581,6 +665,9 @@ namespace ppp {
             return this->Output(false, iphdr, tcp, tcp_len, NULLPTR);
         }
 
+        /**
+         * @brief Recomputes checksums and sends packet to TAP or SYN/ACK cache.
+         */
         bool VNetstack::Output(bool lan2wan, ip_hdr* ip, tcp_hdr* tcp, int tcp_len, TapTcpClient* c) noexcept {
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
@@ -628,6 +715,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Removes flow tables entry and closes linked client.
+         */
         bool VNetstack::CloseTcpLink(const std::shared_ptr<TapTcpLink>& link) noexcept {
             if (NULLPTR == link) {
                 return false;
@@ -658,6 +748,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Resolves accepted socket to pending flow and finalizes accept.
+         */
         bool VNetstack::ProcessAcceptSocket(int sockfd) noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket;
             std::shared_ptr<TapTcpLink> link;
@@ -736,6 +829,9 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Handles lwIP accept callback and prepares SYN/ACK packet state.
+         */
         int VNetstack::LwIpBeginAccept(boost::asio::ip::tcp::endpoint& dest, boost::asio::ip::tcp::endpoint& src, uint32_t seq, uint32_t ack, uint16_t wnd) noexcept {
             const uint32_t dest_ip = *(uint32_t*)dest.address().to_v4().to_bytes().data();
             const uint32_t src_ip = *(uint32_t*)src.address().to_v4().to_bytes().data();
@@ -789,6 +885,9 @@ namespace ppp {
             return pcb->sync_ack_state_.load() >= VNETSTACK_SYNC_ACK_STATE_SYN_RECVD ? 0 : 1;
         }
 
+        /**
+         * @brief Finds or creates lwIP flow link and starts accept workflow.
+         */
         std::shared_ptr<VNetstack::TapTcpLink> VNetstack::LwIpAcceptLink(uint32_t srcAddr, uint32_t dstAddr, int srcPort, int dstPort) noexcept {
             Int128 key = LAN2WAN_KEY(srcAddr, srcPort, dstAddr, dstPort);
             std::shared_ptr<TapTcpLink> link;
@@ -823,8 +922,9 @@ namespace ppp {
 
             std::shared_ptr<TapTcpClient> socket = this->BeginAcceptClient(localEP, remoteEP);
             if (NULLPTR == socket) {
-                // Keep the SYN link pending when the remote transport is transiently unavailable.
-                // Let the peer's TCP retransmission retry instead of hard-closing the flow.
+                /**
+                 * @brief Keep pending SYN link alive for retransmission-driven retry.
+                 */
                 link->Update();
                 return NULLPTR;
             }
@@ -842,7 +942,7 @@ namespace ppp {
 
             bool bok = socket->BeginAccept();
             if (!bok) {
-                // Preserve the pending SYN and wait for the next retransmission window.
+                /** @brief Preserve pending SYN until next retransmission window. */
                 link->Update();
                 return NULLPTR;
             }
@@ -851,6 +951,9 @@ namespace ppp {
             return link;
         }
 
+        /**
+         * @brief Creates a TCP client wrapper for one accepted flow.
+         */
         VNetstack::TapTcpClient::TapTcpClient(const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand) noexcept
             : lwip_(IPEndPoint::MinPort)
             , disposed_(FALSE)
@@ -862,15 +965,24 @@ namespace ppp {
                 make_shared_object<boost::asio::ip::tcp::socket>(*strand) : make_shared_object<boost::asio::ip::tcp::socket>(*context);
         }
 
+        /**
+         * @brief Finalizes and releases TCP client state.
+         */
         VNetstack::TapTcpClient::~TapTcpClient() noexcept {
             Finalize();
         }
 
+        /**
+         * @brief Stores endpoint metadata for this client.
+         */
         void VNetstack::TapTcpClient::Open(const boost::asio::ip::tcp::endpoint& localEP, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
             this->localEP_ = localEP;
             this->remoteEP_ = remoteEP;
         }
 
+        /**
+         * @brief Wraps accepted native socket handle into client socket.
+         */
         std::shared_ptr<boost::asio::ip::tcp::socket> VNetstack::TapTcpClient::NewAsynchronousSocket(int sockfd, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
             if (disposed_) {
                 return NULLPTR;
@@ -899,6 +1011,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Schedules asynchronous finalization on socket executor.
+         */
         void VNetstack::TapTcpClient::Dispose() noexcept {
             if (disposed_.exchange(TRUE, std::memory_order_acq_rel) != FALSE) {
                 return;
@@ -922,6 +1037,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Resets handshake state, closes socket, and releases link.
+         */
         void VNetstack::TapTcpClient::Finalize() noexcept {
             disposed_.store(TRUE, std::memory_order_release);
 
@@ -968,6 +1086,9 @@ namespace ppp {
 #endif
         }
 
+        /**
+         * @brief Refreshes linked flow activity timestamp.
+         */
         bool VNetstack::TapTcpClient::Update() noexcept {
             if (disposed_) {
                 return false;
@@ -983,6 +1104,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Binds accepted NAT endpoint and transitions into established flow.
+         */
         bool VNetstack::TapTcpClient::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
             if (NULLPTR == socket) {
                 return false;
@@ -1016,6 +1140,9 @@ namespace ppp {
             return this->Establish();
         }
 
+        /**
+         * @brief Sends SYN/ACK once and schedules retransmission when needed.
+         */
         bool VNetstack::TapTcpClient::AckAccept() noexcept {
             if (disposed_) {
                 return false;
@@ -1046,10 +1173,12 @@ namespace ppp {
 
                 link->state = TcpState::TCP_STATE_SYN_RECEIVED;
                 (void)tap->Output(packet, packet_length);
+
                 this->sync_ack_byte_array_ = packet;
                 this->sync_ack_bytes_size_ = packet_length;
                 this->sync_ack_retry_count_ = 0;
                 this->ScheduleSyncAckRetry(200);
+                
                 (void)lwip::netstack::input(packet.get(), packet_length);
                 return true;
             }
@@ -1109,9 +1238,9 @@ namespace ppp {
                 SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
                 if (openppp2_sysnat_add_rule(&forward_key_, &forward_val) == 0) {
                     if (openppp2_sysnat_add_rule(&backward_key_, &backward_val) != 0) {
-                        // If the backward rule cannot be installed, the forward rule must be
-                        // removed immediately so SYSNAT does not keep a one-way mapping for
-                        // this TCP flow. The accept path will continue without SYSNAT state.
+                        /**
+                         * @brief Roll back forward SYSNAT rule when backward install fails.
+                         */
                         openppp2_sysnat_del_rule(&forward_key_);
 
                         _ = 1;
@@ -1132,6 +1261,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Cancels pending SYN/ACK retry timer if present.
+         */
         void VNetstack::TapTcpClient::CancelSyncAckRetry() noexcept {
             std::shared_ptr<boost::asio::steady_timer> timer = std::move(this->sync_ack_retry_timer_);
             if (NULLPTR != timer) {
@@ -1140,6 +1272,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Arms SYN/ACK retransmission timer with exponential-like schedule.
+         */
         void VNetstack::TapTcpClient::ScheduleSyncAckRetry(uint64_t delay_ms) noexcept {
             if (disposed_ || delay_ms == 0) {
                 return;
@@ -1178,6 +1313,9 @@ namespace ppp {
                     return;
                 }
 
+                /**
+                 * @brief Retry delays in milliseconds for SYN/ACK retransmission.
+                 */
                 static constexpr uint64_t retry_delays[] = {200, 400, 800, 1200, 1600};
 
                 int retry_index = self->sync_ack_retry_count_;

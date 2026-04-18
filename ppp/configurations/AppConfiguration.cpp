@@ -12,6 +12,11 @@
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 
+/**
+ * @file AppConfiguration.cpp
+ * @brief AppConfiguration loading, normalization, and JSON serialization implementation.
+ */
+
 using ppp::auxiliary::StringAuxiliary;
 using ppp::auxiliary::JsonAuxiliary;
 using ppp::cryptography::Ciphertext;
@@ -24,6 +29,10 @@ using ppp::threading::Thread;
 using ppp::threading::Executors;
 
 namespace {
+    /**
+     * @brief Indicates whether server-side IPv6 data-plane support is available on this platform.
+     * @return True on Linux builds, otherwise false.
+     */
     static bool                                             SupportsServerIPv6DataPlane() noexcept {
 #if defined(_LINUX)
         return true;
@@ -32,6 +41,11 @@ namespace {
 #endif
     }
 
+    /**
+     * @brief Parses textual IPv6 mode into enum value.
+     * @param mode Text mode value.
+     * @return Parsed IPv6 mode; defaults to none.
+     */
     static ppp::configurations::AppConfiguration::IPv6Mode  ParseIPv6Mode(const ppp::string& mode) noexcept {
         ppp::string value = ToLower(mode);
         if (value == "nat66") {
@@ -43,6 +57,11 @@ namespace {
         return ppp::configurations::AppConfiguration::IPv6Mode_None;
     }
 
+    /**
+     * @brief Converts IPv6 mode enum to configuration string.
+     * @param mode IPv6 mode.
+     * @return Mode string used in JSON.
+     */
     static ppp::string                                      IPv6ModeToString(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
         switch (mode) {
         case ppp::configurations::AppConfiguration::IPv6Mode_Nat66:
@@ -54,6 +73,11 @@ namespace {
         }
     }
 
+    /**
+     * @brief Restricts IPv6 mode to supported values.
+     * @param mode Candidate mode.
+     * @return Normalized mode value.
+     */
     static ppp::configurations::AppConfiguration::IPv6Mode  NormalizeIPv6Mode(ppp::configurations::AppConfiguration::IPv6Mode mode) noexcept {
         switch (mode) {
         case ppp::configurations::AppConfiguration::IPv6Mode_Nat66:
@@ -64,6 +88,13 @@ namespace {
         }
     }
 
+    /**
+     * @brief Parses an IPv6 CIDR string into prefix and prefix length.
+     * @param cidr CIDR input.
+     * @param prefix Output prefix string.
+     * @param prefix_length Output prefix length.
+     * @return True when a usable prefix is produced.
+     */
     static bool                                             ParseIPv6Cidr(const ppp::string& cidr, ppp::string& prefix, int& prefix_length) noexcept {
         prefix.clear();
         prefix_length = 0;
@@ -84,6 +115,13 @@ namespace {
         return !prefix.empty();
     }
 
+    /**
+     * @brief Computes the first host address inside an IPv6 prefix.
+     * @param network Network prefix address.
+     * @param prefix_length Prefix length.
+     * @param host Output host address.
+     * @return True when a valid host address is generated.
+     */
     static bool                                             TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, int prefix_length, boost::asio::ip::address_v6& host) noexcept {
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
         if (prefix_length >= ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
@@ -104,11 +142,20 @@ namespace {
         return false;
     }
                                             
+    /**
+     * @brief Checks whether an IPv6 prefix is globally routable unicast.
+     * @param prefix IPv6 prefix address.
+     * @return True when prefix belongs to 2000::/3.
+     */
     static bool                                             IsGlobalUnicastIPv6Prefix(const boost::asio::ip::address_v6& prefix) noexcept {
         boost::asio::ip::address_v6::bytes_type bytes = prefix.to_bytes();
         return (bytes[0] & 0xe0) == 0x20;
     }
                                             
+    /**
+     * @brief Clears all server IPv6 runtime settings.
+     * @param config Configuration object to update.
+     */
     static void                                             DisableServerIPv6(ppp::configurations::AppConfiguration& config) noexcept {
         config.server.ipv6.mode = ppp::configurations::AppConfiguration::IPv6Mode_None;
         config.server.ipv6.cidr.clear();
@@ -128,10 +175,16 @@ namespace ppp {
         static constexpr int                            VEP_HEADER_MSS_MAX_MOD = 1 << 8;
         static constexpr int                            VEP_HEADER_MSS_MIN_MOD = 1 << 7;
 
+        /**
+         * @brief Constructs configuration with default values.
+         */
         AppConfiguration::AppConfiguration() noexcept {
             Clear();
         }
 
+        /**
+         * @brief Resets every configuration section to defaults.
+         */
         void AppConfiguration::Clear() noexcept {
             AppConfiguration& config = *this;
             config.concurrent = Thread::GetProcessorCount();
@@ -240,12 +293,23 @@ namespace ppp {
         }
 
         template <class _Uty>
+        /**
+         * @brief Trims whitespace from each string pointer in an array.
+         * @tparam _Uty Pointer array element type.
+         * @param s Pointer array.
+         * @param length Number of elements in @p s.
+         */
         static void LRTrim(_Uty* s, int length) noexcept {
             for (int i = 0; i < length; i++) {
                 *s[i] = LTrim(RTrim(*s[i]));
             }
         }
 
+        /**
+         * @brief Trims selected string fields from configuration groups.
+         * @param config Configuration object.
+         * @param level Selection level for field groups.
+         */
         static void LRTrim(AppConfiguration& config, int level) noexcept {
             if (level) {
                 ppp::string* strings[] = {
@@ -288,6 +352,12 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Loads and deduplicates client mapping rules from JSON.
+         * @param config Target configuration object.
+         * @param json JSON mapping node (array or single object).
+         * @return True when input shape is supported.
+         */
         static bool LoadAllMappings(AppConfiguration& config, Json::Value& json) noexcept {
             using MappingConfiguration = AppConfiguration::MappingConfiguration;
 
@@ -383,6 +453,10 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Normalizes and validates loaded configuration values.
+         * @return True when normalization completes.
+         */
         bool AppConfiguration::Loaded() noexcept {
             AppConfiguration& config = *this;
             if (config.concurrent < 1) {
@@ -587,6 +661,9 @@ namespace ppp {
 
                 ppp::map<ppp::string, ppp::string> normalized_static_addresses;
                 ppp::unordered_set<ppp::string> used_static_addresses;
+                /**
+                 * @brief Normalize static IPv6 leases to valid, unique, in-prefix addresses.
+                 */
                 for (const auto& kv : config.server.ipv6.static_addresses) {
                     Int128 static_guid_id = auxiliary::StringAuxiliary::GuidStringToInt128(kv.first);
                     if (static_guid_id == 0) {
@@ -717,6 +794,11 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Loads configuration from a JSON file path.
+         * @param path Configuration file path.
+         * @return True when file parsing and normalization succeed.
+         */
         bool AppConfiguration::Load(const ppp::string& path) noexcept {
             Clear();
             if (path.empty()) {
@@ -743,6 +825,13 @@ namespace ppp {
         }
 
         template <typename TMap>
+        /**
+         * @brief Reads object/array JSON values into a key-value map.
+         * @tparam TMap Map-like target container type.
+         * @param json Source JSON node.
+         * @param map Output map.
+         * @return True when JSON type is object or array.
+         */
         static bool ReadJsonAllTokensToMap(const Json::Value& json, TMap& map) noexcept {
             map.clear();
 
@@ -768,6 +857,13 @@ namespace ppp {
         }
 
         template <typename TSet>
+        /**
+         * @brief Reads object/array/string JSON values into a string set.
+         * @tparam TSet Set-like target container type.
+         * @param json Source JSON node.
+         * @param s Output set.
+         * @return True when JSON type is object or array.
+         */
         static bool ReadJsonAllTokensToSet(const Json::Value& json, TSet& s) noexcept {
             s.clear();
 
@@ -803,6 +899,12 @@ namespace ppp {
             return false;
         }
 
+        /**
+         * @brief Validates that a string is an IP literal or domain name.
+         * @param host_string Input host text.
+         * @param out Optional parsed address output when host is an IP.
+         * @return True when host is valid.
+         */
         static bool IPOrHostIsValid(const ppp::string& host_string, boost::asio::ip::address* out = NULLPTR) noexcept {
             if (host_string.empty()) {
                 return false;
@@ -826,6 +928,12 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Reads and validates endpoint strings into a normalized set.
+         * @param json Source JSON node.
+         * @param s Output endpoint set.
+         * @return True when token extraction succeeds.
+         */
         static bool ReadJsonAllAddressStringToSet(const Json::Value& json, ppp::unordered_set<ppp::string>& s) noexcept {
             s.clear();
 
@@ -863,6 +971,13 @@ namespace ppp {
         }
 
         template <typename TValue>
+        /**
+         * @brief Assigns a JSON value when the node is present.
+         * @tparam TValue Destination type.
+         * @param destination Output destination value.
+         * @param json Source JSON node.
+         * @return True when assignment is performed.
+         */
         static bool AssignIfPresent(TValue& destination, const Json::Value& json) noexcept {
             if (json.isNull()) {
                 return false;
@@ -872,6 +987,12 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Assigns a boolean JSON value when the node is present.
+         * @param destination Output destination value.
+         * @param json Source JSON node.
+         * @return True when assignment is performed.
+         */
         static bool AssignBoolIfPresent(bool& destination, const Json::Value& json) noexcept {
             if (json.isNull()) {
                 return false;
@@ -881,6 +1002,12 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Parses one route configuration object.
+         * @param route Output route object.
+         * @param json Source JSON node.
+         * @return True when route data is valid.
+         */
         static bool ReadJsonToRoute(AppConfiguration::RouteConfiguration& route, const Json::Value& json) noexcept {
             if (json.isNull()) {
                 return false;
@@ -914,6 +1041,11 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Loads route configuration list from JSON.
+         * @param s Output route vector.
+         * @param json Source JSON node.
+         */
         static void LoadAllRoutes(ppp::vector<AppConfiguration::RouteConfiguration>& s, const Json::Value& json) noexcept {
             using RouteConfiguration = AppConfiguration::RouteConfiguration;
 
@@ -937,14 +1069,10 @@ namespace ppp {
             }
         }
 
-        /*
-         * Author: Binjie09 (AI Assistant)
-         *
-         * Description: This code is generated by Binjie09, an AI assistant.
-         *              It is designed to read JSON data into the C++ data structure AppConfiguration
-         *              using the Jsoncpp library's Json::Value and JsonAuxiliary::AsValue<TValue> function.
-         *
-         * Date: 2023-06-28
+        /**
+         * @brief Loads configuration from a JSON object.
+         * @param json Source JSON object.
+         * @return True when loading and normalization succeed.
          */
         bool AppConfiguration::Load(Json::Value& json) noexcept {
             Clear();
@@ -1073,13 +1201,9 @@ namespace ppp {
             return Loaded();
         }
 
-        /*
-         * Author: Binjie09 (AI Assistant)
-         *
-         * Description: This code is generated by Binjie09, an AI assistant.
-         *              Convert AppConfiguration object to Json::Value object.
-         *
-         * Date: 2023-06-28
+        /**
+         * @brief Converts current configuration to a JSON object.
+         * @return Serialized JSON tree.
          */
         Json::Value AppConfiguration::ToJson() noexcept {
             Json::Value root;
@@ -1290,13 +1414,9 @@ namespace ppp {
             return root;
         }
 
-        /*
-         * Author: Binjie09 (AI Assistant)
-         *
-         * Description: This code is generated by Binjie09, an AI assistant.
-         *              Convert AppConfiguration object to json string.
-         *
-         * Date: 2023-06-28
+        /**
+         * @brief Converts current configuration to JSON text.
+         * @return Serialized JSON string.
          */
         ppp::string AppConfiguration::ToString() noexcept {
             Json::Value json = ToJson();
@@ -1304,6 +1424,11 @@ namespace ppp {
         }
 
         namespace extensions {
+            /**
+             * @brief Verifies whether encryption algorithm fields are configured.
+             * @param configuration Configuration object.
+             * @return True when protocol/transport names and keys are all non-empty.
+             */
             bool IsHaveCiphertext(const AppConfiguration& configuration) noexcept {
                 return
                     !configuration.key.protocol.empty() &&

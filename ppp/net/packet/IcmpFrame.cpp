@@ -2,11 +2,22 @@
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
 
+/**
+ * @file IcmpFrame.cpp
+ * @brief Implements ICMP frame serialization and parsing helpers.
+ */
+
 using namespace ppp::net::native;
 
 namespace ppp {
     namespace net {
         namespace packet {
+            /**
+             * @brief Builds an IPv4 ICMP packet from this frame.
+             * @param allocator Buffer allocator used for packet memory.
+             * @return Serialized IP frame, or nullptr when validation/allocation fails.
+             * @throws std::runtime_error Thrown for unsupported address families.
+             */
             std::shared_ptr<IPFrame> IcmpFrame::ToIp(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) {
                 if (this->AddressesFamily != AddressFamily::InterNetwork) {
                     throw std::runtime_error("ICMP frames of this address family type are not supported.");
@@ -40,6 +51,7 @@ namespace ppp {
                     memcpy((char*)icmphdr + hdr_bytes_len, payload->Buffer.get(), payload_size);
                 }
 
+                /** Recompute checksum after header and payload are finalized. */
                 icmphdr->icmp_chksum = inet_chksum(icmphdr, packet_size);
                 if (icmphdr->icmp_chksum == 0) {
                     icmphdr->icmp_chksum = 0xffff;
@@ -63,6 +75,11 @@ namespace ppp {
                 return packet;
             }
 
+            /**
+             * @brief Parses an ICMP frame from an IPv4 packet payload.
+             * @param frame Source IP frame that should carry ICMP data.
+             * @return Parsed ICMP frame, or nullptr on validation/parsing failure.
+             */
             std::shared_ptr<IcmpFrame> IcmpFrame::Parse(const IPFrame* frame) noexcept {
                 if (NULLPTR == frame || frame->ProtocolType != ip_hdr::IP_PROTO_ICMP) {
                     return NULLPTR;
@@ -83,6 +100,7 @@ namespace ppp {
                 }
 
 #if defined(PACKET_CHECKSUM)
+                /** Validate checksum when runtime checksum verification is enabled. */
                 if (icmphdr->icmp_chksum != 0) {
                     UInt16 cksum = inet_chksum(icmphdr, messages->Length);
                     if (cksum != 0) {

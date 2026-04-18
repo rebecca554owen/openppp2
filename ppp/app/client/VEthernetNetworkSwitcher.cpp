@@ -29,6 +29,12 @@
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
 
+/**
+ * @file VEthernetNetworkSwitcher.cpp
+ * @brief Client-side virtual Ethernet network switcher implementation.
+ * @details Licensed under GPL-3.0.
+ */
+
 #if defined(_WIN32)
 #include <windows/ppp/tap/TapWindows.h>
 #include <windows/ppp/win32/network/Router.h>
@@ -44,6 +50,7 @@
 #endif
 
 
+/** @brief Returns whether current platform supports managed IPv6 operations. */
 static bool ClientSupportsManagedIPv6() noexcept {
 #if defined(_WIN32) || defined(_LINUX) || defined(_MACOS)
     return true;
@@ -52,6 +59,7 @@ static bool ClientSupportsManagedIPv6() noexcept {
 #endif
 }
 
+/** @brief Validates whether extensions describe an applicable managed IPv6 assignment. */
 static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
     bool status_ok = extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_Applied ||
         extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned ||
@@ -67,6 +75,7 @@ static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetIn
         !extensions.AssignedIPv6Address.is_loopback();
 }
 
+/** @brief Compares two managed IPv6 assignment snapshots for equality. */
 static bool SameManagedIPv6Configuration(
     const ppp::app::protocol::VirtualEthernetInformationExtensions& left,
     const ppp::app::protocol::VirtualEthernetInformationExtensions& right) noexcept {
@@ -103,6 +112,7 @@ using ppp::transmissions::ITransmission;
 namespace ppp {
     namespace app {
         namespace client {
+            /** @brief Constructs network switcher and initializes baseline state flags. */
             VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
                 : VEthernet(context, lwip, vnet, mta)
                 , configuration_(configuration)
@@ -119,21 +129,25 @@ namespace ppp {
                 icmppackets_aid_ = RandomNext();
             }
 
+            /** @brief Finalizes network switcher on destruction. */
             VEthernetNetworkSwitcher::~VEthernetNetworkSwitcher() noexcept {
                 Finalize();
             }
 
+            /** @brief Initializes network interface snapshot defaults. */
             VEthernetNetworkSwitcher::NetworkInterface::NetworkInterface() noexcept
                 : Index(-1) {
 
             }
 
+            /** @brief Creates concrete TCP/IP stack implementation for VEthernet. */
             std::shared_ptr<ppp::ethernet::VNetstack> VEthernetNetworkSwitcher::NewNetstack() noexcept {
                 auto my = shared_from_this();
                 auto self = std::dynamic_pointer_cast<VEthernetNetworkSwitcher>(my);
                 return make_shared_object<VEthernetNetworkTcpipStack>(self);
             }
 
+            /** @brief Performs periodic tick maintenance for QoS, exchanger, and timers. */
             bool VEthernetNetworkSwitcher::OnTick(uint64_t now) noexcept {
                 if (!VEthernet::OnTick(now)) {
                     return false;
@@ -181,6 +195,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles native IPv4 packet input and forwards eligible NAT traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept {
                 if (!vnet) {
                     return false;
@@ -223,6 +238,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles raw IPv6 packet input and forwards approved traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept {
                 if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
@@ -250,6 +266,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Validates IPv6 packet source and destination against assigned policy. */
             bool VEthernetNetworkSwitcher::IsApprovedIPv6Packet(Byte* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
@@ -284,6 +301,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Routes parsed IP frame to protocol-specific handlers. */
             bool VEthernetNetworkSwitcher::OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
                 if (packet->ProtocolType == ip_hdr::IP_PROTO_UDP) {
                     return OnUdpPacketInput(packet);
@@ -296,6 +314,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Handles UDP frame forwarding, DNS redirect, and static mode paths. */
             bool VEthernetNetworkSwitcher::OnUdpPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
                 std::shared_ptr<UdpFrame> frame = UdpFrame::Parse(packet.get());
                 if (NULLPTR == frame) {
@@ -351,6 +370,7 @@ namespace ppp {
                 return exchanger->SendTo(sourceEP, destinationEP, messages->Buffer.get(), messages->Length);
             }
 
+            /** @brief Sends ICMP Echo Reply generated from tracked packet context. */
             bool VEthernetNetworkSwitcher::ER(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, int ttl, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IPFrame> reply = ppp::net::asio::InternetControlMessageProtocol::ER(packet, frame, ttl, allocator);
                 if (NULLPTR == reply) {
@@ -361,6 +381,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Sends ICMP Time Exceeded generated from tracked packet context. */
             bool VEthernetNetworkSwitcher::TE(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, UInt32 source, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IPFrame> reply = ppp::net::asio::InternetControlMessageProtocol::TE(packet, frame, source, allocator);
                 if (NULLPTR == reply) {
@@ -371,6 +392,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Resolves ACK identifier and emits appropriate ICMP response packet. */
             bool VEthernetNetworkSwitcher::ERORTE(int ack_id) noexcept {
                 std::shared_ptr<IPFrame> packet;
                 if (ack_id != 0) {
@@ -408,6 +430,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Processes ICMP input and dispatches to gateway/other echo paths. */
             bool VEthernetNetworkSwitcher::OnIcmpPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
@@ -443,6 +466,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Forwards ICMP packet to non-gateway destination through exchanger. */
             bool VEthernetNetworkSwitcher::EchoOtherServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 if (NULLPTR == exchanger) {
                     return false;
@@ -465,6 +489,7 @@ namespace ppp {
                 return exchanger->Echo(messages->Buffer.get(), messages->Length);
             }
 
+            /** @brief Tracks ICMP packet by ACK ID and triggers remote gateway echo flow. */
             bool VEthernetNetworkSwitcher::EchoGatewayServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 static constexpr int max_icmp_packets_aid = (1 << 24) - 1;
                 
@@ -473,6 +498,7 @@ namespace ppp {
                 }
 
                 int ack_id = 0;
+                /** @brief Allocates a unique ACK ID and stores packet until callback/timeout. */
                 for (SynchronizedObjectScope scope(GetSynchronizedObject());;) {
                     if (IsDisposed()) {
                         return false;
@@ -531,6 +557,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Dispatches switcher finalization and then disposes base VEthernet. */
             void VEthernetNetworkSwitcher::Dispose() noexcept {
                 auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -541,18 +568,21 @@ namespace ppp {
                 VEthernet::Dispose();
             }
 
+            /** @brief Releases objects, packets, and timeout handlers. */
             void VEthernetNetworkSwitcher::Finalize() noexcept {
                 ReleaseAllObjects();
                 ReleaseAllPackets();
                 ReleaseAllTimeouts();
             }
 
+            /** @brief Clears all tracked ICMP packet records. */
             void VEthernetNetworkSwitcher::ReleaseAllPackets() noexcept {
                 // Clear all ICMP packet container.
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 icmppackets_.clear();
             }
 
+            /** @brief Releases all registered timeout callbacks. */
             void VEthernetNetworkSwitcher::ReleaseAllTimeouts() noexcept {
                 TimeoutEventHandlerTable timeouts; {
                     // Clear all ICMP packet container.
@@ -566,11 +596,13 @@ namespace ppp {
             }
 
 #if defined(_ANDROID) || defined(_IPHONE)
+            /** @brief Stores bypass IP list text used by mobile route setup. */
             void VEthernetNetworkSwitcher::SetBypassIpList(ppp::string&& bypass_ip_list) noexcept {
                 bypass_ip_list_ = std::move(bypass_ip_list);
             }
 #endif
 
+            /** @brief Creates QoS controller with configured bandwidth policy. */
             std::shared_ptr<ppp::transmissions::ITransmissionQoS> VEthernetNetworkSwitcher::NewQoS() noexcept {
                 int64_t bandwidth = std::max<int64_t>(0, configuration_->client.bandwidth);
                 if (bandwidth < 0) {
@@ -581,6 +613,7 @@ namespace ppp {
                 return make_shared_object<ppp::transmissions::ITransmissionQoS>(context, bandwidth);
             }
 
+            /** @brief Creates exchanger instance using configured client GUID. */
             std::shared_ptr<VEthernetExchanger> VEthernetNetworkSwitcher::NewExchanger() noexcept {
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 auto guid = StringAuxiliary::GuidStringToInt128(configuration->client.guid);
@@ -593,6 +626,7 @@ namespace ppp {
                 return make_shared_object<VEthernetExchanger>(self, configuration, GetContext(), guid);
             }
 
+            /** @brief Creates HTTP proxy switcher bound to exchanger. */
             VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr VEthernetNetworkSwitcher::NewHttpProxy(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
                 if (NULLPTR == exchanger) {
                     return NULLPTR;
@@ -602,6 +636,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Creates SOCKS proxy switcher bound to exchanger. */
             VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr VEthernetNetworkSwitcher::NewSocksProxy(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
                 if (NULLPTR == exchanger) {
                     return NULLPTR;
@@ -611,10 +646,12 @@ namespace ppp {
                 }
             }
 
+            /** @brief Returns buffer allocator from runtime configuration. */
             std::shared_ptr<ppp::threading::BufferswapAllocator> VEthernetNetworkSwitcher::GetBufferAllocator() noexcept {
                 return configuration_->GetBufferAllocator();
             }
 
+            /** @brief Converts UDP payload to IP frame and emits it to local output. */
             bool VEthernetNetworkSwitcher::DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
@@ -660,6 +697,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Applies managed IPv6 address, route, and DNS configuration. */
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!ClientSupportsManagedIPv6()) {
                     return false;
@@ -761,6 +799,7 @@ namespace ppp {
                 return applied;
             }
 
+            /** @brief Restores previous IPv6 configuration captured before apply. */
             void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
                 if (!ipv6_applied_) {
                     return;
@@ -795,12 +834,14 @@ namespace ppp {
                 ipv6_state_.Clear();
             }
 
+            /** @brief Adapts base information callback to extension-aware overload. */
             bool VEthernetNetworkSwitcher::OnInformation(const std::shared_ptr<VirtualEthernetInformation>& info) noexcept {
                 VirtualEthernetInformationExtensions extensions;
                 extensions.Clear();
                 return OnInformation(info, extensions);
             }
 
+            /** @brief Updates runtime state from server information and extensions. */
             bool VEthernetNetworkSwitcher::OnInformation(const std::shared_ptr<VirtualEthernetInformation>& info, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
@@ -855,6 +896,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Creates Windows PaperAirplane controller bound to exchanger. */
             VEthernetNetworkSwitcher::PaperAirplaneControllerPtr VEthernetNetworkSwitcher::NewPaperAirplaneController() noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = GetExchanger();
                 if (NULLPTR == exchanger) {
@@ -865,6 +907,7 @@ namespace ppp {
                 }
             }
 #elif defined(_LINUX)
+            /** @brief Creates Linux protector network instance for socket protection. */
             VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::NewProtectorNetwork() noexcept {
 #if defined(_ANDROID)
                 // Embedding the so framework into the Android platform does not use sendfd/recvfd unix to share fd across processes, 
@@ -882,6 +925,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Retrieves latest information snapshot from exchanger. */
             std::shared_ptr<VEthernetNetworkSwitcher::VirtualEthernetInformation> VEthernetNetworkSwitcher::GetInformation() noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
@@ -891,11 +935,13 @@ namespace ppp {
                 return exchanger->GetInformation();
             }
             
+            /** @brief Creates transmission statistics collector instance. */
             VEthernetNetworkSwitcher::ITransmissionStatisticsPtr VEthernetNetworkSwitcher::NewStatistics() noexcept {
                 return make_shared_object<ITransmissionStatistics>();
             }
 
 #if defined(_WIN32)
+            /** @brief Builds switcher network-interface snapshot from Windows adapter details. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetNetworkInterface(const ppp::win32::network::AdapterInterfacePtr& ai, const ppp::win32::network::NetworkInterfacePtr& ni) noexcept {
                 if (NULLPTR == ai || NULLPTR == ni) {
                     return NULLPTR;
@@ -919,6 +965,7 @@ namespace ppp {
                 return result;
             }
 
+            /** @brief Resolves Windows network-interface snapshot by adapter interface. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetNetworkInterface(const ppp::win32::network::AdapterInterfacePtr& ai) noexcept {
                 if (NULLPTR == ai) {
                     return NULLPTR;
@@ -928,6 +975,7 @@ namespace ppp {
                 return Windows_GetNetworkInterface(ai, ni);
             }
 
+            /** @brief Gets Windows TAP-side network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetTapNetworkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap) noexcept {
                 int interface_index = tap->GetInterfaceIndex();
                 if (interface_index == -1) {
@@ -946,6 +994,7 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /** @brief Gets Windows underlying physical network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetUnderlyingNetowrkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap, const ppp::string& nic) noexcept {
                 auto [ai, ni] = ppp::win32::network::GetUnderlyingNetowrkInterface2(tap->GetId(), nic);
                 return Windows_GetNetworkInterface(ai, ni);
@@ -956,6 +1005,7 @@ namespace ppp {
                 ppp::string DnsResolveConfiguration;
 
             public:
+                /** @brief Restores Unix DNS resolver configuration from captured state. */
                 static bool SetDnsResolveConfiguration(const std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface>& underlying_ni) noexcept {
                     if (NULLPTR == underlying_ni) {
                         return false;
@@ -996,6 +1046,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Gets Unix TAP/TUN-side network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Unix_GetTapNetworkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap) noexcept {
                 int interface_index = tap->GetInterfaceIndex();
                 if (interface_index == -1) {
@@ -1045,6 +1096,7 @@ namespace ppp {
                 return ni;
             }
 
+            /** @brief Gets Unix underlying physical network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Unix_GetUnderlyingNetowrkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap, const ppp::string& nic) noexcept {
                 std::shared_ptr<UnixNetworkInterface> ni = make_shared_object<UnixNetworkInterface>();
                 if (NULLPTR == ni) {
@@ -1109,6 +1161,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Enables or disables outbound QUIC blocking policy. */
             bool VEthernetNetworkSwitcher::BlockQUIC(bool value) noexcept {
                 // Set the status of the current VPN client switcher that needs to block QUIC traffic flags.
                 block_quic_ = value;
@@ -1116,6 +1169,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Applies local HTTP proxy endpoint to Windows system settings. */
             bool VEthernetNetworkSwitcher::SetHttpProxyToSystemEnv() noexcept {
                 // Windows platform uses the system's Internet function library to set the system HTTP proxy environment.
                 auto http_proxy = GetHttpProxy();
@@ -1146,6 +1200,7 @@ namespace ppp {
                 return bok;
             }
 
+            /** @brief Clears Windows system HTTP proxy settings managed by switcher. */
             bool VEthernetNetworkSwitcher::ClearHttpProxyToSystemEnv() noexcept {
                 // Windows platform uses the system's Internet function library to clear the system HTTP proxy environment.
                 ppp::string server;
@@ -1155,6 +1210,7 @@ namespace ppp {
 #endif
 
 #if defined(_ANDROID) || defined(_IPHONE)
+            /** @brief Builds mobile-side route table including bypass and DNS exceptions. */
             bool VEthernetNetworkSwitcher::AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept {
                 RouteInformationTablePtr rib = make_shared_object<RouteInformationTable>();
                 if (NULLPTR == rib)  {
@@ -1213,6 +1269,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Creates and configures static-mode aggligator instance. */
             bool VEthernetNetworkSwitcher::PreparedAggregator() noexcept {
                 std::shared_ptr<boost::asio::io_context> context = ppp::threading::Executors::GetDefault();
                 if (NULLPTR == context) {
@@ -1239,6 +1296,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Initializes switcher runtime components and opens all services. */
             bool VEthernetNetworkSwitcher::Open(const std::shared_ptr<ITap>& tap) noexcept {
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 // Get and retrieve the current underlying Ethernet interface information!
@@ -1264,6 +1322,7 @@ namespace ppp {
                 FixUnderlyingNgw();
 #endif
                 // Construction of VEtherent virtual Ethernet switcher processing framework.
+                /** @brief Creates base VEthernet framework before higher-level services. */
                 if (!VEthernet::Open(tap)) {
                     return false;
                 }
@@ -1432,6 +1491,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Starts optional PaperAirplane helper service on Windows. */
             bool VEthernetNetworkSwitcher::UsePaperAirplaneController() noexcept {
                 // Open the [PaperAirplane NSP/LSP] paper airplane server controller, 
                 // Depending on the configuration and whether it is a CLI command line hosted network flag.
@@ -1462,6 +1522,7 @@ namespace ppp {
 #endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
+            /** @brief Attempts to restore default route on underlying physical NIC. */
             bool VEthernetNetworkSwitcher::FixUnderlyingNgw() noexcept {
                 auto ni = underlying_ni_;
                 if (NULLPTR == ni) {
@@ -1486,6 +1547,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Installs VPN route entries into host operating system. */
             void VEthernetNetworkSwitcher::AddRoute() noexcept {
 #if defined(_WIN32)
                 // Find and delete all default route information!
@@ -1540,6 +1602,7 @@ namespace ppp {
                 AddRouteWithDnsServers();
             }
 
+            /** @brief Deletes conflicting default routes while VPN is active. */
             bool VEthernetNetworkSwitcher::DeleteAllDefaultRoute() noexcept {
                 if (auto tap = GetTap(); NULLPTR != tap) {
 #if defined(_WIN32)
@@ -1576,6 +1639,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Removes VPN route entries and restores system defaults. */
             void VEthernetNetworkSwitcher::DeleteRoute() noexcept {
 #if defined(_WIN32)
                 // Delete the loaded route table from the windows operating system.
@@ -1632,18 +1696,22 @@ namespace ppp {
                 DeleteRouteWithDnsServers();
             }
 
+            /** @brief Returns formatted cached remote URI string. */
             ppp::string VEthernetNetworkSwitcher::GetRemoteUri() noexcept {
                 return server_ru_;
             }
 
+            /** @brief Sets preferred physical NIC hint for route operations. */
             void VEthernetNetworkSwitcher::PreferredNic(const ppp::string& nic) noexcept {
                 preferred_nic_ = nic;
             }
 
+            /** @brief Sets preferred physical gateway hint for route operations. */
             void VEthernetNetworkSwitcher::PreferredNgw(const boost::asio::ip::address& gw) noexcept {
                 preferred_ngw_ = gw;
             }
 
+            /** @brief Registers IP-list file or URL source for later route loading. */
             bool VEthernetNetworkSwitcher::AddLoadIPList(
                 const ppp::string&                                              path, 
 #if defined(_LINUX) 
@@ -1725,6 +1793,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Loads all registered IP-list files into route information table. */
             bool VEthernetNetworkSwitcher::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {
                 rib_ = NULLPTR;
                 fib_ = NULLPTR;
@@ -1759,6 +1828,7 @@ namespace ppp {
                 return any;
             }
 
+            /** @brief Adds DNS-specific route exceptions to operating system table. */
             void VEthernetNetworkSwitcher::AddRouteWithDnsServers() noexcept {
                 // Clear the current cached dns server ip address list.
                 for (auto& dns_servers : dns_serverss_) {
@@ -1862,6 +1932,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Adds one host route entry to operating system table. */
             bool VEthernetNetworkSwitcher::AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
 #if defined(_WIN32)
                 MIB_IPFORWARDROW route;
@@ -1902,6 +1973,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Deletes one host route entry from Windows route table snapshot. */
             bool VEthernetNetworkSwitcher::DeleteRoute(const std::shared_ptr<MIB_IPFORWARDTABLE>& mib, uint32_t ip, uint32_t gw, int prefix) noexcept {
                 // Delete the IP route for the dns server list added for the windows operating system.
                 if (NULLPTR == mib) {
@@ -1912,6 +1984,7 @@ namespace ppp {
                 return ppp::win32::network::Router::Delete(mib, ip, mask, gw);
             }
 #else
+            /** @brief Deletes one host route entry from Unix route table. */
             bool VEthernetNetworkSwitcher::DeleteRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
 #if defined(_MACOS)
                 // Delete the IP route for the dns server list added for the macos operating system.
@@ -1941,6 +2014,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Removes DNS-specific route exceptions from operating system table. */
             void VEthernetNetworkSwitcher::DeleteRouteWithDnsServers() noexcept {
                 // Delete all vpn dns server routes from the operating system.
                 if (std::shared_ptr<ppp::tap::ITap> tap = GetTap(); NULLPTR != tap) {
@@ -1990,6 +2064,7 @@ namespace ppp {
             // In some PC and network production environments, third - party programs will destroy VPN deployment routing table information 
             // At certain times.In PPP PRIVATE NETWORK™ 1, this NETWORK route protector exists by default, but PPP PRIVATE Network ™ 2 does 
             // Not currently exist, so a new implementation of this section is needed.
+            /** @brief Starts background default-route protector worker. */
             bool VEthernetNetworkSwitcher::ProtectDefaultRoute() noexcept {
                 auto tap = GetTap();
                 if (NULLPTR == tap) {
@@ -2009,6 +2084,7 @@ namespace ppp {
 
                 // Create a new network protection backend subthread.
                 auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
+                /** @brief Background loop that periodically repairs default-route drift. */
                 std::thread([self]() noexcept {
                     auto prepare = [self]() noexcept {
                         // If the current VEthernet framework object instance is released, the process is break.
@@ -2076,6 +2152,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Checks whether destination IP should bypass VPN forwarding path. */
             bool VEthernetNetworkSwitcher::IsBypassIpAddress(const boost::asio::ip::address& ip) noexcept {
                 if (!ip.is_v4()) {
                     return false;
@@ -2128,6 +2205,7 @@ namespace ppp {
 #endif
             }
 
+            /** @brief Releases all runtime services, routes, and related resources. */
             void VEthernetNetworkSwitcher::ReleaseAllObjects() noexcept {
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 // Windows platform needs to set the prdr synchronization lock state to prevent the problem of multi-thread concurrent competition.
@@ -2226,6 +2304,7 @@ namespace ppp {
 #endif
             }
 
+            /** @brief Removes timeout callback associated with a key. */
             bool VEthernetNetworkSwitcher::DeleteTimeout(void* k) noexcept {
                 if (NULLPTR == k) {
                     return false;
@@ -2235,6 +2314,7 @@ namespace ppp {
                 return Dictionary::RemoveValueByKey(timeouts_, k);
             }
 
+            /** @brief Registers timeout callback associated with a key. */
             bool VEthernetNetworkSwitcher::EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept {
                 if (NULLPTR == k || NULLPTR == timeout) {
                     return false;
@@ -2245,6 +2325,7 @@ namespace ppp {
                 return r.second;
             }
 
+            /** @brief Loads DNS redirect rules from file or inline content. */
             bool VEthernetNetworkSwitcher::LoadAllDnsRules(const ppp::string& rules, bool load_file_or_string) noexcept {
                 if (rules.empty()) {
                     return false;
@@ -2261,6 +2342,7 @@ namespace ppp {
                 return events > 0;
             }
 
+            /** @brief Adds remote endpoints and static servers to route/bypass tables. */
             bool VEthernetNetworkSwitcher::AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept {
                 using ProtocolType = VEthernetExchanger::ProtocolType;
 
@@ -2372,6 +2454,7 @@ namespace ppp {
 
                 // Check whether the static tunnel specifies an IP address endpoint (required for transit).
                 ppp::unordered_set<boost::asio::ip::tcp::endpoint> servers;
+                /** @brief Parses and registers one static tunnel server endpoint. */
                 auto StaticEchoAddRemoteEndPoint = 
                     [this, &servers, &fib_add_route_ipv4, &exchanger](const ppp::string& server_string) noexcept {
                         if (server_string.empty()) {
@@ -2434,6 +2517,7 @@ namespace ppp {
                 return fib_add_route_ipv4(remoteIP);
             }
 
+            /** @brief Coroutine DNS redirect implementation for one outbound query. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(
                 ppp::coroutines::YieldContext&                              y,
                 const std::shared_ptr<boost::asio::ip::udp::socket>&        socket,
@@ -2531,6 +2615,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Entry point for DNS redirection decision and async execution. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<BufferSegment>& messages) noexcept {
                 ::dns::Message m;
                 if (m.decode(static_cast<uint8_t*>(messages->Buffer.get()), messages->Length) != ::dns::BufferResult::NoError) {
@@ -2603,6 +2688,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Gets current static mode and optionally updates it. */
             bool VEthernetNetworkSwitcher::StaticMode(bool* static_mode) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 bool snow = static_mode_;
@@ -2613,6 +2699,7 @@ namespace ppp {
                 return snow;
             }
 
+            /** @brief Gets current mux size and optionally updates it. */
             uint16_t VEthernetNetworkSwitcher::Mux(uint16_t* mux) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 uint16_t snow = mux_;
@@ -2623,6 +2710,7 @@ namespace ppp {
                 return snow;
             }
 
+            /** @brief Gets current mux acceleration flags and optionally updates them. */
             uint8_t VEthernetNetworkSwitcher::MuxAcceleration(uint8_t* mux_acceleration) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 uint8_t snow = mux_acceleration_;
@@ -2633,6 +2721,7 @@ namespace ppp {
                 return snow;
             }
 
+            /** @brief Performs periodic update work for static-echo socket rotation. */
             bool VEthernetNetworkSwitcher::OnUpdate(uint64_t now) noexcept {
                 if (VEthernet::OnUpdate(now)) {
                     std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
@@ -2646,6 +2735,7 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)   
 #if defined(_LINUX)
+            /** @brief Gets current Linux protect mode and optionally updates it. */
             bool VEthernetNetworkSwitcher::ProtectMode(bool* protect_mode) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 bool snow = protect_mode_;

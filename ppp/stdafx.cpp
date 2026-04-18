@@ -3,6 +3,11 @@
 #include <ppp/io/File.h>
 #include <ppp/threading/Executors.h>
 
+/**
+ * @file stdafx.cpp
+ * @brief Implements platform and utility helpers declared in stdafx.h.
+ */
+
 #if defined(_WIN32)
 #include <io.h>
 #include <Windows.h>
@@ -57,10 +62,15 @@
 //#endif
 
 namespace ppp {
+    /** @brief Thread-local random source for global random helpers. */
     static thread_local Random  GLOBAL_RANDOBJECT;
 
+    /** @brief Global runtime flag used by startup initialization. */
     bool                        RT = false;
 
+    /**
+     * @brief Raises current thread priority to a realtime-capable level.
+     */
     void SetThreadPriorityToMaxLevel() noexcept {
 #if defined(_WIN32)
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
@@ -73,6 +83,9 @@ namespace ppp {
 #endif
     }
 
+    /**
+     * @brief Raises current process priority to the highest available level.
+     */
     void SetProcessPriorityToMaxLevel() noexcept {
 #if defined(_WIN32)
         SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
@@ -100,6 +113,11 @@ namespace ppp {
 #endif
     }
 
+    /**
+     * @brief Converts a textual switch value into boolean semantics.
+     * @param s Text pointer.
+     * @return `false` for recognized falsy prefixes, otherwise `true`.
+     */
     bool ToBoolean(const char* s) noexcept {
         if (NULLPTR == s || *s == '\x0') {
             return false;
@@ -124,6 +142,12 @@ namespace ppp {
         return true;
     }
 
+    /**
+     * @brief Hashes a raw byte sequence.
+     * @param s Input memory pointer.
+     * @param len Number of bytes.
+     * @return Hash code as signed integer.
+     */
     int GetHashCode(const void* s, int len) noexcept {
         /* std::_Hash_array_representation<Byte>(static_cast<Byte*>(s), len) */
         /* std::_Hash_impl::hash(s, len) */
@@ -133,6 +157,12 @@ namespace ppp {
         return ppp::hash::_Hash_bytes(s, len, __seed);
     }
 
+    /**
+     * @brief Computes CRC32 for a C-string or binary buffer.
+     * @param s Input buffer pointer.
+     * @param len Number of bytes, or negative to use `strlen`.
+     * @return CRC32 value.
+     */
     int CRC32(const char* s, int len) noexcept {
         if (s == NULLPTR) {
             return 0;
@@ -146,6 +176,7 @@ namespace ppp {
             return 0;
         }
 
+        /** @brief CRC32 lookup table. */
         static unsigned int qualityTable[] = {
              0x0, 0x77073096, 0xee0e612c, 0x990951ba, 0x76dc419, 0x706af48f, 0xe963a535, 0x9e6495a3,
              0xedb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988, 0x9b64c2b, 0x7eb17cbd, 0xe7b82d07, 0x90bf1d91,
@@ -191,11 +222,19 @@ namespace ppp {
         return (int)num;
     }
 
+    /**
+     * @brief Generates a random printable ASCII character.
+     * @return A character in range `0x20`..`0x7E`.
+     */
     Char RandomPrintableAsciiBytes() noexcept {
         int ch_ = GLOBAL_RANDOBJECT.Next('\x20', '\x7e');
         return (Char)ch_;
     }
 
+    /**
+     * @brief Generates a random ASCII letter or digit.
+     * @return A character from `[a-zA-Z0-9]` groups.
+     */
     Char RandomAscii() noexcept {
         static const int m_ = 3;
         static const Byte x_[m_] = { 'a', 'A', '0' };
@@ -205,18 +244,28 @@ namespace ppp {
         return (Char)GLOBAL_RANDOBJECT.Next(x_[i_], y_[i_]);
     }
 
+    /** @brief Generates a non-negative random integer. */
     int RandomNext() noexcept {
         return GLOBAL_RANDOBJECT.Next(0, INT_MAX);
     }
 
+    /**
+     * @brief Generates a random integer within the specified bounds.
+     */
     int RandomNext(int minValue, int maxValue) noexcept {
         return GLOBAL_RANDOBJECT.Next(minValue, maxValue);
     }
 
+    /** @brief Generates a random double precision value. */
     double RandomNextDouble() noexcept {
         return GLOBAL_RANDOBJECT.NextDouble();
     }
 
+    /**
+     * @brief Formats byte size using human-readable units.
+     * @param size Size in bytes.
+     * @return Formatted text such as `12.5 MB`.
+     */
     ppp::string StrFormatByteSize(Int64 size) noexcept {
         static const char* aszByteUnitsNames[] = { "B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB", "DB", "NB" };
 
@@ -232,6 +281,9 @@ namespace ppp {
         return sz;
     }
 
+    /**
+     * @brief Returns a boolean argument value with default fallback.
+     */
     bool GetCommandArgument(const char* name, int argc, const char** argv, bool defaultValue) noexcept {
         ppp::string str = GetCommandArgument(name, argc, argv);
         if (str.empty()) {
@@ -241,6 +293,9 @@ namespace ppp {
         return ToBoolean(str.data());
     }
 
+    /**
+     * @brief Returns a string argument value with C-string default fallback.
+     */
     ppp::string GetCommandArgument(const char* name, int argc, const char** argv, const char* defaultValue) noexcept {
         ppp::string defValue;
         if (defaultValue) {
@@ -250,11 +305,17 @@ namespace ppp {
         return GetCommandArgument(name, argc, argv, defValue);
     }
 
+    /**
+     * @brief Returns a string argument value with string default fallback.
+     */
     ppp::string GetCommandArgument(const char* name, int argc, const char** argv, const ppp::string& defaultValue) noexcept {
         ppp::string str = GetCommandArgument(name, argc, argv);
         return str.empty() ? defaultValue : str;
     }
 
+    /**
+     * @brief Detects whether a help option is present.
+     */
     bool IsInputHelpCommand(int argc, const char* argv[]) noexcept {
         const int HELP_COMMAND_COUNT = 4;
         const char* HELP_COMMAND_LIST[HELP_COMMAND_COUNT] = {
@@ -273,6 +334,11 @@ namespace ppp {
         return false;
     }
 
+    /**
+     * @brief Checks whether a named argument appears in command text.
+     *
+     * Supports `name` and `name=value` forms while honoring quoting.
+     */
     bool HasCommandArgument(const char* name, int argc, const char** argv) noexcept {
         if (NULLPTR == name || *name == '\0') {
             return false;
@@ -325,6 +391,9 @@ namespace ppp {
         return false;
     }
 
+    /**
+     * @brief Rebuilds command arguments as a single space-separated string.
+     */
     ppp::string GetCommandArgument(int argc, const char** argv) noexcept {
         if (NULLPTR == argv || argc <= 1) {
             return "";
@@ -339,6 +408,9 @@ namespace ppp {
         return line;
     }
 
+    /**
+     * @brief Removes matching outer quotes from a token.
+     */
     static ppp::string unquote(const char* data, size_t len) noexcept {
         if (len < 2) {
             return ppp::string(data, len);
@@ -355,6 +427,9 @@ namespace ppp {
         return ppp::string(data, len);
     }
 
+    /**
+     * @brief Gets value for a specific named command argument.
+     */
     ppp::string GetCommandArgument(const char* name, int argc, const char** argv) noexcept {
         if (NULLPTR == name || argc <= 1) {
             return "";
@@ -425,6 +500,7 @@ namespace ppp {
         return "";
     }
 
+    /** @brief Returns absolute executable file path for current process. */
     ppp::string GetFullExecutionFilePath() noexcept {
 #if defined(_WIN32)
         static constexpr int EXE_MAX = INT16_MAX; /* Long Paths. */
@@ -463,6 +539,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Returns full command text used to launch current process. */
     ppp::string GetCommandText() noexcept {
 #if defined(_WIN32)
         LPCSTR cmdline = ::GetCommandLineA();
@@ -478,6 +555,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Determines whether current user has administrator/root rights. */
     bool IsUserAnAdministrator() noexcept {
 #if defined(_WIN32)
         return ppp::win32::Win32Native::IsUserAnAdministrator();
@@ -486,6 +564,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Returns current working directory path. */
     ppp::string GetCurrentDirectoryPath() noexcept {
 #if defined(_WIN32)
         static constexpr int CWD_MAX = INT16_MAX; /* Long Paths. */
@@ -503,6 +582,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Returns directory path that contains the executable. */
     ppp::string GetApplicationStartupPath() noexcept {
         ppp::string exe = GetFullExecutionFilePath();
 #if defined(_WIN32)
@@ -518,6 +598,7 @@ namespace ppp {
         }
     }
 
+    /** @brief Returns executable file name without directory components. */
     ppp::string GetExecutionFileName() noexcept {
         ppp::string exe = GetFullExecutionFilePath();
 #if defined(_WIN32)
@@ -533,6 +614,7 @@ namespace ppp {
         }
     }
 
+    /** @brief Returns native process identifier. */
     int GetCurrentProcessId() noexcept {
 #if defined(_WIN32) || defined(_WIN64)
         return ::GetCurrentProcessId();
@@ -541,6 +623,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Resolves native thread identifier using platform-specific syscall APIs. */
     static int64_t GetCurrentThreadIdSysCall() noexcept {
 #if defined(_WIN32) || defined(_WIN64)
         return ::GetCurrentThreadId();
@@ -561,12 +644,14 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Returns cached native thread identifier for current thread. */
     int64_t GetCurrentThreadId() noexcept {
         static thread_local int64_t tid = GetCurrentThreadIdSysCall();
 
         return tid;
     }
 
+    /** @brief Returns number of processors available to the current process. */
     int GetProcesserCount() noexcept {
         int count = 0;
 
@@ -590,16 +675,21 @@ namespace ppp {
         return count;
     }
 
+    /** @brief Generates a random UUID value. */
     boost::uuids::uuid GuidGenerate() noexcept {
         boost::uuids::random_generator rgen;
         return rgen();
     }
 
+    /** @brief Converts UUID to textual representation via lexical cast. */
     ppp::string LexicalCast(const boost::uuids::uuid& uuid) noexcept {
         return boost::lexical_cast<ppp::string>(uuid);
     }
 
-    // D: 6f9619ff-8b86-d011-b42d-00c04fc964ff
+    /**
+     * @brief Converts UUID to canonical dashed format.
+     * @return UUID text like `6f9619ff-8b86-d011-b42d-00c04fc964ff`.
+     */
     ppp::string GuidToString(const boost::uuids::uuid& uuid) noexcept {
         // https://www.boost.org/users/history/version_1_77_0.html
 #if BOOST_VERSION >= 107700
@@ -613,21 +703,27 @@ namespace ppp {
 #endif
     }
 
-    // B: {6f9619ff-8b86-d011-b42d-00c04fc964ff}
+    /** @brief Converts UUID to brace-wrapped format. */
     ppp::string GuidToStringB(const boost::uuids::uuid& uuid) noexcept {
         return "{" + GuidToString(uuid) + "}";
     }
 
-    // N: 6F9619FF-8B86-D011-B42D-00C04FC964FF
+    /** @brief Converts UUID to upper-case dashed format. */
     ppp::string GuidToStringN(const boost::uuids::uuid& uuid) noexcept {
         return ToUpper(GuidToString(uuid));
     }
 
-    // P: (6f9619ff-8b86-d011-b42d-00c04fc964ff)
+    /** @brief Converts UUID to parenthesized format. */
     ppp::string GuidToStringP(const boost::uuids::uuid& uuid) noexcept {
         return "(" + GuidToString(uuid) + ")";
     }
 
+    /**
+     * @brief Converts raw bytes into UUID structure.
+     * @param guid Byte source pointer.
+     * @param length Available byte length.
+     * @return UUID filled from input bytes and zero-padded when needed.
+     */
     boost::uuids::uuid LexicalCast(const void* guid, int length) noexcept {
         boost::uuids::uuid uuid;
         if (NULLPTR == guid) {
@@ -648,6 +744,7 @@ namespace ppp {
         return uuid;
     }
 
+    /** @brief Parses UUID from text, returning zero UUID on failure. */
     boost::uuids::uuid StringToGuid(const ppp::string& guid) noexcept {
         boost::uuids::string_generator sgen;
         try {
@@ -658,6 +755,7 @@ namespace ppp {
         }
     }
 
+    /** @brief Returns normalized system code string. */
     const char* GetSystemCode() noexcept {
 #if defined(_WIN32) || defined(_WIN64)
         return "windows";
@@ -672,6 +770,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Returns normalized architecture code string. */
     const char* GetPlatformCode() noexcept {
 #if defined(__x86_64__) || defined(_M_X64)
         return "X86_64";
@@ -754,6 +853,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Returns default TLS 1.3 cipher suite preference list. */
     const char* GetDefaultCipherSuites() noexcept {
 #if defined(__arm__) || defined(__aarch64__)
         static constexpr int pointer_size = sizeof(void*);
@@ -766,11 +866,13 @@ namespace ppp {
         return "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256";
     }
 
+    /** @brief Captures and prints stack trace to standard output. */
     void PrintStackTrace() noexcept {
         std::string stack_trace = CaptureStackTrace();
         std::cout << stack_trace << std::endl;
     }
 
+    /** @brief Captures current call stack as text. */
     std::string CaptureStackTrace() noexcept {
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(__MUSL__)
         if (ppp::diagnostics::Addr2lineIsSupport()) {
@@ -782,6 +884,7 @@ namespace ppp {
         return boost::stacktrace::to_string(st);
     }
 
+    /** @brief Queries operating system memory page size. */
     int GetSystemPageSize() noexcept {
 #if defined(_WIN32)
         SYSTEM_INFO si{};
@@ -799,11 +902,13 @@ namespace ppp {
         return pagesize;
     }
 
+    /** @brief Returns cached memory page size for fast repeated access. */
     int GetMemoryPageSize() noexcept {
         static int pagesize = GetSystemPageSize();
         return pagesize;
     }
 
+    /** @brief Checks whether a floating-point value is invalid or special. */
     bool IsNaN(double d) noexcept {
         if (isnan(d)) {
             return true;
@@ -829,6 +934,7 @@ namespace ppp {
         return false;
     }
 
+    /** @brief Fast inverse-square-root style approximation helper. */
     float Sqrt(float x) noexcept { /* 0x5f3759df */
         float xhalf = 0.5f * x;
         int32_t i = *(int32_t*)&x;
@@ -838,6 +944,7 @@ namespace ppp {
         return x;
     }
 
+    /** @brief Fast divide-by-three for 32-bit unsigned values. */
     unsigned int Div3(unsigned int i) noexcept {
         // AT&T:
         // movl    $2863311531, %edx
@@ -854,6 +961,7 @@ namespace ppp {
         return r;
     }
 
+    /** @brief Fast divide-by-three for 64-bit unsigned values. */
     unsigned long long Div3(unsigned long long i) noexcept {
         // INTEL:
         // mov     rax, -6148914691236517205; 
@@ -865,11 +973,18 @@ namespace ppp {
         return rdx;
     }
 
+    /** @brief Returns current system tick in milliseconds since epoch. */
     uint64_t GetTickCount() noexcept {
         std::chrono::time_point now = std::chrono::system_clock::now(); /* high_resolution_clock */
         return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
     }
 
+    /**
+     * @brief Moves cursor up or down by a number of console lines.
+     * @param previous `true` moves up, `false` moves down.
+     * @param line Line count to move.
+     * @return `true` on success.
+     */
     static bool MoveConsoleCursorPositionToPreviousNextLine(bool previous, int line) noexcept {
         if (line < 0) {
             return false;
@@ -900,14 +1015,17 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Moves cursor to previous line(s). */
     bool MoveConsoleCursorPositionToPreviousLine(int line) noexcept {
         return MoveConsoleCursorPositionToPreviousNextLine(true, line);
     }
 
+    /** @brief Moves cursor to next line(s). */
     bool MoveConsoleCursorPositionToNextLine(int line) noexcept {
         return MoveConsoleCursorPositionToPreviousNextLine(false, line);
     }
 
+    /** @brief Sets cursor position in the console buffer. */
     bool SetConsoleCursorPosition(int x, int y) noexcept {
 #if defined(_WIN32)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -922,6 +1040,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Gets terminal width and height in characters. */
     bool GetConsoleWindowSize(int& x, int& y) noexcept {
         x = 0;
         y = 0;
@@ -953,6 +1072,7 @@ namespace ppp {
         return true;
     }
 
+    /** @brief Clears console output area and resets cursor position. */
     bool ClearConsoleOutputCharacter() noexcept {
 #if defined(_WIN32)
         HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -976,6 +1096,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Hides or shows the console cursor. */
     bool HideConsoleCursor(bool value) noexcept {
 #if defined(_WIN32)
         HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -1000,6 +1121,9 @@ namespace ppp {
 #endif
     }
 
+    /**
+     * @brief Pads each line in a multi-line string to fixed width.
+     */
     static ppp::string PaddingLeftRightAllLines(std::size_t padding_length, char padding_char, const ppp::string& input_strings, bool right_or_left, int* line_count) noexcept {
         ppp::vector<ppp::string> lines;
         if (ppp::Tokenize<ppp::string>(input_strings, lines, "\r\n") < 1) {
@@ -1024,14 +1148,17 @@ namespace ppp {
         return result;
     }
 
+    /** @brief Applies right padding to all lines in a text block. */
     ppp::string PaddingRightAllLines(std::size_t padding_length, char padding_char, const ppp::string& s, int* line_count) noexcept {
         return PaddingLeftRightAllLines(padding_length, padding_char, s, true, line_count);
     }
 
+    /** @brief Applies left padding to all lines in a text block. */
     ppp::string PaddingLeftAllLines(std::size_t padding_length, char padding_char, const ppp::string& s, int* line_count) noexcept {
         return PaddingLeftRightAllLines(padding_length, padding_char, s, false, line_count);
     }
 
+    /** @brief Checks whether current version vector satisfies minimum version. */
     bool IfVersion(const ppp::vector<uint64_t>& now, const ppp::vector<uint64_t> min) noexcept {
         std::size_t now_length = now.size(), min_length = min.size();
         if (now_length == 0 && min_length == 0) {
@@ -1058,6 +1185,7 @@ namespace ppp {
         return true;
     }
 
+    /** @brief Closes a native OS handle using platform abstraction. */
     bool CloseHandle(const void* handle) noexcept {
 #if defined(_WIN32)
         return ppp::win32::Win32Native::CloseHandle(handle);
@@ -1066,6 +1194,7 @@ namespace ppp {
 #endif
     }
 
+    /** @brief Sleeps current thread for the specified duration. */
     void Sleep(int milliseconds) noexcept {
         if (milliseconds > 0) {
 #if defined(_WIN32)
@@ -1078,6 +1207,7 @@ namespace ppp {
         }
     }
 
+    /** @brief Assigns a human-readable name to current thread. */
     bool SetThreadName(const char* name) noexcept {
         if (NULLPTR == name || *name == '\x0') {
             return false;
@@ -1093,8 +1223,12 @@ namespace ppp {
         return true;
     }
 
-    // On the Android platform, call: boost::asio::ip::address::from_string function will lead to collapse, 
-    // Only is to compile the Release code and opened the compiler code optimization.
+    /**
+     * @brief Parses textual IP address with `inet_pton` fallback path.
+     *
+     * This implementation avoids Android release crashes observed when using
+     * `boost::asio::ip::address::from_string` under optimization.
+     */
     boost::asio::ip::address StringToAddress(const char* s, boost::system::error_code& ec) noexcept {
         ec = boost::asio::error::invalid_argument;
         if (NULLPTR == s || *s == '\x0') {
@@ -1120,9 +1254,12 @@ namespace ppp {
     }
 }
 
-// Global static constructor for PPP PRIVATE NETWORK™ 2. (For OS X platform compatibility.)
-// LLVM/libc++ standard library compatibility, note: Linux, OS X can use this solution to compiled, 
-// But Windows platform does must use of Microsoft VC++ or Intel C/C++ compiler.
+/**
+ * @brief Declares global static constructor entrypoints required during startup.
+ *
+ * This compatibility path is primarily used for non-Windows platforms built
+ * with LLVM/libc++ style toolchains.
+ */
 namespace lwip {
     void netstack_cctor() noexcept;
 }
@@ -1154,9 +1291,12 @@ namespace ppp {
     }
 
     namespace global {
+        /**
+         * @brief Executes one-time PPP global bootstrap sequence.
+         */
         void cctor() noexcept {
 #if !defined(_WIN32)
-            // UNIX: TERM environment variable not set. 
+            /** @brief Ensure terminal type is set for UNIX console output. */
             putenv(const_cast<char*>("TERM=xterm"));
 #endif
 

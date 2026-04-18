@@ -2,6 +2,11 @@
 #include <stdint.h>
 #include <atomic>
 
+/**
+ * @file checksum.cpp
+ * @brief Packet parsing, checksum, and routing-table helper implementations.
+ */
+
 #include <ppp/io/File.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
@@ -25,10 +30,14 @@ namespace ppp
     {
         namespace native
         {
+            /** @brief Cached IPv4 header size in bytes. */
             const int           ip_hdr::IP_HLEN    = sizeof(struct ip_hdr);
+            /** @brief Cached TCP header size in bytes. */
             const int           tcp_hdr::TCP_HLEN  = sizeof(struct tcp_hdr);
+            /** @brief Default TTL value used for new IPv4 headers. */
             const unsigned char ip_hdr::IP_DFT_TTL = Socket::GetDefaultTTL();
 
+            /** @brief Generates a monotonic non-zero IPv4 identification value. */
             unsigned short ip_hdr::NewId() noexcept
             {
                 static std::atomic<unsigned int> aid = ATOMIC_FLAG_INIT;
@@ -43,6 +52,12 @@ namespace ppp
                 }
             }
 
+            /**
+             * @brief Validates and parses an IPv4 header from raw packet bytes.
+             * @param packet Packet start pointer.
+             * @param len In/out packet length; may be adjusted to header-reported length.
+             * @return Parsed header pointer on success, otherwise `NULLPTR`.
+             */
             struct ip_hdr* ip_hdr::Parse(const void* packet, int& len) noexcept
             {
                 struct ip_hdr* iphdr = (struct ip_hdr*)packet;
@@ -120,6 +135,13 @@ namespace ppp
                 return proto == IP_PROTO_UDP || proto == IP_PROTO_TCP || proto == IP_PROTO_ICMP ? iphdr : NULLPTR;
             }
 
+            /**
+             * @brief Validates and parses a TCP header from an IPv4 payload.
+             * @param iphdr Parsed IPv4 header.
+             * @param packet TCP segment start pointer.
+             * @param size TCP segment size in bytes.
+             * @return Parsed TCP header pointer on success, otherwise `NULLPTR`.
+             */
             struct tcp_hdr* tcp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept
             {
                 if (NULLPTR == iphdr || size < 1)
@@ -162,6 +184,13 @@ namespace ppp
                 return tcphdr;
             }
 
+            /**
+             * @brief Validates and parses a UDP header from an IPv4 payload.
+             * @param iphdr Parsed IPv4 header.
+             * @param packet UDP datagram start pointer.
+             * @param size UDP datagram size in bytes.
+             * @return Parsed UDP header pointer on success, otherwise `NULLPTR`.
+             */
             struct udp_hdr* udp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept {
                 if (NULLPTR == iphdr || size < 1)
                 {
@@ -203,6 +232,13 @@ namespace ppp
                 return udphdr;
             }
 
+            /**
+             * @brief Validates and parses an ICMP header from an IPv4 payload.
+             * @param iphdr Parsed IPv4 header.
+             * @param packet ICMP payload start pointer.
+             * @param size ICMP payload size in bytes.
+             * @return Parsed ICMP header pointer on success, otherwise `NULLPTR`.
+             */
             struct icmp_hdr* icmp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept
             {
                 if (NULLPTR == iphdr || size < 1)
@@ -235,11 +271,13 @@ namespace ppp
                 return icmphdr;
             }
 
+            /** @brief Converts current MAC address object to text. */
             ppp::string eth_addr::ToString() noexcept
             {
                 return ToString(*this);
             }
 
+            /** @brief Converts provided MAC address to `xx:xx:xx:xx:xx:xx` text. */
             ppp::string eth_addr::ToString(const struct eth_addr& mac) noexcept
             {
                 char sz[1000];
@@ -259,6 +297,7 @@ namespace ppp
                 return "00:00:00:00:00:00";
             }
             
+            /** @brief Parses MAC text in colon or dash format into binary bytes. */
             bool eth_addr::TryParse(const char* mac_string, struct eth_addr& mac) noexcept
             {
                 if (NULLPTR == mac_string || *mac_string == '\x0')
@@ -296,6 +335,12 @@ namespace ppp
             }
 
 #if defined(__SIMD__)
+            /**
+             * @brief Computes standard Internet checksum with SIMD acceleration.
+             * @param dataptr Pointer to contiguous bytes.
+             * @param len Buffer size in bytes.
+             * @return 16-bit folded sum value (before one's complement inversion).
+             */
             unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept /* MARCO C/C++: __SSE2__ */
             {
                 uint8_t* data = (uint8_t*)dataptr;
@@ -375,6 +420,12 @@ namespace ppp
                 return ntohs(static_cast<uint16_t>(acc));
             }
 #else
+            /**
+             * @brief Computes standard Internet checksum using scalar arithmetic.
+             * @param dataptr Pointer to contiguous bytes.
+             * @param len Buffer size in bytes.
+             * @return 16-bit folded sum value (before one's complement inversion).
+             */
             unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept 
             {
                 unsigned int acc;
@@ -418,6 +469,7 @@ namespace ppp
             }
 #endif
 
+            /** @brief Loads CIDR routes from file and inserts them with a shared gateway. */
             bool RouteInformationTable::AddAllRoutesByIPList(const ppp::string& path, uint32_t gw) noexcept
             {
                 if (path.empty())
@@ -439,6 +491,7 @@ namespace ppp
                 return AddAllRoutes(cidrs, gw);
             }
 
+            /** @brief Parses multiple CIDR lines and inserts each route entry. */
             bool RouteInformationTable::AddAllRoutes(const ppp::string& cidrs, uint32_t gw) noexcept
             {
                 if (cidrs.empty())
@@ -460,6 +513,7 @@ namespace ppp
                 return any;
             }
 
+            /** @brief Parses one CIDR string and inserts an IPv4 route entry. */
             bool RouteInformationTable::AddRoute(const ppp::string& cidr, uint32_t gw) noexcept
             {
                 if (cidr.empty())
@@ -515,6 +569,7 @@ namespace ppp
                 return AddRoute(htonl(in.to_uint()), prefix, gw);
             }
 
+            /** @brief Inserts or updates route entry identified by destination/prefix. */
             bool RouteInformationTable::AddRoute(uint32_t ip, int prefix, uint32_t gw) noexcept
             {
                 if (prefix < MIN_PREFIX_VALUE || prefix > MAX_PREFIX_VALUE)
@@ -559,6 +614,7 @@ namespace ppp
                 return true;
             }
 
+            /** @brief Deletes all route entries under one destination key. */
             bool RouteInformationTable::DeleteRoute(uint32_t ip) noexcept
             {
                 auto tail = routes.find(ip);
@@ -572,6 +628,7 @@ namespace ppp
                 return true;
             }
 
+            /** @brief Deletes route entries matching destination and gateway. */
             bool RouteInformationTable::DeleteRoute(uint32_t ip, uint32_t gw) noexcept
             {
                 auto tail = routes.find(ip);
@@ -599,6 +656,7 @@ namespace ppp
                 return prefixes.size() > 0;
             }
 
+            /** @brief Deletes one route entry matching destination/prefix/gateway. */
             bool RouteInformationTable::DeleteRoute(uint32_t ip, int prefix, uint32_t gw) noexcept
             {
                 auto tail = routes.find(ip);
@@ -628,26 +686,34 @@ namespace ppp
                 return true;
             }
 
+            /** @brief Returns mutable access to route entries table. */
             RouteEntriesTable& RouteInformationTable::GetAllRoutes() noexcept
             {
                 return routes;
             }
 
+            /** @brief Removes all route entries from RIB. */
             void RouteInformationTable::Clear() noexcept
             {
                 routes.clear();
             }
 
+            /** @brief Builds forwarding table snapshot from route-information table. */
             ForwardInformationTable::ForwardInformationTable(RouteInformationTable& rib) noexcept
             {
                 Fill(rib);
             }
 
+            /** @brief Performs next-hop lookup using default prefix bounds. */
             uint32_t ForwardInformationTable::GetNextHop(uint32_t ip, RouteEntriesTable& routes) noexcept 
             {
                 return GetNextHop(ip, MIN_PREFIX_VALUE, MAX_PREFIX_VALUE, routes);
             }
 
+            /**
+             * @brief Performs longest-prefix-match lookup in the provided route table.
+             * @return Next-hop IPv4 address in network order, or `IPEndPoint::NoneAddress`.
+             */
             uint32_t ForwardInformationTable::GetNextHop(uint32_t ip, int min_prefix_value, int max_prefix_value, RouteEntriesTable& routes) noexcept
             {
                 for (int prefix = max_prefix_value; prefix >= min_prefix_value; prefix--)
@@ -673,16 +739,19 @@ namespace ppp
                 return IPEndPoint::NoneAddress;
             }
 
+            /** @brief Performs next-hop lookup against internal forwarding table. */
             uint32_t ForwardInformationTable::GetNextHop(uint32_t ip) noexcept
             {
                 return GetNextHop(ip, routes);
             }
 
+            /** @brief Returns mutable access to forwarding route table. */
             RouteEntriesTable& ForwardInformationTable::GetAllRoutes() noexcept
             {
                 return routes;
             }
 
+            /** @brief Copies routes from RIB and sorts each bucket by prefix descending. */
             void ForwardInformationTable::Fill(RouteInformationTable& rib) noexcept
             {
                 routes = rib.GetAllRoutes();
@@ -697,11 +766,13 @@ namespace ppp
                 }
             }
 
+            /** @brief Removes all forwarding entries. */
             void ForwardInformationTable::Clear() noexcept
             {
                 routes.clear();
             }
 
+            /** @brief Formats raw bytes as uppercase MAC text with zero padding. */
             ppp::string eth_addr::BytesToMacAddress(const void* data, int size) noexcept
             {
                 if ((size < 1) || (NULLPTR != data && size < 1))

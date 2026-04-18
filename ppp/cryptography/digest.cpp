@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/**
+ * @file digest.cpp
+ * @brief Implements MD5 and SHA digest conversion helpers.
+ */
+
 #include <openssl/opensslv.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
@@ -14,8 +19,14 @@
 
 namespace ppp {
     namespace cryptography {
+        /**
+         * @brief Function pointer type for SHA-family one-shot digest routines.
+         */
         typedef unsigned char* (*SHA_PROC)(const unsigned char*, size_t, unsigned char*);
 
+        /**
+         * @brief Lookup table mapping SHA enum values to OpenSSL SHA routines.
+         */
         static SHA_PROC sha_proc_table[] = {
             SHA1,
             SHA224,
@@ -24,6 +35,9 @@ namespace ppp {
             SHA512,
         };
 
+        /**
+         * @brief Digest-length lookup table corresponding to `sha_proc_table`.
+         */
         static size_t sha_len_table[] = {
             SHA_DIGEST_LENGTH,
             SHA224_DIGEST_LENGTH,
@@ -32,16 +46,43 @@ namespace ppp {
             SHA512_DIGEST_LENGTH,
         };
 
+        /**
+         * @brief Convenience overload that returns hexadecimal digest output.
+         * @param data Input bytes.
+         * @param size Input size in bytes.
+         * @param agorithm Target digest algorithm.
+         * @param toupper True for uppercase hexadecimal output.
+         * @return Digest string; empty when computation fails.
+         */
         ppp::string hash_hmac(const void* data, int size, DigestAlgorithmic agorithm, bool toupper) noexcept {
             return hash_hmac(data, size, agorithm, true, toupper);
         }
 
+        /**
+         * @brief Convenience overload that returns digest output as a string.
+         * @param data Input bytes.
+         * @param size Input size in bytes.
+         * @param agorithm Target digest algorithm.
+         * @param hex_or_binarys True for hexadecimal, false for raw binary bytes.
+         * @param toupper True for uppercase hexadecimal output when enabled.
+         * @return Digest string; empty when computation fails.
+         */
         ppp::string hash_hmac(const void* data, int size, DigestAlgorithmic agorithm, bool hex_or_binarys, bool toupper) noexcept {
             ppp::string digest;
             hash_hmac(data, size, digest, agorithm, hex_or_binarys, toupper);
             return digest;
         }
 
+        /**
+         * @brief Computes digest output for MD5 or SHA-family algorithms.
+         * @param data Input bytes. Null input is treated as an empty buffer.
+         * @param size Input size in bytes.
+         * @param digest Receives digest output in requested format.
+         * @param agorithm Target digest algorithm.
+         * @param hex_or_binarys True for hexadecimal, false for raw binary bytes.
+         * @param toupper True for uppercase hexadecimal output when enabled.
+         * @return True on success; otherwise false.
+         */
         bool hash_hmac(const void* data, int size, ppp::string& digest, DigestAlgorithmic agorithm, bool hex_or_binarys, bool toupper) noexcept {
             if (NULLPTR == data || size < 1) {
                 data = "";
@@ -81,6 +122,9 @@ namespace ppp {
                 digest = ppp::string((char*)digest_sz, digest_sz_len);
             }
             else {
+                /**
+                 * @brief Converts binary digest bytes into two-character hex pairs.
+                 */
                 char hex_sz[SHA512_DIGEST_LENGTH * 2];
                 const char* hex_fmt = toupper ? "%02X" : "%02x";
                 for (size_t i = 0; i < digest_sz_len; i++) {

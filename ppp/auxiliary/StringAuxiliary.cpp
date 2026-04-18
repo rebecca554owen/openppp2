@@ -1,3 +1,7 @@
+/**
+ * @file StringAuxiliary.cpp
+ * @brief Implementation of string, GUID, and key-value helper routines.
+ */
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/net/Ipep.h>
 
@@ -5,6 +9,9 @@ namespace ppp
 {
     namespace auxiliary 
     {
+        /**
+         * @brief Parse a GUID string and convert it to Int128.
+         */
         Int128 StringAuxiliary::GuidStringToInt128(const ppp::string& guid_string) noexcept 
         {
             if (guid_string.empty()) 
@@ -16,6 +23,9 @@ namespace ppp
             return StringAuxiliary::GuidStringToInt128(guid);
         }
 
+        /**
+         * @brief Convert UUID bytes into Int128 using network byte order mapping.
+         */
         Int128 StringAuxiliary::GuidStringToInt128(const boost::uuids::uuid& guid) noexcept
         {
             Int128 network_guid = 0;
@@ -27,6 +37,9 @@ namespace ppp
             return ppp::net::Ipep::NetworkToHostOrder(network_guid);
         }
 
+        /**
+         * @brief Convert Int128 to GUID string using network byte order mapping.
+         */
         ppp::string StringAuxiliary::Int128ToGuidString(const Int128& guid) noexcept 
         {
             boost::uuids::uuid uuid;
@@ -39,6 +52,9 @@ namespace ppp
             return GuidToString(uuid);
         }
 
+        /**
+         * @brief Validate whether a string represents an integer literal.
+         */
         bool StringAuxiliary::WhoisIntegerValueString(const ppp::string& integer_string) noexcept
         {
             int integer_size = integer_string.size();
@@ -68,6 +84,9 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Normalize configured separator characters into commas.
+         */
         ppp::string StringAuxiliary::Lstrings(const ppp::string& in, bool colon) noexcept
         {
             static constexpr char keys[] = "; |+*^&#@!'\?%[]{}\\/-_=`~\r\n\t\a\b\v\f";
@@ -92,6 +111,9 @@ namespace ppp
             return result;
         }
 
+        /**
+         * @brief Render dictionary entries into "key: value" text lines.
+         */
         ppp::string StringAuxiliary::ToString(const ppp::unordered_map<ppp::string, ppp::string>& s) noexcept
         {
             ppp::string result;
@@ -110,6 +132,9 @@ namespace ppp
             return result;
         }
 
+        /**
+         * @brief Parse line-based key-value pairs separated by ": ".
+         */
         bool StringAuxiliary::ToDictionary(const ppp::vector<ppp::string>& lines, ppp::unordered_map<ppp::string, ppp::string>& s) noexcept 
         {
             for (size_t i = 0, l = lines.size(); i < l; ++i)
@@ -121,6 +146,9 @@ namespace ppp
                     continue;
                 }
 
+                /**
+                 * @brief Require both key and value portions before insertion.
+                 */
                 size_t n = j + 2;
                 if (n >= str.size())
                 {
@@ -141,6 +169,9 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Split multi-line text and parse key-value dictionary entries.
+         */
         bool StringAuxiliary::ToDictionary(const ppp::string& lines, ppp::unordered_map<ppp::string, ppp::string>& s) noexcept
         {
             ppp::vector<ppp::string> lists;

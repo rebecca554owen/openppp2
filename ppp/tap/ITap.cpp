@@ -4,6 +4,11 @@
 // https://android.googlesource.com/platform/frameworks/native/+/master/include/android/multinetwork.h
 // https://android.googlesource.com/platform/cts/+/fed9991/tests/tests/net/jni/NativeMultinetworkJni.c
 
+/**
+ * @file ITap.cpp
+ * @brief Implements cross-platform TAP/TUN base behaviors and factories.
+ */
+
 #include <ppp/stdafx.h>
 #include <ppp/tap/ITap.h>
 
@@ -28,6 +33,12 @@ namespace ppp
 {
     namespace tap
     {
+        /**
+         * @brief Wraps a placement-constructed stream into a shared pointer.
+         * @tparam T Stream type.
+         * @param native Placement-constructed object pointer.
+         * @return Shared pointer with custom close/cancel/destruct deleter.
+         */
         template <typename T>
         static std::shared_ptr<T> WrapStreamFromNativePtr(T* native) noexcept
         {
@@ -46,6 +57,12 @@ namespace ppp
                 });
         }
 
+        /**
+         * @brief Creates a stream descriptor from a native handle.
+         * @param context I/O context that owns asynchronous operations.
+         * @param handle Native file descriptor/handle.
+         * @return Shared stream descriptor, or null on failure.
+         */
         static std::shared_ptr<boost::asio::posix::stream_descriptor> NewStreamFromHandle(boost::asio::io_context& context, void* handle) noexcept
         {
             if (handle == INVALID_HANDLE_VALUE)
@@ -79,6 +96,9 @@ namespace ppp
             return WrapStreamFromNativePtr(stream);
         }
 
+        /**
+         * @brief Initializes TAP state and binds handle to async stream when needed.
+         */
         ITap::ITap(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& id, void* tun, uint32_t ip, uint32_t gw, uint32_t mask, bool hosted_network)
             : IPAddress(ip)
             , GatewayServer(gw)
@@ -116,11 +136,18 @@ namespace ppp
 #endif
         }
 
+        /**
+         * @brief Finalizes TAP resources on destruction.
+         */
         ITap::~ITap() noexcept
         {
             Finalize();
         }
 
+        /**
+         * @brief Verifies current backend and handle readiness.
+         * @return true if object can perform TAP I/O.
+         */
         bool ITap::IsReady() noexcept
         {
 #if defined(_WIN32)
@@ -156,11 +183,19 @@ namespace ppp
             return b;
         }
 
+        /**
+         * @brief Reports open state combined with readiness checks.
+         * @return true when TAP read loop is active and resources are valid.
+         */
         bool ITap::IsOpen() noexcept
         {
             return _opening && IsReady();
         }
         
+        /**
+         * @brief Validates common arguments required by all Create overloads.
+         * @return true when context, device, IPs, and subnet mask are valid.
+         */
         static bool ITAP_CREATE_REQUIRED(
             const std::shared_ptr<boost::asio::io_context>& context, 
             const ppp::string&                              dev, 
@@ -201,6 +236,9 @@ namespace ppp
         }
 
 #if defined(_WIN32)
+        /**
+         * @brief Creates a Windows TAP backend from numeric network parameters.
+         */
         std::shared_ptr<ITap> ITap::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, uint32_t ip, uint32_t gw, uint32_t mask, uint32_t lease_time_in_seconds, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept 
         {
             if (!ITAP_CREATE_REQUIRED(context, dev, ip, gw, mask)) 
@@ -211,6 +249,9 @@ namespace ppp
             return ppp::tap::TapWindows::Create(context, dev, ip, gw, mask, lease_time_in_seconds, hosted_network, dns_addresses);
         }
 
+        /**
+         * @brief Creates a Windows TAP backend from textual network parameters.
+         */
         std::shared_ptr<ITap> ITap::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, const ppp::string& ip, const ppp::string& gw, const ppp::string& mask, uint32_t lease_time_in_seconds, bool hosted_network, const ppp::vector<ppp::string>& dns_addresses) noexcept 
         {
             ppp::vector<uint32_t> dns_addresses_stloc;
@@ -227,6 +268,9 @@ namespace ppp
         }
 
 #else
+        /**
+         * @brief Creates a POSIX TAP backend from numeric network parameters.
+         */
         std::shared_ptr<ITap> ITap::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, uint32_t ip, uint32_t gw, uint32_t mask, bool promisc, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept
         {
             if (!ITAP_CREATE_REQUIRED(context, dev, ip, gw, mask)) 
@@ -241,6 +285,9 @@ namespace ppp
 #endif
     }
 
+        /**
+         * @brief Creates a POSIX TAP backend from textual network parameters.
+         */
         std::shared_ptr<ITap> ITap::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, const ppp::string& ip, const ppp::string& gw, const ppp::string& mask, bool promisc, bool hosted_network, const ppp::vector<ppp::string>& dns_addresses) noexcept
         {
             ppp::vector<uint32_t> dns_addresses_stloc;
@@ -257,6 +304,9 @@ namespace ppp
         }
 #endif
 
+        /**
+         * @brief Returns a platform-specific candidate TAP device identifier.
+         */
         ppp::string ITap::FindAnyDevice() noexcept
         {
 #if defined(_WIN32)
@@ -266,6 +316,9 @@ namespace ppp
 #endif
         }
 
+        /**
+         * @brief Closes stream resources and clears input callback.
+         */
         void ITap::Finalize() noexcept
         {
             std::shared_ptr<boost::asio::posix::stream_descriptor> stream = std::move(_stream); 
@@ -277,6 +330,9 @@ namespace ppp
             PacketInput = NULLPTR;
         }
 
+        /**
+         * @brief Dispatches finalization into the I/O context thread.
+         */
         void ITap::Dispose() noexcept
         {
             std::shared_ptr<ITap> self = shared_from_this();
@@ -288,6 +344,10 @@ namespace ppp
                 });
         }
 
+        /**
+         * @brief Starts TAP operation by arming asynchronous read loop.
+         * @return true if open transition succeeds.
+         */
         bool ITap::Open() noexcept
         {
             bool isReady = IsReady();
@@ -310,6 +370,10 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Registers one asynchronous packet read and re-arms on completion.
+         * @return true if read handler is successfully scheduled.
+         */
         bool ITap::AsynchronousReadPacketLoops() noexcept
         {
             std::shared_ptr<boost::asio::posix::stream_descriptor> stream = _stream;
@@ -345,6 +409,10 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Invokes external packet input callback if registered.
+         * @param e Input packet event payload.
+         */
         void ITap::OnInput(PacketInputEventArgs& e) noexcept
         {
             PacketInputEventHandler eh = PacketInput;
@@ -354,9 +422,19 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Helper that writes outbound packets to kernel asynchronously.
+         */
         class WritePacketToKernelNio final 
         {
         public:
+            /**
+             * @brief Dispatches asynchronous write to TAP stream.
+             * @param my TAP instance.
+             * @param packet Outbound packet bytes.
+             * @param packet_size Outbound packet size.
+             * @return true if dispatch is accepted.
+             */
             static bool                                                 Invoke(
                 ITap*                                                   my,
                 const std::shared_ptr<Byte>&                            packet, 
@@ -389,6 +467,9 @@ namespace ppp
                             return false;
                         }
 
+                        /**
+                         * @brief Completion handler finalizes on cancellation errors.
+                         */
                         boost::asio::async_write(*stream, boost::asio::buffer(packet.get(), packet_size), 
                             [self, my, stream, packet](const boost::system::error_code& ec, std::size_t sz) noexcept
                             {
@@ -403,6 +484,12 @@ namespace ppp
             }
         };
 
+        /**
+         * @brief Copies raw packet bytes into managed memory and writes out.
+         * @param packet Raw packet bytes.
+         * @param packet_size Packet length in bytes.
+         * @return true if write dispatch succeeds.
+         */
         bool ITap::Output(const void* packet, int packet_size) noexcept
         {
             if (NULLPTR == packet || packet_size < 1)
@@ -421,6 +508,12 @@ namespace ppp
             return WritePacketToKernelNio::Invoke(this, buffer, packet_size);
         }
 
+        /**
+         * @brief Writes outbound packet using caller-provided shared buffer.
+         * @param packet Packet bytes.
+         * @param packet_size Packet length in bytes.
+         * @return true if write dispatch succeeds.
+         */
         bool ITap::Output(const std::shared_ptr<Byte>& packet, int packet_size) noexcept
         {
             return WritePacketToKernelNio::Invoke(this, packet, packet_size);

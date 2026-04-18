@@ -14,10 +14,20 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VEthernetLocalProxyConnection.cpp
+ * @brief Implements local proxy connection lifecycle and bridge establishment.
+ * @author OpenPPP Contributors
+ * @license GPL-3.0
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
             namespace proxys {
+                /**
+                 * @brief Builds a local proxy connection and initializes its timeout state.
+                 */
                 VEthernetLocalProxyConnection::VEthernetLocalProxyConnection(const VEthernetLocalProxySwitcherPtr& proxy, const VEthernetExchangerPtr& exchanger, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept
                     : disposed_(false)
                     , context_(context)
@@ -35,6 +45,9 @@ namespace ppp {
                     Finalize();
                 }
 
+                /**
+                 * @brief Defers cleanup onto socket executor or fallback strand.
+                 */
                 void VEthernetLocalProxyConnection::Dispose() noexcept {
                     std::shared_ptr<VEthernetLocalProxyConnection> self = shared_from_this();
                     ppp::threading::Executors::ContextPtr context = context_;
@@ -54,6 +67,9 @@ namespace ppp {
                     }
                 }
 
+                /**
+                 * @brief Releases active bridge channels, closes socket, and unregisters self.
+                 */
                 void VEthernetLocalProxyConnection::Finalize() noexcept {
                     for (;;) {
                         std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_);
@@ -80,6 +96,9 @@ namespace ppp {
                     proxy_->ReleaseConnection(this);
                 }
 
+                /**
+                 * @brief Executes handshake first, then runs whichever bridge type is active.
+                 */
                 bool VEthernetLocalProxyConnection::Run(YieldContext& y) noexcept {
                     bool ok = this->Handshake(y);
                     if (!ok) {
@@ -105,6 +124,9 @@ namespace ppp {
                     }
                 }
 
+                /**
+                 * @brief Writes outgoing payload to the currently selected bridge backend.
+                 */
                 bool VEthernetLocalProxyConnection::SendBufferToPeer(YieldContext& y, const void* messages, int messages_size) noexcept {
                     if (NULLPTR == messages || messages_size < 1) {
                         return false;
@@ -137,6 +159,9 @@ namespace ppp {
                     return false;
                 }
  
+                /**
+                 * @brief Creates a bridge path in priority order: rinetd, mux, then transmission tunnel.
+                 */
                 bool VEthernetLocalProxyConnection::ConnectBridgeToPeer(const std::shared_ptr<ppp::app::protocol::AddressEndPoint>& destinationEP, YieldContext& y) noexcept {
                     using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<VEthernetLocalProxyConnection>;
                     
@@ -157,6 +182,9 @@ namespace ppp {
                     auto self = shared_from_this();
                     if (auto switcher = exchanger_->GetSwitcher(); NULLPTR != switcher) {
                         if (auto tap = switcher->GetTap(); NULLPTR != tap && tap->IsHostedNetwork()) {
+                            /**
+                             * @brief Hosted-network mode prefers direct rinetd bridge after DNS resolution.
+                             */
                             boost::system::error_code ec;
                             boost::asio::ip::address address = StringToAddress(destinationEP->Host.data(), ec);
                             if (ec) {
@@ -185,6 +213,9 @@ namespace ppp {
                         }
                     }
 
+                    /**
+                     * @brief Attempt vmux fast path before creating a full transmission tunnel.
+                     */
                     int mux_status = VEthernetNetworkTcpipConnection::Mux(self, exchanger_, destinationEP->Host, destinationEP->Port, socket, connection_mux_, y);
                     if (mux_status < 1) {
                         return mux_status == 0;
@@ -219,6 +250,9 @@ namespace ppp {
                     return true;
                 }
 
+                /**
+                 * @brief Parses destination host/port and infers address type.
+                 */
                 std::shared_ptr<ppp::app::protocol::AddressEndPoint> VEthernetLocalProxyConnection::GetAddressEndPointByProtocol(const ppp::string& host, int port) noexcept {
                     if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
                         return NULLPTR;
@@ -266,6 +300,9 @@ namespace ppp {
                     return destinationEP;
                 }
 
+                /**
+                 * @brief Extends connection timeout using linked or connect timeout policy.
+                 */
                 void VEthernetLocalProxyConnection::Update() noexcept {
                     bool linked = false;
                     if (VirtualEthernetTcpipConnectionPtr connection = connection_; NULLPTR != connection) {
