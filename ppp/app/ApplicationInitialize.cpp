@@ -314,6 +314,7 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
 
     if (!ConsoleUI::GetInstance().Start()) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+        Dispose();
         return -1;
     }
 
@@ -347,6 +348,7 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
 
     if (!NextTickAlwaysTimeout(false)) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
+        Dispose();
         return -1;
     }
 

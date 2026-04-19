@@ -9,6 +9,7 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetManagedServer.cpp
@@ -65,10 +66,12 @@ namespace ppp {
              */
             bool VirtualEthernetManagedServer::ConnectToManagedServer(const ppp::string& url) noexcept {
                 if (url_.empty() || url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
@@ -91,16 +94,19 @@ namespace ppp {
              */
             bool VirtualEthernetManagedServer::AuthenticationToManagedServer(const ppp::Int128& session_id, const AuthenticationToManagedServerAsyncCallback& ac) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (NULLPTR == ac) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 UInt64 next = Executors::GetTickCount() + PACKET_TIMEOUT_AUTHENTICATION; {
                     SynchronizedObjectScope scope(syncobj_);
                     if (authentications_.find(session_id) != authentications_.end()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
                         return false;
                     }
 
@@ -114,6 +120,7 @@ namespace ppp {
                 }
 
                 DeleteAuthenticationToManagedServer(session_id);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteFailed);
                 return false;
             }
 
@@ -370,14 +377,17 @@ namespace ppp {
             /** @brief Asynchronously validates managed-server URI and caches normalized form. */
             bool VirtualEthernetManagedServer::TryVerifyUriAsync(const ppp::string& url, const TryVerifyUriAsyncCallback& ac) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (NULLPTR == ac) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
@@ -646,6 +656,7 @@ namespace ppp {
             VirtualEthernetManagedServer::IWebScoketPtr VirtualEthernetManagedServer::NewWebSocketConnectToManagedServer2(const ppp::string& url, YieldContext& y) noexcept {
                 IWebScoketPtr websocket = NewWebSocketConnectToManagedServer(url, y);
                 if (NULLPTR == websocket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                     return NULLPTR;
                 }
 
@@ -680,6 +691,7 @@ namespace ppp {
                 } websocket_auto_destroy_(websocket, ok);
 
                 if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteFailed);
                     return NULLPTR;
                 }
 
@@ -689,6 +701,7 @@ namespace ppp {
                         websocket->Dispose();
                     });
                 if (NULLPTR == timeout) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     return NULLPTR;
                 }
 
@@ -697,30 +710,38 @@ namespace ppp {
 
                 timeout->Dispose();
                 if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketReadFailed);
                     return NULLPTR;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return NULLPTR;
                 }
 
                 int cmd = JsonAuxiliary::AsValue<int>(json["Cmd"]);
                 if (cmd != PACKET_CMD_CONNECT) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                     return NULLPTR;
                 }
 
                 int node_value = JsonAuxiliary::AsValue<int>(json["Node"]);
                 if (node_value != node) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                     return NULLPTR;
                 }
 
                 ppp::string data = JsonAuxiliary::AsString(json["Data"]);
+                if (!ToBoolean(data.data())) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
                 return ToBoolean(data.data()) ? websocket : NULLPTR;
             }
 
             /** @brief Opens TCP/TLS websocket transport and completes network handshake. */
             VirtualEthernetManagedServer::IWebScoketPtr VirtualEthernetManagedServer::NewWebSocketConnectToManagedServer(const ppp::string& url, YieldContext& y) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return NULLPTR;
                 }
                 
@@ -731,17 +752,20 @@ namespace ppp {
 
                 auto url_new = GetManagedServerEndPoint(url, host, path, remoteEP, ssl, y);
                 if (url_new.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
                 auto socket = make_shared_object<boost::asio::ip::tcp::socket>(*context_);
                 if (NULLPTR == socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                     return NULLPTR;
                 }
 
                 boost::system::error_code ec;
                 socket->open(remoteEP.protocol(), ec);
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                     return NULLPTR;
                 }
                 
@@ -751,12 +775,14 @@ namespace ppp {
 
                 bool connect_ok = ppp::coroutines::asio::async_connect(*socket, remoteEP, y);
                 if (!connect_ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpConnectFailed);
                     return NULLPTR;
                 }
 
                 bool binary = false;
                 auto websocket = make_shared_object<IWebSocket>();
                 if (NULLPTR == websocket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                     return NULLPTR;
                 }
 
@@ -764,6 +790,7 @@ namespace ppp {
                 if (ssl) {
                     auto wss = make_shared_object<WebSocketSsl>(context_, strand, socket, binary);
                     if (NULLPTR == wss) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                         return NULLPTR;
                     }
 
@@ -772,6 +799,7 @@ namespace ppp {
                 else {
                     auto ws = make_shared_object<WebSocket>(context_, strand, socket, binary);
                     if (NULLPTR == ws) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                         return NULLPTR;
                     }
 
@@ -780,11 +808,13 @@ namespace ppp {
 
                 bool running = websocket->Run(WebSocket::HandshakeType_Client, host, path, y);
                 if (!running) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                     return NULLPTR;
                 }
 
                 if (disposed_) {
                     websocket->Dispose();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return NULLPTR;
                 }
                 else {

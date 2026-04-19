@@ -15,7 +15,7 @@ namespace ppp {
             uint64_t                                                               GetLastErrorTimestamp() noexcept;
             ErrorCode                                                              SetLastErrorCode(ErrorCode code) noexcept;
             const char*                                                            FormatErrorString(ErrorCode code) noexcept;
-            void                                                                   RegisterErrorHandler(ppp::function<void(int err)> handler) noexcept;
+            void                                                                   RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept;
 
         private:
             ErrorHandler() noexcept = default;
@@ -30,7 +30,7 @@ namespace ppp {
             std::atomic<uint64_t>                                                  last_error_timestamp_snapshot_{0};
 
             std::mutex                                                             error_handlers_sync_;
-            std::vector<ppp::function<void(int err)>>                              error_handlers_;
+            ppp::unordered_map<ppp::string, ppp::function<void(int err)>>          error_handlers_;
         };
     }
 }

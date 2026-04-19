@@ -13,6 +13,7 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetLocalProxyConnection.cpp
@@ -166,17 +167,17 @@ namespace ppp {
                     using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<VEthernetLocalProxyConnection>;
                     
                     if (NULLPTR == destinationEP) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     }
 
                     auto configuration = exchanger_->GetConfiguration();
                     if (NULLPTR == configuration) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     }
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = GetSocket();
                     if (NULLPTR == socket || !socket->is_open()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     }
 
                     auto self = shared_from_this();
@@ -192,7 +193,7 @@ namespace ppp {
                             }
 
                             if (ppp::net::IPEndPoint::IsInvalid(address)) {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                             }
 
                             int rinetd_status = VEthernetNetworkTcpipConnection::Rinetd(self,
@@ -223,12 +224,13 @@ namespace ppp {
 
                     std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger_->ConnectTransmission(context_, strand_, y);
                     if (NULLPTR == transmission) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     std::shared_ptr<VEthernetTcpipConnection> connection =
                         make_shared_object<VEthernetTcpipConnection>(self, configuration, context_, strand_, exchanger_->GetId(), socket);
                     if (NULLPTR == connection) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         IDisposable::DisposeReferences(transmission);
                         return false;
                     }
@@ -242,6 +244,7 @@ namespace ppp {
 
                     bool ok = connection->Connect(y, transmission, destinationEP->Host, destinationEP->Port);
                     if (!ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpConnectFailed);
                         IDisposable::DisposeReferences(connection, transmission);
                         return false;
                     }
@@ -255,16 +258,16 @@ namespace ppp {
                  */
                 std::shared_ptr<ppp::app::protocol::AddressEndPoint> VEthernetLocalProxyConnection::GetAddressEndPointByProtocol(const ppp::string& host, int port) noexcept {
                     if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     if (host.empty()) {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     std::shared_ptr<ppp::app::protocol::AddressEndPoint> destinationEP = make_shared_object<ppp::app::protocol::AddressEndPoint>();
                     if (NULLPTR == destinationEP) {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     boost::system::error_code ec;
@@ -292,7 +295,7 @@ namespace ppp {
                         destinationEP->Type = ppp::app::protocol::AddressType::IPv6;
                     }
                     else {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     destinationEP->Host = host;

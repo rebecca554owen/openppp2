@@ -3,6 +3,7 @@
 #include <ppp/net/Firewall.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file Rule.cpp
@@ -35,14 +36,14 @@ namespace ppp
                 {
                     if (path.empty())
                     {
-                        return 0;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid, 0);
                     }
 
                     ppp::string full_path = ppp::io::File::GetFullPath(
                         ppp::io::File::RewritePath(path.data()).data());
                     if (full_path.empty())
                     {
-                        return 0;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid, 0);
                     }
 
                     ppp::string texts = ppp::io::File::ReadAllText(full_path.data());

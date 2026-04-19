@@ -1,6 +1,7 @@
 #include <ppp/io/File.h>
 #include <ppp/io/MemoryStream.h>
 #include <ppp/text/Encoding.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file File.cpp
@@ -26,12 +27,12 @@ namespace ppp {
          */
         int File::GetLength(const char* path) noexcept {
             if (NULLPTR == path) {
-                return ~0;
+                return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             FILE* stream = fopen(path, "rb");
             if (NULLPTR == stream) {
-                return ~0;
+                return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::FileOpenFailed);
             }
 
             fseek(stream, 0, SEEK_END);
@@ -68,16 +69,16 @@ namespace ppp {
          */
         bool File::WriteAllBytes(const char* path, const void* data, int length) noexcept {
             if (NULLPTR == path || length < 0) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             if (NULLPTR == data && length != 0) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryBufferNull);
             }
 
             FILE* f = fopen(path, "wb+");
             if (NULLPTR == f) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileOpenFailed);
             }
 
             if (length > 0) {
@@ -98,7 +99,7 @@ namespace ppp {
         bool File::CanAccess(const char* path, FileAccess access_) noexcept {
 #if defined(_WIN32)
             if (NULLPTR == path) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             int flags = 0;
@@ -183,7 +184,7 @@ namespace ppp {
             int file_length = 0;
             std::shared_ptr<Byte> file_content = File::ReadAllBytes(path, file_length);
             if (file_length < 0) {
-                return "";
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileReadFailed, ppp::string());
             }
 
             char* file_content_memory = (char*)file_content.get();
@@ -210,12 +211,12 @@ namespace ppp {
         std::shared_ptr<Byte> File::ReadAllBytes(const char* path, int& length) noexcept {
             length = ~0;
             if (NULLPTR == path) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid, std::shared_ptr<Byte>());
             }
 
             FILE* file_ = fopen(path, "rb"); // Oracle Cloud Shells Compatibility...
             if (!file_) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileOpenFailed, std::shared_ptr<Byte>());
             }
 
             MemoryStream stream_;
@@ -299,7 +300,7 @@ namespace ppp {
 
             ppp::string path_new = RewritePath(path);
             if (path_new.empty()) {
-                return "";
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid, ppp::string());
             }
 
 #if defined(_WIN32)            
@@ -352,7 +353,7 @@ namespace ppp {
 
                 return RewritePath(fullpath_string.data());
             }
-            return "";
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid, ppp::string());
 #endif
         }
 
@@ -378,18 +379,27 @@ namespace ppp {
          */
         bool File::Delete(const char* path) noexcept {
             if (NULLPTR == path || *path == '\x0') {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             ppp::string fullpath = RewritePath(path);
             if (fullpath.empty()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
 #if defined(_WIN32)
-            return ::DeleteFileA(fullpath.data());
+            BOOL deleted = ::DeleteFileA(fullpath.data());
+            if (!deleted) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileDeleteFailed);
+            }
+
+            return true;
 #else
-            return ::unlink(fullpath.data()) > -1;
+            if (::unlink(fullpath.data()) > -1) {
+                return true;
+            }
+
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileDeleteFailed);
 #endif
         }
 
@@ -401,10 +411,11 @@ namespace ppp {
          */
         bool File::Create(const char* path, size_t size) noexcept {
             if (NULLPTR == path || *path == '\x0') {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
-            else {
-                ppp::io::File::Delete(path);
+
+            if (ppp::io::File::Exists(path)) {
+                ::remove(path);
             }
 
             std::ofstream ofs(path, std::ios::binary);
@@ -415,7 +426,7 @@ namespace ppp {
                 return true;
             }
             else {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileCreateFailed);
             }
         }
 
@@ -429,7 +440,7 @@ namespace ppp {
          */
         static bool FILE_GetAllFileNames(const char* path, ppp::vector<ppp::string>& out) noexcept {
             if (NULLPTR == path || *path == '\x0') {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             try {
@@ -447,7 +458,7 @@ namespace ppp {
                 return true;
             }
             catch (const std::exception&) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileDirectoryEnumerateFailed);
             }
         }
 
@@ -474,7 +485,7 @@ namespace ppp {
          */
         bool File::CreateDirectories(const char* path) noexcept {
             if (NULLPTR == path || *path == '\x0') {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             boost::filesystem::path dir(path);
@@ -489,7 +500,7 @@ namespace ppp {
                 }
             }
             catch (const std::exception&) {}
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileDirectoryCreateFailed);
         }
 
         /**
@@ -500,7 +511,7 @@ namespace ppp {
         ppp::string File::GetParentPath(const char* path) noexcept {
             ppp::string s = File::RewritePath(path);
             if (s.empty()) {
-                return "";
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid, ppp::string());
             }
 
             ppp::string separator = File::GetSeparator();
@@ -520,7 +531,7 @@ namespace ppp {
         ppp::string File::GetFileName(const char* path) noexcept {
             ppp::string s = File::File::RewritePath(path);
             if (s.empty()) {
-                return "";
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid, ppp::string());
             }
 
             ppp::string separator = File::GetSeparator();

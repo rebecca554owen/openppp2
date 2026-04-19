@@ -100,10 +100,12 @@ namespace ppp {
         const char*                                                         FormatErrorString(ErrorCode code) noexcept;
 
         /**
-         * @brief Registers a callback for later error notifications.
+         * @brief Registers or removes a named callback for later error notifications.
+         * @param key Unique handler key used to update or remove a registration.
          * @param handler Handler receiving the integer error value.
          * @note Registration only stores the callback and does not trigger it immediately.
+         * @note Registration is NOT thread-safe and must be completed before starting multi-thread runtime.
          */
-        void                                                                RegisterErrorHandler(ppp::function<void(int err)> handler) noexcept;
+        void                                                                RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept;
     }
 }

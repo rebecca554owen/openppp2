@@ -205,6 +205,59 @@ DNS 规则文件。默认 `./dns-rules.txt`。
 
 下载 IP list，完成后退出。
 
+## Console UI 命令与布局
+
+运行期 Console UI 是独立交互界面，不等同于启动参数 CLI。
+
+锚点：
+
+- `ppp/app/ConsoleUI.cpp::ExecuteCommand(...)`
+- `ppp/app/ConsoleUI.cpp::RenderFrame(...)`
+- `ppp/app/ConsoleUI.cpp::BuildStatusBarText(...)`
+
+### 支持命令
+
+- `help`：打印可用命令。
+- `restart`：请求进程级重启（`ShutdownApplication(true)`）。
+- `exit`：请求进程退出（`ShutdownApplication(false)`）。
+- `clear`：清空日志缓冲并重置滚动偏移。
+- `status`：打印与底部状态栏一致的文本。
+
+滚动与编辑器导航由交互键盘输入驱动。
+
+### 布局契约
+
+每帧渲染由以下区域组成：
+
+1. 可滚动日志区
+2. 固定命令编辑行（`cmd> ...`）
+3. 固定状态栏行
+
+渲染与输入均为非阻塞，并在专用 UI 线程中执行；主运行时 I/O 线程不会被控制台刷新或按键处理阻塞。
+
+### 键盘控制
+
+- `Up` / `Down`：命令历史导航。
+- `Left` / `Right`：编辑器内移动光标。
+- `Home` / `End`：光标跳到行首/行尾。
+- `Backspace` / `Delete`：删除光标前/当前位置字符。
+- `PageUp` / `PageDown`：日志区按页滚动。
+- `Ctrl+Up` / `Ctrl+Down`：日志区按行滚动。
+
+Windows 与非 Windows 构建都支持主动编辑输入以及历史/滚动控制。
+
+### 状态栏语义
+
+状态栏文本由三部分拼接：
+
+- `vpn:<state>`
+- 可选 `note:<最新状态队列文本>`
+- `err:<FormatErrorString(snapshot)>`
+- 基于 `GetLastErrorTimestamp()` 差值的 `err_age:<seconds>s`
+- `diag_ts:<诊断原始时间戳>`
+
+状态栏读取进程级诊断快照，目标是在不中断数据面线程的情况下给出最近一次失败上下文。
+
 ## 记住这些默认值
 
 - `--mode` 默认 `server`
@@ -218,3 +271,4 @@ DNS 规则文件。默认 `./dns-rules.txt`。
 - `CONFIGURATION_CN.md`
 - `TRANSMISSION_CN.md`
 - `ARCHITECTURE_CN.md`
+- `ERROR_HANDLING_API_CN.md`

@@ -28,6 +28,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetNetworkSwitcher.cpp
@@ -618,7 +619,7 @@ namespace ppp {
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 auto guid = StringAuxiliary::GuidStringToInt128(configuration->client.guid);
                 if (guid == 0) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionIdInvalid, std::shared_ptr<VEthernetExchanger>(NULLPTR));
                 }
 
                 auto my = shared_from_this();
@@ -629,7 +630,7 @@ namespace ppp {
             /** @brief Creates HTTP proxy switcher bound to exchanger. */
             VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr VEthernetNetworkSwitcher::NewHttpProxy(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
                 if (NULLPTR == exchanger) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr(NULLPTR));
                 }
                 else {
                     return make_shared_object<VEthernetHttpProxySwitcher>(exchanger);
@@ -639,7 +640,7 @@ namespace ppp {
             /** @brief Creates SOCKS proxy switcher bound to exchanger. */
             VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr VEthernetNetworkSwitcher::NewSocksProxy(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
                 if (NULLPTR == exchanger) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr(NULLPTR));
                 }
                 else {
                     return make_shared_object<VEthernetSocksProxySwitcher>(exchanger);

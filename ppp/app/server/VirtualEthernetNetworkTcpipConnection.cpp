@@ -6,6 +6,7 @@
 
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetNetworkTcpipConnection.cpp
@@ -83,9 +84,11 @@ namespace ppp {
             bool VirtualEthernetNetworkTcpipConnection::Run(ppp::coroutines::YieldContext& y) noexcept {
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection = AcceptConnection(y);
                 if (NULLPTR == connection) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                     return false;
                 }
                 elif(disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
                 else {
@@ -190,17 +193,21 @@ namespace ppp {
             bool VirtualEthernetNetworkTcpipConnection::AcceptMuxLinklayer(const std::shared_ptr<VirtualEthernetTcpipConnection>& connection, uint32_t vlan, uint32_t seq, uint32_t ack, ppp::coroutines::YieldContext& y) noexcept {
                 std::shared_ptr<VirtualEthernetExchanger> exchanger = switcher_->GetExchanger(id_);
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
                 std::shared_ptr<vmux::vmux_net> mux = exchanger->GetMux();
                 if (NULLPTR == mux) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     return false;
                 }
                 elif(mux->Vlan != vlan) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     return false;
                 }
                 elif(!mux->ftt(seq, ack)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     return false;
                 }
 
@@ -221,6 +228,7 @@ namespace ppp {
                             return true;
                         }
 
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         return false;
                     });
             }

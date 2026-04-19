@@ -13,6 +13,7 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/net/rinetd/RinetdConnection.h>
 #include <ppp/net/asio/IAsynchronousWriteIoQueue.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
@@ -77,6 +78,7 @@ namespace ppp {
 
                     std::shared_ptr<VEthernetNetworkSwitcher> switcher = exchanger->GetSwitcher();
                     if (NULLPTR == switcher) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                         return -1;
                     }
 
@@ -136,6 +138,7 @@ namespace ppp {
                     std::shared_ptr<VEthernetRinetdConnection> connection_rinetd = 
                         make_shared_object<VEthernetRinetdConnection>(reference, configuration, context, strand, socket);
                     if (NULLPTR == connection_rinetd) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return -1;
                     }
 
@@ -145,6 +148,7 @@ namespace ppp {
 
                     bool run_ok = connection_rinetd->Open(remoteEP, y);
                     if (!run_ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpConnectFailed);
                         return -1;
                     }
 
@@ -174,6 +178,7 @@ namespace ppp {
                         if (network_state == NetworkState::NetworkState_Established) {
                             std::shared_ptr<VmuxSktPtr> pmux_connection = make_shared_object<VmuxSktPtr>();
                             if (NULLPTR == pmux_connection) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 return -1;
                             }
 
@@ -185,6 +190,7 @@ namespace ppp {
                                 host,
                                 port,
                                 pmux_connection)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                                 return -1;
                             }
                             else {
@@ -193,6 +199,7 @@ namespace ppp {
                             
                             VmuxSktPtr mux_connection = *pmux_connection;
                             if (NULLPTR == mux_connection) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                                 return -1;
                             }
 

@@ -6,6 +6,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetDatagramPort.cpp
@@ -116,21 +117,21 @@ namespace ppp {
              */
             bool VEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 int destinationPort = destinationEP.port();
                 if (destinationPort <= IPEndPoint::MinPort || destinationPort > IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 boost::asio::ip::address address = destinationEP.address();
                 if (address.is_unspecified()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 bool ok = false;
@@ -142,6 +143,7 @@ namespace ppp {
                 do {
                     std::shared_ptr<ITransmission> transmission = transmission_;
                     if (NULLPTR == transmission) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         fin = true;
                         break;
                     }
@@ -179,6 +181,7 @@ namespace ppp {
                                     opened_ = 1;
                                 }
                                 else {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                                     fin = true;
                                     break;
                                 }
@@ -187,6 +190,7 @@ namespace ppp {
                             // If you are currently trying to open the socket, cache the data and do not send it until it is opened.
                             std::shared_ptr<Byte> packet_managed = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, packet, packet_length);
                             if (NULLPTR == packet_managed) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 break;
                             }
 
@@ -205,6 +209,7 @@ namespace ppp {
                     // Send it to the VPN server for outgoing.
                     ok = exchanger_->DoSendTo(transmission, sourceEP_, destinationEP, (Byte*)packet, packet_length, nullof<YieldContext>());
                     if (!ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                         fin = true;
                         transmission->Dispose();
                     }

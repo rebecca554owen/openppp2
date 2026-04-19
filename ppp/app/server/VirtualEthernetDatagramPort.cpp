@@ -10,6 +10,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetDatagramPort.cpp
@@ -91,11 +92,13 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPort::Open() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
@@ -107,6 +110,7 @@ namespace ppp {
                     boost::system::error_code ec;
                     localEP_ = socket_.local_endpoint(ec);
                     if (ec) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                         return false;
                     }
 
@@ -130,11 +134,13 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPort::Loopback() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
@@ -198,6 +204,7 @@ namespace ppp {
 
                 auto cache = switcher->GetNamespaceCache();
                 if (NULLPTR == cache) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                     return false;
                 }
 
@@ -211,11 +218,13 @@ namespace ppp {
                     });
 
                 if (domain.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
 
                 std::shared_ptr<Byte> response = make_shared_alloc<Byte>(packet_length);
                 if (NULLPTR == response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
@@ -287,20 +296,24 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 int destinationPort = destinationEP.port();
                 if (destinationPort <= IPEndPoint::MinPort || destinationPort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return false;
                 }
 
@@ -315,6 +328,7 @@ namespace ppp {
                 }
 
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false; // Failed to sendto the datagram packet. 
                 }
                 else {

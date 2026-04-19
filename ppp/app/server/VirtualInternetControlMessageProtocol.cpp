@@ -3,6 +3,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualInternetControlMessageProtocol.cpp
@@ -44,17 +45,20 @@ namespace ppp {
              */
             bool VirtualInternetControlMessageProtocol::Output(const IPFrame* packet, const IPEndPoint& destinationEP) noexcept {
                 if (NULLPTR == packet) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
                 std::shared_ptr<ITransmission> transmission = transmission_;
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = this->BufferAllocator;
                 std::shared_ptr<BufferSegment> messages = constantof(packet)->ToArray(allocator);
                 if (NULLPTR == messages) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     return false;
                 }
 
@@ -70,6 +74,7 @@ namespace ppp {
                 }
 
                 transmission->Dispose();
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 return false;
             }
         }

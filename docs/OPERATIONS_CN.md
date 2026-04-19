@@ -50,6 +50,37 @@ stateDiagram-v2
 
 这部分就是把运行时状态转成周期性维护行为的地方。
 
+## 诊断覆盖与错误传播策略
+
+运维与排障遵循统一诊断契约：
+
+- 启动、环境准备、打开路径、回滚路径中的失败分支，在返回失败哨兵值前应设置框架诊断（`SetLastErrorCode` / `SetLastError(...)`）。
+- 仅返回 `false`、`-1` 或 `NULLPTR` 但不设置诊断，视为传播不完整，会降低可观测性。
+- 面向用户的运维界面（Console UI、日志、JNI 返回路径）应消费统一诊断快照，而不是建立平行失败通道。
+
+实践要求：
+
+- 运维路径新增失败分支时，要么直接设置诊断，要么调用保证会设置诊断的 helper。
+
+## 错误处理器注册运行时规则
+
+错误处理器注册已是 key-based（`RegisterErrorHandler(key, handler)`），并有启动期线程安全边界：
+
+- 在初始化阶段完成 handler 的注册、替换、卸载。
+- 多线程运行期不要并发修改注册表。
+
+这样可以保证 worker 活跃期间回调拓扑可预测。
+
+API 细节与生命周期建议见 `ERROR_HANDLING_API_CN.md`。
+
+## Android 运行时同步说明
+
+Android 桥接错误整数与核心诊断应保持语义同步：
+
+- JNI 可见错误码应在可行处映射到核心诊断。
+- `run/stop/release` 过程应在 native 与 managed 边界维持一致错误语义。
+- 运维手册应将 Android bridge 错误纳入同一诊断链路，不作为独立排障体系。
+
 ## 重启行为
 
 重启可以是刻意的。可能由以下原因触发：
@@ -105,6 +136,7 @@ flowchart TD
 - `STARTUP_AND_LIFECYCLE_CN.md`
 - `DEPLOYMENT_CN.md`
 - `PLATFORMS_CN.md`
+- `ERROR_HANDLING_API_CN.md`
 
 ## 主结论
 

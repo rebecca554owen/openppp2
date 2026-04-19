@@ -10,6 +10,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetDatagramPortStatic.cpp
@@ -87,11 +88,13 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPortStatic::Open() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
@@ -103,6 +106,7 @@ namespace ppp {
                     boost::system::error_code ec;
                     localEP_ = socket_.local_endpoint(ec);
                     if (ec) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                         return false;
                     }
 
@@ -126,11 +130,13 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPortStatic::Loopback() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool openped = socket_.is_open();
                 if (!openped) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
@@ -187,6 +193,7 @@ namespace ppp {
                         return Output(switcher, exchanger, messages, message_length, inEP, remoteEP);
                     }
                     else {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                         return false;
                     }
                 }
@@ -205,25 +212,30 @@ namespace ppp {
                 const boost::asio::ip::udp::endpoint&               remoteEP) noexcept {
 
                 if (NULLPTR == switcher || NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (NULLPTR == messages || message_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 boost::asio::ip::udp::socket& socket = switcher->static_echo_socket_;
                 if (!socket.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 boost::asio::ip::address remoteIP = remoteEP.address();
                 if (!remoteIP.is_v4()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                     return false;
                 }
 
                 auto allocated_context = exchanger->static_allocated_context_;
                 if (NULLPTR == allocated_context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
@@ -245,6 +257,7 @@ namespace ppp {
                     message_length,
                     packet_length);
                 if (NULLPTR == packet_output) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     return false;
                 }
 
@@ -253,6 +266,7 @@ namespace ppp {
                     exchanger->static_echo_source_ep_, boost::asio::socket_base::message_end_of_record, ec);
                 
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false;
                 }
 
@@ -269,6 +283,7 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPortStatic::Output(const void* messages, int message_length, const boost::asio::ip::udp::endpoint& remoteEP) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
@@ -316,20 +331,24 @@ namespace ppp {
              */
             bool VirtualEthernetDatagramPortStatic::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 int destinationPort = destinationEP.port();
                 if (destinationPort <= IPEndPoint::MinPort || destinationPort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return false;
                 }
 
@@ -341,6 +360,7 @@ namespace ppp {
                             goto LABEL_OK;
                         }
                         elif(status == 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                             return false;
                         }
                     }
@@ -356,6 +376,7 @@ namespace ppp {
                 }
 
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false; // Failed to sendto the datagram packet. 
                 }
                 else {

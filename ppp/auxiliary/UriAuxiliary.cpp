@@ -4,6 +4,7 @@
  */
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -158,17 +159,17 @@ namespace ppp {
             protocol = ProtocolType_PPP;
 
             if (url.empty()) {
-                return "";
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, ppp::string());
             }
 
             ppp::string url_string = ToLower(LTrim(RTrim(url)));
             if (url_string.empty()) {
-                return "";
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, ppp::string());
             }
 
             std::size_t scheme_sep = url_string.find("://");
             if (scheme_sep == ppp::string::npos) {
-                return ""; 
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed, ppp::string());
             }
 
             /**
@@ -197,7 +198,7 @@ namespace ppp {
                 protocol_type = ProtocolType_Socks;
             }
             else {
-                return ""; 
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported, ppp::string());
             }
 
             ppp::string host_string;
@@ -228,7 +229,7 @@ namespace ppp {
                         long val = strtol(port_str.c_str(), &end, 10);
 
                         if (end == port_str.c_str() || *end != '\0' || val <= IPEndPoint::MinPort || val > IPEndPoint::MaxPort) {
-                            return ""; 
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, ppp::string());
                         }
 
                         port_number = static_cast<int>(val);
@@ -245,7 +246,7 @@ namespace ppp {
                  */
                 std::size_t right_bracket = host_string.find(']', left_bracket);
                 if (right_bracket == ppp::string::npos || left_bracket > right_bracket) {
-                    return "";
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed, ppp::string());
                 }
 
                 address_string = host_string.substr(left_bracket + 1, right_bracket - left_bracket - 1);
@@ -265,7 +266,7 @@ namespace ppp {
                     port_number = PPP_HTTPS_SYS_PORT;
                 }
                 else {
-                    return ""; 
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, ppp::string());
                 }
             }
 

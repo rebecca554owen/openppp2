@@ -581,7 +581,12 @@ namespace ppp {
             bool ipv6_server_enabled = config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66 ||
                 config.server.ipv6.mode == AppConfiguration::IPv6Mode_Gua;
             if (ipv6_server_enabled && !SupportsServerIPv6DataPlane()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PlatformNotSupportGUAMode);
+                if (config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6Nat66Unavailable);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PlatformNotSupportGUAMode);
+                }
                 return false;
             }
 
@@ -800,22 +805,22 @@ namespace ppp {
         bool AppConfiguration::Load(const ppp::string& path) noexcept {
             Clear();
             if (path.empty()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid);
             }
 
             ppp::string file_path = File::GetFullPath(File::RewritePath(path.data()).data());
             if (file_path.empty()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid);
             }
 
             ppp::string json_string = File::ReadAllText(path.data());
             if (json_string.empty()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileUnreadable);
             }
 
             Json::Value json = JsonAuxiliary::FromString(json_string);
             if (!json.isObject()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileMalformed);
             }
             else {
                 return Load(json);
@@ -1075,7 +1080,7 @@ namespace ppp {
         bool AppConfiguration::Load(Json::Value& json) noexcept {
             Clear();
             if (!json.isObject()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigTypeMismatch);
             }
 
             AppConfiguration& config = *this;

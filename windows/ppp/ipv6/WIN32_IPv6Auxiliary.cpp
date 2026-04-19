@@ -163,23 +163,23 @@ namespace ppp {
 
                 bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || context.InterfaceName.empty() || !address.is_v6()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                     }
 
                     boost::asio::ip::address_v6 addr_v6 = address.to_v6();
                     if (addr_v6.is_unspecified() || addr_v6.is_multicast() || addr_v6.is_loopback()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && addr_v6 == ppp::ipv6::ComputeNetworkAddress(addr_v6, prefix_length)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 
                     std::string addr_std = address.to_string();
                     ppp::string addr_str(addr_std.data(), addr_std.size());
                     if (!ppp::win32::network::SetIPv6Address(context.InterfaceIndex, addr_str, prefix_length)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientAddressApplyFailed);
                     }
 
                     state.AddressApplied = true;
@@ -197,7 +197,7 @@ namespace ppp {
                         std::string gw_std = gateway.to_string();
                         ppp::string gw_str(gw_std.data(), gw_std.size());
                         if (!ppp::win32::network::SetIPv6DefaultGateway(context.InterfaceIndex, gw_str, 0)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed);
                             return false;
                         }
 
@@ -207,7 +207,9 @@ namespace ppp {
                     }
 
                     if (!nat_mode || !ppp::win32::network::SetIPv6DefaultRoute(context.InterfaceIndex, 0)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                        ppp::diagnostics::SetLastErrorCode(!nat_mode ?
+                            ppp::diagnostics::ErrorCode::IPv6GatewayMissing :
+                            ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed);
                         return false;
                     }
 
@@ -236,11 +238,11 @@ namespace ppp {
                         gateway_str.assign(gw_std.data(), gw_std.size());
                     }
                     else if (!nat_mode) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
                     if (!ppp::win32::network::AddIPv6Route(context.InterfaceIndex, prefix_str, prefix_length, gateway_str, 0)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed);
                         return false;
                     }
 
@@ -253,12 +255,12 @@ namespace ppp {
 
                 bool ApplyClientDns(const ::ppp::ipv6::auxiliary::ClientContext& context, const ppp::vector<ppp::string>& dns_servers, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || context.InterfaceName.empty() || dns_servers.empty()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed);
                     }
 
                     if (!ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, dns_servers)) {
                         ppp::win32::network::SetDnsAddressesV6(context.InterfaceIndex, state.OriginalDnsServers);
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed);
                     }
 
                     state.DnsApplied = true;

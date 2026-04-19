@@ -205,6 +205,59 @@ Shows the help output.
 
 Downloads an IP list and exits after the action completes.
 
+## Console UI Commands And Layout
+
+The runtime Console UI is a dedicated interactive surface, separate from startup CLI flags.
+
+Anchors:
+
+- `ppp/app/ConsoleUI.cpp::ExecuteCommand(...)`
+- `ppp/app/ConsoleUI.cpp::RenderFrame(...)`
+- `ppp/app/ConsoleUI.cpp::BuildStatusBarText(...)`
+
+### Supported commands
+
+- `help`: prints available commands.
+- `restart`: requests process-level restart (`ShutdownApplication(true)`).
+- `exit`: requests process shutdown (`ShutdownApplication(false)`).
+- `clear`: clears buffered log lines and resets scroll offset.
+- `status`: prints the same status-bar text rendered in the frame footer.
+
+Scrolling and editor navigation are keyboard-driven in the interactive surface.
+
+### Layout contract
+
+Each rendered frame has:
+
+1. scrollable body log area
+2. fixed command editor line (`cmd> ...`)
+3. fixed status bar line
+
+Render and input are non-blocking and run on dedicated UI threads; main runtime I/O threads are not blocked by console repaint or key handling.
+
+### Keyboard controls
+
+- `Up` / `Down`: command history navigation.
+- `Left` / `Right`: move cursor in editor.
+- `Home` / `End`: jump cursor to line boundaries.
+- `Backspace` / `Delete`: erase character before/at cursor.
+- `PageUp` / `PageDown`: page scroll for body log area.
+- `Ctrl+Up` / `Ctrl+Down`: line scroll for body log area.
+
+Windows and non-Windows builds both support active editor input and history/scroll handling.
+
+### Status bar semantics
+
+Status bar text is composed as:
+
+- `vpn:<state>`
+- optional `note:<latest queued runtime status text>`
+- `err:<FormatErrorString(snapshot)>`
+- `err_age:<seconds>s` from `GetLastErrorTimestamp()` delta
+- `diag_ts:<raw diagnostics timestamp>`
+
+The status bar reads process-wide diagnostics snapshots and is intended to show last observed failure context without interrupting data-plane threads.
+
 ## Defaults Worth Remembering
 
 - `--mode` defaults to `server`
@@ -218,3 +271,4 @@ Downloads an IP list and exits after the action completes.
 - `CONFIGURATION.md`
 - `TRANSMISSION.md`
 - `ARCHITECTURE.md`
+- `ERROR_HANDLING_API.md`

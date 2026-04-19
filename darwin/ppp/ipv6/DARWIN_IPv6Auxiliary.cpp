@@ -268,17 +268,17 @@ namespace ppp {
 
                 bool ApplyClientAddress(const ::ppp::ipv6::auxiliary::ClientContext& context, const boost::asio::ip::address& address, int prefix_length, bool gua_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (NULLPTR == context.Tap || context.InterfaceIndex < 0 || !IsSafeShellToken(context.InterfaceName) || !address.is_v6()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                     }
 
                     boost::asio::ip::address_v6 addr_v6 = address.to_v6();
                     if (addr_v6.is_unspecified() || addr_v6.is_multicast() || addr_v6.is_loopback()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && addr_v6 == ComputeNetworkAddress(addr_v6, prefix_length)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 
                     ppp::string addr_str = address.to_string();
@@ -286,7 +286,7 @@ namespace ppp {
                     snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s prefixlen %d alias > /dev/null 2>&1", context.InterfaceName.data(), addr_str.data(), prefix_length);
                     
                     if (system(cmd) != 0) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientAddressApplyFailed);
                     }
 
                     state.AddressApplied = true;
@@ -305,11 +305,11 @@ namespace ppp {
                         gateway_string = gateway.to_string();
                     }
                     else if (!nat_mode) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
                     if (!SetRoute(context.InterfaceName, "::", 0, gateway_string)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed);
                         return false;
                     }
 
@@ -333,13 +333,13 @@ namespace ppp {
                         gateway_string = gateway.to_string();
                     }
                     else if (!nat_mode) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
                     ppp::string prefix_string = prefix.to_string();
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     if (!SetRoute(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed);
                         return false;
                     }
 
@@ -352,7 +352,7 @@ namespace ppp {
 
                 bool ApplyClientDns(const ::ppp::ipv6::auxiliary::ClientContext& context, const ppp::vector<ppp::string>& dns_servers, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {
                     if (dns_servers.empty()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed);
                     }
 
                     ppp::vector<boost::asio::ip::address> dns_addrs;
@@ -367,7 +367,7 @@ namespace ppp {
                     }
 
                     if (dns_addrs.empty() || !ppp::unix__::UnixAfx::MergeDnsAddresses(dns_addrs, current_addrs)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed);
                     }
 
                     state.DnsApplied = true;

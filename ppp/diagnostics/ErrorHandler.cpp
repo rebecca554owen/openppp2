@@ -30,22 +30,20 @@ namespace ppp {
             last_error_code_snapshot_.store(static_cast<uint32_t>(code), std::memory_order_relaxed);
             last_error_timestamp_snapshot_.store(tls_last_error_timestamp_, std::memory_order_relaxed);
 
-            ppp::vector<ppp::function<void(int err)>> error_handlers;
+            ppp::unordered_map<ppp::string, ppp::function<void(int err)>> error_handlers;
             {
                 std::lock_guard<std::mutex> scope(error_handlers_sync_);
-                for (auto&& error_handler : error_handlers_) {
-                    error_handlers.emplace_back(error_handler);
-                }
+                error_handlers = error_handlers_;
             }
 
             int error_value = static_cast<int>(code);
             for (auto&& error_handler : error_handlers) {
-                if (NULLPTR == error_handler) {
+                if (NULLPTR == error_handler.second) {
                     continue;
                 }
 
                 try {
-                    error_handler(error_value);
+                    error_handler.second(error_value);
                 } catch (...) {
                 }
             }
@@ -63,13 +61,15 @@ namespace ppp {
             }
         }
 
-        void ErrorHandler::RegisterErrorHandler(ppp::function<void(int err)> handler) noexcept {
+        void ErrorHandler::RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept {
+            std::lock_guard<std::mutex> scope(error_handlers_sync_);
+
             if (NULLPTR == handler) {
+                error_handlers_.erase(key);
                 return;
             }
 
-            std::lock_guard<std::mutex> scope(error_handlers_sync_);
-            error_handlers_.emplace_back(std::move(handler));
+            error_handlers_[key] = handler;
         }
     }
 }

@@ -81,13 +81,38 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
 
     uint64_t incoming_traffic = 0;
     uint64_t outgoing_traffic = 0;
+    
     std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
-
-    ppp::string status = "tick=" + stl::to_string<ppp::string>(now);
-    if (GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
-        status += " | rx=" + ppp::StrFormatByteSize((Int64)incoming_traffic);
-        status += " | tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
+    std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
+    std::shared_ptr<VEthernetExchanger> exchanger = NULLPTR;
+    if (NULLPTR != client) {
+        exchanger = client->GetExchanger();
     }
+
+    if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
+        incoming_traffic = 0;
+        outgoing_traffic = 0;
+    }
+
+    ppp::string vpn_state = "down";
+    if (NULLPTR != client) {
+        if (NULLPTR == exchanger) {
+            vpn_state = "init";
+        } else {
+            NetworkState network_state = exchanger->GetNetworkState();
+            if (network_state == NetworkState::NetworkState_Established) {
+                vpn_state = "up";
+            } elif (network_state == NetworkState::NetworkState_Reconnecting) {
+                vpn_state = "reconnect";
+            } else {
+                vpn_state = "connect";
+            }
+        }
+    }
+
+    ppp::string status = "vpn=" + vpn_state;
+    status += " rx=" + ppp::StrFormatByteSize((Int64)incoming_traffic);
+    status += " tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
     ConsoleUI::GetInstance().UpdateStatus(status);
 
 #if defined(_WIN32)
@@ -101,12 +126,10 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         }
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
     if (NULLPTR == client) {
         return false;
     }
 
-    std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
     if (NULLPTR == exchanger) {
         return false;
     }

@@ -57,7 +57,7 @@ namespace ppp {
 #if defined(_WIN32) || defined(_LINUX) || defined(_MACOS)
             return true;
 #else
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6Unsupported);
 #endif
         }
 
@@ -87,7 +87,7 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientAddress(context, address, prefix_length, gua_mode, state);
 #else
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6Unsupported);
 #endif
         }
 
@@ -103,7 +103,7 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientDefaultRoute(context, gateway, nat_mode, state);
 #else
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6Unsupported);
 #endif
         }
 
@@ -119,7 +119,7 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientSubnetRoute(context, prefix, prefix_length, gateway, nat_mode, state);
 #else
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6Unsupported);
 #endif
         }
 
@@ -135,7 +135,7 @@ namespace ppp {
 #elif defined(_LINUX)
             return ppp::linux::ipv6::auxiliary::ApplyClientDns(context, dns_servers, state);
 #else
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6Unsupported);
 #endif
         }
 

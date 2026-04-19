@@ -4,6 +4,7 @@
 
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetNetworkTcpipStack.cpp
@@ -30,17 +31,17 @@ namespace ppp {
 
                 std::shared_ptr<VEthernetNetworkSwitcher> ethernet = this->Ethernet;
                 if (NULLPTR == ethernet) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable, std::shared_ptr<VEthernetNetworkTcpipStack::TapTcpClient>(NULLPTR));
                 }
 
                 std::shared_ptr<VEthernetExchanger> exchanger = ethernet->GetExchanger();
                 if (NULLPTR == exchanger) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, std::shared_ptr<VEthernetNetworkTcpipStack::TapTcpClient>(NULLPTR));
                 }
 
                 NetworkState network_state = exchanger->GetNetworkState();
                 if (network_state != NetworkState::NetworkState_Established) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound, std::shared_ptr<VEthernetNetworkTcpipStack::TapTcpClient>(NULLPTR));
                 }
                 
                 ppp::threading::Executors::ContextPtr context;
@@ -48,12 +49,12 @@ namespace ppp {
                 context = ppp::threading::Executors::SelectScheduler(strand);
 
                 if (NULLPTR == context) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable, std::shared_ptr<VEthernetNetworkTcpipStack::TapTcpClient>(NULLPTR));
                 }
 
                 auto connection = make_shared_object<VEthernetNetworkTcpipConnection>(exchanger, context, strand);
                 if (NULLPTR == connection) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, std::shared_ptr<VEthernetNetworkTcpipStack::TapTcpClient>(NULLPTR));
                 }
 
                 connection->Open(localEP, remoteEP);

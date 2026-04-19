@@ -95,7 +95,7 @@ namespace ppp {
             bool VEthernetExchanger::SendRequestedIPv6Configuration(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR == transmission || NULLPTR == configuration) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 VirtualEthernetInformationExtensions request;
@@ -208,26 +208,26 @@ namespace ppp {
             /** @brief Creates and configures an asynchronous TCP socket. */
             std::shared_ptr<boost::asio::ip::tcp::socket> VEthernetExchanger::NewAsynchronousSocket(const ContextPtr& context, const StrandPtr& strand, const boost::asio::ip::tcp& protocol, ppp::coroutines::YieldContext& y) noexcept {
                 if (disposed_) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, std::shared_ptr<boost::asio::ip::tcp::socket>(NULLPTR));
                 }
 
                 if (!context) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing, std::shared_ptr<boost::asio::ip::tcp::socket>(NULLPTR));
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = strand ?
                     make_shared_object<boost::asio::ip::tcp::socket>(*strand) : make_shared_object<boost::asio::ip::tcp::socket>(*context);
                 if (!socket) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, std::shared_ptr<boost::asio::ip::tcp::socket>(NULLPTR));
                 }
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 if (!configuration) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing, std::shared_ptr<boost::asio::ip::tcp::socket>(NULLPTR));
                 }
 
                 if (!ppp::coroutines::asio::async_open(y, *socket, protocol)) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed, std::shared_ptr<boost::asio::ip::tcp::socket>(NULLPTR));
                 }
 
                 Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration->tcp.cwnd, configuration->tcp.rwnd);
@@ -238,7 +238,7 @@ namespace ppp {
             /** @brief Resolves, validates, and caches the remote server endpoint. */
             bool VEthernetExchanger::GetRemoteEndPoint(YieldContext* y, ppp::string& hostname, ppp::string& address, ppp::string& path, int& port, ProtocolType& protocol_type, ppp::string& server, boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 if (server_url_.port > IPEndPoint::MinPort && server_url_.port <= IPEndPoint::MaxPort) {
@@ -254,12 +254,12 @@ namespace ppp {
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 if (!configuration) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                 }
 
                 ppp::string& client_server_string = configuration->client.server;
                 if (client_server_string.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 std::shared_ptr<ppp::transmissions::proxys::IForwarding> forwarding = switcher_->GetForwarding(); ;
@@ -272,11 +272,11 @@ namespace ppp {
                 }
 
                 if (server.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 if (hostname.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 if (NULLPTR != forwarding) {
@@ -289,16 +289,16 @@ namespace ppp {
                 }
 
                 if (address.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 IPEndPoint ipep(address.data(), port);
                 if (IPEndPoint::IsInvalid(ipep)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 remoteEP                  = IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(ipep);
@@ -328,12 +328,12 @@ namespace ppp {
 
                 boost::asio::ip::address remoteIP = remoteEP.address();
                 if (IPEndPoint::IsInvalid(remoteIP)) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 int remotePort = remoteEP.port();
                 if (remotePort <= IPEndPoint::MinPort || remotePort > IPEndPoint::MaxPort) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = NewAsynchronousSocket(context, strand, remoteEP.protocol(), y);
@@ -349,7 +349,7 @@ namespace ppp {
                     auto protector_network = switcher_->GetProtectorNetwork(); 
                     if (NULLPTR != protector_network) {
                         if (!protector_network->Protect(socket->native_handle(), y)) {
-                            return NULLPTR;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                         }
                     }
                 }
@@ -357,7 +357,7 @@ namespace ppp {
 
                 bool ok = ppp::coroutines::asio::async_connect(*socket, remoteEP, y);
                 if (!ok) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TcpConnectFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 return NewTransmission(context, strand, socket, protocol_type, hostname, path);
@@ -366,17 +366,17 @@ namespace ppp {
             /** @brief Starts main asynchronous exchanger loop. */
             bool VEthernetExchanger::Open() noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (!configuration) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                 }
 
                 ContextPtr context = GetContext();
                 if (!context) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 }
 
                 auto self = shared_from_this();
@@ -522,17 +522,17 @@ namespace ppp {
             /** @brief Connects and handshakes a child transmission for mux use. */
             VEthernetExchanger::ITransmissionPtr VEthernetExchanger::ConnectTransmission(const ContextPtr& context, const StrandPtr& strand, YieldContext& y) noexcept {
                 if (NULLPTR == context) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 if (disposed_) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 // VPN client A link can be created only after a link is established between the local switch and the remote VPN server.
                 ITransmissionPtr owner_link = transmission_; 
                 if (NULLPTR == owner_link) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 ITransmissionPtr transmission = OpenTransmission(context, strand, y);
@@ -545,6 +545,7 @@ namespace ppp {
                     return transmission;
                 }
                 else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                     transmission->Dispose();
                     return NULLPTR;
                 }
@@ -579,11 +580,11 @@ namespace ppp {
             bool VEthernetExchanger::Loopback(const ContextPtr& context, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (!configuration) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                 }
 #if defined(_ANDROID)
                 elif(!AwaitJniAttachThread(context, y)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                 }
 #endif
                 bool run_once = false;
@@ -942,7 +943,7 @@ namespace ppp {
 
             /** @brief Rejects unsolicited LAN messages for security hardening. */
             bool VEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid); // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
             /** @brief Forwards NAT payload from remote side to local switcher output. */
@@ -1007,37 +1008,37 @@ namespace ppp {
 
             /** @brief Rejects unsolicited push events for security hardening. */
             bool VEthernetExchanger::OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid); // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
             /** @brief Rejects unsolicited connect events for security hardening. */
             bool VEthernetExchanger::OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid); // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
             /** @brief Rejects unsolicited connect-ack events for security hardening. */
             bool VEthernetExchanger::OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid); // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
             /** @brief Rejects unsolicited disconnect events for security hardening. */
             bool VEthernetExchanger::OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid); // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
             /** @brief Rejects unsupported static callback variant. */
             bool VEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid); // Immediate return false and forcefully close the connection due to a suspected malicious attack on the client.
             }
 
             /** @brief Applies static session parameters received from server. */
             bool VEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {                
                 if (remote_port < IPEndPoint::MinPort || remote_port > IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 if (session_id < 0) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                 }
 
                 // If the server does not support static tunneling, clean up the pre-prepared resources.
@@ -1103,21 +1104,21 @@ namespace ppp {
             /** @brief Sends UDP packet using source-bound datagram relay port. */
             bool VEthernetExchanger::SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 VEthernetDatagramPortPtr datagram = AddNewDatagramPort(transmission, sourceEP);
                 if (NULLPTR == datagram) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed);
                 }
 
                 return datagram->SendTo(packet, packet_size, destinationEP);
@@ -1126,12 +1127,12 @@ namespace ppp {
             /** @brief Sends ACK-based keepalive/echo packet through active transport. */
             bool VEthernetExchanger::Echo(int ack_id) noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 bool ok = DoEcho(transmission, ack_id, nullof<YieldContext>());
@@ -1145,16 +1146,16 @@ namespace ppp {
             /** @brief Sends packet-based echo payload through active transport. */
             bool VEthernetExchanger::Echo(const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                 }
 
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 bool ok = DoEcho(transmission, (Byte*)packet, packet_size, nullof<YieldContext>());
@@ -1168,16 +1169,16 @@ namespace ppp {
             /** @brief Sends NAT payload packet through active transport. */
             bool VEthernetExchanger::Nat(const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                 }
 
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 bool ok = DoNat(transmission, (Byte*)packet, packet_size, nullof<YieldContext>());
@@ -1191,7 +1192,7 @@ namespace ppp {
             /** @brief Announces local LAN information to remote exchanger when needed. */
             int VEthernetExchanger::EchoLanToRemoteExchanger(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (disposed_) {
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 bool vnet = switcher_->IsVNet();
@@ -1200,12 +1201,12 @@ namespace ppp {
                 }
 
                 if (NULLPTR == transmission) {
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 std::shared_ptr<ppp::tap::ITap> tap = switcher_->GetTap();
                 if (NULLPTR == tap) {
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 bool ok = DoLan(transmission, tap->IPAddress, tap->SubmaskAddress, y);
@@ -1214,13 +1215,13 @@ namespace ppp {
                 }
 
                 transmission->Dispose();
-                return -1;
+                return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
             }
 
             /** @brief Creates and registers datagram relay port for source endpoint. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::AddNewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == transmission) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
 
                 VEthernetDatagramPortPtr datagram = GetDatagramPort(sourceEP);
@@ -1229,14 +1230,14 @@ namespace ppp {
                 }
 
                 if (disposed_) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
 
                 bool ok = true; 
                 datagram = NewDatagramPort(transmission, sourceEP);
 
                 if (NULLPTR == datagram) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
                 else {
                     SynchronizedObjectScope scope(syncobj_);
@@ -1246,7 +1247,7 @@ namespace ppp {
 
                 if (!ok) {
                     datagram->Dispose();
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
 
                 return datagram;
@@ -1255,7 +1256,7 @@ namespace ppp {
             /** @brief Allocates a new datagram relay port object. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == transmission) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
 
                 auto my = shared_from_this();
@@ -1317,18 +1318,18 @@ namespace ppp {
             /** @brief Registers one configured FRP mapping endpoint. */
             bool VEthernetExchanger::RegisterMappingPort(ppp::configurations::AppConfiguration::MappingConfiguration& mapping) noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 boost::system::error_code ec;
                 boost::asio::ip::address local_ip = StringToAddress(mapping.local_ip.data(), ec);
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 boost::asio::ip::address remote_ip = StringToAddress(mapping.remote_ip.data(), ec);
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 bool in = remote_ip.is_v4();
@@ -1336,12 +1337,12 @@ namespace ppp {
 
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, protocol_tcp_or_udp, mapping.remote_port);
                 if (NULLPTR != mapping_port) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
 
                 mapping_port = NewMappingPort(in, protocol_tcp_or_udp, mapping.remote_port);
                 if (NULLPTR == mapping_port) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingCreateFailed);
                 }
 
                 bool ok = mapping_port->OpenFrpClient(local_ip, mapping.local_port);
@@ -1351,6 +1352,7 @@ namespace ppp {
                 }
 
                 if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                     mapping_port->Dispose();
                 }
 

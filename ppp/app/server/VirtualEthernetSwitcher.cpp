@@ -420,12 +420,13 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     auto existing_lease_it = ipv6_leases_.find(session_id);
                     if (existing_lease_it != ipv6_leases_.end() && existing_lease_it->second.Address.is_v6() && candidate != existing_lease_it->second.Address.to_v6()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6DuplicateGUID);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
                         return false;
                     }
 
                     auto mapping_it = ipv6s_.find(candidate_key);
                     if (mapping_it != ipv6s_.end() && mapping_it->second && mapping_it->second->GetId() != session_id) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
                         return false;
                     }
 
@@ -440,6 +441,7 @@ namespace ppp {
                         }
 
                         if (lease.StaticBinding || lease.ExpiresAt == UINT64_MAX || lease.ExpiresAt > now) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
                             return false;
                         }
                     }
@@ -833,7 +835,7 @@ namespace ppp {
                             continue;
                         }
 
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6DuplicateGUID);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
                         return false;
                     }
 
@@ -846,7 +848,7 @@ namespace ppp {
 
                 bool route_ok = AddIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                 if (!route_ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
                     return false;
                 }
 
@@ -854,7 +856,9 @@ namespace ppp {
                 bool proxy_ok = !proxy_required || AddIPv6NeighborProxy(ip);
                 if (!proxy_ok) {
                     DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed);
+                    }
                     return false;
                 }
 
@@ -873,6 +877,7 @@ namespace ppp {
              */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!extensions.AssignedIPv6Address.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
                 }
 
@@ -887,10 +892,12 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     auto tail = ipv6s_.find(ip_key);
                     if (tail == ipv6s_.end()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                         return false;
                     }
 
                     if (tail->second && tail->second->GetId() != session_id) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
                         return false;
                     }
 
@@ -900,6 +907,12 @@ namespace ppp {
                 }
 
                 RevokeIPv6Lease(session_id);
+                if (!route_removed) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
+                }
+                if (!proxy_removed) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
+                }
                 return route_removed && proxy_removed;
             }
 
@@ -975,14 +988,14 @@ namespace ppp {
 
                 ppp::string uplink_name = ResolvePreferredIPv6UplinkInterface(preferred_nic_);
                 if (uplink_name.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyEnableFailed);
                     return false;
                 }
 
                 bool proxy_enabled = false;
                 bool query_ok = ppp::tap::TapLinux::QueryIPv6NeighborProxy(uplink_name, proxy_enabled);
                 if (!ppp::tap::TapLinux::EnableIPv6NeighborProxy(uplink_name)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyEnableFailed);
                     return false;
                 }
 
@@ -1051,11 +1064,11 @@ namespace ppp {
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                 bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
                 }
                 return ok;
 #else
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
                 return false;
 #endif
             }
@@ -1096,11 +1109,11 @@ namespace ppp {
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                 bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
                 }
                 return ok;
 #else
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ExternalAccessFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
                 return false;
 #endif
             }
@@ -1138,7 +1151,7 @@ namespace ppp {
                 }
 
                 if (!ip.is_v6() || ipv6_neighbor_proxy_ifname_.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed);
                     return false;
                 }
 
@@ -1146,11 +1159,11 @@ namespace ppp {
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::AddIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed);
                 }
                 return ok;
 #else
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed);
                 return false;
 #endif
             }
@@ -1163,7 +1176,7 @@ namespace ppp {
             bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(const boost::asio::ip::address& ip) noexcept {
 #if defined(_LINUX)
                 if (!ip.is_v6() || ipv6_neighbor_proxy_ifname_.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                     return false;
                 }
 
@@ -1171,11 +1184,11 @@ namespace ppp {
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 }
                 return ok;
 #else
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 return false;
 #endif
             }
@@ -1189,7 +1202,7 @@ namespace ppp {
             bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(const ppp::string& ifname, const boost::asio::ip::address& ip) noexcept {
 #if defined(_LINUX)
                 if (!ip.is_v6() || ifname.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                     return false;
                 }
 
@@ -1197,11 +1210,11 @@ namespace ppp {
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ifname, ip_str);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 }
                 return ok;
 #else
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 return false;
 #endif
             }
@@ -1984,6 +1997,7 @@ namespace ppp {
                 }
                 boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
                 if (ec || !prefix.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6CidrInvalid);
                     return false;
                 }
 
@@ -2006,6 +2020,7 @@ namespace ppp {
                 else {
                     boost::asio::ip::address_v6 derived_transit;
                     if (!TryGetFirstHostIPv6(transit, ipv6.prefix_length, derived_transit)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6GatewayNotReachable);
                         return false;
                     }
 
@@ -2024,11 +2039,13 @@ namespace ppp {
 
                 ITapPtr tap = ppp::tap::ITap::Create(context_, tun_name, "169.254.254.1", "169.254.254.2", "255.255.255.252", false, false, no_dns);
                 if (NULLPTR == tap || !tap->Open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
                     return false;
                 }
 
                 bool address_ok = ppp::tap::TapLinux::SetIPv6Address(tap->GetId(), transit_ip, prefix_length);
                 if (!address_ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
                     tap->Dispose();
                     return false;
                 }
@@ -2049,6 +2066,7 @@ namespace ppp {
                     };
 
                 if (!OpenIPv6TransitSsmtIfNeed(tap)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
                     tap->Dispose();
                     return false;
                 }
@@ -2075,6 +2093,7 @@ namespace ppp {
                 ppp::string uplink_name = ResolvePreferredIPv6UplinkInterface(preferred_nic_);
 
                 if (uplink_name.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyEnableFailed);
                     return false;
                 }
 
@@ -2104,6 +2123,7 @@ namespace ppp {
                 bool proxy_enabled = false;
                 bool query_ok = ppp::tap::TapLinux::QueryIPv6NeighborProxy(uplink_name, proxy_enabled);
                 if (!ppp::tap::TapLinux::EnableIPv6NeighborProxy(uplink_name)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyEnableFailed);
                     return false;
                 }
 

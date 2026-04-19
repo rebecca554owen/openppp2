@@ -21,6 +21,7 @@
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
 #include <ppp/ipv6/IPv6Packet.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetExchanger.cpp
@@ -224,16 +225,19 @@ namespace ppp {
 
             /** @brief Rejects direct connect requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
             /** @brief Rejects direct push requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
             /** @brief Rejects direct disconnect requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
@@ -257,17 +261,20 @@ namespace ppp {
 
             /** @brief Rejects connect-ack packets from client side for safety hardening. */
             bool VirtualEthernetExchanger::OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
             /** @brief Rejects legacy information packet to keep protocol surface strict. */
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
             /** @brief Processes extended information packets, including IPv6 assignment requests. */
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
                 if (disposed_ || NULLPTR == switcher_ || NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
@@ -275,11 +282,13 @@ namespace ppp {
                 bool has_ipv6_request = request.RequestedIPv6Address.is_v6();
                 bool is_server_response = request.AssignedIPv6Address.is_v6() || request.IPv6StatusCode != VirtualEthernetInformationExtensions::IPv6Status_None;
                 if (!has_ipv6_request || is_server_response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                     return false;
                 }
 
                 VirtualEthernetInformationExtensions response;
                 if (!switcher_->UpdateIPv6Request(GetId(), request, response)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
                     return false;
                 }
 
@@ -301,6 +310,7 @@ namespace ppp {
 
             /** @brief Rejects client-originated static assignment packets for safety hardening. */
             bool VirtualEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
@@ -392,27 +402,32 @@ namespace ppp {
             /** @brief Forwards IPv6 packet toward local exchanger or transit gateway. */
             bool VirtualEthernetExchanger::ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 AppConfigurationPtr configuration = GetConfiguration();
 
                 if (!switcher_->IsIPv6ServerEnabled()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
                 boost::asio::ip::address_v6 source;
                 boost::asio::ip::address_v6 destination;
                 if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
                     return false;
                 }
 
                 VirtualEthernetInformationExtensions approved;
                 if (!switcher_->TryGetAssignedIPv6Extensions(GetId(), approved) || !approved.AssignedIPv6Address.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseUnavailable);
                     return false;
                 }
 
                 if (source != approved.AssignedIPv6Address.to_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
                     return false;
                 }
 
@@ -429,11 +444,13 @@ namespace ppp {
                 }
 
                 if (!configuration->server.subnet && configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
                 ITransmissionPtr transmission = exchanger->GetTransmission();
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
@@ -446,6 +463,7 @@ namespace ppp {
                 }
 
                 transmission->Dispose();
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
                 return false;
             }
 

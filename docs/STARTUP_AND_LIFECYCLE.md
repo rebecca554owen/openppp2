@@ -70,6 +70,35 @@ These process timers do not implement transport handshake retry or client-side S
 
 This is important because connection failures should not automatically collapse process ownership. The process remains the outer lifecycle boundary.
 
+## Error Handling Registration In Startup Window
+
+`RegisterErrorHandler` is key-based and should be finalized during startup initialization:
+
+- use a stable key per registration site;
+- passing a null handler removes the registration for that key;
+- complete registration changes before multi-thread runtime branches begin.
+
+Registration-time mutation is intentionally treated as initialization work. Runtime diagnostics dispatch is thread-safe for readers, but registration churn during active worker execution is not part of the supported contract.
+
+See `ERROR_HANDLING_API.md` for API-level notes.
+
+## Diagnostics Propagation Expectations Across Lifecycle
+
+For each lifecycle stage (load, normalize, prepare, open, tick maintenance, dispose/rollback):
+
+- failure returns should carry diagnostics codes, not only sentinel values;
+- process-wide snapshot APIs are used by Console UI status surfaces;
+- lifecycle troubleshooting should start from diagnostics timeline, then map to subsystem logs.
+
+This policy keeps startup and shutdown troubleshooting deterministic even when failure originates on worker threads.
+
+## Android Lifecycle Sync Notes
+
+Android bridge lifecycle (`run`, `stop`, and release paths) should maintain parity with core lifecycle semantics:
+
+- app-uninitialized and not-running states should map consistently across JNI and core diagnostics;
+- release/cleanup failures should be reported with stable meanings so managed callers can react predictably.
+
 ## Ownership Model
 
 | Level | Owner |
@@ -85,3 +114,4 @@ This is important because connection failures should not automatically collapse 
 - `CLIENT_ARCHITECTURE.md`
 - `SERVER_ARCHITECTURE.md`
 - `SOURCE_READING_GUIDE.md`
+- `ERROR_HANDLING_API.md`

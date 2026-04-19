@@ -50,6 +50,37 @@ stateDiagram-v2
 
 This is where the process turns runtime state into recurring maintenance behavior.
 
+## Diagnostics Coverage And Propagation Policy
+
+Operations and troubleshooting should follow a strict diagnostics contract:
+
+- Failure exits in startup, environment preparation, open-path, and rollback code should set framework diagnostics (`SetLastErrorCode` / `SetLastError(...)`) before returning failure sentinels.
+- Returning only `false`, `-1`, or `NULLPTR` without diagnostics is treated as incomplete propagation and reduces observability.
+- User-facing operational surfaces (Console UI, logs, JNI return paths) should consume these diagnostics snapshots instead of inventing parallel failure channels.
+
+Practical expectation:
+
+- Every newly added failure branch in operational paths should either set diagnostics directly or call a helper that guarantees diagnostics are set.
+
+## Error Handler Registration Runtime Rule
+
+Error handler registration is key-based (`RegisterErrorHandler(key, handler)`) and has a startup-time safety boundary:
+
+- Register, replace, or remove handlers during initialization.
+- Do not mutate registrations concurrently with multi-threaded runtime work.
+
+This keeps callback topology deterministic while worker threads are active.
+
+See `ERROR_HANDLING_API.md` for API details and lifecycle guidance.
+
+## Android Runtime Sync Notes
+
+Android bridge error integers and core diagnostics should remain aligned:
+
+- JNI-visible error codes should map to core diagnostics where practical.
+- `run/stop/release` transitions should preserve consistent error meaning across native and managed boundaries.
+- Operational runbooks should treat Android bridge errors as part of the same diagnostics pipeline, not a separate troubleshooting universe.
+
 ## Restart Behavior
 
 Restart can be deliberate. It may happen because of:
@@ -107,6 +138,7 @@ The fastest way to debug runtime behavior is to classify the failure by phase:
 - `STARTUP_AND_LIFECYCLE.md`
 - `DEPLOYMENT.md`
 - `PLATFORMS.md`
+- `ERROR_HANDLING_API.md`
 
 ## Main Conclusion
 

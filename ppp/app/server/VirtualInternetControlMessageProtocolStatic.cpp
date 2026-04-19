@@ -5,6 +5,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualInternetControlMessageProtocolStatic.cpp
@@ -47,21 +48,25 @@ namespace ppp {
              */
             bool VirtualInternetControlMessageProtocolStatic::Output(const IPFrame* packet, const IPEndPoint& destinationEP) noexcept {
                 if (NULLPTR == packet) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
                 int session_id = exchanger_->static_echo_session_id_;
                 if (session_id < 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
                 boost::asio::ip::udp::socket& socket = switcher_->static_echo_socket_;
                 if (!socket.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 auto allocated_context = exchanger_->static_allocated_context_;
                 if (NULLPTR == allocated_context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
@@ -78,6 +83,7 @@ namespace ppp {
                     packet_length);
 
                 if (NULLPTR == packet_output) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     return false;
                 }
 
@@ -89,6 +95,7 @@ namespace ppp {
                     exchanger_->static_echo_source_ep_, boost::asio::socket_base::message_end_of_record, ec);
 
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false;
                 }
                 

@@ -35,11 +35,12 @@ namespace ppp {
         }
 
         /**
-         * @brief Registers an error callback handler.
+         * @brief Registers or removes a named error callback handler.
+         * @param key Unique handler key.
          * @param handler Callback receiving integer error code values.
          */
-        void RegisterErrorHandler(ppp::function<void(int err)> handler) noexcept {
-            ErrorHandler::GetDefault().RegisterErrorHandler(std::move(handler));
+        void RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept {
+            ErrorHandler::GetDefault().RegisterErrorHandler(key, handler);
         }
     }
 }
