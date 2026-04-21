@@ -294,6 +294,13 @@ namespace ppp
          * @brief Tests whether a host is blocked by domain or IP rules.
          * @param host Host or address string.
          * @return true if blocked; otherwise false.
+         *
+         * @note TOCTOU FIX (MEDIUM-1): The previous implementation acquired and
+         *       released syncobj_ on every individual call inside the `contains`
+         *       lambda, so another writer thread could modify network_domains_
+         *       between calls â breaking atomicity of the suffix-walk evaluation.
+         *       Fix: take a single snapshot copy of network_domains_ under one lock
+         *       acquisition, then run all matching against the immutable local copy.
          */
         bool Firewall::IsDropNetworkDomains(const ppp::string& host) noexcept
         {
@@ -315,11 +322,25 @@ namespace ppp
                 return IsDropNetworkSegment(ip);
             }
 
-            auto contains = [this](const ppp::string& s) noexcept
+            // Take a snapshot of the domain table under a single lock acquisition so
+            // the entire suffix-walk evaluation is performed against a consistent view.
+            NetworkDomainsTable domains_snapshot;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                try
                 {
-                    SynchronizedObjectScope scope(syncobj_);
-                    auto tail = network_domains_.find(s);
-                    auto endl = network_domains_.end();
+                    domains_snapshot = network_domains_;
+                }
+                catch (const std::bad_alloc&)
+                {
+                    return false; // Cannot snapshot; fail-safe
+                }
+            }
+
+            auto contains = [&domains_snapshot](const ppp::string& s) noexcept
+                {
+                    auto tail = domains_snapshot.find(s);
+                    auto endl = domains_snapshot.end();
                     return tail != endl;
                 };
             return IsSameNetworkDomains(host_lower, contains);

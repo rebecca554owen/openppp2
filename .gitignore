@@ -73,4 +73,6 @@ ppp.log
 /ppp/Release
 
 build-*/
+build_*/
 builds/cmake-check/
+AGENTS.md

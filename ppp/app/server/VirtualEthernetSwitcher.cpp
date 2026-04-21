@@ -874,6 +874,11 @@ namespace ppp {
              * @param session_id Session identifier.
              * @param extensions Extension object containing assigned IPv6 address.
              * @return true when teardown succeeds for both route and neighbor proxy.
+             *
+             * @note Two-phase locking: the map entry is erased under syncobj_ to guarantee
+             *       atomic removal visibility, then the OS-level route/proxy teardown
+             *       (potentially slow shell calls on Linux) runs outside the lock to
+             *       prevent holding syncobj_ for hundreds of milliseconds per client.
              */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!extensions.AssignedIPv6Address.is_v6()) {
@@ -885,10 +890,8 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_key(ip_std.data(), ip_std.size());
 
-                bool route_removed = false;
-                bool proxy_removed = false;
-
                 {
+                    /** @brief Hold the lock only long enough to validate and erase the map entry. */
                     SynchronizedObjectScope scope(syncobj_);
                     auto tail = ipv6s_.find(ip_key);
                     if (tail == ipv6s_.end()) {
@@ -901,18 +904,29 @@ namespace ppp {
                         return false;
                     }
 
-                    route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                    proxy_removed = DeleteIPv6NeighborProxy(ip);
                     ipv6s_.erase(tail);
                 }
+
+                /**
+                 * @brief OS-level teardown runs outside syncobj_ to avoid prolonged lock hold.
+                 *
+                 * On Linux, DeleteIPv6TransitRoute and DeleteIPv6NeighborProxy may invoke
+                 * shell commands that block for tens to hundreds of milliseconds.  Running
+                 * them here (after the lock is released) ensures other threads are not
+                 * blocked waiting for syncobj_ during this teardown.
+                 */
+                bool route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+                bool proxy_removed = DeleteIPv6NeighborProxy(ip);
 
                 RevokeIPv6Lease(session_id);
                 if (!route_removed) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
                 }
+
                 if (!proxy_removed) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 }
+
                 return route_removed && proxy_removed;
             }
 
@@ -922,9 +936,18 @@ namespace ppp {
              * @return true if any matching binding existed and was removed.
              */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id) noexcept {
-                bool any = false;
+                bool any          = false;
                 bool released_any = false;
 
+                /**
+                 * @note syncobj_ is already held for the duration of this scope.
+                 *       RevokeIPv6Lease() MUST NOT be called here because it also
+                 *       acquires syncobj_ — doing so on a non-recursive std::mutex
+                 *       would cause an immediate self-deadlock on the calling thread.
+                 *       Instead, the lease/request erasure is inlined directly inside
+                 *       this existing lock region to satisfy the same invariant without
+                 *       re-entering the mutex.
+                 */
                 SynchronizedObjectScope scope(syncobj_);
                 for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
                     VirtualEthernetExchangerPtr current = tail->second;
@@ -936,17 +959,24 @@ namespace ppp {
                     boost::system::error_code ec;
                     boost::asio::ip::address ip = StringToAddress(tail->first, ec);
                     if (!ec && ip.is_v6()) {
-                        bool route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                        bool proxy_removed = DeleteIPv6NeighborProxy(ip);
+                        DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+                        DeleteIPv6NeighborProxy(ip);
                     }
 
                     tail = ipv6s_.erase(tail);
                     released_any = true;
-                    any = true;
+                    any          = true;
                 }
 
                 if (released_any) {
-                    RevokeIPv6Lease(session_id);
+                    /**
+                     * @brief Inline the RevokeIPv6Lease() body to avoid re-acquiring
+                     *        syncobj_ (which is already held above).  The semantic
+                     *        result is identical: both lease and request records for
+                     *        this session are removed under the same lock region.
+                     */
+                    ipv6_leases_.erase(session_id);
+                    ipv6_requests_.erase(session_id);
                 }
 
                 return any;
@@ -1398,36 +1428,68 @@ namespace ppp {
              * @return New registered exchanger or null on failure.
              */
             VirtualEthernetSwitcher::VirtualEthernetExchangerPtr VirtualEthernetSwitcher::AddNewExchanger(const ITransmissionPtr& transmission, const Int128& session_id) noexcept {
-                VirtualEthernetExchangerPtr newExchanger;
-                VirtualEthernetExchangerPtr oldExchanger;
+                if (NULLPTR == transmission) {
+                    return NULLPTR;
+                }
 
-                bool ok = false;
-                if (NULLPTR != transmission) {
+                /**
+                 * @brief Phase 1 — guard check only (minimal lock window).
+                 *
+                 *        newExchanger->Open() is intentionally called OUTSIDE syncobj_
+                 *        to prevent a lock-inversion deadlock: Open() is a virtual
+                 *        function that may — in derived classes — call back into any
+                 *        switcher method that also acquires syncobj_ (e.g. AddNatInformation,
+                 *        StaticEchoAllocated), which would immediately deadlock because
+                 *        std::mutex is non-recursive.
+                 */
+                {
                     SynchronizedObjectScope scope(syncobj_);
                     if (disposed_) {
                         return NULLPTR;
                     }
+                }
 
-                    newExchanger = NewExchanger(transmission, session_id);
-                    if (NULLPTR == newExchanger) {
+                /**
+                 * @brief Phase 2 — construct and open the exchanger without any lock held.
+                 *
+                 *        NewExchanger() is a simple factory that does not touch the
+                 *        switcher's shared state, so it is safe to call lock-free.
+                 *        Open() performs protocol / ICMP subsystem initialization and
+                 *        may re-enter the switcher; no switcher lock is held here.
+                 */
+                VirtualEthernetExchangerPtr newExchanger = NewExchanger(transmission, session_id);
+                if (NULLPTR == newExchanger) {
+                    return NULLPTR;
+                }
+
+                if (!newExchanger->Open()) {
+                    IDisposable::Dispose(newExchanger);
+                    return NULLPTR;
+                }
+
+                /**
+                 * @brief Phase 3 — re-acquire lock to insert the opened exchanger.
+                 *
+                 *        Re-check disposed_ inside the lock: the switcher might have
+                 *        been torn down in the window between phase 1 and phase 3.
+                 *        Any exchanger previously mapped to the same session_id is
+                 *        moved out and disposed after the lock is released (safe pattern).
+                 */
+                VirtualEthernetExchangerPtr oldExchanger;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        IDisposable::Dispose(newExchanger);
                         return NULLPTR;
                     }
 
-                    if (newExchanger->Open()) {
-                        VirtualEthernetExchangerPtr& tmpExchanger = exchangers_[session_id];
-                        ok = true;
-                        oldExchanger = tmpExchanger;
-                        tmpExchanger = newExchanger;
-                    }
+                    VirtualEthernetExchangerPtr& slot = exchangers_[session_id];
+                    oldExchanger = std::move(slot);
+                    slot         = newExchanger;
                 }
 
                 IDisposable::Dispose(oldExchanger);
-                if (ok) {
-                    return newExchanger;
-                }
-
-                IDisposable::Dispose(newExchanger);
-                return NULLPTR;
+                return newExchanger;
             }
 
             /**
@@ -2713,21 +2775,31 @@ namespace ppp {
 
                     CloseAllAcceptors();
 
-                    cache = std::move(namespace_cache_);
+                    cache          = std::move(namespace_cache_);
+
+                    /**
+                     * @brief IPv6 exchanger teardown must run BEFORE ipv6_transit_tap_ is moved.
+                     *
+                     * ClearIPv6ExchangersUnsafe() calls DeleteIPv6TransitRoute() and
+                     * DeleteIPv6NeighborProxy(), both of which read the member ipv6_transit_tap_.
+                     * Moving (nulling) it first causes those calls to silently fail and leaves
+                     * kernel route/neighbor-proxy entries permanently installed — a resource leak.
+                     *
+                     * Running this under the lock is acceptable: Finalize() is a one-time
+                     * shutdown path; disposed_ = true has already been set above, so no other
+                     * thread will attempt to access the IPv6 exchanger table concurrently.
+                     */
+                    ClearIPv6ExchangersUnsafe();
+
                     ipv6_transit_tap = std::move(ipv6_transit_tap_);
-                    nats = std::move(nats_);
-                    logger = std::move(logger_);
+                    nats             = std::move(nats_);
+                    logger           = std::move(logger_);
 
                     exchangers = std::move(exchangers_);
                     exchangers_.clear();
 
                     connections = std::move(connections_);
                     connections_.clear();
-
-                    ClearIPv6ExchangersUnsafe();
-
-                    ipv6_requests_.clear();
-                    ipv6_leases_.clear();
 
                     static_echo_allocateds_.clear();
                     break;

@@ -77,10 +77,11 @@ namespace ppp {
             this->srcPort = 0;
             this->natPort = 0;
             this->lwip = false;
+            this->accepting.store(false, std::memory_order_relaxed);
             this->closed.store(false, std::memory_order_relaxed);
-            this->state = TcpState::TCP_STATE_CLOSED;
+            this->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
             this->socket = NULLPTR;
-            this->lastTime = Executors::GetTickCount();
+            this->lastTime.store(Executors::GetTickCount(), std::memory_order_relaxed);
         }
 
         /**
@@ -93,7 +94,7 @@ namespace ppp {
 
             this->Closing();
 
-            this->state = TcpState::TCP_STATE_CLOSED;
+            this->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
             this->Update();
         }
 
@@ -105,9 +106,9 @@ namespace ppp {
                 return;
             }
 
-            this->state = TcpState::TCP_STATE_CLOSED;
+            this->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
 
-            std::shared_ptr<TapTcpClient> c = std::move(this->socket); 
+            std::shared_ptr<TapTcpClient> c = std::atomic_exchange(&this->socket, std::shared_ptr<TapTcpClient>());
 
             if (NULLPTR != c) {
                 c->Dispose();
@@ -161,7 +162,23 @@ namespace ppp {
                 int newPort = 0;
                 SynchronizedObjectScope scope(syncobj_);
 
-                for (int traversePort = IPEndPoint::MinPort; traversePort < IPEndPoint::MaxPort; traversePort++) {
+                /**
+                 * @brief TOCTOU guard: re-check for an existing entry inside the lock.
+                 *
+                 * A concurrent thread may have inserted the same key between the unlocked
+                 * FindTcpLink() call above (line ~156) and this lock acquisition.  Without
+                 * this check, two threads could both pass the unlocked read (both see no
+                 * entry), then both insert — producing duplicate NAT mappings and state
+                 * corruption for the same source flow.
+                 */
+                {
+                    auto existing_tail = lan2wan_.find(key);
+                    if (existing_tail != lan2wan_.end()) {
+                        link = existing_tail->second;
+                    }
+                }
+
+                for (int traversePort = IPEndPoint::MinPort; NULLPTR == link && traversePort < IPEndPoint::MaxPort; traversePort++) {
                     newPort = IPEndPoint::MinPort;
                     for (int c = IPEndPoint::MinPort; c <= IPEndPoint::MaxPort; c++) {
                         int localPort = ++this->ap_;
@@ -195,7 +212,7 @@ namespace ppp {
                     link->srcAddr = src_ip;
                     link->srcPort = src_port;
                     link->natPort = newPort;
-                    link->state = TcpState::TCP_STATE_SYN_RECEIVED;
+                    link->state.store((Byte)TcpState::TCP_STATE_SYN_RECEIVED, std::memory_order_relaxed);
 
                     this->lan2wan_[key] = link;
                     this->wan2lan_[newPort] = link;
@@ -285,6 +302,7 @@ namespace ppp {
                     
                     listenEP_ = IPEndPoint::ToEndPoint(Socket::GetLocalEndPoint(acceptor->GetHandle()));
                     constantof(localPort) = listenEP_.Port;
+                    listenPort_.store(listenEP_.Port, std::memory_order_release);
                 }
             }
 
@@ -328,6 +346,15 @@ namespace ppp {
 
                 lan2wan = std::move(lan2wan_);
                 lan2wan_.clear();
+
+                // Reset these fields INSIDE the lock so that concurrent SSMT Input() threads
+                // that read listenPort_ (lock-free) observe the cleared value only after the
+                // tables are already empty — preventing a window where a packet arrives after
+                // the tables are cleared but before listenPort_ reads return MinPort.
+                listenPort_.store(IPEndPoint::MinPort, std::memory_order_release);
+                listenEP_ = IPEndPoint();
+                lwip_     = IPEndPoint::MinPort;
+                ap_       = RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort);
                 break;
             }
 
@@ -337,10 +364,6 @@ namespace ppp {
 
             Dictionary::ReleaseAllObjects(wan2lan);
             Dictionary::ReleaseAllObjects(lan2wan);
-
-            listenEP_ = IPEndPoint();
-            lwip_     = IPEndPoint::MinPort;
-            ap_       = RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort);
 
 #ifdef SYSNAT
             if (!sysnat_interface_name_.empty()) {
@@ -397,19 +420,20 @@ namespace ppp {
                     ip->src = tap->GatewayServer;
                     tcp->src = link->natPort;
                     ip->dest = tap->IPAddress;
-                    tcp->dest = ntohs(this->listenEP_.Port);
+                    tcp->dest = ntohs((UInt16)this->listenPort_.load(std::memory_order_acquire));
                 }
             }
             elif((link = this->AllocTcpLink(ip->src, tcp->src, ip->dest, tcp->dest))) { // SYN
                 for (;;) {
-                    if (link->state == TcpState::TCP_STATE_CLOSED) {
+                    TcpState ls = (TcpState)link->state.load(std::memory_order_relaxed);
+                    if (ls == TcpState::TCP_STATE_CLOSED) {
                         break;
                     }
                     else {
-                        c = link->socket;
+                        c = std::atomic_load(&link->socket);
                         if (NULLPTR != c) {
                             if (c->IsDisposed()) {
-                                if (link->state == TcpState::TCP_STATE_SYN_RECEIVED || link->state == TcpState::TCP_STATE_SYN_SENT) {
+                                if (ls == TcpState::TCP_STATE_SYN_RECEIVED || ls == TcpState::TCP_STATE_SYN_SENT) {
                                     link->Update();
                                     return true;
                                 }
@@ -420,10 +444,21 @@ namespace ppp {
                         }
                     }
 
-                    if (link->state != TcpState::TCP_STATE_SYN_RECEIVED && link->state != TcpState::TCP_STATE_SYN_SENT) {
+                    if (ls != TcpState::TCP_STATE_SYN_RECEIVED && ls != TcpState::TCP_STATE_SYN_SENT) {
                         /**
                          * @brief Keep handshake links pending to allow retransmission retry.
                          */
+                        link->Update();
+                        return true;
+                    }
+
+                    /**
+                     * @brief CAS guard: only the SSMT thread that wins this exchange may call
+                     *        BeginAcceptClient().  Concurrent SYN retransmissions on other threads
+                     *        lose the CAS and defer, preventing duplicate clients for the same flow.
+                     */
+                    bool expected_accepting = false;
+                    if (!link->accepting.compare_exchange_strong(expected_accepting, true, std::memory_order_acq_rel)) {
                         link->Update();
                         return true;
                     }
@@ -434,8 +469,9 @@ namespace ppp {
                     c = this->BeginAcceptClient(localEP, remoteEP);
                     if (NULLPTR == c) {
                         /**
-                         * @brief Defer failure and wait for peer retransmission window.
+                         * @brief Defer failure; reset accepting so the next retransmission may retry.
                          */
+                        link->accepting.store(false, std::memory_order_release);
                         link->Update();
                         return true;
                     }
@@ -443,7 +479,7 @@ namespace ppp {
                     c->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_SYN_SENT;
 #ifdef SYSNAT
                     for (SynchronizedObjectScope _(c->sysnat_synbobj_);;) {
-                        c->listenPort_ = this->listenEP_.Port;
+                        c->listenPort_ = this->listenPort_.load(std::memory_order_acquire);
                         c->sysnat_status_ = this->sysnat_ ? 0 : -1;
                         break;
                     }
@@ -452,19 +488,21 @@ namespace ppp {
                     if (!c->BeginAccept()) {
                         /**
                          * @brief Preserve pending SYN while outbound connect is transiently unavailable.
+                         *        Reset accepting so that the next retransmission may retry.
                          */
+                        link->accepting.store(false, std::memory_order_release);
                         link->Update();
                         return true;
                     }
 
                     rst = false;
                     c->link_ = link;
-                    link->socket = c;
+                    std::atomic_store(&link->socket, c);
 
                     ip->src = tap->GatewayServer;
                     tcp->src = link->natPort;
                     ip->dest = tap->IPAddress;
-                    tcp->dest = ntohs(this->listenEP_.Port);
+                    tcp->dest = ntohs((UInt16)this->listenPort_.load(std::memory_order_acquire));
                     break;
                 }
             }
@@ -481,24 +519,25 @@ namespace ppp {
              * @brief Advance simplified TCP state for timeout management.
              */
             if (flags & TcpFlags::TCP_RST) {
-                link->state = TcpState::TCP_STATE_CLOSED;
+                link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
             }
             elif((flags & TcpFlags::TCP_SYN) && (flags & TcpFlags::TCP_ACK)) {
-                if (link->state == TcpState::TCP_STATE_SYN_RECEIVED) {
-                    link->state = TcpState::TCP_STATE_ESTABLISHED;
+                if ((TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_SYN_RECEIVED) {
+                    link->state.store((Byte)TcpState::TCP_STATE_ESTABLISHED, std::memory_order_relaxed);
                 }
             }
             elif((flags & TcpFlags::TCP_FIN) && (flags & TcpFlags::TCP_ACK)) {
-                if (link->state == TcpState::TCP_STATE_ESTABLISHED) {
-                    link->state = TcpState::TCP_STATE_CLOSE_WAIT;
+                TcpState ls2 = (TcpState)link->state.load(std::memory_order_relaxed);
+                if (ls2 == TcpState::TCP_STATE_ESTABLISHED) {
+                    link->state.store((Byte)TcpState::TCP_STATE_CLOSE_WAIT, std::memory_order_relaxed);
                 }
-                elif(link->state == TcpState::TCP_STATE_LAST_ACK) {
-                    link->state = TcpState::TCP_STATE_CLOSED;
+                elif(ls2 == TcpState::TCP_STATE_LAST_ACK) {
+                    link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
                 }
             }
             elif(flags & TcpFlags::TCP_ACK) {
-                if (link->state == TcpState::TCP_STATE_CLOSE_WAIT) {
-                    link->state = TcpState::TCP_STATE_LAST_ACK;
+                if ((TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_CLOSE_WAIT) {
+                    link->state.store((Byte)TcpState::TCP_STATE_LAST_ACK, std::memory_order_relaxed);
                 }
             }
 
@@ -556,11 +595,12 @@ namespace ppp {
                         tail++;
                     }
 
-                    UInt64 deltaTime = now - link->lastTime;
+                    UInt64 deltaTime = now - link->lastTime.load(std::memory_order_relaxed);
                     if (link->lwip) {
-                        socket = link->socket;
+                        socket = std::atomic_load(&link->socket);
                         if (NULLPTR == socket) {
-                            bool syn = link->state == TcpState::TCP_STATE_SYN_SENT || link->state == TcpState::TCP_STATE_SYN_RECEIVED;
+                            TcpState ls0 = (TcpState)link->state.load(std::memory_order_relaxed);
+                            bool syn = ls0 == TcpState::TCP_STATE_SYN_SENT || ls0 == TcpState::TCP_STATE_SYN_RECEIVED;
                             if (!syn) {
                                 releases.emplace_back(link);
                             }
@@ -569,7 +609,7 @@ namespace ppp {
                             releases.emplace_back(link);
                         }
                         else {
-                            uint64_t maxTimeout = link->state == TcpState::TCP_STATE_ESTABLISHED ? MaxEstablishedTimeout : MaxFinalizeTimeout;
+                            uint64_t maxTimeout = (TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_ESTABLISHED ? MaxEstablishedTimeout : MaxFinalizeTimeout;
                             if (deltaTime >= maxTimeout) {
                                 releases.emplace_back(link);
                             }
@@ -579,35 +619,50 @@ namespace ppp {
                     }
 #ifdef SYSNAT   
                     else {
-                        socket = link->socket; 
+                        socket = std::atomic_load(&link->socket);
                         if (NULL != socket) {
-                            SynchronizedObjectScope _(socket->sysnat_synbobj_);
-                            if (socket->sysnat_status_ > 0) {
+                            /**
+                             * @brief sysnat_status_ is std::atomic<int>; a lock-free
+                             *        acquire-load is sufficient here.  Acquiring
+                             *        sysnat_synbobj_ while syncobj_ is already held
+                             *        would create an inconsistent lock-ordering with
+                             *        other code paths that hold sysnat_synbobj_ alone,
+                             *        introducing a potential stall (and, if a third
+                             *        lock were ever added, a deadlock cycle).  The
+                             *        atomic read is the correct, safe alternative.
+                             */
+                            if (socket->sysnat_status_.load(std::memory_order_acquire) > 0) {
                                 continue;
                             }
                         }
                     }
 #endif
-                    if (link->state == TcpState::TCP_STATE_ESTABLISHED) {
+                    /**
+                     * @brief Snapshot state atomically once; reuse across all comparisons in
+                     *        this scan iteration to avoid repeated atomic reads and to ensure
+                     *        consistent state across the if/elif/goto chain.
+                     */
+                    TcpState lsn = (TcpState)link->state.load(std::memory_order_relaxed);
+                    if (lsn == TcpState::TCP_STATE_ESTABLISHED) {
                         goto TCP_STATE_INACTIVE;
                     }
-                    elif(link->state == TcpState::TCP_STATE_CLOSED) {
+                    elif(lsn == TcpState::TCP_STATE_CLOSED) {
                         releases.emplace_back(link);
                     }
-                    elif(link->state > TcpState::TCP_STATE_ESTABLISHED) {
+                    elif(lsn > TcpState::TCP_STATE_ESTABLISHED) {
                     TCP_STATE_FINALIZE:
                         if (deltaTime >= MaxFinalizeTimeout) {
                             releases.emplace_back(link);
                         }
                     }
-                    elif(link->state == TcpState::TCP_STATE_SYN_SENT || link->state == TcpState::TCP_STATE_SYN_RECEIVED) {
+                    elif(lsn == TcpState::TCP_STATE_SYN_SENT || lsn == TcpState::TCP_STATE_SYN_RECEIVED) {
                         if (deltaTime >= MaxConnectTimeout) {
                             releases.emplace_back(link);
                         }
                     }
                     else {
                     TCP_STATE_INACTIVE:
-                        socket = link->socket;
+                        socket = std::atomic_load(&link->socket);
                         if (NULLPTR == socket || socket->IsDisposed()) {
                             goto TCP_STATE_FINALIZE;
                         }
@@ -709,9 +764,10 @@ namespace ppp {
                 memcpy(packet.get(), ip, ippkg_len);
             }
 
-            c->sync_ack_tap_driver_ = tap;
-            c->sync_ack_byte_array_ = packet;
-            c->sync_ack_bytes_size_ = ippkg_len;
+            /** @brief Atomic stores prevent a data race with the SYN-ACK retry timer callback running on context_. */
+            std::atomic_store(&c->sync_ack_tap_driver_, tap);
+            std::atomic_store(&c->sync_ack_byte_array_, packet);
+            c->sync_ack_bytes_size_.store(ippkg_len, std::memory_order_release);
             return true;
         }
 
@@ -797,10 +853,10 @@ namespace ppp {
                     break;
                 }
 
-                pcb = link->socket;
+                pcb = std::atomic_load(&link->socket);
                 if (NULLPTR == pcb) {
-                    if (link->state != TcpState::TCP_STATE_CLOSED) {
-                        link->state = TcpState::TCP_STATE_CLOSED;
+                    if ((TcpState)link->state.load(std::memory_order_relaxed) != TcpState::TCP_STATE_CLOSED) {
+                        link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
                     }
 
                     break;
@@ -844,9 +900,9 @@ namespace ppp {
                 return -1;
             }
 
-            std::shared_ptr<TapTcpClient> pcb = link->socket;
+            std::shared_ptr<TapTcpClient> pcb = std::atomic_load(&link->socket);
             if (NULLPTR == pcb) {
-                if (link->state == TcpState::TCP_STATE_SYN_SENT) {
+                if ((TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_SYN_SENT) {
                     boost::asio::ip::tcp::endpoint localEP = IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(src_ip, src_port);
                     boost::asio::ip::tcp::endpoint remoteEP = IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(dest_ip, dest_port);
 
@@ -854,7 +910,7 @@ namespace ppp {
                     if (NULLPTR != pcb) {
                         pcb->lwip_ = link->natPort;
                         pcb->link_ = link;
-                        link->socket = pcb;
+                        std::atomic_store(&link->socket, pcb);
                     }
                 }
 
@@ -869,11 +925,11 @@ namespace ppp {
                 int sync_packet_size = 0;
                 link->Update();
 
-                pcb->sync_ack_bytes_size_ = 0;
-                pcb->sync_ack_byte_array_ = lwip::netstack_wrap_ipv4_tcp_syn_packet(dest, src, wnd, ack, seq, sync_packet_size);
+                pcb->sync_ack_bytes_size_.store(0, std::memory_order_relaxed);
+                std::atomic_store(&pcb->sync_ack_byte_array_, lwip::netstack_wrap_ipv4_tcp_syn_packet(dest, src, wnd, ack, seq, sync_packet_size));
 
-                if (NULLPTR != pcb->sync_ack_byte_array_) {
-                    pcb->sync_ack_bytes_size_ = sync_packet_size;
+                if (NULLPTR != std::atomic_load(&pcb->sync_ack_byte_array_)) {
+                    pcb->sync_ack_bytes_size_.store(sync_packet_size, std::memory_order_release);
                     return 1;
                 }
                 else {
@@ -911,7 +967,7 @@ namespace ppp {
                 link->natPort = (UInt16)key;
                 link->lwip = true;
                 link->closed.store(false, std::memory_order_relaxed);
-                link->state = TcpState::TCP_STATE_SYN_SENT;
+                link->state.store((Byte)TcpState::TCP_STATE_SYN_SENT, std::memory_order_relaxed);
 
                 this->wan2lan_[key] = link;
                 break;
@@ -934,7 +990,7 @@ namespace ppp {
 
 #ifdef SYSNAT
             for (SynchronizedObjectScope _(socket->sysnat_synbobj_);;) {
-                socket->listenPort_ = this->listenEP_.Port;
+                socket->listenPort_ = this->listenPort_.load(std::memory_order_acquire);
                 socket->sysnat_status_ = this->sysnat_ ? 0 : -1;
                 break;
             }
@@ -947,7 +1003,7 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            link->socket = std::move(socket);
+            std::atomic_store(&link->socket, socket);
             return link;
         }
 
@@ -1045,9 +1101,9 @@ namespace ppp {
 
             this->CancelSyncAckRetry();
 
-            this->sync_ack_byte_array_.reset();
-            this->sync_ack_bytes_size_ = 0;
-            this->sync_ack_tap_driver_.reset();
+            std::atomic_store(&this->sync_ack_byte_array_, std::shared_ptr<Byte>());
+            this->sync_ack_bytes_size_.store(0, std::memory_order_release);
+            std::atomic_store(&this->sync_ack_tap_driver_, std::shared_ptr<ITap>());
             this->sync_ack_retry_count_ = 0;
             this->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_CLOSED;
 
@@ -1067,21 +1123,26 @@ namespace ppp {
                 }
             }
 
-#ifdef SYSNAT  
-            for (SynchronizedObjectScope scope(sysnat_synbobj_);;) {
+#ifdef SYSNAT
+            {
+                SynchronizedObjectScope scope(sysnat_synbobj_);
                 int _ = 1;
                 if (sysnat_status_.compare_exchange_strong(_, -1)) {
-                    SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+                    SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj());
                     openppp2_sysnat_del_rule(&forward_key_);
                     openppp2_sysnat_del_rule(&backward_key_);
                 }
+            }
 
-                Update();
-                if (NULL != link) {
-                    link->Update();
-                }
-
-                break;
+            /**
+             * @brief Virtual Update() calls run outside sysnat_synbobj_ to prevent
+             *        lock-order inversion: a subclass override of Update() may acquire
+             *        its own mutex, and acquiring that mutex while holding sysnat_synbobj_
+             *        would create a deadlock if another thread acquires them in reverse order.
+             */
+            Update();
+            if (NULL != link) {
+                link->Update();
             }
 #endif
         }
@@ -1122,9 +1183,9 @@ namespace ppp {
 
             this->CancelSyncAckRetry();
 
-            this->sync_ack_byte_array_.reset();
-            this->sync_ack_bytes_size_ = 0;
-            this->sync_ack_tap_driver_.reset();
+            std::atomic_store(&this->sync_ack_byte_array_, std::shared_ptr<Byte>());
+            this->sync_ack_bytes_size_.store(0, std::memory_order_release);
+            std::atomic_store(&this->sync_ack_tap_driver_, std::shared_ptr<ITap>());
             this->sync_ack_retry_count_ = 0;
             this->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_CLOSED;
 
@@ -1134,7 +1195,7 @@ namespace ppp {
                     return false;
                 }
 
-                link->state = TcpState::TCP_STATE_ESTABLISHED;
+                link->state.store((Byte)TcpState::TCP_STATE_ESTABLISHED, std::memory_order_relaxed);
             }
 
             return this->Establish();
@@ -1148,10 +1209,10 @@ namespace ppp {
                 return false;
             }
 
-            std::shared_ptr<Byte> packet = this->sync_ack_byte_array_;
-            std::shared_ptr<ITap> tap = this->sync_ack_tap_driver_;
+            std::shared_ptr<Byte> packet = std::atomic_load(&this->sync_ack_byte_array_);
+            std::shared_ptr<ITap> tap    = std::atomic_load(&this->sync_ack_tap_driver_);
 
-            int packet_length = this->sync_ack_bytes_size_;
+            int packet_length = this->sync_ack_bytes_size_.load(std::memory_order_acquire);
             if (packet_length < 1) {
                 return false;
             }
@@ -1171,11 +1232,11 @@ namespace ppp {
                     return false;
                 }
 
-                link->state = TcpState::TCP_STATE_SYN_RECEIVED;
+                link->state.store((Byte)TcpState::TCP_STATE_SYN_RECEIVED, std::memory_order_relaxed);
                 (void)tap->Output(packet, packet_length);
 
-                this->sync_ack_byte_array_ = packet;
-                this->sync_ack_bytes_size_ = packet_length;
+                std::atomic_store(&this->sync_ack_byte_array_, packet);
+                this->sync_ack_bytes_size_.store(packet_length, std::memory_order_release);
                 this->sync_ack_retry_count_ = 0;
                 this->ScheduleSyncAckRetry(200);
                 
@@ -1252,9 +1313,8 @@ namespace ppp {
             }
 #endif
 
-            this->sync_ack_byte_array_ = packet;
-            this->sync_ack_bytes_size_ = packet_length;
-            this->sync_ack_retry_count_ = 0;
+            std::atomic_store(&this->sync_ack_byte_array_, packet);
+            this->sync_ack_bytes_size_.store(packet_length, std::memory_order_release);            this->sync_ack_retry_count_ = 0;
             this->ScheduleSyncAckRetry(200);
 
             (void)tap->Output(packet, packet_length);
@@ -1302,9 +1362,9 @@ namespace ppp {
                     return;
                 }
 
-                std::shared_ptr<Byte> packet = self->sync_ack_byte_array_;
-                std::shared_ptr<ITap> tap = self->sync_ack_tap_driver_;
-                int packet_length = self->sync_ack_bytes_size_;
+                std::shared_ptr<Byte> packet = std::atomic_load(&self->sync_ack_byte_array_);
+                std::shared_ptr<ITap> tap    = std::atomic_load(&self->sync_ack_tap_driver_);
+                int packet_length            = self->sync_ack_bytes_size_.load(std::memory_order_acquire);
                 if (NULLPTR == packet || NULLPTR == tap || packet_length < 1) {
                     return;
                 }

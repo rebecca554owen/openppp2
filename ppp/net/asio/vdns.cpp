@@ -459,20 +459,38 @@ namespace ppp {
                         }
                         else {
                             // Not all answers yet – start the merge timer only once (thread-safe).
-                            SynchronizedObjectScope lock(merge_timer_mutex);
-                            if (NULLPTR == merge_timer) {
-                                std::weak_ptr<DNS_RequestContext> weak_self = weak_from_this();
-                                merge_timer = make_shared_object<boost::asio::deadline_timer>(executor);
-                                if (NULLPTR != merge_timer) {
-                                    merge_timer->expires_from_now(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
-                                    merge_timer->async_wait(
-                                        [weak_self](const boost::system::error_code& ec) noexcept {
-                                            std::shared_ptr<DNS_RequestContext> self = weak_self.lock();
-                                            if (NULLPTR != self && ec != boost::asio::error::operation_aborted && !self->completed.load()) {
-                                                self->finish(false);
-                                            }
-                                        });
+                            //
+                            // DEADLOCK FIX (Pattern D): Previously, async_wait() was registered while
+                            // merge_timer_mutex was held.  The registered callback invokes finish(),
+                            // which at its top also acquires merge_timer_mutex -> ABBA deadlock risk.
+                            //
+                            // Fix: create and arm the timer (expires_from_now) under the lock so the
+                            // timer object is owned atomically, capture a local copy of the shared_ptr,
+                            // then call async_wait() AFTER the lock is released so the callback can
+                            // safely re-acquire merge_timer_mutex inside finish().
+                            std::shared_ptr<boost::asio::deadline_timer> pending_timer;
+                            {
+                                SynchronizedObjectScope lock(merge_timer_mutex);
+                                if (NULLPTR == merge_timer) {
+                                    merge_timer = make_shared_object<boost::asio::deadline_timer>(executor);
+                                    if (NULLPTR != merge_timer) {
+                                        merge_timer->expires_from_now(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
+                                        pending_timer = merge_timer; // capture before releasing lock
+                                    }
                                 }
+                            } // merge_timer_mutex released here, BEFORE async_wait
+
+                            // Register the handler only after the lock is released so the callback
+                            // can safely re-acquire merge_timer_mutex when it calls finish().
+                            if (NULLPTR != pending_timer) {
+                                std::weak_ptr<DNS_RequestContext> weak_self = weak_from_this();
+                                pending_timer->async_wait(
+                                    [weak_self](const boost::system::error_code& ec) noexcept {
+                                        std::shared_ptr<DNS_RequestContext> self = weak_self.lock();
+                                        if (NULLPTR != self && ec != boost::asio::error::operation_aborted && !self->completed.load()) {
+                                            self->finish(false);
+                                        }
+                                    });
                             }
                         }
                     }

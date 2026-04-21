@@ -313,17 +313,28 @@ namespace ppp {
             /**
              * @brief Runs asynchronous receive loop on the bypass UDP socket.
              * @return true if a receive operation is scheduled; otherwise false.
+             * @note The mutex is released before registering the async receive to avoid Pattern-D
+             *       deadlock: the completion callback calls Loopback() which re-acquires syncobj_.
+             *       Holding syncobj_ across async_receive_from is therefore illegal.
              */
             bool VEthernetDatagramPort::Loopback() noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                if (disposed_) {
-                    return false;
+                // Validate invariants under lock, then release before scheduling async I/O.
+                for (;;) {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        return false;
+                    }
+
+                    if (!socket_.is_open()) {
+                        return false;
+                    }
+
+                    break;
                 }
 
-                if (!socket_.is_open()) {
-                    return false;
-                }
-
+                // IMPORTANT: async_receive_from is intentionally called outside the syncobj_ scope.
+                // The completion callback re-enters Loopback() which re-acquires syncobj_; holding
+                // the mutex here would create a Pattern-D deadlock on the first callback dispatch.
                 auto self = shared_from_this();
                 socket_.async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), remoteEP_,
                     [self, this](const boost::system::error_code& ec, std::size_t sz) noexcept {

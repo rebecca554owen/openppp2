@@ -48,7 +48,7 @@ namespace ppp
             ssmt_ = 0;
 #if defined(_LINUX)
             ssmt_mq_ = false;
-            ssmt_mq_to_take_effect_ = false;
+            ssmt_mq_to_take_effect_.store(false, std::memory_order_relaxed);
 #endif
 #endif
             assert(NULLPTR != context);
@@ -71,7 +71,7 @@ namespace ppp
             if (ethernet)
             {
                 SynchronizedObjectScope scope(syncobj_);
-                disposed_ = true;
+                disposed_.store(true, std::memory_order_release);
             }
 
             if (ethernet)
@@ -85,14 +85,14 @@ namespace ppp
          */
         void VEthernet::ReleaseAllObjects() noexcept
         {
-            std::shared_ptr<IPFragment> fragment = std::move(fragment_);
+            std::shared_ptr<IPFragment> fragment = std::atomic_exchange(&fragment_, std::shared_ptr<IPFragment>());
             if (NULLPTR != fragment)
             {
                 fragment->Release();
             }
 
             std::shared_ptr<ITap> tap = NULLPTR;
-            std::shared_ptr<VNetstack> netstack = std::move(netstack_);
+            std::shared_ptr<VNetstack> netstack = std::atomic_exchange(&netstack_, std::shared_ptr<VNetstack>());
             if (NULLPTR != netstack)
             {
                 std::shared_ptr<ITap>& netstack_tap = constantof(netstack->Tap);
@@ -146,7 +146,7 @@ namespace ppp
          */
         bool VEthernet::OnUpdate(uint64_t now) noexcept
         {
-            return !disposed_;
+            return !disposed_.load(std::memory_order_acquire);
         }
 
         /**
@@ -154,18 +154,18 @@ namespace ppp
          */
         bool VEthernet::OnTick(uint64_t now) noexcept
         {
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }
 
-            std::shared_ptr<IPFragment> fragment = fragment_;
+            std::shared_ptr<IPFragment> fragment = std::atomic_load(&fragment_);
             if (NULLPTR != fragment)
             {
                 fragment->Update(now);
             }
 
-            std::shared_ptr<VNetstack> netstack = netstack_;
+            std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
             if (NULLPTR != netstack)
             {
                 netstack->Update(now);
@@ -179,7 +179,7 @@ namespace ppp
          */
         bool VEthernet::IsDisposed() noexcept
         {
-            return disposed_;
+            return disposed_.load(std::memory_order_acquire);
         }
 
         /**
@@ -229,7 +229,7 @@ namespace ppp
                     return true;
                 }
 
-                std::shared_ptr<VNetstack> netstack = my->netstack_;
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&my->netstack_);
                 if (NULLPTR != netstack)
                 {
                     return netstack->Input(iphdr, tcphdr, tcp_len);
@@ -260,7 +260,7 @@ namespace ppp
                 }
 
 #if defined(_LINUX)
-                if (my->ssmt_mq_to_take_effect_)
+                if (my->ssmt_mq_to_take_effect_.load(std::memory_order_acquire))
                 {
                     return PacketSsmtInput(my, iphdr, iphdr_hlen, tcphdr, tcp_len, packet_length);
                 }
@@ -334,7 +334,7 @@ namespace ppp
                 return false;
             }
 
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }
@@ -407,7 +407,7 @@ namespace ppp
                     uint32_t                        ack,    
                     uint16_t                        wnd) noexcept 
                 {
-                    std::shared_ptr<VNetstack> netstack = netstack_;
+                    std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
                     return NULLPTR != netstack ? netstack->LwIpBeginAccept(dest, src, seq, ack, wnd) : 0;
                 };
 
@@ -518,8 +518,8 @@ namespace ppp
                 return Output(packet, size);
             };
             
-            netstack_              = netstack;
-            fragment_              = fragment;
+            std::atomic_store(&netstack_, netstack);
+            std::atomic_store(&fragment_, fragment);
 
             tap->PacketInput       = TAP_PACKET_INPUT_EVENT;
             fragment->PacketInput  = FRAGMENT_PACKET_INPUT_EVENT;
@@ -576,7 +576,7 @@ namespace ppp
             std::vector<std::shared_ptr<boost::asio::io_context>/**/> stop_ssmts;
             for (SynchronizedObjectScope scope(syncobj_);;)
             {
-                ssmt_mq_to_take_effect_ = false;
+                ssmt_mq_to_take_effect_.store(false, std::memory_order_release);
                 stop_ssmts = std::move(sssmt_);
                 sssmt_.clear();
                 break;
@@ -606,7 +606,7 @@ namespace ppp
 
             if (proto == ip_hdr::IP_PROTO_TCP)
             {
-                std::shared_ptr<VNetstack> netstack = netstack_;
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
                 if (NULLPTR != netstack)
                 {
                     int tcp_len = packet_length - iphdr_hlen;
@@ -636,7 +636,7 @@ namespace ppp
             
             if (proto == ip_hdr::IP_PROTO_UDP || proto == ip_hdr::IP_PROTO_ICMP)
             {
-                std::shared_ptr<IPFragment> fragment = fragment_;
+                std::shared_ptr<IPFragment> fragment = std::atomic_load(&fragment_);
                 if (NULLPTR != fragment)
                 {
                     std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
@@ -670,10 +670,34 @@ namespace ppp
             }
 
             /**
-             * @brief Spawn detached worker contexts and await startup readiness.
+             * @brief Read the worker count under the lock, then release immediately.
+             *
+             *        The blocking Awaitable::Await() call and the Linux TAP ioctl
+             *        (TapLinux::Ssmt) MUST NOT execute while syncobj_ is held.
+             *        Holding syncobj_ across a blocking wait would prevent any other
+             *        thread from accessing Ssmt(), SsmtMQ(), PacketSsmtInput(), or
+             *        StopAllSsmt() for the entire duration of SSMT startup — a
+             *        significant stall window that can appear as a deadlock to callers.
              */
-            SynchronizedObjectScope scope(syncobj_);
-            for (int i = 0; i < ssmt_; i++)
+            int worker_count = 0;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                worker_count = ssmt_;
+            }
+
+            /**
+             * @brief Spawn detached worker contexts and await startup readiness.
+             *
+             *        Each iteration:
+             *          1. Creates context + awaitable (no shared state).
+             *          2. Appends context to sssmt_ under a brief lock window.
+             *          3. Launches the detached SSMT thread.
+             *          4. Awaits thread-ready signal WITHOUT holding syncobj_.
+             *          5. Performs optional Linux TAP multi-queue attachment WITHOUT
+             *             holding syncobj_.
+             *          6. On failure, removes the last entry from sssmt_ under lock.
+             */
+            for (int i = 0; i < worker_count; i++)
             {
                 std::shared_ptr<boost::asio::io_context> context = make_shared_object<boost::asio::io_context>();
                 if (NULLPTR == context)
@@ -687,9 +711,17 @@ namespace ppp
                     break;
                 }
 
-                std::weak_ptr<Awaitable> awaitable_weak = awaitable;
-                sssmt_.emplace_back(context);
+                /**
+                 * @brief Register the context into sssmt_ before launching the thread
+                 *        so that StopAllSsmt() can stop it even if Await() has not yet
+                 *        returned.  The lock window is intentionally minimal.
+                 */
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    sssmt_.emplace_back(context);
+                }
 
+                std::weak_ptr<Awaitable> awaitable_weak = awaitable;
                 auto process_wt = 
                     [context, awaitable_weak]() noexcept
                     {
@@ -719,15 +751,27 @@ namespace ppp
                 std::thread ssmt_thread(process_wt);
                 ssmt_thread.detach();
 
+                /**
+                 * @brief Block until the SSMT thread signals readiness — WITHOUT
+                 *        holding syncobj_.  This is the critical fix: previously
+                 *        Await() was called inside the outer SynchronizedObjectScope,
+                 *        which held syncobj_ for the entire multi-thread startup
+                 *        window and could stall or deadlock concurrent callers.
+                 */
                 bool await_ok = awaitable->Await();
                 if (!await_ok) 
                 {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (!sssmt_.empty())
+                    {
+                        sssmt_.pop_back();
+                    }
                     return false;
                 }
 
 #if defined(_LINUX)
                 /** @brief Optionally attach each worker to Linux TAP multi-queue. */
-                std::shared_ptr<VNetstack> netstack = netstack_; 
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_); 
                 if (NULLPTR == netstack)
                 {
                     return false;
@@ -745,17 +789,33 @@ namespace ppp
                     return false;
                 }
                 
+                /**
+                 * @brief TAP ioctl is also performed WITHOUT syncobj_ held.
+                 *        The ioctl may block briefly on kernel round-trip; keeping
+                 *        it lock-free avoids stalling concurrent packet-input threads.
+                 */
                 bool ssmt_ok = linux_tap->Ssmt(context);
                 if (!ssmt_ok)
                 {
                     context->stop();
-                    sssmt_.pop_back();
+                    
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (!sssmt_.empty())
+                    {
+                        sssmt_.pop_back();
+                    }
                     return false;
                 }
 
                 if (ssmt_mq_)
                 {
-                    ssmt_mq_to_take_effect_ |= true;
+                    /**
+                     * @brief ssmt_mq_to_take_effect_ is now std::atomic<bool>; the store
+                     *        is lock-free and does not require syncobj_ to be held.
+                     *        The release ordering ensures the flag is visible to concurrent
+                     *        SSMT packet-input threads that load it with acquire.
+                     */
+                    ssmt_mq_to_take_effect_.store(true, std::memory_order_release);
                 }
 #endif
             }
@@ -772,7 +832,7 @@ namespace ppp
             std::shared_ptr<VEthernet> self = shared_from_this();
             StopTimeout();
 
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }
@@ -780,7 +840,7 @@ namespace ppp
             timeout_ = Timer::Timeout(context_, 10, 
                 [self, this](Timer*) noexcept
                 {
-                    if (disposed_)
+                    if (disposed_.load(std::memory_order_acquire))
                     {
                         return false;
                     }
@@ -805,7 +865,7 @@ namespace ppp
          */
         bool VEthernet::IsSysnat()                             noexcept
         {   
-            std::shared_ptr<VNetstack> stack = netstack_;
+            std::shared_ptr<VNetstack> stack = std::atomic_load(&netstack_);
             if (stack)
             {
                 return stack->sysnat_;
@@ -827,7 +887,7 @@ namespace ppp
          */
         std::shared_ptr<ppp::threading::BufferswapAllocator> VEthernet::GetBufferAllocator() noexcept
         {
-            std::shared_ptr<VNetstack> netstack = netstack_;
+            std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
             if (NULLPTR == netstack)
             {
                 return NULLPTR;
@@ -872,7 +932,7 @@ namespace ppp
                 return false;
             }
 
-            if (disposed_) 
+            if (disposed_.load(std::memory_order_acquire)) 
             {
                 return false;
             }
@@ -897,7 +957,7 @@ namespace ppp
                 return false;
             }
 
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }
@@ -921,7 +981,7 @@ namespace ppp
                 return false;
             }
             
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }

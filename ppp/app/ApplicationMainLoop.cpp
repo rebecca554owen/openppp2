@@ -115,6 +115,112 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     status += " tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
     ConsoleUI::GetInstance().UpdateStatus(status);
 
+    /**
+     * @brief Build and push the VPN info snapshot to the TUI info section.
+     *
+     * This block assembles a human-readable set of lines describing the
+     * current runtime environment and pushes them into the ConsoleUI info
+     * section so the user can see live statistics without typing a command.
+     * The block runs on every tick (~1 s) regardless of TUI enabled state;
+     * when no TUI is running, SetInfoLines() is a benign no-op.
+     */
+    {
+        ppp::vector<ppp::string> info;
+        info.reserve(32u);
+
+        // ----------------------------------------------------------------
+        // Static application parameters (stable across ticks)
+        // ----------------------------------------------------------------
+        info.emplace_back("Application started. Press Ctrl+C to shut down.");
+        info.emplace_back("");
+
+        {
+            ppp::string line = "Max Concurrent      : ";
+            line += stl::to_string<ppp::string>(
+                configuration_ ? configuration_->concurrent : 0);
+            info.emplace_back(std::move(line));
+        }
+        {
+            ppp::string line = "Process             : ";
+            line += stl::to_string<ppp::string>(
+                static_cast<Int32>(ppp::GetCurrentProcessId()));
+            info.emplace_back(std::move(line));
+        }
+        {
+            ppp::string line = "Cwd                 : ";
+            line += ppp::GetCurrentDirectoryPath();
+            info.emplace_back(std::move(line));
+        }
+        {
+            ppp::string line = "Hosting Environment : ";
+            line += (client_mode_ ? ppp::string("client") : ppp::string("server"));
+            line += ":production";
+            info.emplace_back(std::move(line));
+        }
+
+        info.emplace_back("");
+
+        // ----------------------------------------------------------------
+        // Dynamic VPN session statistics
+        // ----------------------------------------------------------------
+        info.emplace_back("VPN");
+        info.emplace_back(
+            "---------------------------------------------------------------"
+            "--------------------");
+
+        {
+            uint64_t elapsed_ms = static_cast<uint64_t>(
+                std::max<int64_t>(0LL, stopwatch_.ElapsedMilliseconds()));
+            uint64_t elapsed_s  = elapsed_ms / 1000u;
+            uint64_t hh = elapsed_s / 3600u;
+            uint64_t mm = (elapsed_s % 3600u) / 60u;
+            uint64_t ss = elapsed_s % 60u;
+
+            char dur_buf[32];
+            std::snprintf(dur_buf, sizeof(dur_buf), "%02llu:%02llu:%02llu",
+                static_cast<unsigned long long>(hh),
+                static_cast<unsigned long long>(mm),
+                static_cast<unsigned long long>(ss));
+
+            ppp::string line = "Duration            : ";
+            line += dur_buf;
+            info.emplace_back(std::move(line));
+        }
+
+        {
+            ppp::string line = "Link State          : ";
+            if ("up" == vpn_state) {
+                line += "Established";
+            } elif ("reconnect" == vpn_state) {
+                line += "Reconnecting";
+            } elif ("connect" == vpn_state) {
+                line += "Connecting";
+            } elif ("init" == vpn_state) {
+                line += "Initializing";
+            } else {
+                line += "Down";
+            }
+            info.emplace_back(std::move(line));
+        }
+
+        if (NULLPTR != statistics_snapshot) {
+            {
+                ppp::string line = "TX                  : ";
+                line += ppp::StrFormatByteSize(
+                    static_cast<Int64>(outgoing_traffic));
+                info.emplace_back(std::move(line));
+            }
+            {
+                ppp::string line = "RX                  : ";
+                line += ppp::StrFormatByteSize(
+                    static_cast<Int64>(incoming_traffic));
+                info.emplace_back(std::move(line));
+            }
+        }
+
+        ConsoleUI::GetInstance().SetInfoLines(info);
+    }
+
 #if defined(_WIN32)
     ppp::win32::Win32Native::OptimizedProcessWorkingSize();
 #endif

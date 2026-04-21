@@ -202,12 +202,19 @@ namespace ppp {
                 return true;
             }
 
-            /** @brief Releases callbacks and clears pending reassembly state. */
+            /**
+             * @brief Releases callbacks and clears pending reassembly state.
+             *
+             * @note DATA RACE FIX (MEDIUM-2): Previously PacketInput/PacketOutput were
+             *       zeroed BEFORE acquiring syncobj_, so a concurrent Input() call could
+             *       observe a null callback while reading the handler without the lock.
+             *       Fix: zero the handlers INSIDE the lock so they are mutually exclusive
+             *       with any concurrent OnInput()/OnOutput() readers.
+             */
             void IPFragment::Release() noexcept {
-                PacketInput = NULLPTR;
-                PacketOutput = NULLPTR;
-
                 SynchronizedObjectScope scope(syncobj_);
+                PacketInput  = NULLPTR;
+                PacketOutput = NULLPTR;
                 IPV4_SUBPACKAGES_.clear();
             }
 
@@ -227,10 +234,22 @@ namespace ppp {
 
             /**
              * @brief Raises the packet input event.
+             *
              * @param e Event payload carrying the reassembled packet.
+             *
+             * @note  The handler is snapshotted under syncobj_ before being invoked so that a
+             *        concurrent Release() call -- which zeroes PacketInput inside the same lock --
+             *        cannot introduce a data race on the PacketInputEventHandler copy.  The
+             *        callback is then invoked outside the lock to avoid holding syncobj_ during
+             *        potentially re-entrant user code.
              */
             void IPFragment::OnInput(PacketInputEventArgs& e) noexcept {
-                PacketInputEventHandler eh = PacketInput;
+                PacketInputEventHandler eh;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    eh = PacketInput;
+                }
+
                 if (eh) {
                     eh(this, e);
                 }
@@ -238,10 +257,20 @@ namespace ppp {
 
             /**
              * @brief Raises the packet output event.
+             *
              * @param e Event payload carrying serialized fragment bytes.
+             *
+             * @note  The handler is snapshotted under syncobj_ before being invoked for the same
+             *        reason as OnInput(): to prevent a data race with Release() zeroing
+             *        PacketOutput inside the lock.  The callback is invoked outside the lock.
              */
             void IPFragment::OnOutput(PacketOutputEventArgs& e) noexcept {
-                PacketOutputEventHandler eh = PacketOutput;
+                PacketOutputEventHandler eh;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    eh = PacketOutput;
+                }
+
                 if (eh) {
                     eh(this, e);
                 }

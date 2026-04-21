@@ -312,10 +312,54 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
         return -1;
     }
 
-    if (!ConsoleUI::GetInstance().Start()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
-        Dispose();
-        return -1;
+    /**
+     * @brief TUI startup with isatty-based fallback.
+     *
+     * When stdout is not connected to a terminal (pipe / file redirection),
+     * the full-screen TUI is skipped to avoid corrupting captured output.
+     * A brief plain-text summary is printed instead, and the process continues
+     * with full VPN functionality but without an interactive interface.
+     */
+    bool tui_enabled = ConsoleUI::ShouldEnable();
+    if (tui_enabled) {
+        if (!ConsoleUI::GetInstance().Start()) {
+            /**
+             * @brief Non-fatal TUI initialization failure.
+             *
+             * Terminal setup failure (e.g. PrepareInputTerminal on an unsupported
+             * pseudo-terminal) is treated as a warning rather than an error.
+             * The process continues with plain-text output mode.
+             */
+            fprintf(stdout,
+                "Warning: ConsoleUI initialization failed. "
+                "Continuing in plain-text mode.\n");
+            tui_enabled = false;
+        }
+    }
+
+    if (!tui_enabled) {
+        /**
+         * @brief Plain-text startup banner for no-tty / redirected-output mode.
+         *
+         * Printed once at startup so that log files and pipes receive at least
+         * basic identification information about this process instance.
+         */
+        fprintf(stdout,
+            "PPP PRIVATE NETWORK(TM) 2  version: %s\n",
+            PPP_APPLICATION_VERSION);
+        fprintf(stdout,
+            "Mode    : %s\n",
+            client_mode_ ? "client" : "server");
+        fprintf(stdout,
+            "Process : %d\n",
+            static_cast<int>(ppp::GetCurrentProcessId()));
+        fprintf(stdout,
+            "Config  : %s\n",
+            configuration_path_.data());
+        fprintf(stdout,
+            "Cwd     : %s\n",
+            ppp::GetCurrentDirectoryPath().data());
+        std::fflush(stdout);
     }
 
     stopwatch_.Restart();

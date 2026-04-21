@@ -46,13 +46,39 @@ namespace ppp {
                 UInt32                                                      srcAddr = 0;
                 UInt16                                                      srcPort = 0;
                 UInt16                                                      natPort = 0;
-                struct {
-                    bool                                                    lwip   : 1;
-                    Byte                                                    state  : 7;
-                };
-                std::atomic_bool                                            closed = false;
+                /**
+                 * @brief Set once at link creation from the lwIP accept path; never mutated
+                 *        afterwards.  Plain bool is safe — no cross-thread write after init.
+                 */
+                bool                                                        lwip      = false;
+                /**
+                 * @brief TCP state machine value.  Read and written from multiple SSMT threads
+                 *        without a lock; must be atomic to avoid a data race.
+                 */
+                std::atomic<Byte>                                           state     = { 0 };
+                /**
+                 * @brief CAS guard that prevents two concurrent SSMT threads from both calling
+                 *        BeginAcceptClient() for the same SYN flow during retransmission.
+                 *        Atomically exchanged false→true by the winning thread; reset to false
+                 *        only on failure so the next retransmission may retry.
+                 */
+                std::atomic_bool                                            accepting = { false };
+                /**
+                 * @brief Set-once closing guard.  exchange(true) returns the previous value;
+                 *        only the first caller that sees false performs the close.
+                 */
+                std::atomic_bool                                            closed    = { false };
+                /**
+                 * @brief Last activity timestamp in milliseconds.  Updated lock-free by SSMT
+                 *        threads via Update(); must be atomic to avoid a data race.
+                 */
+                std::atomic<UInt64>                                         lastTime  = { 0 };
+                /**
+                 * @brief Bound outbound socket for this flow.
+                 *        Always accessed via std::atomic_load / std::atomic_store to prevent
+                 *        a data race between Input() threads and Update() / Closing().
+                 */
                 std::shared_ptr<TapTcpClient>                               socket;
-                UInt64                                                      lastTime = 0;
 
             public:
                 /** @brief Initializes a closed link entry. */
@@ -62,7 +88,7 @@ namespace ppp {
 
             public:
                 /** @brief Refreshes last activity timestamp. */
-                void                                                        Update() noexcept { this->lastTime = ppp::threading::Executors::GetTickCount(); };
+                void                                                        Update() noexcept { this->lastTime.store(ppp::threading::Executors::GetTickCount(), std::memory_order_relaxed); }
                 /** @brief Closes the link and resets state. */
                 void                                                        Release() noexcept;
                 /** @brief Marks link closed and disposes bound socket client. */
@@ -162,11 +188,11 @@ namespace ppp {
                 std::shared_ptr<boost::asio::ip::tcp::socket>               socket_;
                 std::shared_ptr<TapTcpLink>                                 link_;
 
-                std::shared_ptr<ITap>                                       sync_ack_tap_driver_;
-                std::shared_ptr<Byte>                                       sync_ack_byte_array_;
-                std::atomic<Byte>                                           sync_ack_state_      = 0;
-                int                                                         sync_ack_bytes_size_ = 0;
-                int                                                         sync_ack_retry_count_ = 0;
+                std::shared_ptr<ITap>                                       sync_ack_tap_driver_;   ///< Protected by std::atomic_store/load (cross-thread).
+                std::shared_ptr<Byte>                                       sync_ack_byte_array_;   ///< Protected by std::atomic_store/load (cross-thread).
+                std::atomic<Byte>                                           sync_ack_state_       = 0;
+                std::atomic<int>                                            sync_ack_bytes_size_  = 0; ///< Atomic: written by Output() thread, read by retry timer thread.
+                int                                                         sync_ack_retry_count_ = 0; ///< Single-threaded (context_ strand only); no atomic needed.
                 std::shared_ptr<boost::asio::steady_timer>                  sync_ack_retry_timer_;
 
                 boost::asio::ip::tcp::endpoint                              natEP_;
@@ -262,6 +288,13 @@ namespace ppp {
             ppp::string                                                     sysnat_interface_name_;
 #endif
             IPEndPoint                                                      listenEP_;
+            /**
+             * @brief Atomic mirror of listenEP_.Port.
+             * @note  Written under syncobj_ in Open() and ReleaseAllResources().
+             *        Read lock-free on SSMT Input() threads to avoid holding syncobj_
+             *        during per-packet NAT rewrites.
+             */
+            std::atomic<int>                                                listenPort_ = { 0 };
             WAN2LANTABLE                                                    wan2lan_;
             LAN2WANTABLE                                                    lan2wan_;
             std::shared_ptr<SocketAcceptor>                                 acceptor_;

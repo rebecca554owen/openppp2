@@ -172,11 +172,27 @@ namespace ppp {
                 virtual bool                                            DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept = 0;
 
             private:
-                /** @brief Bit-field flags representing queue lifecycle and active send state. */
-                struct {
-                    bool                                                disposed_  : 1;
-                    bool                                                sending_   : 7;
-                };
+                /**
+                 * @brief True once Dispose()/Finalize() has been called; read without the lock
+                 *        only as an early-exit fast-path (the lock re-checks it to be definitive).
+                 *
+                 * @note  Stored as a plain bool -- NOT a bitfield -- so that concurrent lock-free
+                 *        reads of disposed_ and lock-protected writes of sending_ operate on
+                 *        distinct, independently-addressable bytes.  Packing both into a single
+                 *        bitfield struct would force the compiler to emit a read-modify-write
+                 *        sequence on the shared byte, introducing a data race between any thread
+                 *        reading disposed_ outside the lock and any thread writing sending_
+                 *        inside the lock (C++17 [intro.races]/2).
+                 */
+                bool                                                    disposed_ = false;
+                /**
+                 * @brief True while an async write is in flight; always accessed under syncobj_.
+                 *
+                 * @note  Kept as a plain bool (not bitfield) for the same reason as disposed_:
+                 *        to guarantee byte-level independence so that lock-free reads of disposed_
+                 *        cannot race with locked writes of sending_.
+                 */
+                bool                                                    sending_  = false;
                 /** @brief Mutex guarding flags and pending contexts. */
                 SynchronizedObject                                      syncobj_;
                 /** @brief Pending write contexts waiting for dispatch. */

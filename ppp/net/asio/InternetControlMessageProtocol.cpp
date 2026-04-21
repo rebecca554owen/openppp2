@@ -65,8 +65,20 @@ namespace ppp {
                 }
 
             public:
-                /** @brief Allocates a unique identification token for an echo request. */
+                /**
+                 * @brief Allocates a unique identification token for an echo request.
+                 *
+                 * @note LOCK DURATION FIX (MEDIUM-3): GetTickCount() was previously called
+                 *       inside the syncobj_ critical section, extending lock hold time for
+                 *       a potentially slow system call.  It is now computed once BEFORE
+                 *       acquiring the lock and reused for every probe iteration.
+                 */
                 bool                                                    Allocated(UInt32& identification) noexcept {
+                    // Compute timestamp once before entering the critical section to keep
+                    // lock hold time as short as possible.
+                    UInt64 now         = ppp::threading::Executors::GetTickCount();
+                    UInt64 now_seconds = now / 1000;
+
                     SynchronizedObjectScope scope(syncobj_);
                     for (int i = 0; i <= MAX_PROBES_COUNT; i++) {
                         UInt32 n = ++aid_;
@@ -75,8 +87,6 @@ namespace ppp {
                             continue;
                         }
 
-                        UInt64 now = ppp::threading::Executors::GetTickCount();
-                        UInt64 now_seconds = now / 1000;
 
                         auto r = allocateds_.emplace(std::make_pair(n, now_seconds));
                         if (r.second) {

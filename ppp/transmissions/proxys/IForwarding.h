@@ -173,8 +173,14 @@ namespace ppp {
                     int&                                                    overflow_length) noexcept;
 
             private:
-                SynchronizedObject                                          syncobj_;      
-                bool                                                        disposed_ = false;          
+                SynchronizedObject                                          syncobj_;
+                /**
+                 * @brief Disposal flag.
+                 * @note  Written inside syncobj_ in Finalize() and read with an atomic fast-path
+                 *        outside the lock in IFORWARDING_TRY_ADD().  Must be std::atomic<bool> to
+                 *        avoid a data race between Finalize() and concurrent TryAdd() callers.
+                 */
+                std::atomic<bool>                                           disposed_ = { false };
                 ContextPtr                                                  context_;
                 AppConfigurationPtr                                         configuration_;
                 /** @brief Cached upstream proxy and tunnel destination settings. */

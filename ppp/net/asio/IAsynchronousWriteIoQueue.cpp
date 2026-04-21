@@ -90,6 +90,12 @@ namespace ppp {
              *
              * Requests are serialized via @ref sending_ and @ref queues_ to guarantee
              * ordered completion callbacks.
+             *
+             * @note Two-phase locking: sending_ is set to true under syncobj_ before the
+             *       lock is released, then DoTryWriteBytesUnsafe() is called outside the
+             *       lock.  This prevents the async-completion callback chain
+             *       (evtf → DoTryWriteBytesNext → syncobj_) from re-entering the mutex
+             *       while this call site still holds it.
              */
             bool IAsynchronousWriteIoQueue::WriteBytes(const std::shared_ptr<Byte>& packet, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 IAsynchronousWriteIoQueue* const q = this;
@@ -110,42 +116,69 @@ namespace ppp {
                     return false;
                 }
 
-                context->cb = cb;
-                context->packet = packet;
+                context->cb            = cb;
+                context->packet        = packet;
                 context->packet_length = packet_length;
 
-                bool ok = false;
-                while (NULLPTR != q) {
-                    /** @brief Serialize either direct dispatch or deferred enqueue. */
+                /** @brief Context to be dispatched outside the lock; null if this request was enqueued. */
+                std::shared_ptr<AsynchronousWriteIoContext> ctx_to_send;
+
+                {
                     SynchronizedObjectScope scope(q->syncobj_);
+                    if (q->disposed_) {
+                        context->Clear();
+                        return false;
+                    }
+
                     if (q->sending_) {
-                        if (q->disposed_) {
-                            break;
-                        }
-
-                        ok = true;
+                        /** @brief Another write is in flight; defer this request into the pending queue. */
                         q->queues_.emplace_back(context);
-                    }
-                    else {
-                        ok = q->DoTryWriteBytesUnsafe(context);
+                        return true;
                     }
 
-                    break;
+                    /**
+                     * @brief Pre-arm the sending guard under the lock before releasing it.
+                     *
+                     * Concurrent WriteBytes() callers observe sending_ = true and enqueue
+                     * their contexts rather than attempting a second parallel write.
+                     * DoTryWriteBytesUnsafe() is called below after the lock is released.
+                     */
+                    q->sending_ = true;
+                    ctx_to_send = context;
                 }
 
-                if (ok) {
-                    return true;
+                /** @brief Initiate the write outside the lock. */
+                bool write_ok = q->DoTryWriteBytesUnsafe(ctx_to_send);
+                if (!write_ok) {
+                    /**
+                     * @brief Write failed to start.  Advance the queue so that any context
+                     *        enqueued by a concurrent thread during the window between setting
+                     *        sending_ = true and this failure is not silently abandoned.
+                     */
+                    int drain = DoTryWriteBytesNext();
+                    if (drain < 0) {
+                        Dispose();
+                    }
+
+                    ctx_to_send->Clear();
+                    return false;
                 }
 
-                context->Clear();
-                return false;
+                return true;
             }
 
             /**
-             * @brief Attempts to start writing the provided context.
+             * @brief Starts the physical write for the given context.
              *
-             * On completion, this schedules progression to the next queued write and disposes
-             * the queue when progression fails.
+             * Registers an async completion callback that either advances the queue
+             * (DoTryWriteBytesNext) on success or disposes the queue on failure.
+             *
+             * @note The caller MUST set sending_ = true under syncobj_ before releasing
+             *       the lock and then invoke this function OUTSIDE the lock.  This two-phase
+             *       discipline prevents DoWriteBytes — and its async-completion chain through
+             *       evtf (→ DoTryWriteBytesNext → syncobj_ acquisition) — from re-entering
+             *       the mutex while the caller still holds it, which would deadlock on the
+             *       non-recursive std::mutex.
              */
             bool IAsynchronousWriteIoQueue::DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept {
                 if (disposed_) {
@@ -153,7 +186,7 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                auto evtf = 
+                auto evtf =
                     [self, this, context](bool ok) noexcept {
                         int err = -1;
                         context->Forward(ok);
@@ -167,25 +200,24 @@ namespace ppp {
                         }
                     };
 
-                bool ok = DoWriteBytes(context->packet, 0, context->packet_length, evtf);
-                if (ok) {
-                    sending_ = true;
-                }
-
-                return ok;
+                return DoWriteBytes(context->packet, 0, context->packet_length, evtf);
             }
 
             /**
              * @brief Advances the queue to the next pending write context.
              *
-             * Returns 1 when another write is started, 0 when queue is empty, and -1 on
-             * disposal or unrecoverable write start failure.
+             * Returns 1 when another write is started, 0 when the queue is empty, and -1
+             * on disposal or an unrecoverable write-start failure.
+             *
+             * @note Two-phase locking: sending_ is reset to false and then, when a next
+             *       context is found, set back to true — all under syncobj_.
+             *       DoTryWriteBytesUnsafe() is then called OUTSIDE the lock to avoid
+             *       re-entering syncobj_ through the evtf completion callback chain.
              */
             int IAsynchronousWriteIoQueue::DoTryWriteBytesNext() noexcept {
-                bool ok = false;
                 std::shared_ptr<AsynchronousWriteIoContext> context;
 
-                for (;;) {
+                {
                     SynchronizedObjectScope scope(syncobj_);
                     sending_ = false;
 
@@ -193,27 +225,36 @@ namespace ppp {
                         return -1;
                     }
 
-                    do {
-                        auto tail = queues_.begin();
-                        auto endl = queues_.end();
-                        if (tail == endl) {
-                            return 0;
+                    /** @brief Skip null or already-cleared entries at the queue head. */
+                    while (!queues_.empty()) {
+                        context = std::move(queues_.front());
+                        queues_.erase(queues_.begin());
+                        if (NULLPTR != context) {
+                            break;
                         }
+                    }
 
-                        context = std::move(*tail);
-                        queues_.erase(tail);
-                    } while (NULLPTR == context);
+                    if (NULLPTR == context) {
+                        /** @brief Queue exhausted; sending_ stays false for the next caller. */
+                        return 0;
+                    }
 
-                    ok = DoTryWriteBytesUnsafe(context);
-                    break;
+                    /**
+                     * @brief Pre-arm the sending guard before releasing the lock so that
+                     *        concurrent WriteBytes() callers enqueue rather than attempt a
+                     *        competing parallel write.
+                     */
+                    sending_ = true;
                 }
 
-                if (ok) {
-                    return 1;
+                /** @brief Start the next write outside the lock to prevent re-entrancy through evtf. */
+                bool ok = DoTryWriteBytesUnsafe(context);
+                if (!ok) {
+                    context->Forward(false);
+                    return -1;
                 }
 
-                context->Forward(false);
-                return -1;
+                return 1;
             }
         }
     }

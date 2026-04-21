@@ -853,17 +853,32 @@ namespace ppp {
                     return;
                 }
 
-                SynchronizedObjectScope scope(syncobj_);
-                boost::system::error_code ec;
+                // All callers are strand-serialized; the atomic CAS on disposed_
+                // is the sole re-entrancy guard.  The previous std::mutex caused a
+                // Pattern-A deadlock: clear_timeout() / cancel_inactivity_timer()
+                // call Timer::Dispose() (which posts onto the io_context) while the
+                // mutex was held.  Fix: capture timer handles locally, clear members,
+                // then Dispose() AFTER releasing all shared state.
+                std::shared_ptr<Timer> timeout_snap    = std::move(timeout_);
+                std::shared_ptr<Timer> inactivity_snap = std::move(inactivity_timer_);
+
                 if (local_socket_) {
                     Socket::Closesocket(*local_socket_);
                     local_socket_.reset();
                 }
 
                 Socket::Closesocket(remote_socket_);
-                clear_timeout();
-                cancel_inactivity_timer();
                 last_ = Executors::GetTickCount();
+
+                // Dispose timers after releasing member state; Dispose() posts onto
+                // the io_context and must not be called while holding a mutex.
+                if (NULLPTR != timeout_snap) {
+                    timeout_snap->Dispose();
+                }
+
+                if (NULLPTR != inactivity_snap) {
+                    inactivity_snap->Dispose();
+                }
             }
 
             // -----------------------------------------------------------------------------

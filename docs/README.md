@@ -75,6 +75,9 @@ The set is intentionally code-first. Each page is written from actual implementa
 | Management | [`MANAGEMENT_BACKEND.md`](MANAGEMENT_BACKEND.md) | [`MANAGEMENT_BACKEND_CN.md`](MANAGEMENT_BACKEND_CN.md) |
 | Usage | [`USER_MANUAL.md`](USER_MANUAL.md) | [`USER_MANUAL_CN.md`](USER_MANUAL_CN.md) |
 | Reading | [`SOURCE_READING_GUIDE.md`](SOURCE_READING_GUIDE.md) | [`SOURCE_READING_GUIDE_CN.md`](SOURCE_READING_GUIDE_CN.md) |
+| UI | [`TUI_DESIGN.md`](TUI_DESIGN.md) | *(English only)* |
+| Diagnostics | [`ERROR_CODES.md`](ERROR_CODES.md) | *(English only)* |
+| Stability | [`IPV6_FIXES.md`](IPV6_FIXES.md) | *(English only)* |
 
 ## Reading Principle
 

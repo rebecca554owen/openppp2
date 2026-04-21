@@ -278,18 +278,34 @@ namespace ppp {
                 return b;
             }
 
-            /** @brief Thread-safe helper that inserts an object into a table when service is active. */
+            /**
+             * @brief Thread-safe helper that inserts an object into a table when service is active.
+             * @note  `disposed` is checked twice: once outside the lock as a fast-path pre-filter,
+             *        and once inside the lock to close the TOCTOU race with IForwarding::Finalize().
+             *        Finalize() sets disposed_ = true inside the same mutex, so the inner check is
+             *        guaranteed to observe the final state once the lock is held.
+             */
             template <class TValue, class TKey, class TMap>
-            static bool IFORWARDING_TRY_ADD(bool& disposed, IForwarding::SynchronizedObject& lck, TMap& map, TKey* key, const TValue& value) noexcept {
+            static bool IFORWARDING_TRY_ADD(std::atomic<bool>& disposed, IForwarding::SynchronizedObject& lck, TMap& map, TKey* key, const TValue& value) noexcept {
                 if (NULLPTR == key) {
                     return false;
                 }
 
+                // Fast-path pre-filter: avoids lock acquisition when already disposed.
                 if (disposed) {
                     return false;
                 }
 
                 IForwarding::SynchronizedObjectScope scope(lck);
+
+                // Re-check inside the lock to close the TOCTOU window with Finalize(), which sets
+                // disposed_ = true under the same mutex before emptying the tables. Without this
+                // inner check, a concurrent TryAdd() that passed the outer check could insert into
+                // a table that Finalize() has already cleared, causing a resource leak.
+                if (disposed) {
+                    return false;
+                }
+
                 return Dictionary::TryAdd(map, key, value);
             }
 
@@ -951,6 +967,15 @@ namespace ppp {
                 
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
+
+                    // Set disposed_ = true INSIDE the lock so that concurrent TryAdd() callers
+                    // that perform a double-checked lock (outer fast-path + inner re-check) will
+                    // observe the disposed state before inserting into the now-cleared tables.
+                    // Writing disposed_ outside the lock would open a TOCTOU window where a
+                    // concurrent TryAdd() passes the outer check, Finalize() empties the maps,
+                    // then TryAdd() inserts into the cleared map — leaking the resource.
+                    disposed_.store(true, std::memory_order_release);
+
                     sockets = std::move(sockets_);
                     sockets_.clear();
 
@@ -962,7 +987,6 @@ namespace ppp {
                     break;
                 }
 
-                disposed_ = true;
                 for (auto&& kv : sockets) {
                     Socket::Closesocket(kv.second);
                 }

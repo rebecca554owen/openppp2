@@ -26,7 +26,9 @@ namespace ppp {
                 typedef ppp::io::MemoryStream                                       MemoryStream;
                 typedef ppp::threading::Timer                                       Timer;
                 typedef boost::asio::strand<boost::asio::io_context::executor_type> Strand;
-                typedef std::lock_guard<std::mutex>                                 SynchronizedObjectScope;
+                // NOTE: No SynchronizedObjectScope/mutex needed — all data-path
+                // calls are serialized by strand_.  The disposed_ atomic CAS in
+                // close() is the sole re-entrancy guard.
 
 #pragma pack(push, 1)
                 /**
@@ -139,7 +141,7 @@ namespace ppp {
                 uint64_t                                                            last_;              ///< Last activity timestamp (ms)
                 std::shared_ptr<Timer>                                              timeout_;           ///< Handshake timeout timer
                 std::shared_ptr<Timer>                                              inactivity_timer_;  ///< Inactivity timeout timer
-                mutable std::mutex                                                  syncobj_;
+                // syncobj_ removed: close() is strand-serialized; mutex was deadlock-prone.
                 std::atomic<bool>                                                   disposed_{ false };
                 char                                                                local_socket_buf_[FORWARD_MSS];  ///< Read buffer for local socket
                 char                                                                remote_socket_buf_[FORWARD_MSS]; ///< Read buffer for remote socket

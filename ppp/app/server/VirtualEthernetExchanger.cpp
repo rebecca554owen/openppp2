@@ -1431,36 +1431,73 @@ namespace ppp {
                 }
 
                 for (;;) {
-                    bool ok = false;
-                    bool nw = false;
-
                     uint64_t key = MAKE_QWORD(source_ip, source_port);
-                    std::shared_ptr<boost::asio::io_context> context = GetContext(); 
-                    if (NULLPTR != context) {
-                        SynchronizedObjectScope scope(static_echo_syncobj_);
-                        ok = ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port);
-
-                        if (!ok) {
-                            datagram_port = make_shared_object<VirtualEthernetDatagramPortStatic>(exchanger, context, source_ip, source_port);
-                            if (NULLPTR == datagram_port) {
-                                return false;
-                            }
-
-                            nw = true;
-                            ok = datagram_port->Open() && ppp::collections::Dictionary::TryAdd(static_echo_datagram_ports_, key, datagram_port);
-                        }
+                    std::shared_ptr<boost::asio::io_context> context = GetContext();
+                    if (NULLPTR == context) {
+                        break;
                     }
 
-                    if (nw) {
-                        if (ok) {
-                            if (NULLPTR != logger) {
-                                logger->Port(GetId(), transmission, datagram_port->GetSourceEndPoint(), datagram_port->GetLocalEndPoint());
+                    /**
+                     * @brief Fast path: check whether a port already exists without opening a socket.
+                     *
+                     * The map lookup runs under the lock; if a port is found, we avoid
+                     * allocating a new socket entirely.
+                     */
+                    bool already_exists = false;
+                    {
+                        SynchronizedObjectScope scope(static_echo_syncobj_);
+                        already_exists = ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port);
+                    }
+
+                    if (already_exists) {
+                        break;
+                    }
+
+                    /**
+                     * @brief Slow path: create and open the socket BEFORE acquiring the lock.
+                     *
+                     * Performing the UDP socket allocation and Open() syscall outside the lock
+                     * prevents static_echo_syncobj_ from being held during potentially blocking
+                     * OS operations.  A concurrent thread may race to insert the same key;
+                     * the second check inside the lock below resolves such races.
+                     */
+                    std::shared_ptr<VirtualEthernetDatagramPortStatic> new_port =
+                        make_shared_object<VirtualEthernetDatagramPortStatic>(exchanger, context, source_ip, source_port);
+                    if (NULLPTR == new_port) {
+                        return false;
+                    }
+
+                    if (!new_port->Open()) {
+                        new_port->Dispose();
+                        return false;
+                    }
+
+                    /**
+                     * @brief Under the lock: attempt to insert the newly opened port.
+                     *
+                     * If another thread already inserted a port for the same key during the
+                     * Open() window, TryAdd returns false; we discard our port and use theirs.
+                     */
+                    bool inserted = false;
+                    {
+                        SynchronizedObjectScope scope(static_echo_syncobj_);
+                        if (!ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port)) {
+                            inserted = ppp::collections::Dictionary::TryAdd(static_echo_datagram_ports_, key, new_port);
+                            if (inserted) {
+                                datagram_port = new_port;
                             }
                         }
-                        else {
-                            datagram_port->Dispose();
-                            return false;
+                        /** @brief datagram_port now holds whichever entry won the insertion race. */
+                    }
+
+                    if (inserted) {
+                        if (NULLPTR != logger) {
+                            logger->Port(GetId(), transmission, datagram_port->GetSourceEndPoint(), datagram_port->GetLocalEndPoint());
                         }
+                    }
+                    else {
+                        /** @brief Lost the insertion race; dispose our redundant port. */
+                        new_port->Dispose();
                     }
 
                     break;

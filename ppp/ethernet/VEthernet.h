@@ -62,10 +62,11 @@ namespace ppp
             std::shared_ptr<VEthernet>                                      GetReference()          noexcept { return shared_from_this(); }
             /**
              * @brief Returns the bound TAP device.
+             * @note  netstack_ is cross-thread; obtain via atomic_load, then read Tap.
              */
             std::shared_ptr<ITap>                                           GetTap()                noexcept
             {
-                std::shared_ptr<VNetstack> netstack = netstack_;
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
                 return NULLPTR != netstack ? netstack->Tap : NULLPTR;
             }
             /**
@@ -74,8 +75,10 @@ namespace ppp
             std::shared_ptr<boost::asio::io_context>                        GetContext()            noexcept { return context_; }
             /**
              * @brief Returns the active virtual network stack object.
+             * @note  netstack_ is written on the open/close path and read from any thread;
+             *        use std::atomic_load to prevent a data race.
              */
-            std::shared_ptr<VNetstack>                                      GetNetstack()           noexcept { return netstack_; }
+            std::shared_ptr<VNetstack>                                      GetNetstack()           noexcept { return std::atomic_load(&netstack_); }
             /**
              * @brief Returns the synchronization object guarding shared state.
              */
@@ -222,20 +225,27 @@ namespace ppp
             int                                                             PacketInput(ppp::net::native::ip_hdr* iphdr, int iphdr_hlen, int proto, struct pbuf* packet, int packet_length, bool allocated) noexcept;
 
         private:
-            struct 
-            {
-                bool                                                        disposed_ : 1;
-                bool                                                        lwip_     : 1;
-                bool                                                        vnet_     : 1;
-                bool                                                        mta_      : 5;
-            };
+            /**
+             * @brief Disposal flag.
+             * @note  Written inside syncobj_ lock in Finalize(); read lock-free from timer
+             *        callbacks, Output(), OnTick() etc.  Must be std::atomic<bool> to prevent
+             *        a data race between the finalizer and concurrent readers.
+             */
+            std::atomic<bool>                                               disposed_ = { false };
+            bool                                                            lwip_     = false;
+            bool                                                            vnet_     = false;
+            bool                                                            mta_      = false;
 #if !defined(_WIN32)
             int                                                             ssmt_     = 0;
 #if defined(_LINUX)
-            struct {
-                bool                                                        ssmt_mq_                : 1;
-                bool                                                        ssmt_mq_to_take_effect_ : 7;
-            };
+            bool                                                            ssmt_mq_                = false;
+            /**
+             * @brief Signals that MQ mode has taken effect.
+             * @note  Written under syncobj_ in ForkAllSsmt()/StopAllSsmt(); read lock-free
+             *        from SSMT packet-input threads.  Must be std::atomic<bool> to prevent
+             *        a data race between the writer and concurrent SSMT readers.
+             */
+            std::atomic<bool>                                               ssmt_mq_to_take_effect_ = { false };
 #endif
             std::vector<std::shared_ptr<boost::asio::io_context>/**/>       sssmt_;
 #endif
