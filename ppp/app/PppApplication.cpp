@@ -173,15 +173,18 @@ void PppApplication::ClearTickAlwaysTimeout() noexcept {
 int RunPreparedApplication(const std::shared_ptr<PppApplication>& app, int prepared_status, int argc, const char* argv[]) noexcept {
     if (ppp::HasCommandArgument("--pull-iplist", argc, argv)) {
         app->PullIPList(ppp::GetCommandArgument("--pull-iplist", argc, argv), false);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
         return -1;
     }
 
 #if defined(_WIN32)
     if (Windows_PreferredNetwork(argc, argv)) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
         return -1;
     }
 
     if (Windows_NoLsp(argc, argv)) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
         return -1;
     }
 
@@ -195,6 +198,7 @@ int RunPreparedApplication(const std::shared_ptr<PppApplication>& app, int prepa
 
     if (prepared_status != 0) {
         app->PrintHelpInformation();
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppInvalidCommandLine);
         return -1;
     }
 

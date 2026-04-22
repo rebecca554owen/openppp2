@@ -20,12 +20,17 @@ namespace ppp {
              */
             class VirtualEthernetLogger : public std::enable_shared_from_this<VirtualEthernetLogger> {
             public:
-                /** @brief Packet flow direction used by packet telemetry records. */
+                /** @brief Packet flow direction used by packet telemetry records.
+                 *
+                 * Records the leg of the forwarding path on which a given packet
+                 * was observed, enabling per-direction traffic accounting and
+                 * forensic analysis.
+                 */
                 enum class PacketDirection : Byte {
-                    ClientToServer,
-                    ServerToClient,
-                    ServerToUplink,
-                    UplinkToServer,
+                    ClientToServer,   ///< Packet originated from the VPN client towards the server.
+                    ServerToClient,   ///< Packet originated from the server towards the VPN client.
+                    ServerToUplink,   ///< Packet forwarded from the server to an upstream network peer.
+                    UplinkToServer,   ///< Packet received by the server from an upstream network peer.
                 };
 
             public:
@@ -99,16 +104,16 @@ namespace ppp {
                 void                                                            Finalize() noexcept;
 
             private:
-                FILE*                                                           log_file_ = NULLPTR;
-                ppp::string                                                     log_path_;
-                ppp::string                                                     log_directory_;
-                ppp::string                                                     log_file_name_;
-                std::shared_ptr<boost::asio::io_context>                        log_context_;
-                std::shared_ptr<boost::asio::strand<boost::asio::io_context::executor_type>> log_strand_;
-                std::size_t                                                     log_file_size_ = 0;
-                int                                                             log_file_day_key_ = -1;
-                bool                                                            flush_scheduled_ = false;
-                std::list<ppp::string>                                          pending_lines_;
+                FILE*                                                           log_file_         = NULLPTR; ///< Handle to the currently open log file; null when not yet opened or after rotation.
+                ppp::string                                                     log_path_;                   ///< Absolute path of the active log file as supplied at construction.
+                ppp::string                                                     log_directory_;              ///< Directory portion of `log_path_`; derived once at construction.
+                ppp::string                                                     log_file_name_;              ///< Base file name of the active log file; derived once at construction.
+                std::shared_ptr<boost::asio::io_context>                        log_context_;                ///< IO context used to schedule serialized log writes and rotation tasks.
+                std::shared_ptr<boost::asio::strand<boost::asio::io_context::executor_type>> log_strand_;   ///< Strand that serializes all log file operations to avoid concurrent writes.
+                std::size_t                                                     log_file_size_    = 0;       ///< Accumulated byte count written to `log_file_` since last rotation.
+                int                                                             log_file_day_key_ = -1;      ///< Calendar-day key (YYYYMMDD) of the current log file; triggers rotation on change.
+                bool                                                            flush_scheduled_  = false;   ///< True when a deferred flush task is already posted to the strand.
+                std::list<ppp::string>                                          pending_lines_;              ///< Lines queued for batch write; drained by `FlushPending()`.
             };
         }
     }

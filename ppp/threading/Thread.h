@@ -58,8 +58,11 @@ namespace ppp
             ~Thread() noexcept;
             
         public:         
+            /** @brief Unique numeric thread identifier assigned at construction (0 until started). */
             const int64_t                                                   Id       = 0;
+            /** @brief Current runtime state of the managed thread. */
             const ThreadState                                               State    = ThreadState::Stopped;
+            /** @brief Scheduling priority to apply when the thread is started. */
             const ThreadPriority                                            Priority = ThreadPriority::Normal;
 
         public:                     
@@ -162,9 +165,13 @@ namespace ppp
             static int                                                      GetProcessorCount() noexcept;
                     
         private:                    
+            /** @brief Underlying OS thread object. */
             std::thread                                                     _thread;
+            /** @brief Mutex guarding lifecycle state transitions. */
             SynchronizedObject                                              _syncobj;
+            /** @brief User-supplied entry-point callback. */
             ThreadStart                                                     _start;
+            /** @brief Per-thread key-value storage map. */
             ThreadLocalStorageData                                          _tls;
         };
     }

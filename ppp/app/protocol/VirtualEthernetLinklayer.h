@@ -17,19 +17,30 @@
 namespace ppp {
     namespace app {
         namespace protocol {
-            /** @brief Address encoding type used by packet endpoint fields. */
+            /**
+             * @brief Address encoding type used by packet endpoint fields.
+             *
+             * Identifies the wire format used to encode the remote host address
+             * in connect and send-to protocol frames.
+             */
             enum AddressType {
-                None                                                        = 0,
-                IPv4                                                        = 1,
-                IPv6                                                        = 2,
-                Domain                                                      = 3,
+                None                                                        = 0,    ///< No address; endpoint is unspecified.
+                IPv4                                                        = 1,    ///< 4-byte IPv4 address in network byte order.
+                IPv6                                                        = 2,    ///< 16-byte IPv6 address in network byte order.
+                Domain                                                      = 3,    ///< Length-prefixed ASCII/UTF-8 domain name.
             };
 
-            /** @brief Logical endpoint containing address type, host text, and port. */
+            /**
+             * @brief Logical endpoint containing address type, host text, and port.
+             *
+             * Used as a decoded representation after parsing a connect or send-to
+             * frame; carries the resolved address family together with host string
+             * and port number before socket operations begin.
+             */
             struct AddressEndPoint {
-                AddressType                                                 Type = AddressType::None;
-                ppp::string                                                 Host;
-                int                                                         Port = 0;
+                AddressType                                                 Type = AddressType::None;   ///< Wire address format of the host field.
+                ppp::string                                                 Host;                        ///< Host text: dotted-decimal, colon-hex, or domain string.
+                int                                                         Port = 0;                   ///< Destination port in host byte order.
             };
 
             /**
@@ -56,37 +67,41 @@ namespace ppp {
                 typedef ppp::coroutines::YieldContext                       YieldContext;
 
             public:
-                /** @brief Virtual Ethernet protocol action opcodes. */
+                /** @brief Virtual Ethernet protocol action opcodes.
+                 *
+                 * Each value identifies one protocol message type in the link-layer
+                 * frame header, driving the dispatch table inside `PacketInput`.
+                 */
                 typedef enum {
-                    PacketAction_INFO                                       = 0x7E,
-                    PacketAction_KEEPALIVED                                 = 0x7F,
-                    PacketAction_FRP_ENTRY                                  = 0x20,
-                    PacketAction_FRP_CONNECT                                = 0x21,
-                    PacketAction_FRP_CONNECTOK                              = 0x22,
-                    PacketAction_FRP_PUSH                                   = 0x23,
-                    PacketAction_FRP_DISCONNECT                             = 0x24,
-                    PacketAction_FRP_SENDTO                                 = 0x25,
-                    PacketAction_LAN                                        = 0x28,
-                    PacketAction_NAT                                        = 0x29,
-                    PacketAction_SYN                                        = 0x2A,
-                    PacketAction_SYNOK                                      = 0x2B,
-                    PacketAction_PSH                                        = 0x2C,
-                    PacketAction_FIN                                        = 0x2D,
-                    PacketAction_SENDTO                                     = 0x2E,
-                    PacketAction_ECHO                                       = 0x2F,
-                    PacketAction_ECHOACK                                    = 0x30,
-                    PacketAction_STATIC                                     = 0x31,
-                    PacketAction_STATICACK                                  = 0x32,
-                    PacketAction_MUX                                        = 0x35,
-                    PacketAction_MUXON                                      = 0x36,
+                    PacketAction_INFO                                       = 0x7E,   ///< Session information / quota exchange frame.
+                    PacketAction_KEEPALIVED                                 = 0x7F,   ///< Periodic keep-alive heartbeat frame.
+                    PacketAction_FRP_ENTRY                                  = 0x20,   ///< FRP: register a port mapping entry.
+                    PacketAction_FRP_CONNECT                                = 0x21,   ///< FRP: open a new tunneled connection.
+                    PacketAction_FRP_CONNECTOK                              = 0x22,   ///< FRP: acknowledgment for connection open.
+                    PacketAction_FRP_PUSH                                   = 0x23,   ///< FRP: stream payload data.
+                    PacketAction_FRP_DISCONNECT                             = 0x24,   ///< FRP: notify connection closure.
+                    PacketAction_FRP_SENDTO                                 = 0x25,   ///< FRP: UDP datagram delivery.
+                    PacketAction_LAN                                        = 0x28,   ///< LAN subnet advertisement (ip + mask).
+                    PacketAction_NAT                                        = 0x29,   ///< Raw IP/NAT payload forwarding.
+                    PacketAction_SYN                                        = 0x2A,   ///< TCP connect request.
+                    PacketAction_SYNOK                                      = 0x2B,   ///< TCP connect acknowledgment.
+                    PacketAction_PSH                                        = 0x2C,   ///< TCP stream payload data.
+                    PacketAction_FIN                                        = 0x2D,   ///< TCP connection teardown notification.
+                    PacketAction_SENDTO                                     = 0x2E,   ///< UDP datagram with endpoint descriptors.
+                    PacketAction_ECHO                                       = 0x2F,   ///< Echo request (latency probe) payload.
+                    PacketAction_ECHOACK                                    = 0x30,   ///< Echo acknowledgment by ID.
+                    PacketAction_STATIC                                     = 0x31,   ///< Static port mapping query.
+                    PacketAction_STATICACK                                  = 0x32,   ///< Static port mapping acknowledgment.
+                    PacketAction_MUX                                        = 0x35,   ///< MUX channel setup request.
+                    PacketAction_MUXON                                      = 0x36,   ///< MUX channel setup acknowledgment.
                 }                                                           PacketAction;
 
             public:
                 /** @brief Error codes returned by connect acknowledgment actions. */
                 typedef enum {
-                    ERRORS_SUCCESS,
-                    ERRORS_CONNECT_TO_DESTINATION,
-                    ERRORS_CONNECT_CANCEL,
+                    ERRORS_SUCCESS,                 ///< Connection established successfully.
+                    ERRORS_CONNECT_TO_DESTINATION,  ///< Failed to reach the remote destination host.
+                    ERRORS_CONNECT_CANCEL,          ///< Connection was cancelled by local or remote policy.
                 }                                                           ERROR_CODES;
 
             public:
@@ -237,15 +252,15 @@ namespace ppp {
                 virtual bool                                                PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept;
 
             private:
-                /** @brief Associated IO context. */
+                /** @brief Associated IO context used for all async operations. */
                 ContextPtr                                                  context_;
-                /** @brief Session identifier. */
+                /** @brief Session identifier shared with transmission peer. */
                 Int128                                                      id_      = 0;
-                /** @brief Last successful packet activity timestamp in milliseconds. */
+                /** @brief Monotonic timestamp of last successfully received packet, in ms. */
                 UInt64                                                      last_    = 0;
-                /** @brief Next keep-alive scheduled timestamp in milliseconds. */
+                /** @brief Monotonic timestamp after which the next keep-alive must be sent, in ms. */
                 UInt64                                                      next_ka_ = 0;
-                /** @brief Runtime configuration source. */
+                /** @brief Runtime configuration source; determines timeouts and cipher settings. */
                 AppConfigurationPtr                                         configuration_;
             };
         }

@@ -59,10 +59,13 @@ namespace ppp
             bool                        IsLockTaken() noexcept { return _.load(); }
 
         public:
+            /** @brief STL Lockable interface: acquires the lock (spins until success). */
             void                        lock() noexcept { Enter(); }
+            /** @brief STL Lockable interface: releases the lock. */
             void                        unlock() noexcept { Leave(); }
 
         private:
+            /** @brief Underlying atomic flag; 0 = unlocked, 1 = locked. */
             std::atomic<int>            _ = 0;
         };
 
@@ -111,12 +114,17 @@ namespace ppp
             bool                        IsLockTaken() noexcept { return lockobj_.IsLockTaken(); }
 
         public:
+            /** @brief STL Lockable interface: acquires the recursive lock. */
             void                        lock() noexcept { Enter(); }
+            /** @brief STL Lockable interface: releases one recursion level. */
             void                        unlock() noexcept { Leave(); }
 
         private:
+            /** @brief Non-recursive spin lock providing the core mutual-exclusion primitive. */
             SpinLock                    lockobj_;
+            /** @brief Thread ID of the current lock owner; 0 when unowned. */
             volatile int64_t            tid_       = 0;
+            /** @brief Current recursion depth for the owning thread. */
             std::atomic<int>            reentries_ = 0;
         };
     }

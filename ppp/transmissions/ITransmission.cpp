@@ -6,6 +6,7 @@
  */
 
 // Cryptographic and I/O utilities.
+#include <ppp/diagnostics/Error.h>
 #include <ppp/cryptography/ssea.h>
 #include <ppp/io/Stream.h>
 #include <ppp/io/MemoryStream.h>
@@ -1095,21 +1096,58 @@ namespace ppp {
          * @brief Reads one message using bridge decode workflow.
          */
         std::shared_ptr<Byte> ITransmission::Read(YieldContext& y, int& outlen) noexcept {
-            return ITransmissionBridge::Read(this, y, outlen);
+            std::shared_ptr<Byte> result = ITransmissionBridge::Read(this, y, outlen);
+            if (NULLPTR == result) {
+                // Distinguish disposed state from a normal I/O failure.
+                if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                }
+            }
+
+            return result;
         }
 
         /**
          * @brief Writes one message using coroutine-aware bridge workflow.
          */
         bool ITransmission::Write(YieldContext& y, const void* packet, int packet_length) noexcept {
-            return ITransmissionBridge::Write(this, y, packet, packet_length);
+            bool ok = ITransmissionBridge::Write(this, y, packet, packet_length);
+            if (!ok) {
+                if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                }
+            }
+
+            return ok;
         }
 
         /**
          * @brief Writes one message using callback-based bridge workflow.
          */
         bool ITransmission::Write(const void* packet, int packet_length, const AsynchronousWriteCallback& cb) noexcept {
-            return ITransmissionBridge::Write(this, packet, packet_length, cb);
+            bool ok = ITransmissionBridge::Write(this, packet, packet_length, cb);
+            if (!ok) {
+                if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+                elif (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                }
+                elif (NULLPTR == cb) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                }
+            }
+
+            return ok;
         }
 
         /**
@@ -1119,14 +1157,21 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
-            return ITransmissionBridge::Encrypt(this, data, datalen, outlen);
+            std::shared_ptr<Byte> result = ITransmissionBridge::Encrypt(this, data, datalen, outlen);
+            if (NULLPTR == result) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+            }
+
+            return result;
         }
 
         /**
@@ -1136,14 +1181,21 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
-            return ITransmissionBridge::Decrypt(this, data, datalen, outlen);
+            std::shared_ptr<Byte> result = ITransmissionBridge::Decrypt(this, data, datalen, outlen);
+            if (NULLPTR == result) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+            }
+
+            return result;
         }
 
         /**
@@ -1263,6 +1315,7 @@ namespace ppp {
          */
         bool ITransmission::InternalHandshakeTimeoutSet() noexcept {
             if (disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }
 
@@ -1273,11 +1326,13 @@ namespace ppp {
             auto st = strand_;
             auto ctx = context_;
             if (NULLPTR == st && NULLPTR == ctx)  {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return false;
             }
 
             auto timer = st ? make_shared_object<DeadlineTimer>(*st) : make_shared_object<DeadlineTimer>(*ctx);
             if (NULLPTR == timer) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return false;
             }
 
@@ -1328,11 +1383,17 @@ namespace ppp {
         Int128 ITransmission::HandshakeClient(YieldContext& y, bool& mux) noexcept {
             mux = false;
             if (!InternalHandshakeTimeoutSet()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return 0;
             }
 
             Int128 sid = InternalHandshakeClient(y, mux);
             InternalHandshakeTimeoutClear();
+
+            if (!sid) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+            }
+
             return sid;
         }
 
@@ -1341,15 +1402,22 @@ namespace ppp {
          */
         bool ITransmission::HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
             if (session_id == 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                 return false;
             }
 
             if (!InternalHandshakeTimeoutSet()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return false;
             }
             
             bool ok = InternalHandshakeServer(y, session_id, mux);
             InternalHandshakeTimeoutClear();
+
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+            }
+
             return ok;
         }
 

@@ -31,6 +31,114 @@ graph TD
     I --> L[go/* optional backend]
 ```
 
+## Full Module Dependency Map
+
+```mermaid
+graph TD
+    subgraph Entry
+        MAIN[main.cpp]
+        APP[PppApplication]
+    end
+
+    subgraph Configuration
+        CFG[AppConfiguration]
+    end
+
+    subgraph Transport
+        ITRANS[ITransmission]
+        TCP[ITcpipTransmission]
+        WS[IWebsocketTransmission]
+        ITRANS --> TCP
+        ITRANS --> WS
+    end
+
+    subgraph Protocol
+        LINKLAYER[VirtualEthernetLinklayer]
+        PACKET[VirtualEthernetPacket]
+        INFO[VirtualEthernetInformation]
+        LINKLAYER --> PACKET
+        LINKLAYER --> INFO
+    end
+
+    subgraph ClientRuntime
+        CSWITCHER[VEthernetNetworkSwitcher]
+        CEXCHANGER[VEthernetExchanger]
+        CSWITCHER --> CEXCHANGER
+    end
+
+    subgraph ServerRuntime
+        SSWITCHER[VirtualEthernetSwitcher]
+        SEXCHANGER[VirtualEthernetExchanger]
+        SSWITCHER --> SEXCHANGER
+    end
+
+    subgraph Platform
+        LINUX[linux/]
+        WIN[windows/]
+        ANDROID[android/]
+        MACOS[darwin/]
+    end
+
+    subgraph Optional
+        GO[go/ management backend]
+    end
+
+    MAIN --> APP
+    APP --> CFG
+    APP --> ITRANS
+    APP --> CSWITCHER
+    APP --> SSWITCHER
+    CFG --> ITRANS
+    ITRANS --> LINKLAYER
+    LINKLAYER --> CEXCHANGER
+    LINKLAYER --> SEXCHANGER
+    CSWITCHER --> LINUX
+    CSWITCHER --> WIN
+    CSWITCHER --> ANDROID
+    CSWITCHER --> MACOS
+    SSWITCHER --> LINUX
+    SSWITCHER --> WIN
+    SSWITCHER --> GO
+```
+
+## Concurrency Model
+
+OPENPPP2 uses Boost.Asio `io_context` as the event loop backbone, combined with
+Boost.Coroutine for async-synchronous hybrid programming.
+
+```mermaid
+graph TD
+    subgraph ThreadPool
+        T1[io_context thread 1]
+        T2[io_context thread 2]
+        TN[io_context thread N]
+    end
+
+    subgraph CoroutineLayer
+        CO1[boost::asio::spawn coroutine]
+        CO2[YieldContext wrapper]
+    end
+
+    subgraph Dispatch
+        POST[asio::post]
+        STRAND[asio::strand]
+    end
+
+    T1 --> POST
+    T2 --> POST
+    TN --> POST
+    POST --> CO1
+    CO1 --> CO2
+    CO2 --> STRAND
+    STRAND --> T1
+```
+
+Key concurrency rules:
+- Cross-thread object lifetime is managed via `std::shared_ptr` and `std::weak_ptr`.
+- Cross-thread state flags use `std::atomic<bool>` with `compare_exchange_strong`.
+- IO thread must never be blocked; blocking work is posted via `asio::post`.
+- Coroutines yield at every async boundary using `YieldContext`.
+
 ## Shared Core Vs Host Consequences
 
 The most important split is this:

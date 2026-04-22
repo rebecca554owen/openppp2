@@ -98,14 +98,22 @@ namespace ppp
             }
 
         private:
+            /** @brief Guards all allocator state modifications. */
             SynchronizedObject                                      syncobj_;
+            /** @brief Backing file path used by the mapped region on POSIX. */
             ppp::string                                             path_;
+            /** @brief Allocation granularity; all allocs are rounded up to this boundary. */
             uint32_t                                                page_size_    = 0;
+            /** @brief Buddy-allocator control block embedded in the mapped region. */
             void*                                                   buddy_        = NULLPTR;
+            /** @brief Pointer to the first byte of managed memory. */
             void*                                                   memory_start_ = NULLPTR;
+            /** @brief Pointer one byte past the last byte of managed memory. */
             void*                                                   memory_maxof_ = NULLPTR;
 #if !defined(_WIN32)
+            /** @brief Boost.Interprocess file mapping descriptor (POSIX only). */
             std::shared_ptr<boost::interprocess::file_mapping>      bip_mapping_file_;
+            /** @brief Boost.Interprocess mapped-region RAII wrapper (POSIX only). */
             std::shared_ptr<boost::interprocess::mapped_region>     bip_mapped_region_;
 #endif
         };

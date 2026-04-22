@@ -53,9 +53,12 @@ namespace ppp
                 virtual bool                                                                        Await() noexcept;
 
             private:
+                /** @brief Guards cv/completed/processed members from concurrent mutation. */
                 bool                                                                                completed = false;
+                /** @brief Set by Processed() to indicate that work has been completed. */
                 bool                                                                                processed = false;
                 SynchronizedObject                                                                  mtx;
+                /** @brief Condition variable used to block/unblock Await() callers. */
                 std::condition_variable                                                             cv;
             };
             /** @brief Callback signature for application shutdown notifications. */
@@ -174,8 +177,6 @@ namespace ppp
 
             /** @brief Selects scheduler when available and optionally returns a strand. */
             static std::shared_ptr<boost::asio::io_context>                                         SelectScheduler(ppp::threading::Executors::StrandPtr& strand) noexcept;
-
-            template <typename TContextPtr, typename TStrandPtr, typename LegacyCompletionHandler>
             /**
              * @brief Posts a completion handler to strand first, then context fallback.
              * @param context Target execution context when strand is absent.
@@ -183,6 +184,7 @@ namespace ppp
              * @param handler Callable to schedule.
              * @return true when scheduled; otherwise false.
              */
+            template <typename TContextPtr, typename TStrandPtr, typename LegacyCompletionHandler>
             static bool                                                                             Post(const TContextPtr& context, const TStrandPtr& strand, LegacyCompletionHandler&& handler) noexcept
             {
                 using TCONTEXT_PTR = typename std::remove_reference<TContextPtr>::type;

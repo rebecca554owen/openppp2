@@ -15,11 +15,17 @@ namespace ppp {
          */
         class ITransmissionQoS : public std::enable_shared_from_this<ITransmissionQoS> {
         public:
+            /** @brief Mutex type used for internal synchronization. */
             typedef std::mutex                                          SynchronizedObject;
+            /** @brief RAII lock scope for SynchronizedObject. */
             typedef std::lock_guard<SynchronizedObject>                 SynchronizedObjectScope;
+            /** @brief Coroutine yield context type used for suspending bandwidth-limited reads. */
             typedef ppp::coroutines::YieldContext                       YieldContext;
+            /** @brief Shared byte array returned by read callbacks. */
             typedef std::shared_ptr<Byte>                               ByteArrayPtr;
+            /** @brief Signature for the underlying raw-read callback used by DoReadBytes. */
             typedef ppp::function<ByteArrayPtr(YieldContext&, int*)>    ReadBytesAsynchronousCallback;
+            /** @brief Signature for a deferred begin-read callback queued when over budget. */
             typedef ppp::function<void()>                               BeginReadAsynchronousCallback;
 
         public:
@@ -35,9 +41,17 @@ namespace ppp {
             virtual ~ITransmissionQoS() noexcept;
 
         public:
+            /** @brief Returns the io_context bound at construction. */
             std::shared_ptr<boost::asio::io_context>                    GetContext()                  noexcept { return context_; }
+            /** @brief Returns a shared reference to this QoS instance. */
             std::shared_ptr<ITransmissionQoS>                           GetReference()                noexcept { return shared_from_this(); }
+            /** @brief Returns the configured bandwidth limit in Kbps (0 = unlimited). */
             Int64                                                       GetBandwidth()                noexcept { return bandwidth_; }
+            /**
+             * @brief Updates the bandwidth limit.
+             * @param bandwidth New limit in Kbps; values less than 1 disable throttling.
+             * @note  Applied atomically via plain assignment; values below 1 are clamped to 0 (ReLU).
+             */
             void                                                        SetBandwidth(Int64 bandwidth) noexcept { bandwidth_ = bandwidth < 1 ? 0 : bandwidth; /* ReLU */ }
             /**
              * @brief Checks whether the current second already consumed the configured limit.
@@ -138,15 +152,23 @@ namespace ppp {
              */
             void                                                        Finalize() noexcept;
 
-        private:    
+        private:
+            /** @brief Set when Dispose() has been called; prevents re-entry. */
             bool                                                        disposed_  = false;
+            /** @brief Mutex protecting reads_ and contexts_ from concurrent modification. */
             SynchronizedObject                                          syncobj_;
+            /** @brief Bound io_context used to post deferred callbacks and disposal. */
             std::shared_ptr<boost::asio::io_context>                    context_;
+            /** @brief Configured bandwidth limit in Kbps; 0 means unlimited. */
             Int64                                                       bandwidth_ = 0;
+            /** @brief Millisecond timestamp of the start of the current QoS window. */
             UInt64                                                      last_      = 0;
+            /** @brief Byte counter for the current one-second window (scaled; divide by 128 for Kbps). */
             std::atomic<UInt64>                                         traffic_   = 0;
 
+            /** @brief Queue of deferred read callbacks waiting for QoS budget to open. */
             ppp::list<BeginReadAsynchronousCallback>                    reads_;
+            /** @brief Coroutine contexts suspended while over bandwidth limit. */
             ppp::list<YieldContext*>                                    contexts_;
         };
     }

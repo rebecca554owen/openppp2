@@ -232,12 +232,17 @@ namespace ppp
              *        a data race between the finalizer and concurrent readers.
              */
             std::atomic<bool>                                               disposed_ = { false };
+            /** @brief Enables lwIP-based virtual TCP/IP stack when true. */
             bool                                                            lwip_     = false;
+            /** @brief Enables virtual-network packet interception mode when true. */
             bool                                                            vnet_     = false;
+            /** @brief Enables multi-threaded acceleration (SSMT) mode when true. */
             bool                                                            mta_      = false;
 #if !defined(_WIN32)
+            /** @brief Number of SSMT worker executor threads currently running. */
             int                                                             ssmt_     = 0;
 #if defined(_LINUX)
+            /** @brief Desired Linux TAP multi-queue (MQ) SSMT mode. */
             bool                                                            ssmt_mq_                = false;
             /**
              * @brief Signals that MQ mode has taken effect.
@@ -247,13 +252,20 @@ namespace ppp
              */
             std::atomic<bool>                                               ssmt_mq_to_take_effect_ = { false };
 #endif
+            /** @brief SSMT worker io_context instances (one per SSMT thread). */
             std::vector<std::shared_ptr<boost::asio::io_context>/**/>       sssmt_;
 #endif
+            /** @brief Mutex guarding open/close lifecycle and shared object tables. */
             SynchronizedObject                                              syncobj_;
+            /** @brief IP fragment reassembly helper. */
             std::shared_ptr<IPFragment>                                     fragment_;
+            /** @brief Active virtual TCP/IP network stack instance. */
             std::shared_ptr<VNetstack>                                      netstack_;
+            /** @brief Asio context shared with the virtual stack and packet pipeline. */
             std::shared_ptr<boost::asio::io_context>                        context_;
+            /** @brief Periodic timer driving OnTick()/OnUpdate() callbacks. */
             std::shared_ptr<ppp::threading::Timer>                          timeout_;
+            /** @brief Millisecond timestamp of the last OnTick() invocation. */
             uint64_t                                                        lasttickts_ = 0;
         };
     }

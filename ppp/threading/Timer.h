@@ -47,10 +47,10 @@ namespace ppp {
             typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>                                       TimeoutEventHandlerTable;
             /** @brief Supported interval units for timer duration creation. */
             enum DurationType {
-                kHours,                                                                                     // 时
-                kMinutes,                                                                                   // 分
-                kSeconds,                                                                                   // 秒
-                kMilliseconds,                                                                              // 毫秒
+                kHours,                                                                                     ///< Duration expressed in hours.
+                kMinutes,                                                                                   ///< Duration expressed in minutes.
+                kSeconds,                                                                                   ///< Duration expressed in seconds.
+                kMilliseconds,                                                                              ///< Duration expressed in milliseconds.
             };
             /** @brief Default duration unit used by DurationTime overloads. */
             static constexpr DurationType                                                                   kDefaultDurationType = static_cast<DurationType>(3);

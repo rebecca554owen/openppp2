@@ -29,13 +29,13 @@ namespace ppp {
             class VirtualEthernetMappingPort : public std::enable_shared_from_this<VirtualEthernetMappingPort> {
             public:
                 // Type aliases for convenience
-                typedef ppp::coroutines::YieldContext                                       YieldContext;
-                typedef ppp::transmissions::ITransmission                                   ITransmission;
-                typedef std::shared_ptr<ITransmission>                                      ITransmissionPtr;
-                typedef ppp::configurations::AppConfiguration                               AppConfiguration;
-                typedef std::shared_ptr<AppConfiguration>                                   AppConfigurationPtr;
-                typedef std::shared_ptr<VirtualEthernetMappingPort>                         Ptr;
-                typedef std::shared_ptr<VirtualEthernetLogger>                              VirtualEthernetLoggerPtr;
+                typedef ppp::coroutines::YieldContext                                       YieldContext;        ///< Coroutine suspend/resume context passed through async call chains.
+                typedef ppp::transmissions::ITransmission                                   ITransmission;       ///< Abstract virtual Ethernet transmission channel.
+                typedef std::shared_ptr<ITransmission>                                      ITransmissionPtr;    ///< Shared ownership handle for a transmission channel.
+                typedef ppp::configurations::AppConfiguration                               AppConfiguration;    ///< Application-wide runtime configuration type.
+                typedef std::shared_ptr<AppConfiguration>                                   AppConfigurationPtr; ///< Shared ownership handle for the configuration object.
+                typedef std::shared_ptr<VirtualEthernetMappingPort>                         Ptr;                 ///< Canonical shared-pointer alias for this class.
+                typedef std::shared_ptr<VirtualEthernetLogger>                              VirtualEthernetLoggerPtr; ///< Shared ownership handle for the structured event logger.
 
             public:
                 /**

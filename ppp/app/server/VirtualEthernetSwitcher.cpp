@@ -598,6 +598,7 @@ namespace ppp {
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
                 }
                 else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
@@ -608,6 +609,7 @@ namespace ppp {
                 }
                 boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
                 if (ec || !prefix.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6CidrInvalid);
                     extensions.Clear();
                     return false;
                 }
@@ -621,6 +623,7 @@ namespace ppp {
 
                 boost::asio::ip::address_v6::bytes_type bytes = prefix.to_v6().to_bytes();
                 if (!build_stable_ipv6(bytes, ipv6.prefix_length)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6CidrInvalid);
                     extensions.Clear();
                     return false;
                 }
@@ -1459,10 +1462,12 @@ namespace ppp {
                  */
                 VirtualEthernetExchangerPtr newExchanger = NewExchanger(transmission, session_id);
                 if (NULLPTR == newExchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionCreateFailed);
                     return NULLPTR;
                 }
 
                 if (!newExchanger->Open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                     IDisposable::Dispose(newExchanger);
                     return NULLPTR;
                 }
@@ -2337,6 +2342,7 @@ namespace ppp {
 
                 bool ok = VirtualEthernetPacket::OpenDatagramSocket(static_echo_socket_, interface_ip, bind_port, bind_endpoint);
                 if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                     return false;
                 }
                 else {
@@ -2346,6 +2352,7 @@ namespace ppp {
                 boost::system::error_code ec;
                 boost::asio::ip::udp::endpoint localEP = static_echo_socket_.local_endpoint(ec);
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                     return false;
                 }
 
@@ -2872,6 +2879,7 @@ namespace ppp {
 
                 FirewallPtr firewall = NewFirewall();
                 if (NULLPTR == firewall) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                     return false;
                 }
 
@@ -2891,6 +2899,7 @@ namespace ppp {
 
                 std::shared_ptr<Timer> timeout = make_shared_object<Timer>(context_);
                 if (!timeout) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     return false;
                 }
 
@@ -2907,6 +2916,7 @@ namespace ppp {
                     return true;
                 }
                 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
                 timeout->Dispose();
                 return false;
             }

@@ -65,17 +65,24 @@ namespace ppp {
              * @brief Holds optional IPv6 assignment and status extensions for a session.
              */
             struct VirtualEthernetInformationExtensions {
-                /** @brief IPv6 allocation mode indicators. */
+                /** @brief IPv6 allocation mode indicators.
+                 *
+                 * Determines how the server assigns an IPv6 address to the client.
+                 */
                 enum IPv6Mode {
-                    IPv6Mode_None                                      = 0,
-                    IPv6Mode_Nat66                                     = 1,
-                    IPv6Mode_Gua                                       = 2,
+                    IPv6Mode_None                                      = 0,   ///< IPv6 is not assigned; client uses IPv4 only.
+                    IPv6Mode_Nat66                                     = 1,   ///< NAT66 transparent translation of a ULA prefix.
+                    IPv6Mode_Gua                                       = 2,   ///< Globally Unique Address assigned via prefix delegation.
                 };
 
-                /** @brief Bit flags for IPv6 behavior controls. */
+                /** @brief Bit flags for IPv6 behavior controls.
+                 *
+                 * Multiple flags may be OR-combined to enable distinct IPv6 behaviors
+                 * on the assigned prefix.
+                 */
                 enum IPv6Flags {
-                    IPv6Flag_None                                      = 0,
-                    IPv6Flag_NeighborProxy                             = 1 << 0,
+                    IPv6Flag_None                                      = 0,        ///< No special IPv6 behavior flags are set.
+                    IPv6Flag_NeighborProxy                             = 1 << 0,   ///< Enable NDP neighbor proxy for the assigned prefix.
                 };
 
                 /** @brief Selected IPv6 mode for this session. */
@@ -103,15 +110,20 @@ namespace ppp {
                 /** @brief Human-readable IPv6 status message. */
                 ppp::string                                         IPv6StatusMessage;
 
-                /** @brief Detailed IPv6 provisioning outcomes. */
+                /** @brief Detailed IPv6 provisioning outcomes.
+                 *
+                 * Returned by the server in the INFO envelope so the client can
+                 * determine whether its IPv6 address request was honoured and, if
+                 * not, the exact reason for the failure.
+                 */
                 enum IPv6Status {
-                    IPv6Status_None                                 = 0,
-                    IPv6Status_Applied                              = 1,
-                    IPv6Status_ServerAssigned                       = 2,
-                    IPv6Status_ClientRequested                      = 3,
-                    IPv6Status_UnsupportedClient                    = 4,
-                    IPv6Status_Rejected                             = 5,
-                    IPv6Status_Failed                               = 6,
+                    IPv6Status_None                                 = 0,   ///< No IPv6 provisioning was attempted.
+                    IPv6Status_Applied                              = 1,   ///< Client's requested IPv6 address was accepted and applied.
+                    IPv6Status_ServerAssigned                       = 2,   ///< Server picked and assigned an IPv6 address (client had no preference).
+                    IPv6Status_ClientRequested                      = 3,   ///< Server accepted the client's explicit IPv6 address request.
+                    IPv6Status_UnsupportedClient                    = 4,   ///< Client does not support IPv6; provisioning skipped.
+                    IPv6Status_Rejected                             = 5,   ///< Server rejected the client's IPv6 request by policy.
+                    IPv6Status_Failed                               = 6,   ///< IPv6 provisioning attempted but failed due to an internal error.
                 };
 
                 /** @brief Resets all extension fields to defaults. */

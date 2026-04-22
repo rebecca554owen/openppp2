@@ -127,9 +127,13 @@ namespace ppp
             }
 
         private:
+            /** @brief Guards blocks_ list and block_count_ from concurrent modifications. */
             SynchronizedObject                                          syncobj_;
+            /** @brief Ordered list of managed BufferblockAllocator instances. */
             BufferblockAllocatorList                                    blocks_;
+            /** @brief Total number of active backing blocks. */
             int                                                         block_count_     = 0;
+            /** @brief Total memory capacity summed across all backing blocks in bytes. */
             uint64_t                                                    memory_size_     = 0;
         };
     }

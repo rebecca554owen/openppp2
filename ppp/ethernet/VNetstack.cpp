@@ -3,6 +3,7 @@
  * @file VNetstack.cpp
  * @brief Implements virtual TCP NAT mapping, accept bridge, and flow lifecycle.
  */
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/native/ip.h>
@@ -276,23 +277,23 @@ namespace ppp {
          */
         bool VNetstack::Open(bool lwip, const int& localPort) noexcept {
             if (localPort < IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
             }
 
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             std::shared_ptr<SocketAcceptor> acceptor = SocketAcceptor::New();
             if (NULLPTR == acceptor) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
             else {
                 ppp::string bindIP = ppp::net::Ipep::ToAddressString<ppp::string>(boost::asio::ip::address_v4::any());
                 if (!acceptor->Open(bindIP.data(), localPort, PPP_LISTEN_BACKLOG)) {
                     acceptor->Dispose();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketListenFailed);
                 }
                 else {
                     int handle = acceptor->GetHandle();
@@ -380,12 +381,12 @@ namespace ppp {
          */
         bool VNetstack::Input(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept {
             if (NULLPTR == ip || NULLPTR == tcp || tcp_len < 1) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             TcpFlags flags = (TcpFlags)tcp_hdr::TCPH_FLAGS(tcp);
@@ -726,7 +727,7 @@ namespace ppp {
         bool VNetstack::Output(bool lan2wan, ip_hdr* ip, tcp_hdr* tcp, int tcp_len, TapTcpClient* c) noexcept {
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             if (ppp::net::Socket::IsDefaultFlashTypeOfService()) {
@@ -758,7 +759,7 @@ namespace ppp {
             std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
             std::shared_ptr<Byte> packet = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, ippkg_len);
             if (NULLPTR == packet) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
             else {
                 memcpy(packet.get(), ip, ippkg_len);
@@ -776,12 +777,12 @@ namespace ppp {
          */
         bool VNetstack::CloseTcpLink(const std::shared_ptr<TapTcpLink>& link) noexcept {
             if (NULLPTR == link) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
             else {
                 SynchronizedObjectScope scope(syncobj_);
@@ -1170,12 +1171,12 @@ namespace ppp {
          */
         bool VNetstack::TapTcpClient::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
             if (NULLPTR == socket) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             std::shared_ptr<boost::asio::io_context> context = this->context_;
             if (NULLPTR == context) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
             }
 
             this->natEP_ = natEP;
@@ -1192,7 +1193,7 @@ namespace ppp {
             if (lwip_) {
                 std::shared_ptr<TapTcpLink> link = this->link_;
                 if (NULLPTR == link) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
                 }
 
                 link->state.store((Byte)TcpState::TCP_STATE_ESTABLISHED, std::memory_order_relaxed);

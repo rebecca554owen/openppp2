@@ -280,18 +280,18 @@ namespace ppp {
 
             private:
 #if defined(_WIN32)
-                std::shared_ptr<ppp::net::QoSS>                                 qoss_;
+                std::shared_ptr<ppp::net::QoSS>                                 qoss_;          ///< Windows QoS socket handle for traffic prioritization.
 #endif
                 struct {
-                    bool                                                        disposed_  : 1;
-                    bool                                                        connected_ : 7;
+                    bool                                                        disposed_  : 1; ///< True after `Finalize()` has been invoked; guards idempotent cleanup.
+                    bool                                                        connected_ : 7; ///< True once a successful handshake has been completed.
                 };
-                AppConfigurationPtr                                             configuration_;
-                ContextPtr                                                      context_;
-                StrandPtr                                                       strand_;
-                Int128                                                          id_        = 0;
-                std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_;
-                ITransmissionPtr                                                transmission_;
+                AppConfigurationPtr                                             configuration_; ///< Runtime configuration shared with the owning context.
+                ContextPtr                                                      context_;       ///< Asio IO context driving async operations for this connection.
+                StrandPtr                                                       strand_;        ///< Serialized executor guaranteeing single-threaded callback ordering.
+                Int128                                                          id_        = 0; ///< Logical connection identifier assigned at construction time.
+                std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_;        ///< Local TCP socket bridged to the virtual Ethernet transmission.
+                ITransmissionPtr                                                transmission_; ///< Virtual Ethernet transmission channel used for protocol framing.
             };
         }
     }

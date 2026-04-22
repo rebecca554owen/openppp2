@@ -23,18 +23,22 @@ namespace ppp
         {
             /**
              * @brief Represents a virtual Ethernet packet for tunnel transport.
+             *
+             * Carries either a raw UDP datagram or an encapsulated IP frame
+             * together with its decoded header fields.  Instances are produced
+             * by `Unpack` and consumed by the link-layer dispatcher.
              */
             struct VirtualEthernetPacket final
             {
             public:
-                std::shared_ptr<ppp::Byte>                                          Payload;             // Encrypted or plain payload data
-                int32_t                                                             Length = 0;          // Length of payload in bytes
-                int32_t                                                             Protocol = 0;        // IP protocol type (IP_PROTO_UDP or IP_PROTO_IP)
-                int32_t                                                             Id = 0;              // Session identifier (positive for UDP, negative for IP)
-                uint32_t                                                            SourceIP = 0;        // Source IPv4 address (host order)
-                uint16_t                                                            SourcePort = 0;      // Source port (host order)
-                uint32_t                                                            DestinationIP = 0;   // Destination IPv4 address (host order)
-                uint32_t                                                            DestinationPort = 0; // Destination port (host order)
+                std::shared_ptr<ppp::Byte>                                          Payload;             ///< Encrypted or decrypted payload bytes managed by shared ownership.
+                int32_t                                                             Length = 0;          ///< Byte length of valid data inside `Payload`.
+                int32_t                                                             Protocol = 0;        ///< Inner IP protocol number: `IP_PROTO_UDP` for datagrams, `IP_PROTO_IP` for encapsulated frames.
+                int32_t                                                             Id = 0;              ///< Session identifier; positive for UDP sessions, negative for IP encapsulation.
+                uint32_t                                                            SourceIP = 0;        ///< Source IPv4 address in host byte order.
+                uint16_t                                                            SourcePort = 0;      ///< Source UDP port in host byte order.
+                uint32_t                                                            DestinationIP = 0;   ///< Destination IPv4 address in host byte order.
+                uint32_t                                                            DestinationPort = 0; ///< Destination port in host byte order.
 
             public:
                 /**

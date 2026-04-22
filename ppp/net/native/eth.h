@@ -2,8 +2,16 @@
 
 #include <ppp/stdafx.h>
 
-/// @file eth.h
-/// @brief Ethernet address and frame header definitions.
+/**
+ * @file eth.h
+ * @brief Ethernet MAC address and Ethernet II frame header definitions.
+ *
+ * All structures use `#pragma pack(push, 1)` / `__attribute__((packed))` to
+ * eliminate compiler-inserted padding, so they can be cast directly onto
+ * raw network buffers.  Multi-byte fields (e.g. `eth_hdr::type`) are stored
+ * in network byte order (big-endian); use ntohs()/htons() when comparing
+ * or assigning on little-endian hosts.
+ */
 
 namespace ppp {
     namespace net {
@@ -51,7 +59,14 @@ namespace ppp {
                 static ppp::string  BytesToMacAddress(const void* data, int size) noexcept;
             };
 
-            /// @brief Ethernet II frame header.
+            /**
+             * @brief Ethernet II frame header (IEEE 802.3).
+             *
+             * Immediately follows the preamble/SFD on the wire.  The @ref type
+             * field identifies the encapsulated payload protocol and is stored in
+             * network byte order; use ntohs() before comparing against the
+             * ETHTYPE_* constants on little-endian platforms.
+             */
             struct 
 #if !defined(_WIN32)
                 __attribute__((packed)) 

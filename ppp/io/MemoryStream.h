@@ -408,12 +408,12 @@ namespace ppp {
             }
 
         private:
-            bool                                _expandable : 1;
-            bool                                _disposed   : 7;
-            int                                 _position   = 0;
-            int                                 _length     = 0;
-            int                                 _capacity   = 0;
-            std::shared_ptr<Byte>               _buffer;
+            bool                                _expandable : 1; ///< true when the buffer can grow automatically on write.
+            bool                                _disposed   : 7; ///< true when Dispose() has been called; all operations become no-ops.
+            int                                 _position   = 0; ///< Current read/write cursor position in bytes.
+            int                                 _length     = 0; ///< Logical content length in bytes.
+            int                                 _capacity   = 0; ///< Allocated buffer capacity in bytes.
+            std::shared_ptr<Byte>               _buffer;         ///< Underlying heap buffer shared between stream and callers via GetBuffer().
         };
     }
 }

@@ -124,38 +124,42 @@ namespace vmux {
     private:
         /**
          * @brief Compact socket state flags and async transfer guards.
+         *
+         * Bit-fields are packed into a single byte to minimize memory footprint.
+         * The two atomic integers prevent concurrent re-entry into the send and
+         * forward coroutine paths respectively.
          */
         struct vmux_status {
             struct {
-                bool                                    disposed_        : 1;
-                bool                                    connected_       : 1;
-                bool                                    fin_             : 1;
-                bool                                    tx_acceleration_ : 1;
-                bool                                    rx_acceleration_ : 1;
-                bool                                    connecton_       : 3;
+                bool                                    disposed_        : 1; ///< Set when the socket has been finalized.
+                bool                                    connected_       : 1; ///< Set when the remote peer acknowledged the connection.
+                bool                                    fin_             : 1; ///< Set when a FIN command was received from peer.
+                bool                                    tx_acceleration_ : 1; ///< Transmit acceleration mode is active.
+                bool                                    rx_acceleration_ : 1; ///< Receive acceleration mode is active.
+                bool                                    connecton_       : 3; ///< Reserved / connection-phase sub-state.
             };
-            std::atomic<int>                            sending_    = false;
-            std::atomic<int>                            forwarding_ = false;
+            std::atomic<int>                            sending_    = false; ///< Non-zero while an async send to peer is in flight.
+            std::atomic<int>                            forwarding_ = false; ///< Non-zero while local-socket forwarding is in progress.
         }                                               status_;
 
 #if defined(_WIN32)
-        std::shared_ptr<ppp::net::QoSS>                 qoss_;
+        std::shared_ptr<ppp::net::QoSS>                 qoss_;              ///< Windows QoS socket service handle.
 #endif
 
-        std::shared_ptr<vmux_net>                       mux_;
+        std::shared_ptr<vmux_net>                       mux_;               ///< Parent multiplexer owning this logical socket.
 
-        uint64_t                                        last_          = 0;
-        uint32_t                                        connection_id_ = 0;
+        uint64_t                                        last_          = 0; ///< Monotonic tick of last activity (used for idle detection).
+        uint32_t                                        connection_id_ = 0; ///< Immutable logical connection identifier within the mux session.
 
-        packet_queue                                    rx_queue_;
-        int64_t                                         rx_congestions_;
+        packet_queue                                    rx_queue_;          ///< Inbound payload queue pending delivery to local socket.
+        int64_t                                         rx_congestions_;    ///< Signed congestion counter; negative means backpressure applied.
 
-        std::shared_ptr<boost::asio::ip::tcp::socket>   tx_socket_;
-        std::shared_ptr<Byte>                           tx_buffer_;
+        std::shared_ptr<boost::asio::ip::tcp::socket>   tx_socket_;         ///< Local TCP socket to which inbound data is forwarded.
+        std::shared_ptr<Byte>                           tx_buffer_;         ///< Persistent receive buffer for the local socket read loop.
         
-        ContextPtr                                      tx_context_;
-        StrandPtr                                       tx_strand_;
+        ContextPtr                                      tx_context_;        ///< ASIO execution context for the local socket operations.
+        StrandPtr                                       tx_strand_;         ///< Optional strand serializing local socket callbacks.
 
-        ConnectAsynchronousCallback                     connect_ac_;
+        ConnectAsynchronousCallback                     connect_ac_;        ///< One-shot callback fired when the connect result is known.
     };
 }

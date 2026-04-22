@@ -39,11 +39,11 @@ namespace vmux {
         /** @brief Shared pointer to transmission metadata object. */
         typedef std::shared_ptr<ppp::transmissions::ITransmission>                  ITransmissionPtr;
 
-        std::shared_ptr<ppp::threading::BufferswapAllocator>                        BufferAllocator;
-        std::shared_ptr<ppp::configurations::AppConfiguration>                      AppConfiguration;
-        std::shared_ptr<ppp::app::protocol::VirtualEthernetLogger>                  Logger;
-        uint16_t                                                                    Vlan;
-        std::shared_ptr<ppp::net::Firewall>                                         Firewall;
+        std::shared_ptr<ppp::threading::BufferswapAllocator>                        BufferAllocator;    ///< Shared byte-buffer pool used for packet allocation.
+        std::shared_ptr<ppp::configurations::AppConfiguration>                      AppConfiguration;   ///< Application-wide runtime configuration snapshot.
+        std::shared_ptr<ppp::app::protocol::VirtualEthernetLogger>                  Logger;             ///< Diagnostic and audit event logger.
+        uint16_t                                                                    Vlan;               ///< VLAN identifier assigned to this session.
+        std::shared_ptr<ppp::net::Firewall>                                         Firewall;           ///< Optional firewall rule evaluator.
 
         typedef std::shared_ptr<vmux_skt>                                           vmux_skt_ptr;
         /**
@@ -103,46 +103,65 @@ namespace vmux {
 
 #pragma pack(push, 1)
         /**
-         * @brief Packed vmux packet header.
+         * @brief Packed vmux packet header prepended to every vmux frame.
+         *
+         * Layout (9 bytes, no padding):
+         *   - seq           (4 bytes) – monotonically increasing frame sequence number.
+         *   - cmd           (1 byte)  – vmux command identifier (see anonymous enum below).
+         *   - connection_id (4 bytes) – logical connection this frame belongs to.
+         *
+         * @note All fields are in host byte order within the vmux subsystem;
+         *       callers must not apply htonl/ntohs unless crossing a protocol boundary.
          */
         typedef struct 
 #if defined(__GNUC__) || defined(__clang__)
             __attribute__((packed)) 
 #endif
         {
-            uint32_t                                                                seq;
-            uint8_t                                                                 cmd;
-            uint32_t                                                                connection_id;
+            uint32_t                                                                seq;           ///< Frame sequence number used for ordered delivery.
+            uint8_t                                                                 cmd;           ///< vmux command byte (one of the cmd_* constants).
+            uint32_t                                                                connection_id; ///< Logical connection identifier within this session.
         }                                                                           vmux_hdr;
 #pragma pack(pop)
 
         /**
-         * @brief vmux protocol command and packet-size constants.
+         * @brief vmux protocol command byte constants and packet-size limits.
+         *
+         * Command values are contiguous starting from `('E' - 1)` so that the
+         * wire protocol is trivially distinguishable from arbitrary byte streams.
          */
         enum {
-            cmd_none = ('E' - 1),
-            cmd_syn,
-            cmd_syn_ok,
-            cmd_push,
-            cmd_fin,
-            cmd_keep_alived,
-            cmd_acceleration,
-            cmd_max,
+            cmd_none         = ('E' - 1), ///< Sentinel — no command / uninitialized.
+            cmd_syn,                      ///< SYN — request to open a new logical connection.
+            cmd_syn_ok,                   ///< SYN-OK — server acknowledges the connection request.
+            cmd_push,                     ///< PUSH — carry application payload.
+            cmd_fin,                      ///< FIN — close the logical connection gracefully.
+            cmd_keep_alived,              ///< KEEP-ALIVE — heartbeat probe frame.
+            cmd_acceleration,             ///< ACCELERATION — enable/disable fast-path flag.
+            cmd_max,                      ///< Sentinel — one past the last valid command.
 
-            max_buffers_size = UINT16_MAX - sizeof(vmux_hdr),
+            max_buffers_size = UINT16_MAX - sizeof(vmux_hdr), ///< Maximum payload bytes per vmux frame.
         };
 
         /** @brief Internal completion callback for post operations. */
         typedef ppp::function<void(bool)>                                           PostInternalAsynchronousCallback;
-        /** @brief Receive packet holder used by ordered RX queue. */
+        /**
+         * @brief Receive packet holder used by the ordered RX reorder queue.
+         *
+         * Buffers a single vmux payload fragment identified by its sequence number.
+         */
         struct rx_packet {
-            std::shared_ptr<Byte>                                                   buffer;
-            int                                                                     length = 0;
+            std::shared_ptr<Byte>                                                   buffer; ///< Shared byte buffer holding the raw payload.
+            int                                                                     length = 0; ///< Valid payload length in bytes.
         };
 
-        /** @brief Transmit packet holder with optional completion callback. */
+        /**
+         * @brief Transmit packet holder with an optional async completion callback.
+         *
+         * Extends @ref rx_packet with a post-send acknowledgment callback.
+         */
         struct tx_packet : rx_packet {
-            PostInternalAsynchronousCallback                                        ac;
+            PostInternalAsynchronousCallback                                        ac; ///< Optional callback invoked after the packet is sent.
         };
 
         typedef vmux::list<vmux_linklayer_ptr>                                      vmux_linklayer_list;
@@ -330,37 +349,37 @@ namespace vmux {
     private:
         /** @brief Core boolean state flags for vmux session lifecycle. */
         struct {
-            bool                                                                    disposed_          : 1;
-            bool                                                                    ftt_               : 1;
-            bool                                                                    established_       : 1;
-            bool                                                                    server_or_client_  : 1;
-            bool                                                                    acceleration_      : 4;
+            bool                                                                    disposed_          : 1; ///< Set when session is finalized.
+            bool                                                                    ftt_               : 1; ///< Fast transport training frame received.
+            bool                                                                    established_       : 1; ///< At least one link-layer is established.
+            bool                                                                    server_or_client_  : 1; ///< true = server role; false = client role.
+            bool                                                                    acceleration_      : 4; ///< Acceleration enabled flags (multi-bit).
         }                                                                           base_;
 
         /** @brief Runtime counters, sequence values, and heartbeat timestamps. */
         struct {
-            uint16_t                                                                max_connections    = 0;
-            uint16_t                                                                opened_connections = 0;
+            uint16_t                                                                max_connections    = 0; ///< Maximum allowed logical connections.
+            uint16_t                                                                opened_connections = 0; ///< Currently active logical connection count.
 
-            uint32_t                                                                rx_ack_            = 0;
-            uint32_t                                                                tx_seq_            = 0;
+            uint32_t                                                                rx_ack_            = 0; ///< Last acknowledged inbound sequence number.
+            uint32_t                                                                tx_seq_            = 0; ///< Next outbound sequence number to use.
 
-            uint64_t                                                                last_              = 0;
-            uint64_t                                                                last_heartbeat_    = 0;
+            uint64_t                                                                last_              = 0; ///< Monotonic tick of last received packet.
+            uint64_t                                                                last_heartbeat_    = 0; ///< Monotonic tick of last heartbeat sent.
 
-            uint64_t                                                                heartbeat_timeout_ = 0;
+            uint64_t                                                                heartbeat_timeout_ = 0; ///< Deadline tick beyond which session is considered dead.
         }                                                                           status_;
 
-        SynchronizationObject                                                       syncobj_;
+        SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map.
 
-        vmux_skt_map                                                                skts_;
-        StrandPtr                                                                   strand_;
-        ContextPtr                                                                  context_;
+        vmux_skt_map                                                                skts_;              ///< Active logical socket map keyed by connection_id.
+        StrandPtr                                                                   strand_;            ///< Serialized strand for vmux event loop.
+        ContextPtr                                                                  context_;           ///< ASIO execution context.
 
-        tx_packet_ssqueue                                                           tx_queue_;
-        rx_packet_ssqueue                                                           rx_queue_;
+        tx_packet_ssqueue                                                           tx_queue_;          ///< Pending outbound packet queue.
+        rx_packet_ssqueue                                                           rx_queue_;          ///< Out-of-order inbound packet reorder queue.
 
-        vmux_linklayer_vector                                                       rx_links_;
-        vmux_linklayer_list                                                         tx_links_;
+        vmux_linklayer_vector                                                       rx_links_;          ///< All link-layer endpoints available for inbound.
+        vmux_linklayer_list                                                         tx_links_;          ///< Link-layer endpoints ordered by transmit usage.
     };
 }

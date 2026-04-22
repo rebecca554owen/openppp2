@@ -82,6 +82,203 @@ flowchart TD
 
 平台层改变的是可观测的宿主行为，所以它必须被当作运行时本身的一部分，而不是普通辅助 glue。
 
+---
+
+## 平台抽象层（ITap）
+
+### 设计概述
+
+`ITap`（`ppp/tap/ITap.h`）是平台无关的虚拟网卡核心抽象。所有平台后端均继承自该接口，封装以下能力：
+
+- **设备生命周期**：基于 native 句柄构造、`Open()`、`Dispose()`。
+- **数据包收发**：异步读循环（`AsynchronousReadPacketLoops`）、入站事件回调（`PacketInputEventHandler`）、两个 `Output()` 重载（共享缓冲区或裸指针）。
+- **地址元数据**：`IPAddress`、`GatewayServer`、`SubmaskAddress` 以 `uint32_t` 常量存储。
+- **工厂方法**：静态 `ITap::Create()` 重载，Windows 签名额外携带 `lease_time_in_seconds`，POSIX 签名携带 `promisc` 标志。
+- **MTU 管理**：纯虚函数 `SetInterfaceMtu(int mtu)` 由各平台实现。
+
+基类持有 `boost::asio::posix::stream_descriptor`（`_stream`）和 MTU 大小的复用读缓冲区（`_packet[ITap::Mtu]`）。异步读写通过 `_context`（Boost.Asio `io_context`）调度。
+
+```mermaid
+classDiagram
+    class ITap {
+        +uint32_t IPAddress
+        +uint32_t GatewayServer
+        +uint32_t SubmaskAddress
+        +PacketInputEventHandler PacketInput
+        +shared_ptr~BufferswapAllocator~ BufferAllocator
+        +static int Mtu
+        +Open() bool
+        +Dispose() void
+        +Output(shared_ptr~Byte~, int) bool
+        +Output(void*, int) bool
+        +SetInterfaceMtu(int) bool*
+        +IsReady() bool
+        +IsOpen() bool
+        +FindAnyDevice()$ string
+        +Create(...)$ shared_ptr~ITap~
+        #AsynchronousReadPacketLoops() bool
+        #OnInput(PacketInputEventArgs) void
+        -_id string
+        -_handle void*
+        -_stream shared_ptr~stream_descriptor~
+        -_context shared_ptr~io_context~
+        -_packet Byte[]
+    }
+
+    class TapLinux {
+        +bool promisc_
+        +vector~ip_address~ dns_addresses_
+        +Ssmt(context) bool
+        +AddRoute(address, prefix, gw) bool
+        +DeleteRoute(address, prefix, gw) bool
+        +SetIPAddress(ifrName, ip, mask)$ bool
+        +SetMtu(ifrName, mtu)$ bool
+        +EnableIPv6NeighborProxy(ifrName)$ bool
+        +SetInterfaceMtu(int) bool
+        +Dispose() void
+    }
+
+    class TapWindows {
+        -shared_ptr~void~ wintun_
+        +InstallDriver(path, name)$ bool
+        +UninstallDriver(path)$ bool
+        +IsWintun()$ bool
+        +FindComponentId()$ string
+        +DnsFlushResolverCache()$ bool
+        +SetAddresses(index, ip, mask, gw)$ bool
+        +SetDnsAddresses(index, servers)$ bool
+        +SetInterfaceMtu(int) bool
+        +Dispose() void
+    }
+
+    class TapDarwin {
+        -bool promisc_
+        -vector~ip_address~ dns_addresses_
+        +GetAllNetworkInterfaces(interfaces)$ bool
+        +GetPreferredNetworkInterface(list)$ Ptr
+        +AddAllRoutes(rib)$ bool
+        +DeleteAllRoutes(rib)$ bool
+        +SetInterfaceMtu(int) bool
+    }
+
+    ITap <|-- TapLinux
+    ITap <|-- TapWindows
+    ITap <|-- TapDarwin
+```
+
+> **Android 说明**：Android 直接使用 `TapLinux`。`TapLinux::From()` 静态工厂（通过 `#if defined(_ANDROID)` 守护）接收 Android `VpnService` 提供的现有 TUN 文件描述符，无需自行打开 `/dev/tun`。
+
+---
+
+## 平台特化实现细节
+
+### 平台层次结构
+
+```mermaid
+graph TD
+    OS["操作系统 / 内核"] --> DRV
+    DRV["内核驱动 / 虚拟网卡"]
+    DRV --> ITap["ITap（C++ 抽象层）"]
+    ITap --> VEth["VEthernet 网络栈（lwIP）"]
+    VEth --> PPP["PPP 传输 / 会话层"]
+
+    subgraph Linux
+        L1["TUN 设备（/dev/net/tun）"]
+        L2["ioctl TUNSETIFF"]
+        L3["io_uring（可选，SSMT 多队列）"]
+        L1 --> L2 --> L3
+    end
+
+    subgraph Windows
+        W1["Wintun 环形缓冲驱动"]
+        W2["TAP-Windows NDIS 驱动（回退）"]
+        W3["DHCP MASQ / TUN 模式配置"]
+        W1 --> W3
+        W2 --> W3
+    end
+
+    subgraph macOS
+        M1["utun socket（PF_SYSTEM / SYSPROTO_CONTROL）"]
+        M2["route(8) 风格 sysctl 变更"]
+        M1 --> M2
+    end
+
+    subgraph Android
+        A1["VpnService.protect() + FileDescriptor"]
+        A2["TapLinux::From() 封装现有 fd"]
+        A3["libopenppp2.so JNI 桥接"]
+        A1 --> A2 --> A3
+    end
+
+    Linux --> ITap
+    Windows --> ITap
+    macOS --> ITap
+    Android --> ITap
+```
+
+### Linux：TapLinux
+
+`TapLinux`（`linux/ppp/tap/TapLinux.h`）是 `final` 类，实现步骤如下：
+
+1. **打开 TUN 设备**：`OpenDriver()` 调用 `open("/dev/net/tun", ...)` 并执行 `ioctl(TUNSETIFF)`，携带 `IFF_TUN | IFF_NO_PI` 标志。接口名（如 `tun0`）来自 `dev` 参数或由内核自动分配。
+2. **配置接口**：`SetIPAddress()` 使用 `SIOCSIFADDR`/`SIOCSIFNETMASK`；`SetMtu()` 使用 `SIOCSIFMTU`；`SetNetifUp()` 使用 `SIOCSIFFLAGS`。
+3. **路由管理**：通过 `netlink(7)` 的 `RTM_NEWROUTE`/`RTM_DELROUTE` 消息完成，封装为 `AddRoute()`/`DeleteRoute()` 及批量变体。
+4. **IPv6 支持**：`SetIPv6Address()`、`AddRoute6()`、`DeleteRoute6()`、`EnableIPv6NeighborProxy()`、`AddIPv6NeighborProxy()` 共同实现服务端 IPv6 透传所需的邻居发现代理管理。
+5. **多队列 SSMT**：`Ssmt(context)` 通过 `TUNSETIFF` + `IFF_MULTI_QUEUE` 在同一 TUN 设备上打开额外文件描述符，并注册为独立 `stream_descriptor`，实现每 IO 线程独立读路径。
+6. **混杂模式**：`promisc_` 为 `true` 时，将接口置于 `IFF_PROMISC` 模式，捕获所有帧。
+
+### Windows：TapWindows
+
+`TapWindows`（`windows/ppp/tap/TapWindows.h`）是 `final` 类，支持两种内核驱动后端：
+
+| 后端 | 检测方式 | 说明 |
+|---|---|---|
+| **Wintun** | `IsWintun()` 返回 `true` | 环形缓冲，性能最高，需要 Wintun DLL |
+| **TAP-Windows** | NDIS 中间驱动 | 传统回退方案；支持 DHCP MASQ 或 TUN 模式 |
+
+关键操作：
+
+- **驱动安装**：`InstallDriver()` 复制驱动文件并调用 `SetupDi` API 安装 NDIS 适配器；`UninstallDriver()` 卸载。
+- **Component ID 查找**：`FindComponentId()` 扫描注册表 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E972...}` 定位适配器 GUID。
+- **接口配置**：`SetAddresses()` 使用 IP Helper API（`SetUnicastIpAddressEntry`）设置 IP/掩码/网关；`SetDnsAddresses()` 通过同一路径写入 DNS。
+- **Wintun 环形缓冲**：激活时 `wintun_` 持有 `WINTUN_ADAPTER_HANDLE`，读写通过 `WintunReceivePacket`/`WintunSendPacket` 完成。
+- **DNS 刷新**：`DnsFlushResolverCache()` 在 DNS 服务器变更后调用 Win32 同名 API 刷新系统 DNS 缓存。
+
+应用启动时，`ApplicationInitialize.cpp` 中的 `Windows_PreparedEthernetEnvironment()` 确保 Component ID 存在；若找不到适配器，自动调用 `InstallDriver()`。
+
+### macOS：TapDarwin
+
+`TapDarwin`（`darwin/ppp/tap/TapDarwin.h`）是 `final` 类，基于 macOS `utun` 虚拟接口：
+
+- **设备创建**：通过 `PF_SYSTEM` socket 连接 `com.apple.net.utun_control` 内核控制，自动获得 `utunN` 接口。
+- **路由管理**：`AddAllRoutes()`/`DeleteAllRoutes()` 通过 `PF_ROUTE` 原始 socket 发送 `RTM_ADD`/`RTM_DELETE` 消息，遵循 macOS 路由语义（与 Linux netlink 差异显著）。
+- **接口枚举**：`GetAllNetworkInterfaces()` 遍历 `getifaddrs()` 结果，`GetPreferredNetworkInterface()` 按 metric 选择最优接口。
+- **包帧处理**：`OnInput()` 覆盖基类，剥除 macOS utun 读出时额外的 4 字节地址族前缀，再将裸 IP 帧送入 lwIP 栈。
+- **IPv6**：使用 BSD 风格 `SIOCDIFADDR_IN6`/`SIOCAIFADDR_IN6` ioctl 赋址，与 Linux netlink 路径完全不同。
+
+### Android：JNI 桥接（libopenppp2.so）
+
+Android 对普通 App 不暴露原始 TUN 设备，集成流程如下：
+
+1. 宿主 App 调用 `VpnService.establish()` 获取内核已配置好的 TUN `ParcelFileDescriptor`。
+2. 通过 JNI 将文件描述符传入 `libopenppp2.so`（导出函数以 `__LIBOPENPPP2__` 宏标注，即 `extern "C" JNIEXPORT`）。
+3. 库内部 `TapLinux::From()` 把裸 fd 包装为 `TapLinux` 实例，不再自行打开 `/dev/net/tun`。
+4. 后续运行时与 Linux 桌面路径完全一致，使用相同的 `TapLinux` 读循环和路由管理。
+
+JNI 宏约定（`android/libopenppp2.cpp`）：
+
+```cpp
+// 标记 JNI 导出函数
+#define __LIBOPENPPP2__(JNIType)  extern "C" JNIEXPORT __unused JNIType JNICALL
+
+// 获取单例应用上下文
+#define __LIBOPENPPP2_MAIN__      libopenppp2_application::GetDefault()
+```
+
+JNI 层的 `run`/`stop`/release 生命周期与核心保持一致语义，确保 Java 层与 C++ 层诊断状态同步（详见 `STARTUP_AND_LIFECYCLE_CN.md`）。
+
+---
+
 ## 相关文档
 
 - `ARCHITECTURE_CN.md`

@@ -31,6 +31,113 @@ graph TD
     I --> L[go/* 可选后端]
 ```
 
+## 完整模块依赖图
+
+```mermaid
+graph TD
+    subgraph 入口
+        MAIN[main.cpp]
+        APP[PppApplication]
+    end
+
+    subgraph 配置
+        CFG[AppConfiguration]
+    end
+
+    subgraph 传输层
+        ITRANS[ITransmission]
+        TCP[ITcpipTransmission]
+        WS[IWebsocketTransmission]
+        ITRANS --> TCP
+        ITRANS --> WS
+    end
+
+    subgraph 协议层
+        LINKLAYER[VirtualEthernetLinklayer]
+        PACKET[VirtualEthernetPacket]
+        INFO[VirtualEthernetInformation]
+        LINKLAYER --> PACKET
+        LINKLAYER --> INFO
+    end
+
+    subgraph 客户端运行时
+        CSWITCHER[VEthernetNetworkSwitcher]
+        CEXCHANGER[VEthernetExchanger]
+        CSWITCHER --> CEXCHANGER
+    end
+
+    subgraph 服务端运行时
+        SSWITCHER[VirtualEthernetSwitcher]
+        SEXCHANGER[VirtualEthernetExchanger]
+        SSWITCHER --> SEXCHANGER
+    end
+
+    subgraph 平台适配层
+        LINUX[linux/]
+        WIN[windows/]
+        ANDROID[android/]
+        MACOS[darwin/]
+    end
+
+    subgraph 可选后端
+        GO[go/ 管理后端]
+    end
+
+    MAIN --> APP
+    APP --> CFG
+    APP --> ITRANS
+    APP --> CSWITCHER
+    APP --> SSWITCHER
+    CFG --> ITRANS
+    ITRANS --> LINKLAYER
+    LINKLAYER --> CEXCHANGER
+    LINKLAYER --> SEXCHANGER
+    CSWITCHER --> LINUX
+    CSWITCHER --> WIN
+    CSWITCHER --> ANDROID
+    CSWITCHER --> MACOS
+    SSWITCHER --> LINUX
+    SSWITCHER --> WIN
+    SSWITCHER --> GO
+```
+
+## 并发模型
+
+OPENPPP2 使用 Boost.Asio `io_context` 作为事件循环核心，结合 Boost.Coroutine 实现异步-同步混合编程范式。
+
+```mermaid
+graph TD
+    subgraph 线程池
+        T1[io_context 线程 1]
+        T2[io_context 线程 2]
+        TN[io_context 线程 N]
+    end
+
+    subgraph 协程层
+        CO1[boost::asio::spawn 协程]
+        CO2[YieldContext 封装]
+    end
+
+    subgraph 任务分发
+        POST[asio::post]
+        STRAND[asio::strand]
+    end
+
+    T1 --> POST
+    T2 --> POST
+    TN --> POST
+    POST --> CO1
+    CO1 --> CO2
+    CO2 --> STRAND
+    STRAND --> T1
+```
+
+核心并发规则：
+- 跨线程对象生命周期通过 `std::shared_ptr` 和 `std::weak_ptr` 管理。
+- 跨线程状态标志使用 `std::atomic<bool>` 和 `compare_exchange_strong`。
+- IO 线程严禁阻塞；阻塞操作通过 `asio::post` 投递。
+- 协程在每个异步边界通过 `YieldContext` 挂起。
+
 ## 共享核心与宿主后果
 
 最重要的分割是：

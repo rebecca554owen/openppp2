@@ -511,11 +511,13 @@ namespace ppp {
                 auto my = shared_from_this();
                 std::shared_ptr<VirtualEthernetExchanger> exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(my);
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionCreateFailed);
                     return false;
                 }
 
                 VES::NatInformationPtr nat = switcher_->AddNatInformation(exchanger, ip, mask);
                 if (NULLPTR == nat) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionCreateFailed);
                     return false;
                 }
             

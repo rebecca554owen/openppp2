@@ -3,7 +3,33 @@
 /**
  * @file VEthernetDatagramPort.h
  * @brief Datagram relay port for client-side virtual Ethernet exchange.
+ *
  * @details
+ * VEthernetDatagramPort represents a single UDP relay session on the client side.
+ * Each port is keyed by a local source endpoint (the IP:port tuple from the TAP
+ * device) and is owned by VEthernetExchanger's datagram port table.
+ *
+ * ### Responsibilities
+ *  - Receives outbound UDP datagrams from the local virtual network and forwards
+ *    them to the remote server through the active ITransmission channel.
+ *  - Routes inbound UDP datagrams received from the server back to the local
+ *    virtual network via the owning VEthernetNetworkSwitcher.
+ *  - Tracks an inactivity timeout, using a shorter DNS-only timeout when the
+ *    port handles only DNS traffic.
+ *  - On Android, manages a real UDP socket to bypass VPN protection for direct
+ *    OS-level communication.
+ *
+ * ### Threading model
+ * All public methods must be called from the IO thread associated with the
+ * owning io_context. The `syncobj_` mutex protects only the Android message
+ * queue and the disposal flag path.
+ *
+ * ### Lifecycle
+ * 1. Constructed by VEthernetExchanger::NewDatagramPort() on first UDP packet.
+ * 2. On Android, Open() must be called in a coroutine before SendTo().
+ * 3. IsPortAging() is checked periodically; expired ports are removed.
+ * 4. Dispose() releases the socket and unregisters from the exchanger.
+ *
  * This file is part of the project and is distributed under the terms of
  * the GNU General Public License v3.0 (GPL-3.0).
  */
@@ -24,87 +50,202 @@ namespace ppp {
             class VEthernetNetworkSwitcher;
 
             /**
-             * @brief Represents a UDP datagram relay endpoint bound to a local source endpoint.
+             * @brief UDP datagram relay port bound to a single local source endpoint.
+             *
              * @details
-             * The port tracks activity timeout, forwards outbound datagrams through
-             * the active transmission, and routes inbound datagrams back to the
-             * network switcher path.
+             * Instances are created by VEthernetExchanger on demand when a new UDP
+             * source endpoint is seen from the virtual TAP interface. The port forwards
+             * outbound datagrams over the VPN transmission channel and injects received
+             * responses back into the local virtual network through the switcher.
+             *
+             * Inactivity timeouts enforce session cleanup:
+             *  - DNS-only sessions: short timeout from `configuration->udp.dns.timeout`.
+             *  - Regular sessions:  standard timeout from `configuration->udp.inactive.timeout`.
+             *
+             * @note
+             * On Android, a real protected UDP socket is opened so that DNS and other
+             * UDP traffic can bypass the VPN route protection without infinite recursion.
              */
             class VEthernetDatagramPort : public std::enable_shared_from_this<VEthernetDatagramPort> {
                 friend class                                            VEthernetExchanger;
                 friend class                                            VEthernetNetworkSwitcher;
 
             public:
+                /** @brief Application configuration type alias. */
                 typedef ppp::configurations::AppConfiguration           AppConfiguration;
+                /** @brief Shared pointer alias for application configuration. */
                 typedef std::shared_ptr<AppConfiguration>               AppConfigurationPtr;
+                /** @brief Executors utility alias. */
                 typedef ppp::threading::Executors                       Executors;
+                /** @brief Shared pointer alias for Boost.Asio io_context. */
                 typedef std::shared_ptr<boost::asio::io_context>        ContextPtr;
+                /** @brief Transmission interface alias. */
                 typedef ppp::transmissions::ITransmission               ITransmission;
+                /** @brief Shared pointer alias for transmission interface. */
                 typedef std::shared_ptr<ITransmission>                  ITransmissionPtr;
+                /** @brief Internal mutex type. */
                 typedef std::mutex                                      SynchronizedObject;
+                /** @brief RAII lock guard for the internal mutex. */
                 typedef std::lock_guard<SynchronizedObject>             SynchronizedObjectScope;
+                /** @brief Shared pointer alias for owning exchanger. */
                 typedef std::shared_ptr<VEthernetExchanger>             VEthernetExchangerPtr;
+                /** @brief Shared pointer alias for owning network switcher. */
                 typedef std::shared_ptr<VEthernetNetworkSwitcher>       VEthernetNetworkSwitcherPtr;
 
 #if defined(_ANDROID)
             public:
+                /** @brief Shared pointer alias for Android socket protector. */
                 typedef std::shared_ptr<ppp::net::ProtectorNetwork>     ProtectorNetworkPtr;
-                /** @brief Buffered UDP datagram pending local send on Android. */
+
+                /**
+                 * @brief Buffered UDP datagram pending local delivery on Android.
+                 *
+                 * @details
+                 * Android requires socket protection before send. Datagrams received
+                 * before the socket is ready are queued here and flushed after Open().
+                 */
                 typedef struct {
-                    std::shared_ptr<Byte>                               packet;
-                    int                                                 packet_length = 0;
-                    boost::asio::ip::udp::endpoint                      destinationEP;
+                    std::shared_ptr<Byte>                               packet;        ///< Datagram payload buffer.
+                    int                                                 packet_length = 0; ///< Payload length in bytes.
+                    boost::asio::ip::udp::endpoint                      destinationEP; ///< Target UDP endpoint.
                 }                                                       Message;
+
+                /** @brief Queue of pending outbound messages on Android. */
                 typedef ppp::list<Message>                              Messages;
 
             public:
+                /**
+                 * @brief Optional Android socket protector.
+                 *
+                 * @details
+                 * Must be set before Open() is called on Android. The protector marks
+                 * the real UDP socket so that its traffic bypasses the VPN tunnel.
+                 */
                 ProtectorNetworkPtr                                     ProtectorNetwork;
 #endif
 
             public:
-                /** @brief Initializes a datagram relay port instance. */
+                /**
+                 * @brief Initializes a datagram relay port bound to the given source endpoint.
+                 *
+                 * @param exchanger    Owning exchanger that manages this port's lifetime.
+                 * @param transmission Active transport channel used for outbound forwarding.
+                 * @param sourceEP     Local TAP-side UDP source endpoint this port represents.
+                 */
                 VEthernetDatagramPort(const VEthernetExchangerPtr& exchanger, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
-                /** @brief Releases resources owned by the port. */
+
+                /**
+                 * @brief Releases all resources owned by the port.
+                 *
+                 * @note Calls Finalize() to unregister from the exchanger and close the socket.
+                 */
                 virtual ~VEthernetDatagramPort() noexcept;
 
             public:
-                /** @brief Returns a shared self reference. */
+                /**
+                 * @brief Returns a shared self-reference.
+                 * @return shared_ptr to this instance.
+                 */
                 std::shared_ptr<VEthernetDatagramPort>                  GetReference()     noexcept { return shared_from_this(); }
-                /** @brief Returns the owning exchanger. */
+
+                /**
+                 * @brief Returns the owning exchanger.
+                 * @return Shared VEthernetExchanger pointer.
+                 */
                 VEthernetExchangerPtr                                   GetExchanger()     noexcept { return exchanger_; }
-                /** @brief Returns the scheduler context used by this port. */
+
+                /**
+                 * @brief Returns the io_context used for async operations.
+                 * @return Shared io_context pointer.
+                 */
                 ContextPtr                                              GetContext()       noexcept { return context_; }
-                /** @brief Returns immutable runtime configuration. */
+
+                /**
+                 * @brief Returns the immutable runtime configuration.
+                 * @return Shared AppConfiguration snapshot.
+                 */
                 AppConfigurationPtr                                     GetConfiguration() noexcept { return configuration_; }
-                /** @brief Returns the local source endpoint represented by this port. */
+
+                /**
+                 * @brief Returns the local UDP source endpoint this port represents.
+                 * @return Reference to the source endpoint.
+                 */
                 boost::asio::ip::udp::endpoint&                         GetLocalEndPoint() noexcept { return sourceEP_; }
 
             public:
-                /** @brief Checks whether the port is disposed or timeout-expired. */
+                /**
+                 * @brief Checks whether the port is disposed or has exceeded its inactivity timeout.
+                 *
+                 * @param now  Current tick count in milliseconds (from Executors::GetTickCount()).
+                 * @return true if the port should be removed; false if still active.
+                 */
                 bool                                                    IsPortAging(UInt64 now) noexcept { return disposed_ || now >= timeout_; }
-                /** @brief Disposes the relay port and releases owned resources. */
+
+                /**
+                 * @brief Disposes the relay port and releases owned resources.
+                 *
+                 * @note Safe to call multiple times; subsequent calls are no-ops.
+                 *       Schedules Finalize() on the io_context thread.
+                 */
                 virtual void                                            Dispose() noexcept;
-                /** @brief Sends a UDP payload to destination through the remote exchanger. */
+
+                /**
+                 * @brief Sends a UDP payload to the destination endpoint via the remote exchanger.
+                 *
+                 * @param packet        Payload buffer pointer.
+                 * @param packet_length Payload length in bytes.
+                 * @param destinationEP Target UDP endpoint on the remote network.
+                 * @return true if the datagram was forwarded; false on error.
+                 * @note Refreshes the inactivity timeout on success.
+                 */
                 virtual bool                                            SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
 
 #if defined(_ANDROID)
-            public:  
-                /** @brief Opens Android UDP socket and starts loopback receive flow. */
+            public:
+                /**
+                 * @brief Opens the Android protected UDP socket and starts the loopback receive loop.
+                 *
+                 * @param y  Coroutine yield context; blocks until the socket is ready.
+                 * @return true if the socket was opened and the receive loop started; false otherwise.
+                 * @note Must be called from a coroutine before any SendTo() calls on Android.
+                 */
                 bool                                                    Open(ppp::coroutines::YieldContext& y) noexcept;
 
-            private: 
-                /** @brief Receives datagrams from socket and forwards to remote exchanger. */
+            private:
+                /**
+                 * @brief Drains the pending message queue and starts the async receive loop.
+                 *
+                 * @return true if the loopback was set up; false on socket error.
+                 * @note Android-only. Called internally after Open() completes.
+                 */
                 bool                                                    Loopback() noexcept;
 #endif
 
             protected:
-                /** @brief Handles datagram received from remote side for this source endpoint. */
+                /**
+                 * @brief Handles a datagram received from the remote server for this source endpoint.
+                 *
+                 * @param packet         Pointer to the received payload buffer.
+                 * @param packet_length  Payload length in bytes.
+                 * @param destinationEP  Original source endpoint on the remote side (becomes local dest).
+                 * @note Default implementation routes the datagram through the switcher's DatagramOutput.
+                 */
                 virtual void                                            OnMessage(void*, int, const boost::asio::ip::udp::endpoint&) noexcept;
 
             private:
-                /** @brief Finalizes and unhooks this port from owner tables. */
+                /**
+                 * @brief Finalizes the port: unregisters from exchanger and closes the socket.
+                 * @note Called from Dispose() and the destructor.
+                 */
                 void                                                    Finalize() noexcept;
-                /** @brief Refreshes inactivity timeout according to current mode. */
+
+                /**
+                 * @brief Refreshes the inactivity timeout based on the current traffic mode.
+                 *
+                 * @details
+                 * DNS-only mode uses the shorter `udp.dns.timeout`; regular mode uses
+                 * `udp.inactive.timeout`. Both values are multiplied by 1000 (ms).
+                 */
                 void                                                    Update() noexcept {
                     UInt64 now = Executors::GetTickCount();
                     if (onlydns_) {
@@ -114,29 +255,45 @@ namespace ppp {
                         timeout_ = now + (UInt64)configuration_->udp.inactive.timeout * 1000;
                     }
                 }
-                /** @brief Marks this port for finalization on next disposal path. */
+
+                /**
+                 * @brief Marks this port as finalized by an external caller (e.g. exchanger GC sweep).
+                 * @note After this call the port will not re-enter the exchanger tables.
+                 */
                 void                                                    MarkFinalize() noexcept { finalize_ = true; }
 
             private:
                 struct {
-                    bool                                                disposed_ : 1;
-                    bool                                                onlydns_  : 1;
-                    bool                                                sendto_   : 1;
-                    bool                                                finalize_ : 5;
-                    UInt64                                              timeout_  = 0;
+                    bool                                                disposed_ : 1; ///< True when Dispose() has been called.
+                    bool                                                onlydns_  : 1; ///< True when only DNS traffic has been seen.
+                    bool                                                sendto_   : 1; ///< True once the first SendTo() call succeeds.
+                    bool                                                finalize_ : 5; ///< Non-zero after MarkFinalize() is called.
+                    UInt64                                              timeout_  = 0; ///< Absolute tick-count expiry timestamp.
                 };
+                /** @brief Guards disposal flag and Android message queue. */
                 SynchronizedObject                                      syncobj_;
+                /** @brief IO context for all async operations. */
                 ContextPtr                                              context_;
+                /** @brief Owning network switcher providing DatagramOutput path. */
                 VEthernetNetworkSwitcherPtr                             switcher_;
+                /** @brief Owning exchanger for deregistration on disposal. */
                 VEthernetExchangerPtr                                   exchanger_;
+                /** @brief Active transport channel for outbound forwarding. */
                 ITransmissionPtr                                        transmission_;
+                /** @brief Immutable configuration snapshot. */
                 AppConfigurationPtr                                     configuration_;
+                /** @brief Local TAP-side source endpoint represented by this port. */
                 boost::asio::ip::udp::endpoint                          sourceEP_;
 #if defined(_ANDROID)
+                /** @brief Queue of pending outbound messages awaiting socket readiness. */
                 Messages                                                messages_;
+                /** @brief State machine flag for socket open progress (0=init, 1=opening, 2=open). */
                 int                                                     opened_   = 0;
+                /** @brief Real protected UDP socket used on Android to bypass VPN. */
                 boost::asio::ip::udp::socket                            socket_;
+                /** @brief Receive buffer for the Android UDP socket receive loop. */
                 std::shared_ptr<Byte>                                   buffer_;
+                /** @brief Last remote endpoint received from the Android UDP socket. */
                 boost::asio::ip::udp::endpoint                          remoteEP_;
 #endif
             };

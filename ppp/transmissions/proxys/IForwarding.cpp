@@ -4,6 +4,7 @@
  * @file IForwarding.cpp
  * @brief Implements local-to-proxy forwarding, including HTTP CONNECT and SOCKS5 handshake flows.
  */
+#include <ppp/diagnostics/Error.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/IDisposable.h>
 #include <ppp/collections/Dictionary.h>
@@ -633,6 +634,7 @@ namespace ppp {
             /** @brief Initializes proxy settings from configuration and opens local acceptor. */
             int IForwarding::OpenInternal() noexcept {
                 if (NULLPTR == context_ || NULLPTR == configuration_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                     return -1;
                 }
 
@@ -640,10 +642,12 @@ namespace ppp {
                 ppp::string proxy_password;
                 ppp::string proxy_url = IFORWARDING_REWRITE_PROXY_URI(configuration_->client.server_proxy, proxy_uername, proxy_password);
                 if (proxy_url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldMissing);
                     return -1;
                 }
 
                 if (acceptor_.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
                     return -1;
                 }
 

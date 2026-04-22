@@ -41,10 +41,15 @@ namespace ppp {
              */
             struct TapTcpLink {
             public:
+                /** @brief Destination (WAN-side) IPv4 address. */
                 UInt32                                                      dstAddr = 0;
+                /** @brief Destination (WAN-side) TCP port. */
                 UInt16                                                      dstPort = 0;
+                /** @brief Source (LAN-side) IPv4 address. */
                 UInt32                                                      srcAddr = 0;
+                /** @brief Source (LAN-side) TCP port. */
                 UInt16                                                      srcPort = 0;
+                /** @brief Locally allocated NAT port used on the loopback listener side. */
                 UInt16                                                      natPort = 0;
                 /**
                  * @brief Set once at link creation from the lwIP accept path; never mutated
@@ -180,12 +185,18 @@ namespace ppp {
                 std::shared_ptr<boost::asio::ip::tcp::socket>               NewAsynchronousSocket(int sockfd, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept;
 
             private:
+                /** @brief Non-zero when this client was created through the lwIP accept path. */
                 Int128                                                      lwip_                = 0;
+                /** @brief Disposal guard; exchange FALSE→non-zero to perform one-time finalization. */
                 std::atomic<int>                                            disposed_            = FALSE;
 
+                /** @brief io_context used for posting timers and fallback async operations. */
                 std::shared_ptr<boost::asio::io_context>                    context_;
+                /** @brief Optional strand serializing socket callbacks. */
                 ppp::threading::Executors::StrandPtr                        strand_;
+                /** @brief Outbound TCP socket connecting to the upstream destination. */
                 std::shared_ptr<boost::asio::ip::tcp::socket>               socket_;
+                /** @brief Owning NAT flow link entry. */
                 std::shared_ptr<TapTcpLink>                                 link_;
 
                 std::shared_ptr<ITap>                                       sync_ack_tap_driver_;   ///< Protected by std::atomic_store/load (cross-thread).
@@ -195,8 +206,11 @@ namespace ppp {
                 int                                                         sync_ack_retry_count_ = 0; ///< Single-threaded (context_ strand only); no atomic needed.
                 std::shared_ptr<boost::asio::steady_timer>                  sync_ack_retry_timer_;
 
+                /** @brief NAT-side local endpoint accepted by the loopback listener. */
                 boost::asio::ip::tcp::endpoint                              natEP_;
+                /** @brief LAN-side source endpoint seen in the TAP packet flow. */
                 boost::asio::ip::tcp::endpoint                              localEP_;
+                /** @brief WAN-side remote destination endpoint. */
                 boost::asio::ip::tcp::endpoint                              remoteEP_;
 
 #ifdef SYSNAT
@@ -280,13 +294,19 @@ namespace ppp {
             std::shared_ptr<TapTcpLink>                                     AllocTcpLink(UInt32 src_ip, int src_port, UInt32 dst_ip, int dst_port) noexcept;
 
         private:
+            /** @brief Guards wan2lan_, lan2wan_, and acceptor_ from concurrent access. */
             SynchronizedObject                                              syncobj_;
+            /** @brief Next NAT port allocation counter. */
             int                                                             ap_     = 0;
+            /** @brief Indicates whether lwIP accept path is active. */
             bool                                                            lwip_   = false;
 #ifdef SYSNAT
+            /** @brief Indicates whether SYSNAT kernel-bypass mode is enabled. */
             bool                                                            sysnat_ = false;
+            /** @brief Network interface name used by SYSNAT kernel module. */
             ppp::string                                                     sysnat_interface_name_;
 #endif
+            /** @brief Local loopback endpoint that the acceptor listens on. */
             IPEndPoint                                                      listenEP_;
             /**
              * @brief Atomic mirror of listenEP_.Port.
@@ -295,8 +315,11 @@ namespace ppp {
              *        during per-packet NAT rewrites.
              */
             std::atomic<int>                                                listenPort_ = { 0 };
+            /** @brief WAN-to-LAN NAT translation table keyed by composite flow ID. */
             WAN2LANTABLE                                                    wan2lan_;
+            /** @brief LAN-to-WAN NAT translation table keyed by composite flow ID. */
             LAN2WANTABLE                                                    lan2wan_;
+            /** @brief Loopback socket acceptor used to receive locally originated connections. */
             std::shared_ptr<SocketAcceptor>                                 acceptor_;
         };
     }

@@ -3,6 +3,7 @@
  * @file VEthernet.cpp
  * @brief Implements TAP-facing virtual Ethernet packet dispatch and timers.
  */
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/Timer.h>
@@ -331,23 +332,23 @@ namespace ppp
         {
             if (NULLPTR == tap)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             if (disposed_.load(std::memory_order_acquire))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             if (!tap->IsOpen())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             std::shared_ptr<IPFragment> fragment = NewFragment();
             if (NULLPTR == fragment)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 
             /**
@@ -416,7 +417,7 @@ namespace ppp
              */
             if (!static_netstack_loopback.try_open_loopback())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelLoopbackSetupFailed);
             }
 
             /**
@@ -426,14 +427,14 @@ namespace ppp
                 lwip::netstack::IP != tap->IPAddress ||
                 lwip::netstack::MASK != tap->SubmaskAddress) 
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
             }
 
             /** @brief Instantiate and open concrete virtual network stack. */
             std::shared_ptr<VNetstack> netstack = NewNetstack();
             if (NULLPTR == netstack)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
             else
             {
@@ -443,7 +444,7 @@ namespace ppp
                 if (!netstack->Open(lwip_, 0))
                 {
                     netstack->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
                 }
             }
  
@@ -528,7 +529,7 @@ namespace ppp
 #if !defined(_WIN32)
             if (!ForkAllSsmt())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
             }
 #endif  
             NextTimeout();
@@ -929,19 +930,19 @@ namespace ppp
         {
             if (NULLPTR == packet)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             if (disposed_.load(std::memory_order_acquire)) 
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
             std::shared_ptr<BufferSegment> messages = IPFrame::ToArray(allocator, packet);
             if (NULLPTR == messages) 
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 
             return Output(messages->Buffer, messages->Length);
@@ -954,18 +955,18 @@ namespace ppp
         {
             if (NULLPTR == packet || packet_length < 1)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             if (disposed_.load(std::memory_order_acquire))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             std::shared_ptr<ITap> tap = GetTap();
             if (NULLPTR == tap)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             return tap->Output(packet, packet_length);
@@ -978,18 +979,18 @@ namespace ppp
         {
             if (NULLPTR == packet || packet_length < 1)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
             
             if (disposed_.load(std::memory_order_acquire))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             std::shared_ptr<ITap> tap = GetTap();
             if (NULLPTR == tap)
             {
-                return false;   
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             return tap->Output(packet, packet_length);

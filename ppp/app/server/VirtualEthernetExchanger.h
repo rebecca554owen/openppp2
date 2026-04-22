@@ -2,8 +2,38 @@
 
 /**
  * @file VirtualEthernetExchanger.h
- * @brief Declares the per-session virtual ethernet exchanger on server side.
- * @author OPENPPP2 Team
+ * @brief Declares the per-session virtual ethernet exchanger on the server side.
+ *
+ * @details `VirtualEthernetExchanger` is the core per-client session object on the server.
+ *          It derives from `VirtualEthernetLinklayer` and handles every packet type
+ *          the client can send: LAN announcements, NAT packets, ICMP echo, UDP sendto,
+ *          IPv6, FRP port mapping, VMUX (multiplexed sub-channel), and static-echo.
+ *
+ *          Key responsibilities:
+ *          - Registers the client's LAN subnet in the switcher's NAT table (`OnLan()`).
+ *          - Forwards IPv4 NAT packets between clients in the same managed subnet
+ *            or to the internet via `OnNat()`.
+ *          - Proxies UDP datagrams through per-source `VirtualEthernetDatagramPort` objects.
+ *          - Manages ICMP echo forwarding via `VirtualInternetControlMessageProtocol`.
+ *          - Provides FRP inbound/outbound port-mapping via `VirtualEthernetMappingPort`.
+ *          - Negotiates VMUX sub-channel multiplexing via `vmux::vmux_net`.
+ *          - Handles static-echo allocation requests and forwards static-echo datagrams.
+ *          - Uploads per-session traffic deltas to the managed server on each tick.
+ *
+ *          Lifecycle:
+ *          - Constructed by `VirtualEthernetSwitcher::NewExchanger()`.
+ *          - `Open()` initializes the ICMP helper and static-echo state.
+ *          - `Update(now)` is called on every global tick and handles keepalive, port GC,
+ *            VMUX polling, traffic upload, and DNS timeout expiry.
+ *          - `Dispose()` schedules asynchronous teardown on the owning io_context.
+ *
+ *          Thread safety:
+ *          - `syncobj_` guards `datagrams_`, `timeouts_`, and `mappings_`.
+ *          - `static_echo_syncobj_` guards the static-echo sub-state (`static_echo_`,
+ *            `static_allocated_context_`, `static_echo_datagram_ports_`).
+ *          - Do not acquire both locks in the same call frame to avoid deadlock.
+ *
+ * @author  OPENPPP2 Team
  * @license GPL-3.0
  */
 
@@ -30,7 +60,17 @@ namespace ppp {
             class VirtualInternetControlMessageProtocolStatic;
 
             /**
-             * @brief Handles one client session's L2/L3 forwarding, NAT and control operations.
+             * @brief Handles one client session's L2/L3 forwarding, NAT, and control operations.
+             *
+             * @details Each `VirtualEthernetExchanger` is bound to exactly one transmission
+             *          channel (TCP/WebSocket/…) that represents a connected VPN client.
+             *          It processes the full protocol command set defined by
+             *          `VirtualEthernetLinklayer` and dispatches to specialized sub-systems
+             *          (ICMP, UDP, FRP, VMUX, static-echo).
+             *
+             * @note Friendship with `VirtualEthernetSwitcher`, `VirtualEthernetDatagramPort`,
+             *       and the static ICMP/datagram helper classes is required so that those
+             *       classes can access internal state without exposing it via public API.
              */
             class VirtualEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer {
                 friend class                                                                VirtualInternetControlMessageProtocolStatic;
@@ -39,19 +79,19 @@ namespace ppp {
                 friend class                                                                VirtualEthernetDatagramPortStatic;
 
             public:
-                /** @brief Base information packet alias. */
+                /** @brief Base information packet type alias. */
                 typedef ppp::app::protocol::VirtualEthernetInformation                      VirtualEthernetInformation;
-                /** @brief Extended information packet alias. */
+                /** @brief Extended information packet type alias. */
                 typedef ppp::app::protocol::VirtualEthernetInformationExtensions            VirtualEthernetInformationExtensions;
-                /** @brief Shared pointer alias for switcher owner. */
+                /** @brief Shared pointer alias for the parent switcher. */
                 typedef std::shared_ptr<VirtualEthernetSwitcher>                            VirtualEthernetSwitcherPtr;
-                /** @brief Shared pointer alias for UDP datagram port wrapper. */
+                /** @brief Shared pointer alias for the UDP datagram relay port. */
                 typedef std::shared_ptr<VirtualEthernetDatagramPort>                        VirtualEthernetDatagramPortPtr;
-                /** @brief Shared pointer alias for managed server bridge. */
+                /** @brief Shared pointer alias for the Go managed-server bridge. */
                 typedef std::shared_ptr<VirtualEthernetManagedServer>                       VirtualEthernetManagedServerPtr;
-                /** @brief Static echo allocation context alias. */
+                /** @brief Static-echo allocation context value alias. */
                 typedef VirtualEthernetSwitcher::VirtualEthernetStaticEchoAllocatedContext  VirtualEthernetStaticEchoAllocatedContext;
-                /** @brief Shared pointer alias for static echo allocation context. */
+                /** @brief Shared pointer alias for the static-echo allocation context. */
                 typedef std::shared_ptr<VirtualEthernetStaticEchoAllocatedContext>          VirtualEthernetStaticEchoAllocatedContextPtr;
 
             private:    
@@ -79,92 +119,274 @@ namespace ppp {
 
             public:
                 /**
-                 * @brief Creates a virtual exchanger bound to one transmission session.
-                 * @param switcher Parent switcher that manages all exchangers.
-                 * @param configuration Runtime configuration snapshot.
-                 * @param transmission Session transport channel.
-                 * @param id Session identifier.
+                 * @brief Constructs a virtual exchanger bound to one transmission session.
+                 *
+                 * @param switcher      Parent switcher that manages all active exchangers.
+                 * @param configuration Immutable runtime configuration snapshot.
+                 * @param transmission  Session transport channel (TCP/WebSocket/…).
+                 * @param id            Unique 128-bit session identifier.
                  */
                 VirtualEthernetExchanger(
                     const VirtualEthernetSwitcherPtr&                                       switcher,
                     const AppConfigurationPtr&                                              configuration, 
                     const ITransmissionPtr&                                                 transmission,
                     const Int128&                                                           id) noexcept;
-                /** @brief Releases all session resources. */
+
+                /**
+                 * @brief Destroys the exchanger and releases all session-level resources.
+                 *
+                 * @details Calls `Finalize()` to ensure the NAT entry, datagram ports,
+                 *          ICMP helper, and transmission are all released even if `Dispose()`
+                 *          was never called.
+                 */
                 virtual ~VirtualEthernetExchanger() noexcept;   
     
             public:
-                /** @brief Runs periodic maintenance for ports, mappings and keepalive. */
+                /**
+                 * @brief Runs periodic maintenance: port GC, keepalive, VMUX, traffic upload.
+                 *
+                 * @param now Current monotonic tick count in milliseconds.
+                 * @return True to continue; false if the exchanger should be disposed.
+                 */
                 virtual bool                                                                Update(UInt64 now) noexcept;
-                /** @brief Initializes echo/static components for this session. */
+
+                /**
+                 * @brief Initializes the ICMP echo helper and static-echo state for this session.
+                 *
+                 * @return True on success; false if initialization fails.
+                 */
                 virtual bool                                                                Open() noexcept;
-                /** @brief Asynchronously disposes this exchanger on its io context. */
+
+                /**
+                 * @brief Schedules asynchronous disposal of this exchanger on its io_context.
+                 *
+                 * @details Sets internal flags and posts a cleanup coroutine.  Safe to call
+                 *          from any thread; the actual teardown happens on the IO thread.
+                 */
                 virtual void                                                                Dispose() noexcept;
-                /** @brief Gets whether exchanger has been disposed. */
+
+                /** @brief Returns true if this exchanger has been disposed. */
                 bool                                                                        IsDisposed() noexcept       { return disposed_; }
-                /** @brief Gets parent switcher reference. */
+                /** @brief Returns the parent switcher. */
                 VirtualEthernetSwitcherPtr                                                  GetSwitcher() noexcept      { return switcher_; }
-                /** @brief Gets current transmission reference. */
+                /** @brief Returns the active transmission channel for this session. */
                 ITransmissionPtr                                                            GetTransmission() noexcept  { return transmission_; }
-                /** @brief Gets managed-server bridge reference. */
+                /** @brief Returns the Go managed-server bridge (may be null). */
                 VirtualEthernetManagedServerPtr                                             GetManagedServer() noexcept { return managed_server_; }
-                /** @brief Gets traffic statistics object in use. */
+                /** @brief Returns the traffic statistics object for this session. */
                 ITransmissionStatisticsPtr                                                  GetStatistics() noexcept    { return statistics_; }
-                /** @brief Gets current VMUX instance when enabled. */
+                /** @brief Returns the VMUX instance when sub-channel multiplexing is active. */
                 std::shared_ptr<vmux::vmux_net>                                             GetMux() noexcept           { return mux_; }
-                /** @brief Gets preferred TUN fd hint used by lower forwarding layer. */
+                /**
+                 * @brief Returns the preferred TUN file descriptor hint for the forwarding layer.
+                 * @return TUN fd; -1 if none is set.
+                 */
                 int                                                                         GetPreferredTunFd() noexcept;
-                /** @brief Sets preferred TUN fd hint used by lower forwarding layer. */
+                /**
+                 * @brief Sets the preferred TUN file descriptor hint for the forwarding layer.
+                 * @param fd TUN fd value; -1 to clear.
+                 */
                 void                                                                        SetPreferredTunFd(int fd) noexcept;
 
             protected:  
-                /** @brief Handles client LAN announcement and NAT binding registration. */
+                /**
+                 * @brief Handles the client LAN announcement and registers the NAT binding.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param ip           Client LAN IPv4 address (host-byte order).
+                 * @param mask         Client LAN subnet mask (host-byte order).
+                 * @param y            Coroutine yield context.
+                 * @return True on success; false to tear down the session.
+                 */
                 virtual bool                                                                OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept override;
-                /** @brief Handles NAT packet from client and forwards to destination peer/transit. */
+
+                /**
+                 * @brief Handles a NAT packet from the client and forwards it to the correct peer or internet.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param packet        Raw IP packet buffer.
+                 * @param packet_length Packet length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True on success; false to tear down the session.
+                 */
                 virtual bool                                                                OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept override;
-                /** @brief Rejects legacy information message to prevent protocol abuse. */
+
+                /**
+                 * @brief Rejects the legacy information message to prevent protocol abuse.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param information   Parsed information payload (ignored).
+                 * @param y             Coroutine yield context.
+                 * @return Always false; this command is not valid server-side.
+                 */
                 virtual bool                                                                OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept override;
-                /** @brief Handles extended information message (primarily IPv6 request exchange). */
+
+                /**
+                 * @brief Handles the extended information envelope (IPv6 address request exchange).
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param information   Extended information envelope from the client.
+                 * @param y             Coroutine yield context.
+                 * @return True on success; false to tear down the session.
+                 */
                 virtual bool                                                                OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept override;
-                /** @brief Rejects direct push command for security hardening. */
+
+                /**
+                 * @brief Rejects direct push commands for security hardening.
+                 *
+                 * @details The server never receives push commands directly; they are routed
+                 *          through the TCP connection object.
+                 * @return Always false.
+                 */
                 virtual bool                                                                OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept override;
-                /** @brief Rejects direct connect command for security hardening. */
+
+                /**
+                 * @brief Rejects direct connect commands for security hardening.
+                 * @return Always false.
+                 */
                 virtual bool                                                                OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept override;
-                /** @brief Rejects connect-ack command for security hardening. */
+
+                /**
+                 * @brief Rejects connect-ack commands for security hardening.
+                 * @return Always false.
+                 */
                 virtual bool                                                                OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept override;
-                /** @brief Rejects direct disconnect command for security hardening. */
+
+                /**
+                 * @brief Rejects direct disconnect commands for security hardening.
+                 * @return Always false.
+                 */
                 virtual bool                                                                OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept override;
-                /** @brief Handles echo ack command from client. */
+
+                /**
+                 * @brief Handles an echo acknowledgment (keepalive reply) from the client.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param ack_id       Acknowledgment sequence identifier.
+                 * @param y            Coroutine yield context.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept override;
-                /** @brief Handles ICMP echo packet from client. */
+
+                /**
+                 * @brief Handles an ICMP echo packet from the client.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param packet        Raw ICMP packet buffer.
+                 * @param packet_length Packet length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept override;
-                /** @brief Handles UDP sendto command from client. */
+
+                /**
+                 * @brief Handles a UDP sendto command from the client.
+                 *
+                 * @details Finds or creates a `VirtualEthernetDatagramPort` for `sourceEP`,
+                 *          applies DNS redirect policy, and forwards the payload to `destinationEP`.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param sourceEP      Client-side UDP source endpoint.
+                 * @param destinationEP UDP destination endpoint.
+                 * @param packet        UDP payload buffer.
+                 * @param packet_length Payload length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept override;
-                /** @brief Handles static-echo session allocation request. */
+
+                /**
+                 * @brief Handles a static-echo channel allocation request from the client.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param y            Coroutine yield context.
+                 * @return True if the allocation is sent to the client successfully.
+                 */
                 virtual bool                                                                OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept override;
-                /** @brief Rejects client-side static-echo control packet for security hardening. */
+
+                /**
+                 * @brief Rejects the client-side static-echo control packet for security hardening.
+                 * @return Always false; this direction is reserved for client-side only.
+                 */
                 virtual bool                                                                OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept override;
-                /** @brief Handles VMUX configuration request from client. */
+
+                /**
+                 * @brief Handles a VMUX configuration request from the client.
+                 *
+                 * @param transmission     Active transmission channel.
+                 * @param vlan             VLAN identifier for the VMUX session.
+                 * @param max_connections  Maximum number of sub-connections.
+                 * @param acceleration     True to enable hardware acceleration hints.
+                 * @param y                Coroutine yield context.
+                 * @return True if the VMUX instance is created and acknowledged.
+                 */
                 virtual bool                                                                OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept override;
 
             protected:  
-                /** @brief Returns firewall used for this exchanger session. */
+                /**
+                 * @brief Returns the firewall instance used for this session.
+                 *
+                 * @details Falls back to the switcher-level firewall if no session-level one
+                 *          is set.
+                 * @return Active firewall for packet filtering.
+                 */
                 virtual FirewallPtr                                                         GetFirewall() noexcept override;
-                /** @brief Creates ICMP echo forwarding helper bound to transmission. */
+
+                /**
+                 * @brief Factory: creates the ICMP echo forwarding helper for this session.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @return Newly constructed ICMP helper; null on failure.
+                 */
                 virtual VirtualInternetControlMessageProtocolPtr                            NewEchoTransmissions(const ITransmissionPtr& transmission) noexcept;
-                /** @brief Creates UDP datagram proxy port for a source endpoint. */
+
+                /**
+                 * @brief Factory: creates a UDP datagram relay port for a source endpoint.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param sourceEP     Source endpoint for which the port is created.
+                 * @return Newly constructed datagram port; null on failure.
+                 */
                 virtual VirtualEthernetDatagramPortPtr                                      NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
-                /** @brief Finds existing datagram proxy port by source endpoint. */
+
+                /**
+                 * @brief Finds the existing datagram relay port for a source endpoint.
+                 *
+                 * @param sourceEP Source endpoint to look up.
+                 * @return Existing port; null if not found.
+                 */
                 virtual VirtualEthernetDatagramPortPtr                                      GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
-                /** @brief Releases datagram proxy port ownership by source endpoint. */
+
+                /**
+                 * @brief Removes and returns ownership of a datagram relay port.
+                 *
+                 * @param sourceEP Source endpoint whose port should be released.
+                 * @return Released port; null if not found.
+                 */
                 virtual VirtualEthernetDatagramPortPtr                                      ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
     
             private:    
-                /** @brief Performs synchronous resource finalization and switcher deregistration. */
+                /** @brief Synchronously finalizes all session resources and deregisters from switcher. */
                 void                                                                        Finalize() noexcept;
-                /** @brief Removes a DNS redirect timeout entry by native key. */
+
+                /**
+                 * @brief Removes a DNS redirect timeout handler by its native key.
+                 * @param k Raw pointer key of the timeout entry to remove.
+                 * @return True if the entry was found and removed.
+                 */
                 bool                                                                        DeleteTimeout(void* k) noexcept;
-                /** @brief Resolves configured DNS redirect host and dispatches redirect send task. */
+
+                /**
+                 * @brief Resolves the configured DNS redirect host and dispatches the redirect task.
+                 *
+                 * @param transmission   Active transmission channel.
+                 * @param sourceEP       UDP source endpoint of the original query.
+                 * @param destinationEP  Original DNS destination endpoint.
+                 * @param packet         Original DNS query buffer.
+                 * @param packet_length  Query buffer length in bytes.
+                 * @param static_transit True to use the static-echo transit path.
+                 * @return True if the redirect task is dispatched.
+                 */
                 bool                                                                        INTERNAL_RedirectDnsQuery(
                     const ITransmissionPtr&                                                 transmission, 
                     const boost::asio::ip::udp::endpoint&                                   sourceEP,
@@ -172,7 +394,19 @@ namespace ppp {
                     Byte*                                                                   packet, 
                     int                                                                     packet_length,
                     bool                                                                    static_transit) noexcept;
-                /** @brief Sends one DNS query to redirect endpoint and relays asynchronous response. */
+
+                /**
+                 * @brief Sends the DNS query to the redirect endpoint and relays the async response.
+                 *
+                 * @param transmission   Active transmission channel (by value for coroutine capture).
+                 * @param redirectEP     Redirect destination UDP endpoint.
+                 * @param sourceEP       Original client-side source endpoint.
+                 * @param destinationEP  Original DNS destination endpoint.
+                 * @param packet         Shared DNS query buffer.
+                 * @param packet_length  Query buffer length in bytes.
+                 * @param static_transit True to use the static-echo transit path for the reply.
+                 * @return True if the query is sent and the response is relayed.
+                 */
                 bool                                                                        INTERNAL_RedirectDnsQuery(
                     ITransmissionPtr                                                        transmission,
                     boost::asio::ip::udp::endpoint                                          redirectEP,
@@ -181,7 +415,18 @@ namespace ppp {
                     std::shared_ptr<Byte>                                                   packet,
                     int                                                                     packet_length,
                     bool                                                                    static_transit) noexcept;
-                /** @brief Handles DNS redirect policy and returns redirect status code. */
+
+                /**
+                 * @brief Applies the DNS redirect policy and returns a redirect status code.
+                 *
+                 * @param transmission   Active transmission channel.
+                 * @param sourceEP       UDP source endpoint of the query.
+                 * @param destinationEP  Original DNS destination endpoint.
+                 * @param packet         DNS query buffer.
+                 * @param packet_length  Query buffer length in bytes.
+                 * @param static_transit True to use the static-echo transit path.
+                 * @return 1 if redirected; 0 if no redirect applies; -1 on error.
+                 */
                 int                                                                         RedirectDnsQuery(
                     const ITransmissionPtr&                                                 transmission, 
                     const boost::asio::ip::udp::endpoint&                                   sourceEP, 
@@ -191,77 +436,235 @@ namespace ppp {
                     bool                                                                    static_transit) noexcept;
     
             private:    
-                /** @brief Uploads per-session traffic deltas to managed server bridge. */
+                /**
+                 * @brief Uploads per-session rx/tx traffic deltas to the managed server.
+                 * @return True if the upload is queued or sent successfully.
+                 */
                 bool                                                                        UploadTrafficToManagedServer() noexcept;
-                /** @brief Runs VMUX polling/update and tears down failed VMUX instance. */
+
+                /**
+                 * @brief Runs VMUX polling and tears down the VMUX instance on failure.
+                 * @return True if the VMUX instance is healthy; false if it was torn down.
+                 */
                 bool                                                                        DoMuxEvents() noexcept;
-                /** @brief Registers NAT information based on announced LAN address/mask. */
+
+                /**
+                 * @brief Registers a NAT entry based on the LAN announcement IP and mask.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param ip           Client LAN IPv4 address (host-byte order).
+                 * @param mask         Client LAN subnet mask (host-byte order).
+                 * @return True if the NAT entry is registered.
+                 */
                 bool                                                                        Arp(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask) noexcept;
-                /** @brief Forwards IPv4 NAT packet to peer exchanger inside managed subnet. */
+
+                /**
+                 * @brief Forwards an IPv4 NAT packet to the peer exchanger inside the managed subnet.
+                 *
+                 * @param packet        Raw IP packet buffer.
+                 * @param packet_length Packet length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True if the packet is forwarded successfully.
+                 */
                 bool                                                                        ForwardNatPacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept;
-                /** @brief Forwards IPv6 packet to local peer exchanger or transit gateway. */
+
+                /**
+                 * @brief Forwards an IPv6 packet to the local peer exchanger or transit gateway.
+                 *
+                 * @param packet        Raw IPv6 packet buffer.
+                 * @param packet_length Packet length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True if the packet is forwarded successfully.
+                 */
                 bool                                                                        ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept;
-                /** @brief Parses and forwards ICMP echo packet to echo subsystem. */
+
+                /**
+                 * @brief Parses and dispatches an ICMP echo packet to the ICMP echo subsystem.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param packet        Raw ICMP packet buffer.
+                 * @param packet_length Packet length in bytes.
+                 * @return True if the packet is dispatched.
+                 */
                 bool                                                                        SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
-                /** @brief Forwards UDP payload to destination via per-source datagram port. */
+
+                /**
+                 * @brief Forwards a UDP payload to its destination via the per-source datagram port.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param sourceEP      Client-side UDP source endpoint.
+                 * @param destinationEP UDP destination endpoint.
+                 * @param packet        UDP payload buffer.
+                 * @param packet_length Payload length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True on successful forwarding.
+                 */
                 bool                                                                        SendPacketToDestination(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept;
     
             private:    
-                /** @brief Allocates static-echo relay session and returns assignment to client. */
+                /**
+                 * @brief Allocates a static-echo relay session and returns the assignment to the client.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param y            Coroutine yield context.
+                 * @return True if the allocation message is sent to the client.
+                 */
                 bool                                                                        StaticEcho(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
-                /** @brief Releases a static-echo UDP source port mapping. */
+
+                /**
+                 * @brief Releases a static-echo UDP source-port mapping when a port is freed.
+                 *
+                 * @param source_ip   Source IPv4 address (host-byte order).
+                 * @param source_port Source UDP port number.
+                 * @return True if the mapping is found and released.
+                 */
                 bool                                                                        StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept;
-                /** @brief Forwards static-echo UDP packet to destination. */
+
+                /**
+                 * @brief Forwards a static-echo UDP packet to its network destination.
+                 *
+                 * @param packet Parsed virtual ethernet packet to forward.
+                 * @return True if the packet is sent.
+                 */
                 bool                                                                        StaticEchoSendToDestination(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet) noexcept;
-                /** @brief Handles static-echo ICMP packet forwarding path. */
+
+                /**
+                 * @brief Handles an ICMP packet received via the static-echo channel.
+                 *
+                 * @param packet   Parsed virtual ethernet packet carrying the ICMP payload.
+                 * @param sourceEP UDP source endpoint of the static-echo sender.
+                 * @return True if the packet is forwarded.
+                 */
                 bool                                                                        StaticEchoEchoToDestination(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
     
             private:    
-                /** @brief Finds existing FRP mapping port by direction/protocol/port key. */
+                /**
+                 * @brief Finds an existing FRP mapping port by direction, protocol, and remote port.
+                 *
+                 * @param in          True for inbound; false for outbound.
+                 * @param tcp         True for TCP; false for UDP.
+                 * @param remote_port Remote port number.
+                 * @return Existing port; null if not found.
+                 */
                 VirtualEthernetMappingPortPtr                                               GetMappingPort(bool in, bool tcp, int remote_port) noexcept;
-                /** @brief Creates FRP mapping port object for one remote port key. */
+
+                /**
+                 * @brief Creates a new FRP mapping port object for the given key.
+                 *
+                 * @param in          True for inbound; false for outbound.
+                 * @param tcp         True for TCP; false for UDP.
+                 * @param remote_port Remote port number.
+                 * @return Newly created port; null on failure.
+                 */
                 VirtualEthernetMappingPortPtr                                               NewMappingPort(bool in, bool tcp, int remote_port) noexcept;
-                /** @brief Opens and registers FRP mapping port in mapping table. */
+
+                /**
+                 * @brief Opens and registers an FRP mapping port in the mapping table.
+                 *
+                 * @param in          True for inbound; false for outbound.
+                 * @param tcp         True for TCP; false for UDP.
+                 * @param remote_port Remote port number.
+                 * @return True if the port is opened and registered.
+                 */
                 bool                                                                        RegisterMappingPort(bool in, bool tcp, int remote_port) noexcept;
     
             private:    
-                /** @brief Extends base keepalive and disposes session on timeout. */
+                /**
+                 * @brief Extends the base keepalive logic and disposes the session on timeout.
+                 *
+                 * @param transmission Active transmission channel.
+                 * @param now          Current tick count in milliseconds.
+                 * @return True if keepalive sent; false if the session timed out and is disposed.
+                 */
                 virtual bool                                                                DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept override;
-                /** @brief Handles FRP entry notification from client. */
+
+                /**
+                 * @brief Handles an FRP port-mapping entry notification from the client.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param tcp           True for TCP; false for UDP.
+                 * @param in            True for inbound mapping; false for outbound.
+                 * @param remote_port   Remote port number to expose.
+                 * @param y             Coroutine yield context.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept override;
-                /** @brief Handles FRP UDP data packet from client. */
+
+                /**
+                 * @brief Handles an FRP UDP data packet from the client.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param in            True for inbound; false for outbound.
+                 * @param remote_port   Remote port number of the mapping.
+                 * @param sourceEP      UDP source endpoint.
+                 * @param packet        UDP payload buffer.
+                 * @param packet_length Payload length in bytes.
+                 * @param y             Coroutine yield context.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept override;
-                /** @brief Handles FRP TCP connect-ack packet from client. */
+
+                /**
+                 * @brief Handles an FRP TCP connect-acknowledgment from the client.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param connection_id FRP TCP sub-connection identifier.
+                 * @param in            True for inbound; false for outbound.
+                 * @param remote_port   Remote port number of the mapping.
+                 * @param error_code    Zero on success; non-zero on connect failure.
+                 * @param y             Coroutine yield context.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept override;
-                /** @brief Handles FRP TCP disconnect notification from client. */
+
+                /**
+                 * @brief Handles an FRP TCP disconnect notification from the client.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param connection_id FRP TCP sub-connection identifier.
+                 * @param in            True for inbound; false for outbound.
+                 * @param remote_port   Remote port number of the mapping.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept override;
-                /** @brief Handles FRP TCP stream payload from client. */
+
+                /**
+                 * @brief Handles an FRP TCP stream payload from the client.
+                 *
+                 * @param transmission  Active transmission channel.
+                 * @param connection_id FRP TCP sub-connection identifier.
+                 * @param in            True for inbound; false for outbound.
+                 * @param remote_port   Remote port number of the mapping.
+                 * @param packet        TCP stream payload buffer.
+                 * @param packet_length Payload length in bytes.
+                 * @return True on success.
+                 */
                 virtual bool                                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept override;
     
             private:    
-                SynchronizedObject                                                          syncobj_;
-                bool                                                                        disposed_ = false;
-                uint32_t                                                                    address_  = 0;
-                int                                                                         preferred_tun_fd_ = -1;
-                VirtualEthernetSwitcherPtr                                                  switcher_;
-                std::shared_ptr<Byte>                                                       buffer_;
-                FirewallPtr                                                                 firewall_;
-                TimeoutEventHandlerTable                                                    timeouts_;
-                VirtualInternetControlMessageProtocolPtr                                    echo_;
-                VirtualEthernetDatagramPortTable                                            datagrams_;
-                ITransmissionPtr                                                            transmission_;
-                VirtualEthernetManagedServerPtr                                             managed_server_;
-                ITransmissionStatisticsPtr                                                  statistics_last_;
-                VirtualEthernetMappingPortTable                                             mappings_;
-                ITransmissionStatisticsPtr                                                  statistics_;
-                std::shared_ptr<vmux::vmux_net>                                             mux_;
+                SynchronizedObject                                                          syncobj_;                   ///< Guards datagrams_, timeouts_, and mappings_.
+                bool                                                                        disposed_ = false;          ///< True after Dispose() is called.
+                uint32_t                                                                    address_  = 0;              ///< Client LAN IPv4 address registered in NAT table.
+                int                                                                         preferred_tun_fd_ = -1;     ///< Preferred TUN fd hint for the forwarding layer.
+                VirtualEthernetSwitcherPtr                                                  switcher_;                  ///< Parent switcher reference.
+                std::shared_ptr<Byte>                                                       buffer_;                    ///< Shared scratch buffer for packet processing.
+                FirewallPtr                                                                 firewall_;                  ///< Session-level firewall (may fall back to switcher-level).
+                TimeoutEventHandlerTable                                                    timeouts_;                  ///< Active DNS redirect timeout handlers.
+                VirtualInternetControlMessageProtocolPtr                                    echo_;                      ///< ICMP echo forwarding helper.
+                VirtualEthernetDatagramPortTable                                            datagrams_;                 ///< Active UDP relay ports keyed by source endpoint.
+                ITransmissionPtr                                                            transmission_;              ///< Active session transmission channel.
+                VirtualEthernetManagedServerPtr                                             managed_server_;            ///< Go managed-server bridge reference.
+                ITransmissionStatisticsPtr                                                  statistics_last_;           ///< Statistics snapshot from the previous upload tick.
+                VirtualEthernetMappingPortTable                                             mappings_;                  ///< Active FRP port-mapping objects.
+                ITransmissionStatisticsPtr                                                  statistics_;                ///< Current traffic statistics for this session.
+                std::shared_ptr<vmux::vmux_net>                                             mux_;                       ///< VMUX multiplexed sub-channel instance (may be null).
 
-                SynchronizedObject                                                          static_echo_syncobj_;
-                std::shared_ptr<VirtualInternetControlMessageProtocolStatic>                static_echo_;
-                VirtualEthernetStaticEchoAllocatedContextPtr                                static_allocated_context_;
-                boost::asio::ip::udp::endpoint                                              static_echo_source_ep_;
-                std::atomic<int>                                                            static_echo_session_id_ = 0;
-                VirtualEthernetDatagramPortStaticTable                                      static_echo_datagram_ports_;
+                SynchronizedObject                                                          static_echo_syncobj_;               ///< Guards all static_echo_* members below.
+                std::shared_ptr<VirtualInternetControlMessageProtocolStatic>                static_echo_;                       ///< Static-echo ICMP forwarding helper.
+                VirtualEthernetStaticEchoAllocatedContextPtr                                static_allocated_context_;          ///< Active static-echo allocation context.
+                boost::asio::ip::udp::endpoint                                              static_echo_source_ep_;             ///< Most-recent static-echo sender endpoint.
+                std::atomic<int>                                                            static_echo_session_id_ = 0;        ///< Atomic slot index for the static-echo session.
+                VirtualEthernetDatagramPortStaticTable                                      static_echo_datagram_ports_;        ///< Static-echo UDP relay ports (key = source_ip:port hash).
             };
         }
     }

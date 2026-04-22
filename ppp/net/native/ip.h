@@ -4,7 +4,11 @@
 #include <stdint.h>
 
 /// @file ip.h
-/// @brief IPv4 header structure, protocol constants, and helper utilities.
+/// @brief IPv4 header structure (RFC 791), protocol constants, and helper utilities.
+///
+/// All multi-byte fields inside `ip_hdr` are stored in network byte order
+/// (big-endian).  Use ntohs()/htons() for 16-bit fields and ntohl()/htonl()
+/// for 32-bit fields when reading or writing on little-endian hosts.
 
 namespace ppp {
     namespace net {

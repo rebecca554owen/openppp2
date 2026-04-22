@@ -37,27 +37,43 @@ namespace ppp {
                     /** @brief SOCKS5 proxy tunnel mode. */
                     ProtocolType_SocksProxy,
                 };
+                /** @brief Application configuration type alias. */
                 typedef ppp::configurations::AppConfiguration               AppConfiguration;
+                /** @brief Shared pointer to application configuration. */
                 typedef std::shared_ptr<AppConfiguration>                   AppConfigurationPtr;
+                /** @brief Coroutine yield context type. */
                 typedef ppp::coroutines::YieldContext                       YieldContext;
+                /** @brief Shared io_context pointer. */
                 typedef std::shared_ptr<boost::asio::io_context>            ContextPtr;
+                /** @brief Mutex type for internal synchronization. */
                 typedef std::mutex                                          SynchronizedObject;
+                /** @brief RAII lock guard for SynchronizedObject. */
                 typedef std::lock_guard<SynchronizedObject>                 SynchronizedObjectScope;
 #if defined(_LINUX)
+                /** @brief Linux socket protector for VPN bypass routing (Linux only). */
                 typedef std::shared_ptr<ppp::net::ProtectorNetwork>         ProtectorNetworkPtr;
 
             public:
+                /** @brief Optional socket protector that prevents VPN routing loops (Linux only). */
                 ProtectorNetworkPtr                                         ProtectorNetwork;
 #endif
 
             private:
+                /** @brief Internal forward declaration of the proxy connection helper class. */
                 class                                                       ProxyConnection;
+                /** @brief Shared proxy connection pointer. */
                 typedef std::shared_ptr<ProxyConnection>                    ProxyConnectionPtr;
+                /** @brief Table of active proxy connections keyed by raw pointer. */
                 typedef ppp::unordered_map<void*, ProxyConnectionPtr>       ProxyConnectionTable;
+                /** @brief Shared TCP socket pointer. */
                 typedef std::shared_ptr<boost::asio::ip::tcp::socket>       SocketPtr;
+                /** @brief Table of tracked sockets keyed by raw pointer. */
                 typedef ppp::unordered_map<void*, SocketPtr>                SocketTable;
+                /** @brief Timer type alias. */
                 typedef ppp::threading::Timer                               Timer;
+                /** @brief Shared timer pointer. */
                 typedef std::shared_ptr<Timer>                              TimerPtr;
+                /** @brief Table of one-shot timers keyed by raw Timer pointer. */
                 typedef ppp::unordered_map<void*, TimerPtr>                 TimerTable;
 
             public: 
@@ -173,6 +189,7 @@ namespace ppp {
                     int&                                                    overflow_length) noexcept;
 
             private:
+                /** @brief Mutex guarding sockets_, connections_, and timers_ tables. */
                 SynchronizedObject                                          syncobj_;
                 /**
                  * @brief Disposal flag.
@@ -181,22 +198,36 @@ namespace ppp {
                  *        avoid a data race between Finalize() and concurrent TryAdd() callers.
                  */
                 std::atomic<bool>                                           disposed_ = { false };
+                /** @brief Shared io_context used for all async accept/connect operations. */
                 ContextPtr                                                  context_;
+                /** @brief Runtime configuration providing timeouts and proxy settings. */
                 AppConfigurationPtr                                         configuration_;
                 /** @brief Cached upstream proxy and tunnel destination settings. */
                 struct {
+                    /** @brief Selected upstream proxy protocol (HTTP or SOCKS). */
                     ProtocolType                                            protocol;
+                    /** @brief Remote tunnel target host name. */
                     ppp::string                                             host;
+                    /** @brief Remote tunnel target port. */
                     int                                                     port = 0;
+                    /** @brief Upstream proxy authentication username. */
                     ppp::string                                             username;
+                    /** @brief Upstream proxy authentication password. */
                     ppp::string                                             password;
+                    /** @brief Full upstream proxy URL string. */
                     ppp::string                                             url;
+                    /** @brief Resolved upstream proxy endpoint. */
                     boost::asio::ip::tcp::endpoint                          endpoint;
                 }                                                           server_;
+                /** @brief Tracked one-shot timeout timers keyed by raw Timer pointer. */
                 TimerTable                                                  timers_;
+                /** @brief Tracked accepted local sockets awaiting upstream connection. */
                 SocketTable                                                 sockets_;
+                /** @brief Active bidirectional proxy connections keyed by raw pointer. */
                 ProxyConnectionTable                                        connections_;
+                /** @brief Loopback TCP acceptor that receives local client connections. */
                 boost::asio::ip::tcp::acceptor                              acceptor_;
+                /** @brief Cached local endpoint exposed to clients after bind. */
                 boost::asio::ip::tcp::endpoint                              local_endpoint_;
             };
         }

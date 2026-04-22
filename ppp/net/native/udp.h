@@ -2,7 +2,10 @@
 
 /**
  * @file udp.h
- * @brief Defines the native IPv4 UDP header layout and parser.
+ * @brief Defines the native IPv4 UDP header layout (RFC 768) and parser.
+ *
+ * All multi-byte fields inside `udp_hdr` are stored in network byte order
+ * (big-endian).  Use ntohs()/htons() for host-byte-order access.
  */
 
 #include <memory>
@@ -14,6 +17,13 @@ namespace ppp {
     namespace net {
         namespace native {
 #pragma pack(push, 1)
+            /**
+             * @brief IPv4 UDP datagram header (RFC 768).
+             *
+             * All fields are in network byte order (big-endian).
+             * Use ntohs()/htons() for host-byte-order conversion.
+             * The packed attribute ensures no compiler-inserted padding.
+             */
             struct 
 #if defined(__GNUC__) || defined(__clang__)
                 __attribute__((packed)) 

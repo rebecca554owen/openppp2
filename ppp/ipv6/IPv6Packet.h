@@ -117,9 +117,7 @@ namespace ppp {
             int full_bytes = prefix_length / 8;
             int remainder_bits = prefix_length % 8;
             if (full_bytes < 16) {
-                /**
-                 * @brief Applies a partial-byte bitmask when the prefix is not byte-aligned.
-                 */
+                // Apply a partial-byte bitmask when the prefix is not byte-aligned.
                 if (remainder_bits != 0) {
                     unsigned char mask = static_cast<unsigned char>(0xff << (8 - remainder_bits));
                     bytes[full_bytes] &= mask;

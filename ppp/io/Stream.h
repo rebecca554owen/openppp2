@@ -18,6 +18,11 @@ namespace ppp {
         public:
             /**
              * @brief Optional allocator used by concrete stream implementations.
+             *
+             * When non-null, internal buffer allocations are routed through this
+             * object (backed by jemalloc) instead of the global heap.  Set by the
+             * caller before the first read/write to keep allocations consistent
+             * with the surrounding pipeline.
              */
             std::shared_ptr<ppp::threading::BufferswapAllocator>    BufferAllocator;
 

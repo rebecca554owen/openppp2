@@ -22,14 +22,10 @@ namespace ppp
         struct LinkedListNode
         {
         public:
-            /** Previous node in the list. */
-         	std::shared_ptr<LinkedListNode<T> > Previous;
-            /** Next node in the list. */
-         	std::shared_ptr<LinkedListNode<T> > Next;
-            /** Value stored by this node. */
-         	T                                   Value;
-            /** Owning list pointer, or null when detached. */
-         	LinkedList<T>*                      LinkedList_;
+            std::shared_ptr<LinkedListNode<T> > Previous;  ///< Pointer to the preceding node; null for the head node.
+            std::shared_ptr<LinkedListNode<T> > Next;      ///< Pointer to the following node; null for the tail node.
+            T                                   Value;     ///< User-supplied value stored in this node.
+            LinkedList<T>*                      LinkedList_; ///< Raw back-pointer to the owning list; null when detached.
         };
 
         /**

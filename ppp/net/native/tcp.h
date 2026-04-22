@@ -2,7 +2,13 @@
 
 /**
  * @file tcp.h
- * @brief Defines the native IPv4 TCP header layout and helper accessors.
+ * @brief Defines the native IPv4 TCP header layout (RFC 793) and helper accessors.
+ *
+ * All multi-byte fields inside `tcp_hdr` are stored in network byte order
+ * (big-endian).  Use ntohs()/htons() for 16-bit fields and ntohl()/htonl()
+ * for 32-bit fields when reading or writing on little-endian hosts.
+ *
+ * @see https://android.googlesource.com/kernel/msm/+/android-msm-hammerhead-3.4-marshmallow-mr2/include/linux/tcp.h
  */
 
 #include <ppp/net/native/ip.h>
@@ -13,30 +19,27 @@ namespace ppp {
         namespace native {
 #pragma pack(push, 1)
             /*
-             * typedef struct _tcp_hdr  
-             * {  
-             *     unsigned short src_port;    //源端口号   
-             *     unsigned short dst_port;    //目的端口号   
-             *     unsigned int seq_no;        //序列号   
-             *     unsigned int ack_no;        //确认号   
-             *     #if LITTLE_ENDIAN   
-             *     unsigned char reserved_1:4; //保留6位中的4位首部长度   
-             *     unsigned char thl:4;        //tcp头部长度   
-             *     unsigned char flag:6;       //6位标志   
-             *     unsigned char reseverd_2:2; //保留6位中的2位   
-             *     #else   
-             *     unsigned char thl:4;        //tcp头部长度   
-             *     unsigned char reserved_1:4; //保留6位中的4位首部长度   
-             *     unsigned char reseverd_2:2; //保留6位中的2位   
-             *     unsigned char flag:6;       //6位标志    
-             *     #endif   
-             *     unsigned short wnd_size;    //16位窗口大小   
-             *     unsigned short chk_sum;     //16位TCP检验和   
-             *     unsigned short urgt_p;      //16为紧急指针   
-             * } tcp_hdr;  
+             * Reference layout of the TCP header fields (RFC 793):
+             *
+             *   src_port    (16 bits) – source port
+             *   dst_port    (16 bits) – destination port
+             *   seq_no      (32 bits) – sequence number
+             *   ack_no      (32 bits) – acknowledgment number
+             *   thl         ( 4 bits) – TCP header length (in 32-bit words)
+             *   reserved    ( 6 bits) – reserved bits (must be zero)
+             *   flag        ( 6 bits) – control flags (see tcp_flags enum)
+             *   wnd_size    (16 bits) – receive window size
+             *   chk_sum     (16 bits) – TCP checksum
+             *   urgt_p      (16 bits) – urgent pointer
              */
 
-            // https://android.googlesource.com/kernel/msm/+/android-msm-hammerhead-3.4-marshmallow-mr2/include/linux/tcp.h
+            /**
+             * @brief IPv4 TCP segment header (RFC 793).
+             *
+             * All multi-byte fields are stored in network byte order (big-endian).
+             * Use ntohs()/ntohl()/htons()/htonl() for host-side access.
+             * The packed attribute ensures no padding is inserted by the compiler.
+             */
             struct 
 #if defined(__GNUC__) || defined(__clang__)
                 __attribute__((packed)) 
@@ -47,30 +50,30 @@ namespace ppp {
                  * @brief TCP control flags stored in the low bits of @ref hdrlen_rsvd_flags.
                  */
                 enum tcp_flags {
-                    TCP_FIN                     = 0x01,
-                    TCP_SYN                     = 0x02,
-                    TCP_RST                     = 0x04,
-                    TCP_PSH                     = 0x08,
-                    TCP_ACK                     = 0x10,
-                    TCP_UGR                     = 0x20,
-                    TCP_ECE                     = 0x40,
-                    TCP_CWR                     = 0x80,
-                    TCP_FLAGS                   = 0x3f
+                    TCP_FIN                     = 0x01, ///< FIN – no more data from sender.
+                    TCP_SYN                     = 0x02, ///< SYN – synchronize sequence numbers.
+                    TCP_RST                     = 0x04, ///< RST – reset the connection.
+                    TCP_PSH                     = 0x08, ///< PSH – push buffered data immediately.
+                    TCP_ACK                     = 0x10, ///< ACK – acknowledgment field is valid.
+                    TCP_UGR                     = 0x20, ///< URG – urgent pointer field is valid.
+                    TCP_ECE                     = 0x40, ///< ECE – ECN-Echo (RFC 3168).
+                    TCP_CWR                     = 0x80, ///< CWR – Congestion Window Reduced (RFC 3168).
+                    TCP_FLAGS                   = 0x3f  ///< Mask covering all standard flag bits.
                 };
 
                 /**
                  * @brief Common TCP connection states used by higher-level logic.
                  */
                 enum tcp_state {
-                    TCP_STATE_CLOSED,
-                    TCP_STATE_SYN_SENT,
-                    TCP_STATE_SYN_RECEIVED,
-                    TCP_STATE_ESTABLISHED,
-                    TCP_STATE_FIN_WAIT1,
-                    TCP_STATE_FIN_WAIT2,
-                    TCP_STATE_TIME_WAIT,
-                    TCP_STATE_CLOSE_WAIT,
-                    TCP_STATE_LAST_ACK,
+                    TCP_STATE_CLOSED,           ///< No connection state.
+                    TCP_STATE_SYN_SENT,         ///< Active open; SYN sent, waiting for SYN-ACK.
+                    TCP_STATE_SYN_RECEIVED,     ///< SYN received; SYN-ACK sent.
+                    TCP_STATE_ESTABLISHED,      ///< Open connection; data transfer in progress.
+                    TCP_STATE_FIN_WAIT1,        ///< FIN sent; waiting for FIN or ACK.
+                    TCP_STATE_FIN_WAIT2,        ///< ACK received; waiting for remote FIN.
+                    TCP_STATE_TIME_WAIT,        ///< Waiting for remaining packets to expire.
+                    TCP_STATE_CLOSE_WAIT,       ///< Remote FIN received; waiting for application close.
+                    TCP_STATE_LAST_ACK,         ///< FIN sent after CLOSE_WAIT; waiting for final ACK.
                 };
 
             public:

@@ -48,15 +48,21 @@ namespace ppp
             typedef ppp::function<bool(ITap*, PacketInputEventArgs&)>       PacketInputEventHandler;
 
         public:
+            /** @brief Local IPv4 address assigned to the virtual network interface. */
             const uint32_t                                                  IPAddress      = ppp::net::IPEndPoint::AnyAddress;
+            /** @brief IPv4 address of the default gateway routed via this adapter. */
             const uint32_t                                                  GatewayServer  = ppp::net::IPEndPoint::AnyAddress;
+            /** @brief Subnet mask applied to the local interface address. */
             const uint32_t                                                  SubmaskAddress = ppp::net::IPEndPoint::AnyAddress;
 
         public:
+            /** @brief Inbound packet event handler; invoked for every packet received from the device. */
             PacketInputEventHandler                                         PacketInput;
+            /** @brief Shared swap-based memory allocator for packet buffer lifetimes. */
             std::shared_ptr<ppp::threading::BufferswapAllocator>            BufferAllocator;
 
         public:
+            /** @brief Maximum transmission unit in bytes, equal to the IP header MTU constant. */
             static constexpr int                                            Mtu = ppp::net::native::ip_hdr::MTU;
 
         public:
@@ -120,10 +126,15 @@ namespace ppp
             virtual bool                                                    Output(const void* packet, int packet_size) noexcept;
 
         public:
+            /** @brief Returns the device identifier string. */
             const ppp::string&                                              GetId() noexcept             { return _id; }
+            /** @brief Returns the io_context used by this adapter. */
             std::shared_ptr<boost::asio::io_context>                        GetContext() noexcept        { return _context; }
+            /** @brief Returns the native device handle or backend pointer. */
             void*                                                           GetHandle() noexcept         { return _handle; }
+            /** @brief Returns a mutable reference to the OS network interface index. */
             int&                                                            GetInterfaceIndex() noexcept { return _interface_index; }
+            /** @brief Returns whether hosted-network (bridged) mode is active. */
             bool                                                            IsHostedNetwork() noexcept   { return _hosted_network; }
 
         public:
@@ -181,16 +192,24 @@ namespace ppp
             void                                                            Finalize() noexcept;
 
         private:
+            /** @brief Platform device identifier string (e.g., GUID on Windows, "tun0" on Linux). */
             ppp::string                                                     _id;
             struct {
+                /** @brief Set while the adapter read loop is active. */
                 bool                                                        _opening         : 1;
+                /** @brief Set when hosted-network (bridged) mode is requested. */
                 bool                                                        _hosted_network  : 7;
             };
 
+            /** @brief Opaque native device handle or driver object pointer. */
             void*                                                           _handle          = NULLPTR;
+            /** @brief OS-assigned network interface index (e.g., from if_nametoindex). */
             int                                                             _interface_index = -1;
+            /** @brief Asio POSIX stream descriptor wrapping the TAP/TUN file descriptor. */
             std::shared_ptr<boost::asio::posix::stream_descriptor>          _stream;
+            /** @brief Shared io_context used for all asynchronous read/write operations. */
             std::shared_ptr<boost::asio::io_context>                        _context;
+            /** @brief Reusable MTU-sized buffer for single-copy packet reads. */
             Byte                                                            _packet[ITap::Mtu];
         };
     }

@@ -111,6 +111,7 @@ int PppApplication::PullIPList(const ppp::string& url, ppp::set<ppp::string>& ip
     bool https = false;
 
     if (!HttpClient::VerifyUri(url, ppp::addressof(host), &port, ppp::addressof(path), &https)) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
         return -1;
     }
 
@@ -119,6 +120,7 @@ int PppApplication::PullIPList(const ppp::string& url, ppp::set<ppp::string>& ip
     int http_status_code = -1;
     std::string http_response_body = http_client.Get(path, http_status_code);
     if (http_status_code < 200 || http_status_code >= 300) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
         return -1;
     }
 
