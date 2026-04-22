@@ -928,7 +928,11 @@ namespace vmux {
             return false;
         }
 
-        vmux_post_exec(context_, strand_,
+        // Guard Suspend() behind the post result: if the executor is unavailable the
+        // lambda (and every ppp::coroutines::asio::R() inside it) will never run, so
+        // calling Suspend() would park the coroutine with no future Resume() – a
+        // permanent coroutine leak.
+        bool posted = vmux_post_exec(context_, strand_,
             [this, sk, host, port, status, context, strand, return_connection, &y]() noexcept {
                 bool ok = connect(context, strand, sk, host, port,
                     [status, return_connection, &y](vmux_skt* sender, bool success) noexcept {
@@ -943,6 +947,10 @@ namespace vmux {
                     ppp::coroutines::asio::R(y, *status, false);
                 }
             });
+
+        if (!posted) {
+            return false;
+        }
 
         y.Suspend();
         return status->load() > 0;

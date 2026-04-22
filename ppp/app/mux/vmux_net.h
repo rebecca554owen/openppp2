@@ -238,11 +238,19 @@ namespace vmux {
          */
         bool                                                                        do_yield(ppp::coroutines::YieldContext& y, YieldHandler&& h) noexcept {
             bool ok = false;
-            vmux_post_exec(context_, strand_,
+
+            // Guard Suspend() behind the post result: if the executor is unavailable the
+            // lambda (and the y.R() inside it) will never run, so calling Suspend() would
+            // park the coroutine with no future Resume() – a permanent coroutine leak.
+            bool posted = vmux_post_exec(context_, strand_,
                 [&y, &ok, h]() noexcept {
                     ok = h();
                     y.R();
                 });
+
+            if (!posted) {
+                return false;
+            }
 
             y.Suspend();
             return ok;

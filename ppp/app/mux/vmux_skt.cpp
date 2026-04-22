@@ -487,7 +487,12 @@ namespace vmux {
         }
 
         auto self = shared_from_this();
-        vmux_post_exec(mux_->context_, mux_->strand_,
+
+        // Guard Suspend() behind the post result: if the executor is unavailable the
+        // lambda (and every ppp::coroutines::asio::R() inside it) will never run, so
+        // calling Suspend() would park the coroutine with no future Resume() – a
+        // permanent coroutine leak.
+        bool posted = vmux_post_exec(mux_->context_, mux_->strand_,
             [self, this, packet, packet_length, status, &y]() noexcept {
                 bool forwarding = 
                     send_to_peer(packet, packet_length, 
@@ -499,6 +504,10 @@ namespace vmux {
                     ppp::coroutines::asio::R(y, *status, false);
                 }
             });
+
+        if (!posted) {
+            return false;
+        }
 
         y.Suspend();
         return status->load() > 0;
