@@ -46,8 +46,16 @@ namespace ppp {
                 ppp::string                                         ToJson() noexcept;
                 /** @brief Serializes this object into formatted JSON text. */
                 ppp::string                                         ToString() noexcept;
-                /** @brief Checks validity against current time. */
-                bool                                                Valid() noexcept                                          { return Valid((UInt32)(GetTickCount() / 1000)); }
+                /**
+                 * @brief Checks validity against current wall-clock time.
+                 *
+                 * Uses time(NULL) (Unix epoch seconds) instead of
+                 * GetTickCount()/1000 because ExpiredTime is a Unix timestamp
+                 * issued by the server.  The monotonic clock used by
+                 * GetTickCount() carries no fixed relationship to Unix time
+                 * and must not be used here.
+                 */
+                bool                                                Valid() noexcept                                          { return Valid((UInt32)time(nullptr)); }
                 /** @brief Checks validity against a provided timestamp. */
                 bool                                                Valid(UInt32 now) noexcept                                { return Valid(this, now); }
                 /** @brief Validates quotas and expiration values for a data instance. */

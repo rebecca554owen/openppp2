@@ -280,9 +280,9 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
-        /** @brief Cancels pending deadline timer operations. */
-        void Socket::Cancel(const boost::asio::deadline_timer& deadline_timer) noexcept {
-            boost::asio::deadline_timer& t = constantof(deadline_timer);
+        /** @brief Cancels pending steady (monotonic) timer operations. */
+        void Socket::Cancel(const boost::asio::steady_timer& deadline_timer) noexcept {
+            boost::asio::steady_timer& t = constantof(deadline_timer);
             boost::system::error_code ec;
             try {
                 t.cancel(ec);

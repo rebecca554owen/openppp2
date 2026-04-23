@@ -126,9 +126,9 @@ namespace ppp {
                 typedef ppp::cryptography::Ciphertext                                   Ciphertext;
                 /** @brief Shared pointer alias for ciphertext objects. */
                 typedef std::shared_ptr<Ciphertext>                                     CiphertextPtr;
-                /** @brief Shared pointer alias for Boost deadline timers. */
-                typedef std::shared_ptr<boost::asio::deadline_timer>                    DeadlineTimerPtr;
-                /** @brief Map from opaque key to Boost deadline timer. */
+                /** @brief Shared pointer alias for Boost steady (monotonic) timers. */
+                typedef std::shared_ptr<boost::asio::steady_timer>                      DeadlineTimerPtr;
+                /** @brief Map from opaque key to Boost steady timer. */
                 typedef ppp::unordered_map<void*, DeadlineTimerPtr>                     DeadlineTimerTable;
 
             public:
@@ -741,7 +741,7 @@ namespace ppp {
                  * @param deadline_timer  Pointer used as the table key.
                  * @return true if the timer was found and cancelled; false otherwise.
                  */
-                bool                                                                    ReleaseDeadlineTimer(const boost::asio::deadline_timer* deadline_timer) noexcept;
+                bool                                                                    ReleaseDeadlineTimer(const boost::asio::steady_timer* deadline_timer) noexcept;
 
                 /**
                  * @brief Creates a one-shot deadline timer and tracks it internally.

@@ -60,7 +60,7 @@ namespace ppp {
              * @param durationType Unit of @p interval.
              * @return Boost.Asio deadline timer duration.
              */
-            static boost::asio::deadline_timer::duration_type                                               DurationTime(long long int interval, DurationType durationType = kDefaultDurationType) noexcept;
+            static boost::asio::steady_timer::duration                                                      DurationTime(long long int interval, DurationType durationType = kDefaultDurationType) noexcept;
 
         public:
             /** @brief Creates a timer without binding an external io_context. */
@@ -158,8 +158,8 @@ namespace ppp {
             int                                                                                             _interval  = 0;
             /** @brief Execution context used by the timer. */
             std::shared_ptr<boost::asio::io_context>                                                        _context;
-            /** @brief Underlying Boost.Asio deadline timer instance. */
-            std::shared_ptr<boost::asio::deadline_timer>                                                    _deadline_timer;                                                                 
+            /** @brief Underlying Boost.Asio steady (monotonic) timer instance. */
+            std::shared_ptr<boost::asio::steady_timer>                                                      _deadline_timer;                                                                 
         };
     }
 }

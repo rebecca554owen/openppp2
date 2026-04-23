@@ -76,7 +76,7 @@ namespace ppp {
             }
 
             _last = 0;
-            _deadline_timer = make_shared_object<boost::asio::deadline_timer>(*_context);
+            _deadline_timer = make_shared_object<boost::asio::steady_timer>(*_context);
             return Next();
         }
 
@@ -89,7 +89,7 @@ namespace ppp {
                 return false;
             }
 
-            std::shared_ptr<boost::asio::deadline_timer> t = _deadline_timer;
+            std::shared_ptr<boost::asio::steady_timer> t = _deadline_timer;
             if (NULLPTR == t) {
                 return false;
             }
@@ -98,7 +98,7 @@ namespace ppp {
             }
 
             std::shared_ptr<Timer> self = GetReference();
-            boost::asio::deadline_timer::duration_type durationTime = Timer::DurationTime(_interval);
+            boost::asio::steady_timer::duration durationTime = Timer::DurationTime(_interval);
             t->expires_from_now(durationTime);
             /**
              * @brief Wait callback that raises tick and chains subsequent scheduling.
@@ -122,7 +122,7 @@ namespace ppp {
          * @return true when a timer instance was active; otherwise false.
          */
         bool Timer::Stop() noexcept {
-            std::shared_ptr<boost::asio::deadline_timer> t = std::move(_deadline_timer);
+            std::shared_ptr<boost::asio::steady_timer> t = std::move(_deadline_timer);
             if (t) {
                 ppp::net::Socket::Cancel(*t);
             }
@@ -216,24 +216,26 @@ namespace ppp {
         }
 
         /**
-         * @brief Converts interval and unit into a Boost deadline timer duration.
+         * @brief Converts interval and unit into a monotonic steady timer duration.
          * @param interval Duration value.
          * @param durationType Duration unit selector.
-         * @return Converted Boost duration.
+         * @return Converted std::chrono-based duration (monotonic, immune to wall-clock jumps).
+         * @note  Uses std::chrono so the timer is armed against CLOCK_MONOTONIC/steady_clock,
+         *        avoiding wraparound when the system wall clock is adjusted forward/backward.
          */
-        boost::asio::deadline_timer::duration_type Timer::DurationTime(long long int interval, DurationType durationType) noexcept {
+        boost::asio::steady_timer::duration Timer::DurationTime(long long int interval, DurationType durationType) noexcept {
             switch (static_cast<int>(durationType))
             {
             case 0:
-                return boost::posix_time::hours(interval);
+                return std::chrono::hours(interval);
             case 1:
-                return boost::posix_time::minutes(interval);
+                return std::chrono::minutes(interval);
             case 2:
-                return boost::posix_time::seconds(interval);
+                return std::chrono::seconds(interval);
             case 3:
-                return boost::posix_time::milliseconds(interval);
+                return std::chrono::milliseconds(interval);
             default:
-                return boost::posix_time::milliseconds(interval);
+                return std::chrono::milliseconds(interval);
             };
         }
 
@@ -301,9 +303,9 @@ namespace ppp {
             }
 
             boost::asio::strand<boost::asio::io_context::executor_type>* strand = y.GetStrand();
-            std::shared_ptr<boost::asio::deadline_timer> deadlineTimer = strand ? 
-                make_shared_object<boost::asio::deadline_timer>(*strand) : 
-                make_shared_object<boost::asio::deadline_timer>(y.GetContext());
+            std::shared_ptr<boost::asio::steady_timer> deadlineTimer = strand ? 
+                make_shared_object<boost::asio::steady_timer>(*strand) : 
+                make_shared_object<boost::asio::steady_timer>(y.GetContext());
 
             if (NULLPTR == deadlineTimer) {
                 return false;
@@ -318,7 +320,7 @@ namespace ppp {
                     });
             }
             else {
-                boost::asio::deadline_timer::duration_type durationTime = Timer::DurationTime(milliseconds);
+                boost::asio::steady_timer::duration durationTime = Timer::DurationTime(milliseconds);
                 deadlineTimer->expires_from_now(durationTime);
                 deadlineTimer->async_wait(
                     [&y, &ok](const boost::system::error_code& ec) noexcept {

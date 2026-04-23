@@ -1343,7 +1343,7 @@ namespace ppp {
             }
 
             auto self = shared_from_this();
-            timer->expires_from_now(boost::posix_time::milliseconds(expire_ms));
+            timer->expires_from_now(std::chrono::milliseconds(expire_ms));
 
             // FIXED: async_wait handler must return void.
             timer->async_wait(

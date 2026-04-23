@@ -28,8 +28,8 @@ namespace ppp {
             /** @brief QoS helper requires direct access to transmission internals. */
             friend class ITransmissionQoS;
 
-            /** @brief Deadline timer type used for handshake timeout control. */
-            typedef boost::asio::deadline_timer                                                     DeadlineTimer;
+            /** @brief Deadline timer type used for handshake timeout control (monotonic, immune to wall-clock jumps). */
+            typedef boost::asio::steady_timer                                                       DeadlineTimer;
             /** @brief Shared deadline timer pointer. */
             typedef std::shared_ptr<DeadlineTimer>                                                  DeadlineTimerPtr;
 

@@ -314,10 +314,10 @@ namespace ppp {
 
         public:
             /**
-             * @brief Cancels pending operations on a deadline timer.
+             * @brief Cancels pending operations on a monotonic steady timer.
              * @param socket  Timer to cancel; already-expired timers are unaffected.
              */
-            static void                                                                                 Cancel(const boost::asio::deadline_timer& socket) noexcept;
+            static void                                                                                 Cancel(const boost::asio::steady_timer& socket) noexcept;
             /**
              * @brief Cancels pending operations on a UDP socket.
              * @param socket  UDP socket whose outstanding async operations are cancelled.

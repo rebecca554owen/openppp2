@@ -286,8 +286,8 @@ namespace ppp {
                     boost::asio::ip::udp::endpoint                                              source;
                     boost::asio::io_context&                                                    executor;
                     std::shared_ptr<boost::asio::ip::udp::socket>                               socket;
-                    boost::asio::deadline_timer                                                 timeout_timer;
-                    std::shared_ptr<boost::asio::deadline_timer>                                merge_timer;
+                    boost::asio::steady_timer                                                   timeout_timer;
+                    std::shared_ptr<boost::asio::steady_timer>                                  merge_timer;
                     SynchronizedObject                                                          merge_timer_mutex; // Protects merge_timer creation/destruction
 
                     // Per-address-family state
@@ -358,7 +358,7 @@ namespace ppp {
                         }
 
                         // Cancel timeout timer – it will not fire after this point.
-                        timeout_timer.expires_from_now(boost::posix_time::seconds(0));
+                        timeout_timer.expires_from_now(std::chrono::seconds(0));
 
                         Socket::Cancel(timeout_timer);
                         if (NULLPTR != socket) {
@@ -468,11 +468,11 @@ namespace ppp {
                             // timer object is owned atomically, capture a local copy of the shared_ptr,
                             // then call async_wait() AFTER the lock is released so the callback can
                             // safely re-acquire merge_timer_mutex inside finish().
-                            std::shared_ptr<boost::asio::deadline_timer> pending_timer;
+                            std::shared_ptr<boost::asio::steady_timer> pending_timer;
                             {
                                 SynchronizedObjectScope lock(merge_timer_mutex);
                                 if (NULLPTR == merge_timer) {
-                                    merge_timer = make_shared_object<boost::asio::deadline_timer>(executor);
+                                    merge_timer = make_shared_object<boost::asio::steady_timer>(executor);
                                     if (NULLPTR != merge_timer) {
                                         merge_timer->expires_from_now(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
                                         pending_timer = merge_timer; // capture before releasing lock

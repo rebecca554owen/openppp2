@@ -209,12 +209,23 @@
         return (u32_t)(now);
     }
 #elif __linux
-    #include <sys/time.h>
+    #include <time.h>
+    /**
+     * @brief Returns a monotonic millisecond timestamp for lwIP timers.
+     *
+     * Switched from gettimeofday (wall clock, CLOCK_REALTIME) to
+     * clock_gettime(CLOCK_MONOTONIC) so that lwIP internal timers are immune
+     * to system-time adjustments.  lwIP only ever uses the *difference*
+     * between two sys_now() samples, and the u32_t wraparound at ~49 days is
+     * handled correctly by unsigned subtraction throughout lwIP's timer code.
+     *
+     * @return Milliseconds since an arbitrary monotonic epoch (u32_t, wraps at ~49 days).
+     */
     u32_t sys_now(void)
     {
-        struct timeval te;
-        gettimeofday(&te, NULL);
-        return te.tv_sec*1000LL + te.tv_usec/1000;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (u32_t)((uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL);
     }
 #elif __unix // all unices not caught above
     // Unix

@@ -973,9 +973,22 @@ namespace ppp {
         return rdx;
     }
 
-    /** @brief Returns current system tick in milliseconds since epoch. */
+    /**
+     * @brief Returns a monotonic tick count in milliseconds.
+     *
+     * Uses std::chrono::steady_clock so the value is immune to system-time
+     * adjustments (NTP steps, manual clock changes, DST, etc.).  The epoch
+     * is arbitrary (typically process start or OS boot); callers must only
+     * rely on *differences* between two calls, never on the absolute value.
+     *
+     * @note  All internal timeout and expiration calculations depend on this
+     *        function.  Keeping it monotonic prevents two failure modes:
+     *        - Clock moved forward  → all sessions instantly expire.
+     *        - Clock moved backward → sessions never expire (resource leak).
+     * @return Milliseconds elapsed since an arbitrary monotonic epoch.
+     */
     uint64_t GetTickCount() noexcept {
-        std::chrono::time_point now = std::chrono::system_clock::now(); /* high_resolution_clock */
+        std::chrono::time_point now = std::chrono::steady_clock::now();
         return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
     }
 

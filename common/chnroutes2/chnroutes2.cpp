@@ -270,7 +270,7 @@ static ppp::function<void()> http_easy_timeout(const std::shared_ptr<boost::asio
         milliseconds = 0;
     }
 
-    auto t = ppp::make_shared_object<boost::asio::deadline_timer>(socket->get_executor());
+    auto t = ppp::make_shared_object<boost::asio::steady_timer>(socket->get_executor());
     if (NULLPTR == t) {
         return NULLPTR;
     }

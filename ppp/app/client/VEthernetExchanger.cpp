@@ -838,7 +838,7 @@ namespace ppp {
             }
 
             /** @brief Removes a deadline timer from tracking table and cancels it. */
-            bool VEthernetExchanger::ReleaseDeadlineTimer(const boost::asio::deadline_timer* deadline_timer) noexcept {
+            bool VEthernetExchanger::ReleaseDeadlineTimer(const boost::asio::steady_timer* deadline_timer) noexcept {
                 if (NULLPTR == deadline_timer) {
                     return false;
                 }
@@ -860,7 +860,7 @@ namespace ppp {
 
             /** @brief Creates and tracks one asynchronous deadline timer. */
             bool VEthernetExchanger::NewDeadlineTimer(const ContextPtr& context, int64_t timeout, const ppp::function<void(bool)>& event) noexcept {
-                std::shared_ptr<boost::asio::deadline_timer> t = make_shared_object<boost::asio::deadline_timer>(*context);
+                std::shared_ptr<boost::asio::steady_timer> t = make_shared_object<boost::asio::steady_timer>(*context);
                 if (NULLPTR == t) {
                     return false;
                 }
@@ -874,7 +874,7 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                boost::asio::deadline_timer* deadline_timer = t.get();
+                boost::asio::steady_timer* deadline_timer = t.get();
 
                 t->expires_from_now(Timer::DurationTime(timeout));
                 t->async_wait(

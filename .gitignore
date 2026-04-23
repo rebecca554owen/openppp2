@@ -67,7 +67,10 @@ android/build/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+nul
 ppp.log
+
 /ppp/x64
 /ppp/Debug
 /ppp/Release

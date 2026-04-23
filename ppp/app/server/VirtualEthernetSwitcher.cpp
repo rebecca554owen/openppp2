@@ -1565,7 +1565,9 @@ namespace ppp {
                     }
                     run = channel->DoInformation(transmission, envelope, y);
                     if (run) {
-                        run = VirtualEthernetInformation::Valid(const_cast<VirtualEthernetInformation*>(established_information), (UInt32)(GetTickCount() / 1000));
+                        // Use Unix wall-clock time (time(NULL)) to compare against the server-issued
+                        // ExpiredTime Unix timestamp.  GetTickCount() is monotonic and must not be used here.
+                        run = VirtualEthernetInformation::Valid(const_cast<VirtualEthernetInformation*>(established_information), (UInt32)time(NULL));
                     }
                 }
 

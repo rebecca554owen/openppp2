@@ -14,7 +14,7 @@ namespace aggligator
 {
     using Byte                                                              = ppp::Byte;                                            // 8-bit unsigned byte
     using acceptor                                                          = std::shared_ptr<boost::asio::ip::tcp::acceptor>;      // TCP acceptor shared pointer
-    using deadline_timer                                                    = std::shared_ptr<boost::asio::deadline_timer>;         // Deadline timer shared pointer
+    using deadline_timer                                                    = std::shared_ptr<boost::asio::steady_timer>;           // Steady (monotonic) timer shared pointer; immune to wall-clock adjustments
     using YieldContext                                                      = ppp::coroutines::YieldContext;                        // Coroutine yield context
 
     using string = ppp::string;                                             // String type alias
