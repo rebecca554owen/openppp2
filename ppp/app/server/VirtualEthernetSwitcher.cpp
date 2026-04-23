@@ -91,7 +91,10 @@ static bool TryGetFirstHostIPv6(const boost::asio::ip::address_v6& network, int 
  * @return true if the candidate is assignable; otherwise false.
  */
 static bool IsAssignableClientIPv6Address(const boost::asio::ip::address_v6& address, int prefix_length, const boost::asio::ip::address_v6* gateway = NULLPTR) noexcept {
-    if (address.is_unspecified() || address.is_multicast() || address.is_loopback()) {
+    // Reject well-known non-routable or reserved address categories.
+    // Link-local (fe80::/10) must be excluded: they are interface-scoped and
+    // cannot be used as globally routable client addresses across the VPN.
+    if (address.is_unspecified() || address.is_multicast() || address.is_loopback() || address.is_link_local()) {
         return false;
     }
 
@@ -638,6 +641,11 @@ namespace ppp {
                         boost::asio::ip::address static_address = StringToAddress(static_it->second, ec);
                         if (!ec && static_address.is_v6()) {
                             if (!try_commit_ipv6_lease(static_address.to_v6(), true, VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned, "static-binding")) {
+                                // Populate extensions error fields so the caller / client can
+                                // distinguish a static-binding conflict from other failure modes.
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
+                                extensions.IPv6StatusCode    = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
+                                extensions.IPv6StatusMessage = "gua-static-binding-conflict";
                                 return false;
                             }
                         }
@@ -709,10 +717,6 @@ namespace ppp {
                 boost::asio::ip::address dns2 = StringToAddress(ipv6.dns2, ec);
                 if (!ec && dns2.is_v6()) {
                     extensions.AssignedIPv6Dns2 = dns2;
-                }
-
-
-                if (mode == AppConfiguration::IPv6Mode_Gua) {
                 }
 
                 if (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
@@ -833,13 +837,16 @@ namespace ppp {
 
                 {
                     SynchronizedObjectScope scope(syncobj_);
-                    for (const auto& kv : ipv6s_) {
-                        if (!kv.second || session_id != kv.second->GetId() || kv.first == ip_key) {
-                            continue;
+                    // O(1) check: if this session already has a lease for a different address,
+                    // reject the binding to avoid a session owning multiple IPv6 entries in ipv6s_.
+                    auto lease_it = ipv6_leases_.find(session_id);
+                    if (lease_it != ipv6_leases_.end() && lease_it->second.Address.is_v6()) {
+                        std::string existing_std = lease_it->second.Address.to_string();
+                        ppp::string existing_key(existing_std.data(), existing_std.size());
+                        if (existing_key != ip_key) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
+                            return false;
                         }
-
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
-                        return false;
                     }
 
                     auto existing = ipv6s_.find(ip_key);
@@ -943,43 +950,59 @@ namespace ppp {
                 bool released_any = false;
 
                 /**
-                 * @note syncobj_ is already held for the duration of this scope.
-                 *       RevokeIPv6Lease() MUST NOT be called here because it also
-                 *       acquires syncobj_ — doing so on a non-recursive std::mutex
-                 *       would cause an immediate self-deadlock on the calling thread.
-                 *       Instead, the lease/request erasure is inlined directly inside
-                 *       this existing lock region to satisfy the same invariant without
-                 *       re-entering the mutex.
+                 * @note  Two-phase pattern: IPv6 addresses to clean up are collected and
+                 *        map entries are erased while syncobj_ is held; the blocking
+                 *        DeleteIPv6TransitRoute() / DeleteIPv6NeighborProxy() shell commands
+                 *        (fork+exec) are then executed OUTSIDE the lock.  This avoids
+                 *        holding syncobj_ across operations that can block for 10s–100s of ms.
+                 *
+                 *        RevokeIPv6Lease() MUST NOT be called here because it also acquires
+                 *        syncobj_ — doing so on a non-recursive std::mutex would cause an
+                 *        immediate self-deadlock on the calling thread.  Instead, the
+                 *        lease/request erasure is inlined directly inside this existing lock
+                 *        region to satisfy the same invariant without re-entering the mutex.
                  */
-                SynchronizedObjectScope scope(syncobj_);
-                for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
-                    VirtualEthernetExchangerPtr current = tail->second;
-                    if (!current || current->GetId() != session_id) {
-                        ++tail;
-                        continue;
+
+                // Collect IPv6 addresses to clean up under the lock, then process outside.
+                ppp::vector<boost::asio::ip::address> cleanup_ipv6_addresses;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
+                        VirtualEthernetExchangerPtr current = tail->second;
+                        if (!current || current->GetId() != session_id) {
+                            ++tail;
+                            continue;
+                        }
+
+                        boost::system::error_code ec;
+                        boost::asio::ip::address ip = StringToAddress(tail->first, ec);
+                        if (!ec && ip.is_v6()) {
+                            cleanup_ipv6_addresses.emplace_back(ip);
+                        }
+
+                        tail = ipv6s_.erase(tail);
+                        released_any = true;
+                        any          = true;
                     }
 
-                    boost::system::error_code ec;
-                    boost::asio::ip::address ip = StringToAddress(tail->first, ec);
-                    if (!ec && ip.is_v6()) {
-                        DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                        DeleteIPv6NeighborProxy(ip);
+                    if (released_any) {
+                        /**
+                         * @brief Inline the RevokeIPv6Lease() body to avoid re-acquiring
+                         *        syncobj_ (which is already held above).  The semantic
+                         *        result is identical: both lease and request records for
+                         *        this session are removed under the same lock region.
+                         */
+                        ipv6_leases_.erase(session_id);
+                        ipv6_requests_.erase(session_id);
                     }
-
-                    tail = ipv6s_.erase(tail);
-                    released_any = true;
-                    any          = true;
                 }
 
-                if (released_any) {
-                    /**
-                     * @brief Inline the RevokeIPv6Lease() body to avoid re-acquiring
-                     *        syncobj_ (which is already held above).  The semantic
-                     *        result is identical: both lease and request records for
-                     *        this session are removed under the same lock region.
-                     */
-                    ipv6_leases_.erase(session_id);
-                    ipv6_requests_.erase(session_id);
+                // Perform blocking shell commands OUTSIDE the lock to avoid holding
+                // syncobj_ across fork()+exec() which can block for 10s–100s of ms.
+                for (const boost::asio::ip::address& ip : cleanup_ipv6_addresses) {
+                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+                    DeleteIPv6NeighborProxy(ip);
                 }
 
                 return any;
@@ -1057,6 +1080,7 @@ namespace ppp {
                 }
                 ipv6_neighbor_proxy_ifname_.clear();
                 ipv6_neighbor_proxy_owned_ = false;
+                ipv6_ndp_proxy_applied_    = false; ///< Reset so the sysctl runs again on next Open.
 #endif
                 return true;
             }
@@ -1256,16 +1280,26 @@ namespace ppp {
              * @brief Starts accept loops for all configured inbound listener categories.
              * @return true if at least one acceptor starts successfully.
              */
-            bool VirtualEthernetSwitcher::Run() noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                if (disposed_) {
-                    return false;
+             bool VirtualEthernetSwitcher::Run() noexcept {
+                // Snapshot the acceptor list under the lock, then start accept loops
+                // outside the lock to avoid holding syncobj_ across socket operations.
+                std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptors_snapshot[NetworkAcceptorCategories_Max];
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        return false;
+                    }
+
+                    for (int categories = NetworkAcceptorCategories_Min; categories < NetworkAcceptorCategories_Max; categories++) {
+                        acceptors_snapshot[categories] = acceptors_[categories];
+                    }
                 }
 
                 auto self = shared_from_this();
                 bool bany = false;
                 for (int categories = NetworkAcceptorCategories_Min; categories < NetworkAcceptorCategories_Max; categories++) {
-                    std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor = acceptors_[categories];
+                    std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor = acceptors_snapshot[categories];
                     if (NULLPTR == acceptor) {
                         continue;
                     }
@@ -1284,6 +1318,7 @@ namespace ppp {
                         bany = true;
                     }
                     else {
+                        SynchronizedObjectScope scope(syncobj_);
                         Socket::Closesocket(acceptor);
                         acceptors_[categories] = NULLPTR;
                     }
@@ -1825,20 +1860,29 @@ namespace ppp {
              * @brief Opens switch subsystems and prepares runtime state.
              * @param firewall_rules Firewall rule file path.
              * @return true when all required subsystems initialize successfully.
+             *
+             * @note The syncobj_ lock is held only for the guard checks and
+             *       collection reset.  The heavy subsystem-initialization calls
+             *       (socket creation, I/O, ioctl, managed-server TLS handshake)
+             *       execute without the lock to prevent blocking incoming connection
+             *       handlers for hundreds of milliseconds during startup.
              */
             bool VirtualEthernetSwitcher::Open(const ppp::string& firewall_rules) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                if (disposed_) {
-                    return false;
-                }
+                // Narrow critical section: guard check + collection reset only.
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        return false;
+                    }
 
-                if (timeout_) {
-                    return false;
-                }
+                    if (timeout_) {
+                        return false;
+                    }
 
-                ipv6s_.clear();
-                ipv6_requests_.clear();
-                ipv6_leases_.clear();
+                    ipv6s_.clear();
+                    ipv6_requests_.clear();
+                    ipv6_leases_.clear();
+                }  // Release syncobj_ before heavy subsystem initialization.
 
                 bool ok = CreateAllAcceptors() &&
                     CreateAlwaysTimeout() &&
@@ -1988,7 +2032,10 @@ namespace ppp {
                         return false;
                     }
 
-                    if (source.is_unspecified() || source.is_multicast() || source.is_loopback()) {
+                    // Reject unspecified, multicast, loopback, and link-local source
+                    // addresses; link-local (fe80::/10) addresses are scoped to a single
+                    // L2 segment and must not be routed across the virtual fabric.
+                    if (source.is_unspecified() || source.is_multicast() || source.is_loopback() || source.is_link_local()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
                         return false;
                     }
@@ -2172,7 +2219,17 @@ namespace ppp {
                 {
                     SynchronizedObjectScope scope(syncobj_);
                     old_ifname = ipv6_neighbor_proxy_ifname_;
-                    old_owned = ipv6_neighbor_proxy_owned_;
+                    old_owned  = ipv6_neighbor_proxy_owned_;
+
+                    // Skip the sysctl + popen work when the uplink interface has not changed
+                    // and the proxy was already applied.  This avoids blocking the IO thread
+                    // with a shell fork on every OnTick interval (~1 s) when nothing has
+                    // changed.  The interface-migration path (old_ifname != uplink_name)
+                    // intentionally bypasses this guard and continues normally.
+                    if (ipv6_ndp_proxy_applied_ && old_ifname == uplink_name) {
+                        return true;
+                    }
+
                     replay_entries.reserve(ipv6s_.size());
                     for (const auto& kv : ipv6s_) {
                         if (!kv.second) {
@@ -2209,7 +2266,8 @@ namespace ppp {
                 {
                     SynchronizedObjectScope scope(syncobj_);
                     ipv6_neighbor_proxy_ifname_ = uplink_name;
-                    ipv6_neighbor_proxy_owned_ = old_ifname == uplink_name ? old_owned : (query_ok ? !proxy_enabled : false);
+                    ipv6_neighbor_proxy_owned_  = old_ifname == uplink_name ? old_owned : (query_ok ? !proxy_enabled : false);
+                    ipv6_ndp_proxy_applied_     = true; ///< Mark sysctl as applied for this uplink.
                 }
 
                 ppp::vector<Int128> broken_sessions;
@@ -2536,10 +2594,10 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                VirtualEthernetStaticEchoAllocatedContextPtr allocated_context;
-                SynchronizedObjectScope scope(syncobj_);
-
+                // --- Fast O(1) lookup path: take the lock once and return. ---
                 if (allocated_id != 0) {
+                    VirtualEthernetStaticEchoAllocatedContextPtr allocated_context;
+                    SynchronizedObjectScope scope(syncobj_);
                     if (!Dictionary::TryGetValue(static_echo_allocateds_, allocated_id, allocated_context)) {
                         return NULLPTR;
                     }
@@ -2547,30 +2605,52 @@ namespace ppp {
                     remote_port = bind_port;
                     return allocated_context;
                 }
-                
-                for (int i = ppp::net::IPEndPoint::MinPort; i <= ppp::net::IPEndPoint::MaxPort; i++) {
+
+                // --- Allocation path (two-phase to minimise lock hold time). ---
+                //
+                // Phase 1 (outside lock): allocate the context object and generate a
+                //   stable FSID.  Construction and GUID generation are the expensive
+                //   work; keeping them outside syncobj_ means contending threads do
+                //   not block each other during object creation.
+                //
+                // Phase 2 (short critical section, O(1) per attempt): check that the
+                //   candidate ID is still free, finalise the context fields that depend
+                //   on the concrete ID, then insert into the map.  If another thread
+                //   grabbed the same random ID between Phase 1 and Phase 2 (rare), we
+                //   simply pick a new candidate and retry — no long loop inside the lock.
+                //
+                // kMaxAllocationAttempts bounds the total retries.  With a 16-bit ID
+                // space and typical occupancy well below 50 %, the probability of 64
+                // consecutive collisions is astronomically small.
+                static constexpr int kMaxAllocationAttempts = 64;
+
+                VirtualEthernetStaticEchoAllocatedContextPtr allocated_context =
+                    make_shared_object<VirtualEthernetStaticEchoAllocatedContext>();
+                if (NULLPTR == allocated_context) {
+                    return NULLPTR;
+                }
+
+                Int128 fsid = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(GuidGenerate());
+                allocated_context->guid = session_id;
+                allocated_context->fsid = fsid;
+
+                for (int attempt = 0; attempt < kMaxAllocationAttempts; attempt++) {
                     int generate_id = abs(RandomNext());
                     if (generate_id < 1) {
                         continue;
                     }
 
+                    // Short critical section: O(1) — one map probe + one map insert.
+                    SynchronizedObjectScope scope(syncobj_);
                     if (Dictionary::ContainsKey(static_echo_allocateds_, generate_id)) {
-                        continue;
+                        continue; // ID taken by a concurrent thread; try a new candidate.
                     }
-                    elif(NULLPTR == allocated_context) {
-                        allocated_context = make_shared_object<VirtualEthernetStaticEchoAllocatedContext>();
-                        if (NULLPTR == allocated_context) {
-                            break;
-                        }
-                        else {
-                            Int128 fsid = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(GuidGenerate());
-                            allocated_context->guid = session_id;
-                            allocated_context->myid = generate_id;
-                            allocated_context->fsid = fsid;
 
-                            VirtualEthernetPacket::Ciphertext(configuration_, session_id, fsid, generate_id, allocated_context->protocol, allocated_context->transport);
-                        }
-                    }
+                    // Finalise the fields that depend on the concrete ID while the lock
+                    // is held, so the inserted context is always fully initialised.
+                    allocated_context->myid = generate_id;
+                    VirtualEthernetPacket::Ciphertext(configuration_, session_id, fsid, generate_id,
+                        allocated_context->protocol, allocated_context->transport);
 
                     if (Dictionary::TryAdd(static_echo_allocateds_, generate_id, allocated_context)) {
                         remote_port  = bind_port;
@@ -2604,13 +2684,20 @@ namespace ppp {
                 return server->TryVerifyUriAsync(configuration_->server.backend,
                     [self, this, server](bool ok) noexcept {
                         if (ok) {
+                            // ConnectToManagedServer performs TLS/TCP handshake — potentially
+                            // long-running.  Call it outside the lock to avoid holding syncobj_
+                            // across a blocking network operation.
+                            ok = server->ConnectToManagedServer(configuration_->server.backend);
+                        }
+
+                        if (ok) {
+                            // Only the assignment of managed_server_ requires the lock.
                             SynchronizedObjectScope scope(syncobj_);
-                            ok = false;
-                            if (!disposed_) {
-                                ok = server->ConnectToManagedServer(configuration_->server.backend);
-                                if (ok) {
-                                    managed_server_ = server;
-                                }
+                            if (disposed_) {
+                                ok = false;
+                            }
+                            else {
+                                managed_server_ = server;
                             }
                         }
 
@@ -2669,7 +2756,7 @@ namespace ppp {
              * @return true after finalization begins.
              */
             bool VirtualEthernetSwitcher::IsDisposed() noexcept {
-                return disposed_;
+                return disposed_.load(std::memory_order_relaxed);
             }
 
             /**
@@ -2767,7 +2854,7 @@ namespace ppp {
             /**
              * @brief Performs full shutdown and releases all runtime resources.
              */
-            void VirtualEthernetSwitcher::Finalize() noexcept {
+             void VirtualEthernetSwitcher::Finalize() noexcept {
                 std::shared_ptr<boost::asio::ip::tcp::resolver> tresolver;
                 std::shared_ptr<boost::asio::ip::udp::resolver> uresolver;
 
@@ -2778,11 +2865,20 @@ namespace ppp {
                 VirtualEthernetExchangerTable exchangers;
                 VirtualEthernetNetworkTcpipConnectionTable connections;
 
+                // Snapshot acceptors under the lock so that socket close syscalls
+                // (which may block or invoke OS callbacks) run outside syncobj_.
+                std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptors_snapshot[NetworkAcceptorCategories_Max];
+
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     disposed_ = true;
 
-                    CloseAllAcceptors();
+                    // Swap all acceptors into local snapshot and null the members.
+                    // Actual close (socket syscall) happens after the lock is released.
+                    for (int i = NetworkAcceptorCategories_Min; i < NetworkAcceptorCategories_Max; i++) {
+                        acceptors_snapshot[i] = std::move(acceptors_[i]);
+                        acceptors_[i].reset();
+                    }
 
                     cache          = std::move(namespace_cache_);
 
@@ -2812,6 +2908,14 @@ namespace ppp {
 
                     static_echo_allocateds_.clear();
                     break;
+                }
+
+                // Close snapshotted acceptors outside the lock to avoid holding syncobj_
+                // across blocking socket close syscalls.
+                for (int i = NetworkAcceptorCategories_Min; i < NetworkAcceptorCategories_Max; i++) {
+                    if (NULLPTR != acceptors_snapshot[i]) {
+                        Socket::Closesocket(acceptors_snapshot[i]);
+                    }
                 }
 
                 CloseIPv6TransitSsmtContexts();
@@ -2924,21 +3028,79 @@ namespace ppp {
             }
 
             /**
-             * @brief Updates all exchangers with current tick timestamp.
-             * @param now Current tick count.
+             * @brief Updates all exchangers and disposes stale ones.
+             *
+             * @param now  Current tick count in milliseconds.
+             *
+             * @note  Two-phase pattern: Update() is called under the lock (it is fast —
+             *        it only posts a lambda and returns).  Stale exchangers are collected
+             *        into a local vector while the lock is held, erased from the map, then
+             *        Dispose()d outside the lock.  This eliminates the ABBA window where
+             *        Dispose() acquires ASIO's internal queue lock while syncobj_ is held.
              */
             void VirtualEthernetSwitcher::TickAllExchangers(UInt64 now) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                ppp::collections::Dictionary::UpdateAllObjects2(exchangers_, now);
+                ppp::vector<VirtualEthernetExchangerPtr> stale;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto tail = exchangers_.begin(); tail != exchangers_.end();) {
+                        const VirtualEthernetExchangerPtr& ex = tail->second;
+                        if (!ex || !ex->Update(now)) {
+                            if (ex) {
+                                stale.emplace_back(ex);
+                            }
+
+                            tail = exchangers_.erase(tail);
+                        }
+                        else {
+                            ++tail;
+                        }
+                    }
+                }
+
+                // Dispose outside the lock to avoid holding syncobj_ across
+                // boost::asio::post() calls inside VirtualEthernetExchanger::Dispose().
+                for (auto& ex : stale) {
+                    IDisposable::Dispose(*ex);
+                }
             }
 
             /**
-             * @brief Updates all transient network connections for aging checks.
-             * @param now Current tick count.
+             * @brief Expires stale TCP connections and disposes them outside the lock.
+             *
+             * @param now  Current tick count in milliseconds.
+             *
+             * @note  Snapshot-and-release pattern: expired connection pointers are moved
+             *        into a local vector under the lock; the map entries are erased; the
+             *        lock is released; then Dispose() is called outside the lock.
+             *        This prevents a re-entrant deadlock if a connection's Dispose() path
+             *        calls DeleteConnection() which would otherwise re-acquire syncobj_
+             *        (std::mutex is non-recursive).
              */
             void VirtualEthernetSwitcher::TickAllConnections(UInt64 now) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                Dictionary::UpdateAllObjects(connections_, now);
+                ppp::vector<VirtualEthernetNetworkTcpipConnectionPtr> stale;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto tail = connections_.begin(); tail != connections_.end();) {
+                        const VirtualEthernetNetworkTcpipConnectionPtr& conn = tail->second;
+                        if (!conn || conn->IsPortAging(now)) {
+                            if (conn) {
+                                stale.emplace_back(conn);
+                            }
+
+                            tail = connections_.erase(tail);
+                        }
+                        else {
+                            ++tail;
+                        }
+                    }
+                }
+
+                // Dispose outside the lock to avoid re-entrant deadlock on syncobj_.
+                for (auto& conn : stale) {
+                    IDisposable::Dispose(*conn);
+                }
             }
 
             /**
@@ -3009,8 +3171,7 @@ namespace ppp {
                 TickAllExchangers(now);
                 TickAllConnections(now);
                 TickIPv6Leases(now);
-                if (!RefreshIPv6NeighborProxyIfNeed()) {
-                }
+                RefreshIPv6NeighborProxyIfNeed();
 
                 VirtualEthernetNamespaceCachePtr cache = namespace_cache_;
                 if (NULLPTR != cache) {
@@ -3105,9 +3266,6 @@ namespace ppp {
                         ipv6_requests_.erase(session_id);
                     }
                 }
-
-                VirtualEthernetInformation info;
-                info.Clear();
 
                 BuildInformationIPv6Extensions(session_id, response);
                 if (response.AssignedIPv6Address.is_v6()) {

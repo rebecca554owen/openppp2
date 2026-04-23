@@ -78,6 +78,14 @@ static constexpr const char kColorWhite[]  = "\x1b[1;97m";
 static constexpr const char kColorReset[]  = "\x1b[0m";
 /** @brief ANSI dim/dark gray (for placeholder text). */
 static constexpr const char kColorDim[]    = "\x1b[2;37m";
+/** @brief ANSI reverse-video (used to render the synthetic cursor block). */
+static constexpr const char kColorReverse[] = "\x1b[7m";
+/** @brief Enter alternate screen buffer (preserves the user's original console contents). */
+static constexpr const char kAltScreenOn[]  = "\x1b[?1049h";
+/** @brief Leave alternate screen buffer (restores the user's original console contents). */
+static constexpr const char kAltScreenOff[] = "\x1b[?1049l";
+/** @brief Move cursor to top-left without clearing the screen. */
+static constexpr const char kCursorHome[]   = "\x1b[H";
 
 // ---------------------------------------------------------------------------
 // ASCII art definition (5 lines, ~50 columns wide)
@@ -335,6 +343,7 @@ ppp::string ConsoleUI::BuildEditorLine(
     const ppp::string& input,
     std::size_t cursor_pos,
     int width,
+    bool use_color,
     int& cursor_column) noexcept {
 
     cursor_column = 0;
@@ -353,7 +362,8 @@ ppp::string ConsoleUI::BuildEditorLine(
     std::size_t prompt_len = safe_prompt.size();
     std::size_t avail = (max_w > prompt_len) ? (max_w - prompt_len) : 0u;
 
-    // Compute view window
+    // Compute view window (scroll the editor text horizontally so the
+    // caret is always visible inside 'avail' columns).
     std::size_t safe_cursor = std::min(cursor_pos, input.size());
     std::size_t view_start = 0u;
     if (0u < avail && safe_cursor >= avail) {
@@ -364,14 +374,14 @@ ppp::string ConsoleUI::BuildEditorLine(
         view_start = input.size() - avail;
     }
 
-    // Extract visible portion
+    // Extract visible portion into a mutable byte buffer
     ppp::string view;
     if (0u < avail && view_start < input.size()) {
         std::size_t take = std::min(avail, input.size() - view_start);
         view = input.substr(view_start, take);
     }
 
-    // Pad to exactly avail columns
+    // Pad to exactly avail columns with spaces (cursor may land on a space)
     if (view.size() < avail) {
         view.append(avail - view.size(), ' ');
     }
@@ -384,12 +394,7 @@ ppp::string ConsoleUI::BuildEditorLine(
         view[avail - 1u] = '>';
     }
 
-    ppp::string line = safe_prompt + view;
-    if (line.size() < max_w) {
-        line.append(max_w - line.size(), ' ');
-    }
-
-    // Compute cursor column
+    // Compute cursor column relative to the visible window
     std::size_t local_cursor = (safe_cursor >= view_start) ? (safe_cursor - view_start) : 0u;
     if (0u < avail && avail <= local_cursor) {
         local_cursor = avail - 1u;
@@ -399,8 +404,56 @@ ppp::string ConsoleUI::BuildEditorLine(
     if (0u < max_w && max_w <= col) {
         col = max_w - 1u;
     }
-
     cursor_column = static_cast<int>(col);
+
+    // -----------------------------------------------------------------------
+    // Assemble the final line.  When colour is available we embed a single
+    // reverse-video (white-block) character at the cursor position so the
+    // real terminal cursor can stay permanently hidden.  This removes all
+    // cursor flicker that would otherwise arise from cyclic show/hide
+    // escape sequences on every frame.
+    // -----------------------------------------------------------------------
+    ppp::string line;
+    line.reserve(max_w + 16u);
+    line += safe_prompt;
+
+    if (use_color && 0u < avail) {
+        std::size_t caret = local_cursor;
+        if (avail <= caret) {
+            caret = avail - 1u;
+        }
+
+        // Portion before the caret
+        if (0u < caret) {
+            line.append(view.data(), caret);
+        }
+
+        // Caret cell rendered as an inverse-video white block.  We prefer
+        // a space character so the underlying text is still readable by
+        // screen-readers and when the block is positioned on a '<' or '>'
+        // overflow marker.
+        line += kColorReverse;
+        char caret_ch = (caret < view.size()) ? view[caret] : ' ';
+        if ('\0' == caret_ch || static_cast<unsigned char>(caret_ch) < 0x20) {
+            caret_ch = ' ';
+        }
+        line.push_back(caret_ch);
+        line += kColorReset;
+
+        // Portion after the caret
+        if (caret + 1u < view.size()) {
+            line.append(view.data() + caret + 1u, view.size() - caret - 1u);
+        }
+    } else {
+        line += view;
+    }
+
+    // Pad the trailing columns with plain spaces so the row keeps its
+    // exact width inside the box border.
+    // Note: line may now contain ANSI bytes; we cannot rely on size().
+    // Instead, we computed 'avail' above and wrote prompt + avail
+    // printable columns.  Any remaining visible gap is handled by the
+    // caller which sizes the content via the box row builder.
     return line;
 }
 
@@ -446,7 +499,39 @@ bool ConsoleUI::Start() noexcept {
         return false;
     }
 
+    // -----------------------------------------------------------------------
+    // Save the current console state so Stop() can restore it verbatim.
+    // On Windows we snapshot the output mode and cursor visibility; on POSIX
+    // the alternate-screen escape sequence handles full buffer restoration.
+    // -----------------------------------------------------------------------
+#if defined(_WIN32)
+    win_stdout_handle_  = ::GetStdHandle(STD_OUTPUT_HANDLE);
+    win_out_mode_saved_ = false;
+    win_cursor_saved_   = false;
+
+    if (NULLPTR != win_stdout_handle_ && INVALID_HANDLE_VALUE != win_stdout_handle_) {
+        DWORD mode = 0;
+        if (::GetConsoleMode(static_cast<HANDLE>(win_stdout_handle_), &mode)) {
+            win_original_out_mode_ = mode;
+            win_out_mode_saved_    = true;
+        }
+
+        CONSOLE_CURSOR_INFO cci{};
+        if (::GetConsoleCursorInfo(static_cast<HANDLE>(win_stdout_handle_), &cci)) {
+            win_cursor_visible_ = (FALSE != cci.bVisible);
+            win_cursor_saved_   = true;
+        }
+    }
+#endif
+
+    // Enter alternate screen buffer + permanently hide the real cursor.
+    // The synthetic reverse-video cursor block inside the editor line is the
+    // only indicator of input position, eliminating all cursor flicker.
+    EnterAlternateScreen();
     ppp::HideConsoleCursor(true);
+
+    force_redraw_.store(true, std::memory_order_release);
+    dirty_.store(true, std::memory_order_release);
 
     try {
         render_thread_ = std::thread([this]() noexcept { RenderLoop(); });
@@ -461,6 +546,7 @@ bool ConsoleUI::Start() noexcept {
         }
         RestoreInputTerminal();
         ppp::HideConsoleCursor(false);
+        LeaveAlternateScreen();
         return false;
     }
 
@@ -473,6 +559,10 @@ void ConsoleUI::Stop() noexcept {
         return;
     }
 
+    // Wake the render thread so it exits its condition-variable wait immediately
+    // rather than blocking up to the full 100 ms timeout.
+    render_cv_.notify_all();
+
     if (render_thread_.joinable()) {
         render_thread_.join();
     }
@@ -480,8 +570,81 @@ void ConsoleUI::Stop() noexcept {
         input_thread_.join();
     }
 
+    // Wait (bounded) for detached shell threads to finish calling AppendLine()
+    // before we tear down the TUI.  Each thread decrements pending_shell_threads_
+    // on exit, so this loop terminates as soon as all outstanding popen pipes close.
+    for (int i = 0; i < 100 && pending_shell_threads_.load(std::memory_order_acquire) > 0; ++i) {
+        ppp::Sleep(50);
+    }
+
     RestoreInputTerminal();
+
+    // Leave the alternate-screen buffer: this restores whatever the user's
+    // console displayed before Start() was called (shell prompt, scrollback,
+    // etc.).  The real cursor must be made visible again before we exit.
+    LeaveAlternateScreen();
     ppp::HideConsoleCursor(false);
+
+#if defined(_WIN32)
+    if (NULLPTR != win_stdout_handle_ && INVALID_HANDLE_VALUE != win_stdout_handle_) {
+        if (win_out_mode_saved_) {
+            ::SetConsoleMode(static_cast<HANDLE>(win_stdout_handle_), win_original_out_mode_);
+        }
+        if (win_cursor_saved_) {
+            CONSOLE_CURSOR_INFO cci{};
+            cci.dwSize   = 25;
+            cci.bVisible = win_cursor_visible_ ? TRUE : FALSE;
+            ::SetConsoleCursorInfo(static_cast<HANDLE>(win_stdout_handle_), &cci);
+        }
+    }
+    win_stdout_handle_  = NULLPTR;
+    win_out_mode_saved_ = false;
+    win_cursor_saved_   = false;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Alternate-screen helpers
+// ---------------------------------------------------------------------------
+
+void ConsoleUI::EnterAlternateScreen() noexcept {
+    if (altscreen_entered_) {
+        return;
+    }
+
+    if (vt_enabled_) {
+        std::fwrite(kAltScreenOn, 1u, sizeof(kAltScreenOn) - 1u, stdout);
+        std::fwrite(kClearScreen, 1u, sizeof(kClearScreen) - 1u, stdout);
+        std::fflush(stdout);
+    }
+
+    altscreen_entered_ = true;
+}
+
+void ConsoleUI::LeaveAlternateScreen() noexcept {
+    if (!altscreen_entered_) {
+        return;
+    }
+
+    if (vt_enabled_) {
+        // Move cursor to a sane location, clear residual attributes, then
+        // swap the buffer back so the user sees their original shell state.
+        std::fwrite(kColorReset, 1u, sizeof(kColorReset) - 1u, stdout);
+        std::fwrite(kAltScreenOff, 1u, sizeof(kAltScreenOff) - 1u, stdout);
+        std::fflush(stdout);
+    }
+
+    altscreen_entered_ = false;
+}
+
+// ---------------------------------------------------------------------------
+// Dirty-marker (inlined by mutators)
+// ---------------------------------------------------------------------------
+
+void ConsoleUI::MarkDirty() noexcept {
+    dirty_.store(true, std::memory_order_release);
+    // Wake the render thread immediately so it does not wait the full CV timeout.
+    render_cv_.notify_one();
 }
 
 // ---------------------------------------------------------------------------
@@ -489,32 +652,41 @@ void ConsoleUI::Stop() noexcept {
 // ---------------------------------------------------------------------------
 
 void ConsoleUI::UpdateStatus(const ppp::string& status_text) noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    status_queue_.push(status_text);
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        status_queue_.push(status_text);
+    }
+    MarkDirty();
 }
 
 void ConsoleUI::AppendLine(const ppp::string& line) noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    cmd_lines_.push_back(line);
-    while (kMaxCmdLines < static_cast<int>(cmd_lines_.size())) {
-        cmd_lines_.pop_front();
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        cmd_lines_.push_back(line);
+        while (kMaxCmdLines < static_cast<int>(cmd_lines_.size())) {
+            cmd_lines_.pop_front();
+        }
     }
+    MarkDirty();
 }
 
 void ConsoleUI::SetInfoLines(const ppp::vector<ppp::string>& lines) noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    // Preserve the current scroll position so that periodic tick updates
-    // (which call SetInfoLines every ~1 s) do not discard the user's scroll
-    // position achieved via Home / End.  The scroll offset is clamped against
-    // the new content size inside RenderFrame().
-    bool was_empty = info_lines_.empty();
-    info_lines_    = lines;
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        // Preserve the current scroll position so that periodic tick updates
+        // (which call SetInfoLines every ~1 s) do not discard the user's scroll
+        // position achieved via Home / End.  The scroll offset is clamped against
+        // the new content size inside RenderFrame().
+        bool was_empty = info_lines_.empty();
+        info_lines_    = lines;
 
-    // Only jump to the top when content is being populated for the first time;
-    // subsequent updates keep whatever scroll position the user has set.
-    if (was_empty) {
-        info_scroll_ = 0;
+        // Only jump to the top when content is being populated for the first time;
+        // subsequent updates keep whatever scroll position the user has set.
+        if (was_empty) {
+            info_scroll_ = 0;
+        }
     }
+    MarkDirty();
 }
 
 // ---------------------------------------------------------------------------
@@ -522,38 +694,54 @@ void ConsoleUI::SetInfoLines(const ppp::vector<ppp::string>& lines) noexcept {
 // ---------------------------------------------------------------------------
 
 void ConsoleUI::DrainStatusQueue() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-
-    while (false == status_queue_.empty())
+    // Short-lock: swap the entire queue out to a local copy so that
+    // UpdateStatus() callers are not blocked while we do string processing.
+    std::queue<ppp::string> local_queue;
     {
-        ppp::string txt = status_queue_.front();
-        status_queue_.pop();
+        std::lock_guard<std::mutex> scope(lock_);
+        local_queue.swap(status_queue_);
+    }
+
+    if (local_queue.empty()) {
+        return;
+    }
+
+    // Process all pending entries outside the lock (ToLower, find, substr).
+    // Only the last entry's values are written back; earlier ones are
+    // effectively coalesced, which matches the original sequential semantics.
+    ppp::string last_state;
+    ppp::string last_speed;
+
+    while (false == local_queue.empty())
+    {
+        ppp::string txt = local_queue.front();
+        local_queue.pop();
 
         ppp::string lower = ppp::ToLower(txt);
 
         if (ppp::string::npos != lower.find("disconnect"))
         {
-            vpn_state_text_ = "Disconnected";
+            last_state = "Disconnected";
         }
-        else if (ppp::string::npos != lower.find("reconnect"))
+        elif (ppp::string::npos != lower.find("reconnect"))
         {
-            vpn_state_text_ = "Reconnecting";
+            last_state = "Reconnecting";
         }
-        else if (ppp::string::npos != lower.find("established") ||
-                 ppp::string::npos != lower.find("connected"))
+        elif (ppp::string::npos != lower.find("established") ||
+             ppp::string::npos != lower.find("connected"))
         {
-            vpn_state_text_ = "Established";
+            last_state = "Established";
         }
-        else if (ppp::string::npos != lower.find("connect"))
+        elif (ppp::string::npos != lower.find("connect"))
         {
-            vpn_state_text_ = "Connecting";
+            last_state = "Connecting";
         }
         else
         {
-            vpn_state_text_ = txt;
+            last_state = txt;
         }
 
-        speed_text_.clear();
+        last_speed.clear();
 
         std::size_t rx_pos = lower.find("rx=");
         std::size_t tx_pos = lower.find("tx=");
@@ -564,8 +752,8 @@ void ConsoleUI::DrainStatusQueue() noexcept {
             ppp::string rx_val = (ppp::string::npos == end_pos)
                 ? txt.substr(rx_pos + 3u)
                 : txt.substr(rx_pos + 3u, end_pos - rx_pos - 3u);
-            speed_text_ += "\xe2\x86\x93 ";
-            speed_text_ += rx_val;
+            last_speed += "\xe2\x86\x93 ";
+            last_speed += rx_val;
         }
 
         if (ppp::string::npos != tx_pos)
@@ -575,14 +763,21 @@ void ConsoleUI::DrainStatusQueue() noexcept {
                 ? txt.substr(tx_pos + 3u)
                 : txt.substr(tx_pos + 3u, end_pos - tx_pos - 3u);
 
-            if (false == speed_text_.empty())
+            if (false == last_speed.empty())
             {
-                speed_text_ += "  ";
+                last_speed += "  ";
             }
 
-            speed_text_ += "\xe2\x86\x91 ";
-            speed_text_ += tx_val;
+            last_speed += "\xe2\x86\x91 ";
+            last_speed += tx_val;
         }
+    }
+
+    // Short-lock: write the final computed state back.
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        vpn_state_text_ = std::move(last_state);
+        speed_text_      = std::move(last_speed);
     }
 }
 
@@ -593,11 +788,46 @@ void ConsoleUI::DrainStatusQueue() noexcept {
 void ConsoleUI::RenderLoop() noexcept {
     while (running_.load(std::memory_order_acquire)) {
         DrainStatusQueue();
-        RenderFrame();
-        ppp::Sleep(100);
+
+        // Status updates that change vpn_state / speed text should trigger a
+        // repaint too; DrainStatusQueue marks dirty implicitly via the public
+        // UpdateStatus entry point.  The render thread coalesces multiple
+        // dirty marks into a single frame draw.
+        bool need_redraw = dirty_.exchange(false, std::memory_order_acq_rel)
+                        || force_redraw_.load(std::memory_order_acquire);
+
+        // Detect window resize even when the data model has not changed —
+        // a resize requires a full forced clear to avoid stale artefacts.
+        int probe_w = 0;
+        int probe_h = 0;
+        if (ppp::GetConsoleWindowSize(probe_w, probe_h)) {
+            if (probe_w != last_width_ || probe_h != last_height_) {
+                force_redraw_.store(true, std::memory_order_release);
+                need_redraw = true;
+            }
+        }
+
+        if (need_redraw) {
+            RenderFrame();
+        }
+
+        // Wait for up to 100 ms or until MarkDirty()/Stop() fires the CV.
+        // The 100 ms cap ensures window-resize detection still fires promptly
+        // even when no data-model change has occurred.
+        {
+            std::unique_lock<std::mutex> lk(render_cv_mutex_);
+            render_cv_.wait_for(lk, std::chrono::milliseconds(100),
+                [this]() noexcept -> bool {
+                    return !running_.load(std::memory_order_acquire)
+                        || dirty_.load(std::memory_order_acquire)
+                        || force_redraw_.load(std::memory_order_acquire);
+                });
+        }
     }
 
-    // Final frame on exit
+    // Final frame on exit ensures the terminal state is deterministic before
+    // Stop() swaps out of the alternate screen buffer.
+    force_redraw_.store(true, std::memory_order_release);
     RenderFrame();
 }
 
@@ -711,13 +941,28 @@ void ConsoleUI::RenderFrame() noexcept {
 
     // -----------------------------------------------------------------------
     // 5.  Build frame string
+    //
+    // The cursor is permanently hidden by Start(); the editor line embeds a
+    // reverse-video block at the caret position, so no per-frame cursor
+    // show/hide escapes are emitted here.  A full-screen clear (\x1b[2J) is
+    // only issued on the very first frame or after a window-size change —
+    // subsequent frames rely on \x1b[H (cursor-home) plus full-width line
+    // overwrites, eliminating the flicker that would otherwise be produced
+    // by clearing the screen on every tick.
     // -----------------------------------------------------------------------
     ppp::string frame;
     frame.reserve(static_cast<std::size_t>(width * height) * 8u);
 
+    bool forced = force_redraw_.exchange(false, std::memory_order_acq_rel);
+    last_width_  = width;
+    last_height_ = height;
+
     if (vt_enabled_) {
-        frame += kHideCursor;
-        frame += kClearScreen;
+        if (forced) {
+            frame += kClearScreen;
+        } else {
+            frame += kCursorHome;
+        }
     }
 
     int inner = width - 2;  // display columns inside borders
@@ -825,7 +1070,7 @@ void ConsoleUI::RenderFrame() noexcept {
             cursor_col = 2;  // after "> "
         } else {
             ppp::string editor_content =
-                BuildEditorLine("> ", input_snap, cursor_snap, inner, cursor_col);
+                BuildEditorLine("> ", input_snap, cursor_snap, inner, vt_enabled_, cursor_col);
             frame += editor_content;
         }
 
@@ -871,22 +1116,10 @@ void ConsoleUI::RenderFrame() noexcept {
     // --- Bottom border ---
     frame += BoxBotSplitRow(width, split);
 
-    // --- Cursor positioning (VT100) ---
-    if (vt_enabled_) {
-        // 1-indexed row of the input line:
-        //   1 (top border) + 9 (hint1, hint2, 5 art, empty, sep) + info_h + 1 (info-cmd sep)
-        //   + cmd_h + 1 (cmd-input sep) + 1 (input row itself)
-        int input_row = 1 + 9 + info_h + 1 + cmd_h + 1 + 1;  // = 13 + info_h + cmd_h
-        // 1-indexed column: 1 (│ border) + cursor_col + 1 (1-indexed offset)
-        int input_col = cursor_col + 2;
-
-        frame += "\x1b[";
-        frame += stl::to_string<ppp::string>(input_row);
-        frame += ";";
-        frame += stl::to_string<ppp::string>(input_col);
-        frame += "H";
-        frame += kShowCursor;
-    }
+    // The real cursor stays hidden; no trailing cursor-position or
+    // show-cursor escape is needed — the synthetic reverse-video block
+    // inside the editor line conveys the caret location to the user.
+    (void)cursor_col;
 
     // -----------------------------------------------------------------------
     // 6.  Write frame to stdout in one atomic write
@@ -919,93 +1152,121 @@ void ConsoleUI::HandleEnter() noexcept {
         }
     }
 
+    MarkDirty();
     ExecuteCommand(command_line);
 }
 
 void ConsoleUI::HandleHistoryUp() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (history_.empty()) {
-        return;
-    }
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (history_.empty()) {
+            return;
+        }
 
-    if (-1 == history_index_) {
-        history_edit_backup_ = input_buffer_;
-        history_index_       = static_cast<int>(history_.size()) - 1;
-    } elif (0 < history_index_) {
-        --history_index_;
-    }
+        if (-1 == history_index_) {
+            history_edit_backup_ = input_buffer_;
+            history_index_       = static_cast<int>(history_.size()) - 1;
+        } elif (0 < history_index_) {
+            --history_index_;
+        }
 
-    if (0 <= history_index_ && static_cast<int>(history_.size()) > history_index_) {
-        input_buffer_ = history_[static_cast<std::size_t>(history_index_)];
-        input_cursor_ = input_buffer_.size();
+        if (0 <= history_index_ && static_cast<int>(history_.size()) > history_index_) {
+            input_buffer_ = history_[static_cast<std::size_t>(history_index_)];
+            input_cursor_ = input_buffer_.size();
+        }
     }
+    MarkDirty();
 }
 
 void ConsoleUI::HandleHistoryDown() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (history_.empty() || -1 == history_index_) {
-        return;
-    }
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (history_.empty() || -1 == history_index_) {
+            return;
+        }
 
-    int last_index = static_cast<int>(history_.size()) - 1;
-    if (history_index_ < last_index) {
-        ++history_index_;
-        input_buffer_ = history_[static_cast<std::size_t>(history_index_)];
-    } else {
-        history_index_ = -1;
-        input_buffer_  = history_edit_backup_;
-        history_edit_backup_.clear();
-    }
+        int last_index = static_cast<int>(history_.size()) - 1;
+        if (history_index_ < last_index) {
+            ++history_index_;
+            input_buffer_ = history_[static_cast<std::size_t>(history_index_)];
+        } else {
+            history_index_ = -1;
+            input_buffer_  = history_edit_backup_;
+            history_edit_backup_.clear();
+        }
 
-    input_cursor_ = input_buffer_.size();
+        input_cursor_ = input_buffer_.size();
+    }
+    MarkDirty();
 }
 
 void ConsoleUI::InsertInputChar(char ch) noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (input_cursor_ > input_buffer_.size()) {
-        input_cursor_ = input_buffer_.size();
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (input_cursor_ > input_buffer_.size()) {
+            input_cursor_ = input_buffer_.size();
+        }
+        input_buffer_.insert(input_cursor_, 1u, ch);
+        ++input_cursor_;
     }
-    input_buffer_.insert(input_cursor_, 1u, ch);
-    ++input_cursor_;
+    MarkDirty();
 }
 
 void ConsoleUI::MoveCursorLeft() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (0u < input_cursor_) {
-        --input_cursor_;
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (0u < input_cursor_) {
+            --input_cursor_;
+        }
     }
+    MarkDirty();
 }
 
 void ConsoleUI::MoveCursorRight() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (input_buffer_.size() > input_cursor_) {
-        ++input_cursor_;
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (input_buffer_.size() > input_cursor_) {
+            ++input_cursor_;
+        }
     }
+    MarkDirty();
 }
 
 void ConsoleUI::MoveCursorLineStart() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    input_cursor_ = 0u;
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        input_cursor_ = 0u;
+    }
+    MarkDirty();
 }
 
 void ConsoleUI::MoveCursorLineEnd() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    input_cursor_ = input_buffer_.size();
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        input_cursor_ = input_buffer_.size();
+    }
+    MarkDirty();
 }
 
 void ConsoleUI::EraseBeforeCursor() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (0u < input_cursor_ && !input_buffer_.empty()) {
-        input_buffer_.erase(input_cursor_ - 1u, 1u);
-        --input_cursor_;
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (0u < input_cursor_ && !input_buffer_.empty()) {
+            input_buffer_.erase(input_cursor_ - 1u, 1u);
+            --input_cursor_;
+        }
     }
+    MarkDirty();
 }
 
 void ConsoleUI::EraseAtCursor() noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    if (input_buffer_.size() > input_cursor_) {
-        input_buffer_.erase(input_cursor_, 1u);
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        if (input_buffer_.size() > input_cursor_) {
+            input_buffer_.erase(input_cursor_, 1u);
+        }
     }
+    MarkDirty();
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,18 +1274,36 @@ void ConsoleUI::EraseAtCursor() noexcept {
 // ---------------------------------------------------------------------------
 
 void ConsoleUI::ScrollInfoBy(int delta) noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    int next = info_scroll_ + delta;
-    if (0 > next) {
-        next = 0;
+    // Compute the visible info panel height so max_scroll clamps to the last
+    // page boundary rather than the last individual line.
+    int w = 120;
+    int h = 46;
+    ppp::GetConsoleWindowSize(w, h);
+
+    static constexpr int kHdrRows = 10;
+    static constexpr int kFtrRows = 5;
+    int middle = std::max(0, h - kHdrRows - kFtrRows);
+    int info_h  = (3 <= middle) ? std::max(2, (middle - 1) * 3 / 5)
+                                : (middle > 0 ? 1 : 0);
+    if (1 > info_h) {
+        info_h = 1;
     }
 
-    int max_scroll = std::max(0, static_cast<int>(info_lines_.size()) - 1);
-    if (next > max_scroll) {
-        next = max_scroll;
-    }
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        int next = info_scroll_ + delta;
+        if (0 > next) {
+            next = 0;
+        }
 
-    info_scroll_ = next;
+        int max_scroll = std::max(0, static_cast<int>(info_lines_.size()) - info_h);
+        if (next > max_scroll) {
+            next = max_scroll;
+        }
+
+        info_scroll_ = next;
+    }
+    MarkDirty();
 }
 
 void ConsoleUI::ScrollInfoPage(int direction) noexcept {
@@ -1044,18 +1323,38 @@ void ConsoleUI::ScrollInfoPage(int direction) noexcept {
 }
 
 void ConsoleUI::ScrollCmdBy(int delta) noexcept {
-    std::lock_guard<std::mutex> scope(lock_);
-    int next = cmd_scroll_ + delta;
-    if (0 > next) {
-        next = 0;
+    // Compute the visible cmd panel height so max_scroll clamps to the last
+    // page boundary rather than the last individual line.
+    int w = 120;
+    int h = 46;
+    ppp::GetConsoleWindowSize(w, h);
+
+    static constexpr int kHdrRows = 10;
+    static constexpr int kFtrRows = 5;
+    int middle = std::max(0, h - kHdrRows - kFtrRows);
+    int info_h  = (3 <= middle) ? std::max(2, (middle - 1) * 3 / 5)
+                                : (middle > 0 ? 1 : 0);
+    int cmd_h   = (3 <= middle) ? std::max(1, middle - 1 - info_h)
+                                : (middle > 1 ? 1 : 0);
+    if (1 > cmd_h) {
+        cmd_h = 1;
     }
 
-    int max_scroll = std::max(0, static_cast<int>(cmd_lines_.size()) - 1);
-    if (next > max_scroll) {
-        next = max_scroll;
-    }
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        int next = cmd_scroll_ + delta;
+        if (0 > next) {
+            next = 0;
+        }
 
-    cmd_scroll_ = next;
+        int max_scroll = std::max(0, static_cast<int>(cmd_lines_.size()) - cmd_h);
+        if (next > max_scroll) {
+            next = max_scroll;
+        }
+
+        cmd_scroll_ = next;
+    }
+    MarkDirty();
 }
 
 void ConsoleUI::ScrollCmdPage(int direction) noexcept {
@@ -1140,9 +1439,12 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
         }
 
         if ("clear" == openppp2_sub) {
-            std::lock_guard<std::mutex> scope(lock_);
-            cmd_lines_.clear();
-            cmd_scroll_ = 0;
+            {
+                std::lock_guard<std::mutex> scope(lock_);
+                cmd_lines_.clear();
+                cmd_scroll_ = 0;
+            }
+            MarkDirty();
             return;
         }
 
@@ -1180,6 +1482,10 @@ void ConsoleUI::ExecuteSystemCommand(const ppp::string& cmd) noexcept {
     ConsoleUI* self = this;
     ppp::string cmd_copy = cmd;
 
+    // Track the outstanding thread count so Stop() can wait for all pipes to
+    // drain before tearing down the TUI (prevents AppendLine() use-after-stop).
+    pending_shell_threads_.fetch_add(1, std::memory_order_acq_rel);
+
     std::thread([self, cmd_copy]() noexcept {
         try {
 #if defined(_WIN32)
@@ -1191,6 +1497,7 @@ void ConsoleUI::ExecuteSystemCommand(const ppp::string& cmd) noexcept {
 #endif
             if (NULLPTR == fp) {
                 self->AppendLine("[Error: failed to open process pipe]");
+                self->pending_shell_threads_.fetch_sub(1, std::memory_order_acq_rel);
                 return;
             }
 
@@ -1214,6 +1521,8 @@ void ConsoleUI::ExecuteSystemCommand(const ppp::string& cmd) noexcept {
         } catch (...) {
             self->AppendLine("[Error: exception during system command]");
         }
+
+        self->pending_shell_threads_.fetch_sub(1, std::memory_order_acq_rel);
     }).detach();
 }
 
@@ -1286,12 +1595,16 @@ void ConsoleUI::InputLoop() noexcept {
         char ch = '\0';
         ssize_t n = ::read(STDIN_FILENO, &ch, 1u);
         if (0 >= n) {
-            if (EAGAIN == errno || EWOULDBLOCK == errno) {
+            int err = errno;
+            if (EAGAIN == err || EWOULDBLOCK == err || EINTR == err) {
+                // Transient: no data available yet — yield and retry.
                 ppp::Sleep(15);
-            } else {
-                ppp::Sleep(15);
+                continue;
             }
-            continue;
+
+            // Hard error (EIO, EBADF, …): stdin is broken.  Exit cleanly
+            // instead of spinning at 100 % CPU indefinitely.
+            break;
         }
 
         // Ctrl+A / Ctrl+E
@@ -1389,6 +1702,22 @@ bool ConsoleUI::EnableVirtualTerminal() noexcept {
 
 bool ConsoleUI::PrepareInputTerminal() noexcept {
 #if defined(_WIN32)
+    // Disable ENABLE_ECHO_INPUT and ENABLE_LINE_INPUT on stdin so that
+    // _kbhit()/_getch() deliver raw keystrokes without echoing them to the
+    // screen (which would corrupt the TUI frame).
+    win_stdin_handle_  = ::GetStdHandle(STD_INPUT_HANDLE);
+    win_in_mode_saved_ = false;
+
+    if (NULLPTR != win_stdin_handle_ && INVALID_HANDLE_VALUE != win_stdin_handle_) {
+        DWORD mode = 0;
+        if (::GetConsoleMode(static_cast<HANDLE>(win_stdin_handle_), &mode)) {
+            win_original_in_mode_ = mode;
+            win_in_mode_saved_    = true;
+            ::SetConsoleMode(static_cast<HANDLE>(win_stdin_handle_),
+                mode & ~(DWORD)(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT));
+        }
+    }
+
     return true;
 #else
     if (terminal_ready_) {
@@ -1425,6 +1754,15 @@ bool ConsoleUI::PrepareInputTerminal() noexcept {
 
 void ConsoleUI::RestoreInputTerminal() noexcept {
 #if defined(_WIN32)
+    // Restore the original stdin console mode saved by PrepareInputTerminal().
+    if (win_in_mode_saved_ &&
+        NULLPTR != win_stdin_handle_ &&
+        INVALID_HANDLE_VALUE != win_stdin_handle_) {
+        ::SetConsoleMode(static_cast<HANDLE>(win_stdin_handle_), win_original_in_mode_);
+    }
+
+    win_stdin_handle_  = NULLPTR;
+    win_in_mode_saved_ = false;
     return;
 #else
     if (!terminal_ready_) {

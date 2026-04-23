@@ -247,6 +247,7 @@
 #include <condition_variable>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <atomic>
 #include <thread>
 #include <utility>

@@ -3,6 +3,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file Firewall.cpp
@@ -200,7 +201,7 @@ namespace ppp
                 return false;
             }
 
-            SynchronizedObjectScope scope(syncobj_);
+            SharedSynchronizedObjectScope scope(syncobj_);
             ppp::unordered_set<int>* lists[] =
             {
                 &ports_,
@@ -267,7 +268,7 @@ namespace ppp
             {
                 UInt32 __ip = ip.to_v4().to_uint();
                 {
-                    SynchronizedObjectScope scope(syncobj_);
+                    SharedSynchronizedObjectScope scope(syncobj_);
                     return Firewall_IsDropNetworkSegment<UInt32>(ip, __ip, 32, network_segments_);
                 }
             }
@@ -279,7 +280,7 @@ namespace ppp
                     std::memcpy(&network_ip, __bytes_ip.data(), sizeof(network_ip));
                     Int128 __ip = Ipep::NetworkToHostOrder(network_ip);
                     {
-                        SynchronizedObjectScope scope(syncobj_);
+                        SharedSynchronizedObjectScope scope(syncobj_);
                         return Firewall_IsDropNetworkSegment<Int128>(ip, __ip, 128, network_segments_);
                     }
                 }
@@ -322,11 +323,11 @@ namespace ppp
                 return IsDropNetworkSegment(ip);
             }
 
-            // Take a snapshot of the domain table under a single lock acquisition so
+            // Take a snapshot of the domain table under a single shared-lock acquisition so
             // the entire suffix-walk evaluation is performed against a consistent view.
             NetworkDomainsTable domains_snapshot;
             {
-                SynchronizedObjectScope scope(syncobj_);
+                SharedSynchronizedObjectScope scope(syncobj_);
                 try
                 {
                     domains_snapshot = network_domains_;
@@ -541,13 +542,13 @@ namespace ppp
         {
             if (path.empty())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             ppp::string file_path = File::GetFullPath(File::RewritePath(path.data()).data());
             if (file_path.empty())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             ppp::string rules = File::ReadAllText(file_path.data());
@@ -565,7 +566,7 @@ namespace ppp
 
             if (rules.empty())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             ppp::vector<ppp::string> lines;

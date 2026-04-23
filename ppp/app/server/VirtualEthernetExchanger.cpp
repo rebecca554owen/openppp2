@@ -162,6 +162,16 @@ namespace ppp {
 
             /** @brief Finalizes all runtime objects and unregisters session from switcher. */
             void VirtualEthernetExchanger::Finalize() noexcept {
+                // BUG-15 + BUG-17: Guard against double-finalization.  disposed_ must be set
+                // to true at the very top, BEFORE any map is cleared, so that any concurrent
+                // async callback that checks disposed_ first will bail out immediately and will
+                // not touch datagrams_, mappings_, or timeouts_ after we release them.
+                if (disposed_) {
+                    return;
+                }
+
+                disposed_ = true;
+
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
                 for (;;) {
                     Dictionary::ReleaseAllObjects(datagrams_);
@@ -194,7 +204,6 @@ namespace ppp {
                         mux->close_exec();
                     }
 
-                    disposed_ = true;
                     break;
                 }
 
@@ -210,12 +219,15 @@ namespace ppp {
                 Dictionary::ReleaseAllObjects(static_echo_datagram_ports);
 
                 static_allocated_context_.reset();
+
+                // BUG-15: Guard every switcher call with a null check — switcher_ may be null
+                // if the constructor did not receive a valid switcher reference.
                 if (switcher_) {
                     switcher_->DeleteIPv6Exchanger(GetId());
+                    switcher_->DeleteExchanger(this);
+                    switcher_->DeleteNatInformation(this, address_);
+                    switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
                 }
-                switcher_->DeleteExchanger(this);
-                switcher_->DeleteNatInformation(this, address_);
-                switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
             }
 
             /** @brief Gets firewall assigned to this exchanger. */
@@ -436,6 +448,13 @@ namespace ppp {
                     if (HandleIPv6GatewayEchoReply(packet, packet_length, gateway.to_v6())) {
                         return DoNat(transmission_, packet, packet_length, y);
                     }
+                }
+
+                // Reject packets destined for loopback or multicast addresses; these
+                // must never be forwarded into the virtual network fabric.
+                if (destination.is_loopback() || destination.is_multicast()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
+                    return false;
                 }
 
                 VirtualEthernetSwitcher::VirtualEthernetExchangerPtr exchanger = switcher_->FindIPv6Exchanger(destination);
@@ -722,29 +741,43 @@ namespace ppp {
                 const auto max_buffer_size = PPP_BUFFER_SIZE;
                 const auto self = shared_from_this();
                 
+                // BUG-16: buffer_ is a shared scratch buffer owned by this exchanger.
+                // Multiple concurrent INTERNAL_RedirectDnsQuery calls are possible when
+                // the client sends several DNS queries in quick succession before any
+                // reply arrives.  Each outstanding async_receive_from must have its own
+                // dedicated receive buffer; sharing buffer_ across concurrent receives
+                // would cause later arriving data to corrupt an earlier in-flight read.
+                // Allocate a per-call heap buffer so every outstanding receive is
+                // independently owned and there is no aliasing between concurrent calls.
+                const std::shared_ptr<ppp::threading::BufferswapAllocator> recv_allocator = transmission->BufferAllocator;
+                const std::shared_ptr<Byte> recv_buffer = ppp::threading::BufferswapAllocator::MakeByteArray(recv_allocator, max_buffer_size);
+                if (NULLPTR == recv_buffer) {
+                    return false;
+                }
+
                 const auto responseEP = make_shared_object<boost::asio::ip::udp::endpoint>();
                 if (NULLPTR == responseEP) {
                     return false;
                 }
 
                 /** @brief Receives redirect DNS response and forwards to static/dynamic path. */
-                socket->async_receive_from(boost::asio::buffer(buffer_.get(), max_buffer_size),
+                socket->async_receive_from(boost::asio::buffer(recv_buffer.get(), max_buffer_size),
                     *responseEP,
-                    [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP, responseEP](boost::system::error_code ec, size_t sz) noexcept {
+                    [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP, responseEP, recv_buffer](boost::system::error_code ec, size_t sz) noexcept {
                         DeleteTimeout(socket.get());
                         if (ec == boost::system::errc::success) {
                             int bytes_transferred = static_cast<int>(sz);
                             if (bytes_transferred > 0) {
                                 if (static_transit) {
-                                    VirtualEthernetDatagramPortStatic::Output(switcher_.get(), this, buffer_.get(), bytes_transferred, sourceEP, destinationEP);
+                                    VirtualEthernetDatagramPortStatic::Output(switcher_.get(), this, recv_buffer.get(), bytes_transferred, sourceEP, destinationEP);
                                 }
-                                elif(!DoSendTo(transmission, sourceEP, destinationEP, buffer_.get(), bytes_transferred, nullof<YieldContext>())) {
+                                elif(!DoSendTo(transmission, sourceEP, destinationEP, recv_buffer.get(), bytes_transferred, nullof<YieldContext>())) {
                                     transmission->Dispose();
                                 }
 
                                 AppConfigurationPtr configuration = GetConfiguration();
                                 if (NULLPTR != configuration && configuration->udp.dns.cache) {
-                                    VirtualEthernetDatagramPort::NamespaceQuery(switcher_, buffer_.get(), bytes_transferred);
+                                    VirtualEthernetDatagramPort::NamespaceQuery(switcher_, recv_buffer.get(), bytes_transferred);
                                 }
                             }
                         }
@@ -861,8 +894,38 @@ namespace ppp {
                     [self, this, now]() noexcept {
                         int session_id = static_echo_session_id_.load();
                         if (session_id != 0) {
-                            SynchronizedObjectScope scope(static_echo_syncobj_);
-                            Dictionary::UpdateAllObjects(static_echo_datagram_ports_, now);
+                            // D1-4: Do NOT call UpdateAllObjects (which invokes Dispose() on expired
+                            // ports) while static_echo_syncobj_ is held.  Disposing a UDP datagram
+                            // port may trigger OS socket-close syscalls and re-entrant callbacks,
+                            // both of which must not run under the lock.
+                            //
+                            // Instead, collect all stale ports into a local vector under the lock,
+                            // erase them from the map, release the lock, and then dispose them
+                            // outside the lock.  This is the standard snapshot-and-release pattern.
+                            ppp::vector<VirtualEthernetDatagramPortStaticPtr> stale_ports;
+
+                            {
+                                SynchronizedObjectScope scope(static_echo_syncobj_);
+                                for (auto tail = static_echo_datagram_ports_.begin(); tail != static_echo_datagram_ports_.end();) {
+                                    const VirtualEthernetDatagramPortStaticPtr& port = tail->second;
+                                    if (NULLPTR == port || port->IsPortAging(now)) {
+                                        if (NULLPTR != port) {
+                                            stale_ports.emplace_back(port);
+                                        }
+
+                                        tail = static_echo_datagram_ports_.erase(tail);
+                                    }
+                                    else {
+                                        ++tail;
+                                    }
+                                }
+                            }
+
+                            // Dispose expired ports outside the lock to avoid holding
+                            // static_echo_syncobj_ across socket-close syscalls.
+                            for (auto& port : stale_ports) {
+                                IDisposable::Dispose(*port);
+                            }
                         }
 
                         UploadTrafficToManagedServer();
@@ -1103,17 +1166,30 @@ namespace ppp {
                     return forward(switcher_.get(), destination, packet, packet_length, y) > 0;
                 }
                 else {
+                    // BUG-19: The original loop iterated every host address in the subnet,
+                    // which is up to 16 million iterations for a /8 — blocking the IO thread
+                    // for an unbounded time.  Cap the broadcast walk at 256 host addresses to
+                    // bound worst-case latency while still covering practical subnet sizes
+                    // (/24 and smaller, which are the common deployment configurations).
+                    // Subnets larger than /24 will only have their first 256 hosts forwarded;
+                    // this is an intentional safety limit, not a correctness regression, because
+                    // iterating millions of addresses synchronously would stall every other
+                    // session on the same IO thread.
+                    static constexpr uint32_t kMaxBroadcastHosts = 256;
+
                     bool any = false;
                     uint32_t current = htonl(ip->src);
                     uint32_t mask = ntohl(source->SubmaskAddress);
                     uint32_t first = current & mask;
                     uint32_t boardcast = first | (~mask); // first | (~first & 0xff);
+                    uint32_t walked = 0;
 
-                    for (uint32_t address = first; address < boardcast; address++) {
+                    for (uint32_t address = first; address < boardcast && walked < kMaxBroadcastHosts; address++) {
                         if (current == address) {
                             continue;
                         }
 
+                        walked++;
                         int status = forward(switcher_.get(), htonl(address), packet, packet_length, y);
                         if (status < 0) {
                             break;

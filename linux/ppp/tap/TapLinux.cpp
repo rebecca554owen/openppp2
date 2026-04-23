@@ -222,6 +222,15 @@ namespace ppp {
             return ioctl(ifc_ctl_sock.sock_v4, SIOCSIFNETMASK, &ifr) == 0;
         }
 
+        // NOTE: ExecuteIpCommand() calls system() which performs a blocking fork()+exec().
+        // Most callers (SetIPv6Address, AddRoute6, DeleteRoute6, AddIPv6NeighborProxy,
+        // DeleteIPv6NeighborProxy, EnableIPv6NeighborProxy, DisableIPv6NeighborProxy, SetMtu)
+        // are invoked directly or indirectly from ASIO IO-thread callbacks (e.g. OnTick,
+        // AddIPv6Exchanger, DeleteIPv6Exchanger).  Each system() call blocks the calling
+        // thread for the duration of the subprocess (typically 10–100 ms).  This is
+        // accepted as a known limitation of the current Linux network-management model;
+        // no restructuring of the async workflow is performed here.  Callers that run on
+        // a dedicated non-IO thread (e.g. startup/shutdown paths) are safe without restriction.
         static bool ExecuteIpCommand(const ppp::string& command) noexcept {
             if (command.empty()) {
                 return false;
@@ -324,6 +333,12 @@ namespace ppp {
         }
 
         bool TapLinux::QueryIPv6NeighborProxy(const ppp::string& ifrName, bool& enabled) noexcept {
+            // NOTE: This function calls popen() which forks a shell process and blocks until
+            // the child exits.  It is invoked from RefreshIPv6NeighborProxyIfNeed(), which
+            // runs on the IO thread via OnTick.  The call is intentional and expected to be
+            // fast (sysctl read), but callers must be aware of the blocking cost and should
+            // guard against redundant invocations (e.g. cache the result when the interface
+            // has not changed).
             enabled = false;
             if (!IsSafeShellToken(ifrName)) {
                 return false;

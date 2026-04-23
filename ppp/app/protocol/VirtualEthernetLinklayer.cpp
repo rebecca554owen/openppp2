@@ -17,6 +17,7 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <cstring>       // for std::memcpy
 
@@ -128,7 +129,8 @@ namespace ppp {
                             try {
                                 return ppp::coroutines::asio::GetAddressByHostName<TProtocol>(hostname.data(), port, y);
                             } catch (...) {
-                                // DNS failed -> return empty endpoint
+                                // DNS resolution failed; record error and return empty endpoint.
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
                                 return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                             }
                         } else {

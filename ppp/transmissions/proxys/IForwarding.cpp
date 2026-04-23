@@ -957,10 +957,43 @@ namespace ppp {
                 }
             }
 
-            /** @brief Updates timeout aging for all active proxy connections. */
+            /**
+             * @brief Updates timeout aging for all active proxy connections.
+             *
+             * @param now  Current monotonic timestamp in milliseconds.
+             *
+             * @note  Snapshot-and-release pattern: expired ProxyConnection pointers are
+             *        moved into a local vector while syncobj_ is held (the erase is
+             *        atomic with respect to other writers).  Dispose() is then called
+             *        outside the lock to avoid holding syncobj_ across socket-close
+             *        syscalls and any ASIO internal queue operations performed by
+             *        ProxyConnection::Dispose().
+             */
             void IForwarding::Update(UInt64 now) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                Dictionary::UpdateAllObjects(connections_, now);
+                ppp::vector<ProxyConnectionPtr> stale;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto tail = connections_.begin(); tail != connections_.end();) {
+                        const ProxyConnectionPtr& conn = tail->second;
+                        if (NULLPTR == conn || conn->IsPortAging(now)) {
+                            if (NULLPTR != conn) {
+                                stale.emplace_back(conn);
+                            }
+
+                            tail = connections_.erase(tail);
+                        }
+                        else {
+                            ++tail;
+                        }
+                    }
+                }
+
+                // Dispose outside the lock — socket close syscalls and ASIO post()
+                // must not be performed while syncobj_ is held.
+                for (auto& conn : stale) {
+                    IDisposable::Dispose(*conn);
+                }
             }
 
             /** @brief Releases all tracked sockets, timers, and proxy connections. */

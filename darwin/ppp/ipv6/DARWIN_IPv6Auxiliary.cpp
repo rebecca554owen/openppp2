@@ -272,7 +272,7 @@ namespace ppp {
                     }
 
                     boost::asio::ip::address_v6 addr_v6 = address.to_v6();
-                    if (addr_v6.is_unspecified() || addr_v6.is_multicast() || addr_v6.is_loopback()) {
+                    if (addr_v6.is_unspecified() || addr_v6.is_multicast() || addr_v6.is_loopback() || addr_v6.is_link_local()) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 

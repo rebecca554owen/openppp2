@@ -9,10 +9,15 @@ namespace ppp::app {
 
 /**
  * @brief Initializes process-level console state and platform-specific UI settings.
+ *
+ * @note The terminal cursor visibility is intentionally *not* altered here.
+ *       ConsoleUI::Start() owns the cursor state for the duration of the TUI
+ *       session and restores it verbatim on Stop().  Touching the cursor at
+ *       construction time would corrupt redirected log files (the escape
+ *       sequence would be written into the pipe) and race with the TUI's own
+ *       save/restore sequence.
  */
 PppApplication::PppApplication() noexcept {
-    ppp::HideConsoleCursor(true);
-
 #if defined(_WIN32)
     SetConsoleTitle(TEXT("PPP PRIVATE NETWORK™ 2"));
 
@@ -38,10 +43,11 @@ PppApplication::~PppApplication() noexcept {
 
 /**
  * @brief Restores temporary process state and closes singleton guard handles.
+ *
+ * @note Cursor restoration is handled by ConsoleUI::Stop(); see the note on
+ *       the constructor for the rationale.
  */
 void PppApplication::Release() noexcept {
-    ppp::HideConsoleCursor(false);
-
 #if defined(_WIN32)
     ppp::win32::Win32Native::EnabledConsoleWindowClosedButton(true);
 #endif

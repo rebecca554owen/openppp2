@@ -9,6 +9,7 @@
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
+#include <ppp/diagnostics/Error.h>
 
 #ifdef _LINUX
 # include <netinet/tcp.h>
@@ -346,7 +347,7 @@ namespace ppp {
 
                 ppp::string hostname = fetch_sniaddr(tls_payload);
                 if (hostname.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, false);
                 }
 
                 return do_connect_and_forward_to_host(y, hostname,

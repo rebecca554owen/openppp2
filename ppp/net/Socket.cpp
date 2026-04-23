@@ -41,6 +41,7 @@
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 #if defined(__MUSL__)
 #include <err.h>
@@ -1031,7 +1032,7 @@ namespace ppp {
             }
 
             if (ec) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed);
             }
 
             int handle = acceptor_.native_handle();
@@ -1042,7 +1043,7 @@ namespace ppp {
 
             acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
             if (ec) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             }
 
             acceptor_.set_option(boost::asio::ip::tcp::no_delay(noDelay), ec);
@@ -1053,7 +1054,7 @@ namespace ppp {
                 if (listenPort != IPEndPoint::MinPort) {
                     acceptor_.bind(boost::asio::ip::tcp::endpoint(address_, IPEndPoint::MinPort), ec);
                     if (ec) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     }
                 }
             }
@@ -1064,7 +1065,7 @@ namespace ppp {
 
             acceptor_.listen(backlog, ec);
             if (ec) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketListenFailed);
             }
 
             return true;
@@ -1106,7 +1107,7 @@ namespace ppp {
                 }
 
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 }
             }
 
@@ -1118,7 +1119,7 @@ namespace ppp {
 
             socket_.set_option(boost::asio::ip::udp::socket::reuse_address(true), ec);
             if (ec) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             }
 
             socket_.bind(boost::asio::ip::udp::endpoint(address_, listenPort), ec);
@@ -1126,7 +1127,7 @@ namespace ppp {
                 if (listenPort != IPEndPoint::MinPort) {
                     socket_.bind(boost::asio::ip::udp::endpoint(address_, IPEndPoint::MinPort), ec);
                     if (ec) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     }
                 }
             }

@@ -52,6 +52,15 @@ namespace ppp {
                 /** @brief Locally allocated NAT port used on the loopback listener side. */
                 UInt16                                                      natPort = 0;
                 /**
+                 * @brief Full Int128 LAN2WAN key stored by the lwIP accept path.
+                 *        Standard NAT path flows leave this zero and use natPort for
+                 *        wan2lan_ lookup.  lwIP-path flows store the full key here so
+                 *        that CloseTcpLink() can locate and remove the correct wan2lan_
+                 *        entry without the Int128→UInt16 truncation that previously caused
+                 *        map entries to leak.  Zero for non-lwIP flows.
+                 */
+                Int128                                                      lwipKey = 0;
+                /**
                  * @brief Set once at link creation from the lwIP accept path; never mutated
                  *        afterwards.  Plain bool is safe — no cross-thread write after init.
                  */
@@ -80,8 +89,11 @@ namespace ppp {
                 std::atomic<UInt64>                                         lastTime  = { 0 };
                 /**
                  * @brief Bound outbound socket for this flow.
-                 *        Always accessed via std::atomic_load / std::atomic_store to prevent
-                 *        a data race between Input() threads and Update() / Closing().
+                 * @note  These fields MUST be accessed exclusively via `std::atomic_load` /
+                 *        `std::atomic_store` / `std::atomic_exchange` free functions
+                 *        (C++17 valid pattern).
+                 *        Do NOT use `std::atomic<std::shared_ptr<T>>` — that is a C++20
+                 *        feature and this project targets C++17.
                  */
                 std::shared_ptr<TapTcpClient>                               socket;
 
@@ -199,8 +211,15 @@ namespace ppp {
                 /** @brief Owning NAT flow link entry. */
                 std::shared_ptr<TapTcpLink>                                 link_;
 
-                std::shared_ptr<ITap>                                       sync_ack_tap_driver_;   ///< Protected by std::atomic_store/load (cross-thread).
-                std::shared_ptr<Byte>                                       sync_ack_byte_array_;   ///< Protected by std::atomic_store/load (cross-thread).
+                /**
+                 * @note  These fields MUST be accessed exclusively via `std::atomic_load` /
+                 *        `std::atomic_store` / `std::atomic_exchange` free functions
+                 *        (C++17 valid pattern).
+                 *        Do NOT use `std::atomic<std::shared_ptr<T>>` — that is a C++20
+                 *        feature and this project targets C++17.
+                 */
+                std::shared_ptr<ITap>                                       sync_ack_tap_driver_;   ///< Atomically-accessed TAP driver reference for SYN/ACK retry path.
+                std::shared_ptr<Byte>                                       sync_ack_byte_array_;   ///< Atomically-accessed SYN/ACK packet buffer for retry path.
                 std::atomic<Byte>                                           sync_ack_state_       = 0;
                 std::atomic<int>                                            sync_ack_bytes_size_  = 0; ///< Atomic: written by Output() thread, read by retry timer thread.
                 int                                                         sync_ack_retry_count_ = 0; ///< Single-threaded (context_ strand only); no atomic needed.

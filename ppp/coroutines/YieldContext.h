@@ -264,13 +264,8 @@ namespace ppp
              */
             void                                                                Invoke() noexcept;
 
-            /**
-             * @brief Entry trampoline called by `jump_fcontext` when a new coroutine starts.
-             * @param t Transfer structure holding the return context and data pointer.
-             * @note  Exceptions may propagate out only if the caller installs a try/catch
-             *        around `jump_fcontext`; internal code catches and swallows them.
-             */
-            static void                                                         Handle(boost::context::detail::transfer_t t) noexcept(false);
+            /** @brief Coroutine entry-point trampoline; must be noexcept (cannot throw across fcontext). */
+            static void                                                         Handle(boost::context::detail::transfer_t t) noexcept;
 
             /**
              * @brief Validates state and atomically transitions the suspend flag.

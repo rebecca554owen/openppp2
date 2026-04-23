@@ -740,7 +740,8 @@ namespace ppp {
 
             private:
                 SynchronizedObject                                      syncobj_;           ///< Mutex guarding all shared mutable tables.
-                bool                                                    disposed_  = false; ///< True after Dispose() has been called.
+                /** @brief Set to true after Dispose() begins; atomic for lock-free cross-thread reads via IsDisposed(). */
+                std::atomic<bool>                                       disposed_{false};
 
                 VirtualEthernetLoggerPtr                                logger_;                        ///< Session activity logger.
                 NatInformationTable                                     nats_;                          ///< IPv4 NAT ownership table (key = IP).
@@ -759,7 +760,8 @@ namespace ppp {
                 bool                                                    tun_ssmt_mq_ = false;           ///< Multi-queue mode flag for the transit TAP.
                 ppp::string                                             preferred_nic_;                 ///< Preferred NIC for routing/proxy operations.
                 ppp::string                                             ipv6_neighbor_proxy_ifname_;    ///< Interface used for NDP proxy entries.
-                bool                                                    ipv6_neighbor_proxy_owned_ = false; ///< True if this switcher opened the NDP proxy.
+                bool                                                    ipv6_neighbor_proxy_owned_ = false;    ///< True if this switcher opened the NDP proxy.
+                bool                                                    ipv6_ndp_proxy_applied_ = false;       ///< True once the sysctl proxy_ndp enable has been run for the current uplink interface.
                 ITapPtr                                                 ipv6_transit_tap_;              ///< IPv6 transit TAP device handle.
                 ppp::vector<std::shared_ptr<boost::asio::io_context>>   ipv6_transit_ssmt_contexts_;    ///< SSMT io_contexts for the transit TAP.
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;                   ///< Active TCP/IP connection objects.

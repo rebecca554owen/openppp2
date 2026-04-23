@@ -1,6 +1,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/io/File.h>
 #include <ppp/threading/BufferblockAllocator.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file BufferblockAllocator.cpp
@@ -135,6 +136,7 @@ namespace ppp
                     catch (const boost::interprocess::interprocess_exception&)
                     {
                         ppp::io::File::Delete(path.data());
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryMapFailed);
                     }
 
                     /**

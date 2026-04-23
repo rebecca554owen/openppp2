@@ -17,7 +17,10 @@
 
 namespace {
     static bool IsSafeIPv6ClientAddress(const boost::asio::ip::address_v6& address, int prefix_length, const boost::asio::ip::address_v6* gateway = NULLPTR) noexcept {
-        if (address.is_unspecified() || address.is_multicast() || address.is_loopback()) {
+        // Reject well-known non-routable or reserved address categories.
+        // Link-local (fe80::/10) must be excluded: they are interface-scoped and
+        // cannot be safely applied as a globally routable client address.
+        if (address.is_unspecified() || address.is_multicast() || address.is_loopback() || address.is_link_local()) {
             return false;
         }
 
@@ -474,6 +477,10 @@ namespace {
         }
         if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Nat66) {
             if (prefix.empty()) {
+                // When no prefix is configured, PrepareServerEnvironment only installs the
+                // MASQUERADE rule (keyed on uplink interface name).  No FORWARD rules are
+                // installed in this path because BuildIpv6ForwardRules requires a non-empty
+                // prefix.  Remove only the MASQUERADE rule here.
                 if (!uplink_name.empty()) {
                     snprintf(command, sizeof(command), "ip6tables -t nat -D POSTROUTING -o %s -j MASQUERADE >/dev/null 2>&1", uplink_name.data());
                     LinuxExecuteCommand(command);

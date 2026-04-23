@@ -79,11 +79,10 @@ The set is intentionally code-first. Each page is written from actual implementa
 | Usage | [`USER_MANUAL.md`](USER_MANUAL.md) | [`USER_MANUAL_CN.md`](USER_MANUAL_CN.md) |
 | Reading | [`SOURCE_READING_GUIDE.md`](SOURCE_READING_GUIDE.md) | [`SOURCE_READING_GUIDE_CN.md`](SOURCE_READING_GUIDE_CN.md) |
 | Architecture | [`EDSM_STATE_MACHINES.md`](EDSM_STATE_MACHINES.md) | [`EDSM_STATE_MACHINES_CN.md`](EDSM_STATE_MACHINES_CN.md) |
-| UI | [`TUI_DESIGN.md`](TUI_DESIGN.md) | *(English only)* |
+| UI | [`TUI_DESIGN.md`](TUI_DESIGN.md) | [`TUI_DESIGN_CN.md`](TUI_DESIGN_CN.md) |
 | Diagnostics | [`ERROR_CODES.md`](ERROR_CODES.md) | [`ERROR_CODES_CN.md`](ERROR_CODES_CN.md) |
 | Diagnostics | [`ERROR_HANDLING_API.md`](ERROR_HANDLING_API.md) | [`ERROR_HANDLING_API_CN.md`](ERROR_HANDLING_API_CN.md) |
 | Protocol | [`TUNNEL_DESIGN.md`](TUNNEL_DESIGN.md) | [`TUNNEL_DESIGN_CN.md`](TUNNEL_DESIGN_CN.md) |
-| Stability | [`IPV6_FIXES.md`](IPV6_FIXES.md) | *(English only)* |
 
 ## Reading Principle
 

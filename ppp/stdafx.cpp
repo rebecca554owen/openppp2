@@ -1130,6 +1130,9 @@ namespace ppp {
         else {
             fprintf(stdout, "\033[?25h");
         }
+        // Flush immediately so the escape reaches the terminal even if the
+        // process exits abnormally (e.g. SIGTERM) before stdio buffers drain.
+        fflush(stdout);
         return true;
 #endif
     }

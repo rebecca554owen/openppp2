@@ -5,6 +5,7 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 typedef ppp::net::Socket                        Socket;
 typedef ppp::net::native::ip_hdr                ip_hdr;
@@ -369,13 +370,13 @@ namespace ppp {
 
                 const int sockfd = ::socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
                 if (sockfd == -1) {
-                    return false; /* ::socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP); */
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketCreateFailed, false); /* ::socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP); */
                 }
                 else {
                     const int TTL = packet->Ttl;
                     if (::setsockopt(sockfd, IPPROTO_IP, IP_TTL, (char*)&TTL, sizeof(TTL))) { // SOL_SOCKET, SO_SNDTIMEO, SO_RCVTIMEO
                         Socket::Closesocket(sockfd);
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed, false);
                     }
                 }
 
@@ -383,7 +384,7 @@ namespace ppp {
                 const std::shared_ptr<boost::asio::ip::udp::socket> socket = make_shared_object<boost::asio::ip::udp::socket>(*executor_);
                 if (!socket) {
                     Socket::Closesocket(sockfd);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketCreateFailed, false);
                 }
 
                 ppp::net::Socket::AdjustDefaultSocketOptional(sockfd, packet->AddressesFamily == AddressFamily::InterNetwork);
@@ -394,19 +395,19 @@ namespace ppp {
                 socket->assign(boost::asio::ip::udp::v4(), sockfd, ec);
                 if (ec) {
                     Socket::Closesocket(sockfd);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed, false);
                 }
 
                 UInt32 identification_nat = 0;
                 if (!InternetControlMessageProtocol_Global::GetDefault().Allocated(identification_nat)) {
                     Socket::Closesocket(socket);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ResourceExhaustedSockets, false);
                 }
 
                 const std::shared_ptr<EchoAsynchronousContext> context = make_shared_object<EchoAsynchronousContext>(identification_nat);
                 if (!context) {
                     Socket::Closesocket(socket);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, false);
                 }
                 else {
                     const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = this->BufferAllocator;
@@ -424,7 +425,7 @@ namespace ppp {
                         boost::asio::socket_base::message_end_of_record, ec);
                     if (ec) {
                         Socket::Closesocket(socket);
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketWriteFailed, false);
                     }
                 }
 
@@ -438,7 +439,7 @@ namespace ppp {
                     });
                 if (!timeout_cb) {
                     Socket::Closesocket(socket);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, false);
                 }
 
                 context->timeout_ = Timer::Timeout(executor_, MAX_ICMP_TIMEOUT, *timeout_cb);
@@ -455,7 +456,7 @@ namespace ppp {
                 }
                 else {
                     context->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericAlreadyExists, false);
                 }
             }
 

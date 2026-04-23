@@ -167,10 +167,10 @@ namespace ppp {
                  * @brief TOCTOU guard: re-check for an existing entry inside the lock.
                  *
                  * A concurrent thread may have inserted the same key between the unlocked
-                 * FindTcpLink() call above (line ~156) and this lock acquisition.  Without
-                 * this check, two threads could both pass the unlocked read (both see no
-                 * entry), then both insert — producing duplicate NAT mappings and state
-                 * corruption for the same source flow.
+                 * FindTcpLink() call above and this lock acquisition.  Without this check,
+                 * two threads could both pass the unlocked read (both see no entry), then
+                 * both insert — producing duplicate NAT mappings and state corruption for
+                 * the same source flow.
                  */
                 {
                     auto existing_tail = lan2wan_.find(key);
@@ -179,12 +179,18 @@ namespace ppp {
                     }
                 }
 
-                for (int traversePort = IPEndPoint::MinPort; NULLPTR == link && traversePort < IPEndPoint::MaxPort; traversePort++) {
-                    newPort = IPEndPoint::MinPort;
-                    for (int c = IPEndPoint::MinPort; c <= IPEndPoint::MaxPort; c++) {
+                /**
+                 * @brief Port scan: find one free NAT port and allocate the link.
+                 *        The outer for-loop that previously wrapped this block always broke
+                 *        on its first iteration; it has been removed (L4-5) to eliminate the
+                 *        dead O(N²) shell.  The inner scan is preserved as-is.
+                 */
+                if (NULLPTR == link) {
+                    for (int c = 0; c <= IPEndPoint::MaxPort; c++) {
                         int localPort = ++this->ap_;
                         if (localPort <= IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort) {
-                            this->ap_ = IPEndPoint::MinPort;
+                            this->ap_ = IPEndPoint::MinPort + 1;
+                            localPort = this->ap_;
                         }
 
                         if (localPort == this->listenEP_.Port) {
@@ -199,25 +205,20 @@ namespace ppp {
                         }
                     }
 
-                    if (newPort == IPEndPoint::MinPort) {
-                        break;
+                    if (0 != newPort) {
+                        link = make_shared_object<TapTcpLink>();
+                        if (NULLPTR != link) {
+                            link->dstAddr = dst_ip;
+                            link->dstPort = dst_port;
+                            link->srcAddr = src_ip;
+                            link->srcPort = src_port;
+                            link->natPort = newPort;
+                            link->state.store((Byte)TcpState::TCP_STATE_SYN_RECEIVED, std::memory_order_relaxed);
+
+                            this->lan2wan_[key]     = link;
+                            this->wan2lan_[newPort] = link;
+                        }
                     }
-
-                    link = make_shared_object<TapTcpLink>();
-                    if (NULLPTR == link) {
-                        break;
-                    }
-
-                    link->dstAddr = dst_ip;
-                    link->dstPort = dst_port;
-                    link->srcAddr = src_ip;
-                    link->srcPort = src_port;
-                    link->natPort = newPort;
-                    link->state.store((Byte)TcpState::TCP_STATE_SYN_RECEIVED, std::memory_order_relaxed);
-
-                    this->lan2wan_[key] = link;
-                    this->wan2lan_[newPort] = link;
-                    break;
                 }
             }
 
@@ -354,7 +355,7 @@ namespace ppp {
                 // the tables are cleared but before listenPort_ reads return MinPort.
                 listenPort_.store(IPEndPoint::MinPort, std::memory_order_release);
                 listenEP_ = IPEndPoint();
-                lwip_     = IPEndPoint::MinPort;
+                lwip_     = false;
                 ap_       = RandomNext(IPEndPoint::MinPort, IPEndPoint::MaxPort);
                 break;
             }
@@ -568,116 +569,119 @@ namespace ppp {
 
         /**
          * @brief Performs periodic flow timeout scan and cleanup.
+         *
+         * Snapshot-and-release pattern (L4-10): the wan2lan_ table is copied under a
+         * brief syncobj_ lock, then the lock is dropped before the O(N) per-entry
+         * evaluation.  CloseTcpLink() re-acquires syncobj_ internally per entry, so
+         * there is no lock held across the full traversal.
          */
         bool VNetstack::Update(uint64_t now) noexcept {
             const uint64_t MaxEstablishedTimeout = GetMaxEstablishedTimeout();
-            const uint64_t MaxFinalizeTimeout = GetMaxFinalizeTimeout();
-            const uint64_t MaxConnectTimeout = GetMaxConnectTimeout();
+            const uint64_t MaxFinalizeTimeout    = GetMaxFinalizeTimeout();
+            const uint64_t MaxConnectTimeout     = GetMaxConnectTimeout();
 
-            std::shared_ptr<TapTcpClient> socket;
-            std::shared_ptr<TapTcpLink> link;
-
-            /**
-             * @brief Collect expired links first, then close outside lock.
-             */
-            ppp::vector<TapTcpLink::Ptr> releases;
-            for (;;) {
+            // Step 1: Snapshot the table under a brief lock.
+            WAN2LANTABLE snapshot;
+            {
                 SynchronizedObjectScope scope(syncobj_);
+                if (wan2lan_.empty()) {
+                    return true;
+                }
 
-                auto tail = this->wan2lan_.begin(); 
-                auto endl = this->wan2lan_.end();
-                while (tail != endl) {
-                    link = tail->second;
-                    if (NULLPTR == link) {
-                        tail = this->wan2lan_.erase(tail);
-                        continue;
-                    }
-                    else {
-                        tail++;
-                    }
+                snapshot = wan2lan_;   // O(N) copy; shared_ptr ref-count increments only.
+            }
+            // syncobj_ is released here; the snapshot keeps all links alive.
 
-                    UInt64 deltaTime = now - link->lastTime.load(std::memory_order_relaxed);
-                    if (link->lwip) {
-                        socket = std::atomic_load(&link->socket);
-                        if (NULLPTR == socket) {
-                            TcpState ls0 = (TcpState)link->state.load(std::memory_order_relaxed);
-                            bool syn = ls0 == TcpState::TCP_STATE_SYN_SENT || ls0 == TcpState::TCP_STATE_SYN_RECEIVED;
-                            if (!syn) {
-                                releases.emplace_back(link);
-                            }
-                        }
-                        elif(socket->IsDisposed()) {
+            // Step 2: Iterate the snapshot without holding syncobj_.
+            std::shared_ptr<TapTcpClient> socket;
+            ppp::vector<TapTcpLink::Ptr> releases;
+
+            for (auto& kv : snapshot) {
+                std::shared_ptr<TapTcpLink> link = kv.second;
+                if (NULLPTR == link) {
+                    continue;
+                }
+
+                UInt64 deltaTime = now - link->lastTime.load(std::memory_order_relaxed);
+                if (link->lwip) {
+                    socket = std::atomic_load(&link->socket);
+                    if (NULLPTR == socket) {
+                        TcpState ls0 = (TcpState)link->state.load(std::memory_order_relaxed);
+                        bool syn = ls0 == TcpState::TCP_STATE_SYN_SENT || ls0 == TcpState::TCP_STATE_SYN_RECEIVED;
+                        if (!syn) {
                             releases.emplace_back(link);
                         }
-                        else {
-                            uint64_t maxTimeout = (TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_ESTABLISHED ? MaxEstablishedTimeout : MaxFinalizeTimeout;
-                            if (deltaTime >= maxTimeout) {
-                                releases.emplace_back(link);
-                            }
-                        }
-
-                        continue;
                     }
-#ifdef SYSNAT   
-                    else {
-                        socket = std::atomic_load(&link->socket);
-                        if (NULL != socket) {
-                            /**
-                             * @brief sysnat_status_ is std::atomic<int>; a lock-free
-                             *        acquire-load is sufficient here.  Acquiring
-                             *        sysnat_synbobj_ while syncobj_ is already held
-                             *        would create an inconsistent lock-ordering with
-                             *        other code paths that hold sysnat_synbobj_ alone,
-                             *        introducing a potential stall (and, if a third
-                             *        lock were ever added, a deadlock cycle).  The
-                             *        atomic read is the correct, safe alternative.
-                             */
-                            if (socket->sysnat_status_.load(std::memory_order_acquire) > 0) {
-                                continue;
-                            }
-                        }
-                    }
-#endif
-                    /**
-                     * @brief Snapshot state atomically once; reuse across all comparisons in
-                     *        this scan iteration to avoid repeated atomic reads and to ensure
-                     *        consistent state across the if/elif/goto chain.
-                     */
-                    TcpState lsn = (TcpState)link->state.load(std::memory_order_relaxed);
-                    if (lsn == TcpState::TCP_STATE_ESTABLISHED) {
-                        goto TCP_STATE_INACTIVE;
-                    }
-                    elif(lsn == TcpState::TCP_STATE_CLOSED) {
+                    elif(socket->IsDisposed()) {
                         releases.emplace_back(link);
                     }
-                    elif(lsn > TcpState::TCP_STATE_ESTABLISHED) {
-                    TCP_STATE_FINALIZE:
-                        if (deltaTime >= MaxFinalizeTimeout) {
-                            releases.emplace_back(link);
-                        }
-                    }
-                    elif(lsn == TcpState::TCP_STATE_SYN_SENT || lsn == TcpState::TCP_STATE_SYN_RECEIVED) {
-                        if (deltaTime >= MaxConnectTimeout) {
-                            releases.emplace_back(link);
-                        }
-                    }
                     else {
-                    TCP_STATE_INACTIVE:
-                        socket = std::atomic_load(&link->socket);
-                        if (NULLPTR == socket || socket->IsDisposed()) {
-                            goto TCP_STATE_FINALIZE;
-                        }
-
-                        if (deltaTime >= MaxEstablishedTimeout) {
+                        uint64_t maxTimeout = (TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_ESTABLISHED ? MaxEstablishedTimeout : MaxFinalizeTimeout;
+                        if (deltaTime >= maxTimeout) {
                             releases.emplace_back(link);
+                        }
+                    }
+
+                    continue;
+                }
+#ifdef SYSNAT
+                else {
+                    socket = std::atomic_load(&link->socket);
+                    if (NULL != socket) {
+                        /**
+                         * @brief sysnat_status_ is std::atomic<int>; a lock-free
+                         *        acquire-load is sufficient here.  Acquiring
+                         *        sysnat_synbobj_ while syncobj_ is already held
+                         *        would create an inconsistent lock-ordering with
+                         *        other code paths that hold sysnat_synbobj_ alone,
+                         *        introducing a potential stall (and, if a third
+                         *        lock were ever added, a deadlock cycle).  The
+                         *        atomic read is the correct, safe alternative.
+                         */
+                        if (socket->sysnat_status_.load(std::memory_order_acquire) > 0) {
+                            continue;
                         }
                     }
                 }
+#endif
+                /**
+                 * @brief Snapshot state atomically once; reuse across all comparisons in
+                 *        this scan iteration to avoid repeated atomic reads and to ensure
+                 *        consistent state across the if/elif/goto chain.
+                 */
+                TcpState lsn = (TcpState)link->state.load(std::memory_order_relaxed);
+                if (lsn == TcpState::TCP_STATE_ESTABLISHED) {
+                    goto TCP_STATE_INACTIVE;
+                }
+                elif(lsn == TcpState::TCP_STATE_CLOSED) {
+                    releases.emplace_back(link);
+                }
+                elif(lsn > TcpState::TCP_STATE_ESTABLISHED) {
+                TCP_STATE_FINALIZE:
+                    if (deltaTime >= MaxFinalizeTimeout) {
+                        releases.emplace_back(link);
+                    }
+                }
+                elif(lsn == TcpState::TCP_STATE_SYN_SENT || lsn == TcpState::TCP_STATE_SYN_RECEIVED) {
+                    if (deltaTime >= MaxConnectTimeout) {
+                        releases.emplace_back(link);
+                    }
+                }
+                else {
+                TCP_STATE_INACTIVE:
+                    socket = std::atomic_load(&link->socket);
+                    if (NULLPTR == socket || socket->IsDisposed()) {
+                        goto TCP_STATE_FINALIZE;
+                    }
 
-                break;
+                    if (deltaTime >= MaxEstablishedTimeout) {
+                        releases.emplace_back(link);
+                    }
+                }
             }
 
-            for (const std::shared_ptr<TapTcpLink>& i : releases) {
+            // Step 3: Close identified links (CloseTcpLink acquires syncobj_ internally).
+            for (const TapTcpLink::Ptr& i : releases) {
                 if (NULLPTR != i) {
                     this->CloseTcpLink(i);
                 }
@@ -787,7 +791,9 @@ namespace ppp {
             else {
                 SynchronizedObjectScope scope(syncobj_);
 
-                auto tail_wan2lan = this->wan2lan_.find(link->natPort);
+                // Use the full Int128 key for lwIP-path links; the lower-16-bit natPort for standard NAT.
+                Int128 wan_key = (Int128(0) != link->lwipKey) ? link->lwipKey : Int128(link->natPort);
+                auto tail_wan2lan = this->wan2lan_.find(wan_key);
                 auto endl_wan2lan = this->wan2lan_.end();
                 if (tail_wan2lan != endl_wan2lan) {
                     this->wan2lan_.erase(tail_wan2lan);
@@ -909,7 +915,7 @@ namespace ppp {
 
                     pcb = this->BeginAcceptClient(localEP, remoteEP);
                     if (NULLPTR != pcb) {
-                        pcb->lwip_ = link->natPort;
+                        pcb->lwip_ = link->lwipKey;   // Non-zero key marks this TapTcpClient as lwIP-path.
                         pcb->link_ = link;
                         std::atomic_store(&link->socket, pcb);
                     }
@@ -965,7 +971,8 @@ namespace ppp {
                 link->dstPort = ntohs(dstPort);
                 link->srcAddr = srcAddr;
                 link->srcPort = ntohs(srcPort);
-                link->natPort = (UInt16)key;
+                link->natPort = 0;       // Not used as a real NAT port in the lwIP path.
+                link->lwipKey = key;     // Store full Int128 key for wan2lan_ lookup on close.
                 link->lwip = true;
                 link->closed.store(false, std::memory_order_relaxed);
                 link->state.store((Byte)TcpState::TCP_STATE_SYN_SENT, std::memory_order_relaxed);

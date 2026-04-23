@@ -65,10 +65,39 @@ namespace ppp {
 
                 /**
                  * @brief Runs periodic aging checks over tracked connections.
+                 *
+                 * @param now  Current tick count in milliseconds.
+                 *
+                 * @note  Snapshot-and-release pattern: expired connection pointers are moved
+                 *        into a local vector while syncobj_ is held, the map entries are
+                 *        erased, then Dispose() is called outside the lock.  This prevents a
+                 *        potential re-entrant deadlock if a connection's Dispose() callback
+                 *        tries to call back into VEthernetLocalProxySwitcher under syncobj_.
                  */
                 void VEthernetLocalProxySwitcher::Update(UInt64 now) noexcept {
-                    SynchronizedObjectScope scope(syncobj_);
-                    ppp::collections::Dictionary::UpdateAllObjects(connections_, now);
+                    ppp::vector<VEthernetLocalProxyConnectionPtr> stale;
+
+                    {
+                        SynchronizedObjectScope scope(syncobj_);
+                        for (auto tail = connections_.begin(); tail != connections_.end();) {
+                            const VEthernetLocalProxyConnectionPtr& conn = tail->second;
+                            if (NULLPTR == conn || conn->IsPortAging(now)) {
+                                if (NULLPTR != conn) {
+                                    stale.emplace_back(conn);
+                                }
+
+                                tail = connections_.erase(tail);
+                            }
+                            else {
+                                ++tail;
+                            }
+                        }
+                    }
+
+                    // Dispose outside the lock to prevent re-entrant acquisition of syncobj_.
+                    for (auto& conn : stale) {
+                        IDisposable::Dispose(*conn);
+                    }
                 }
 
                 /**

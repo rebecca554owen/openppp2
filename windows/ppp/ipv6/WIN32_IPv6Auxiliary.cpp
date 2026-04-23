@@ -167,7 +167,11 @@ namespace ppp {
                     }
 
                     boost::asio::ip::address_v6 addr_v6 = address.to_v6();
-                    if (addr_v6.is_unspecified() || addr_v6.is_multicast() || addr_v6.is_loopback()) {
+                    // Reject non-routable or interface-scoped address categories.
+                    // Link-local (fe80::/10) addresses must not be applied to the
+                    // TAP adapter as client addresses because they are interface-scoped
+                    // and cannot participate in global routing.
+                    if (addr_v6.is_unspecified() || addr_v6.is_multicast() || addr_v6.is_loopback() || addr_v6.is_link_local()) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 

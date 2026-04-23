@@ -46,13 +46,13 @@ namespace ppp {
             /** @brief Returns a shared reference to this QoS instance. */
             std::shared_ptr<ITransmissionQoS>                           GetReference()                noexcept { return shared_from_this(); }
             /** @brief Returns the configured bandwidth limit in Kbps (0 = unlimited). */
-            Int64                                                       GetBandwidth()                noexcept { return bandwidth_; }
+            Int64                                                       GetBandwidth()                noexcept { return bandwidth_.load(std::memory_order_relaxed); }
             /**
              * @brief Updates the bandwidth limit.
              * @param bandwidth New limit in Kbps; values less than 1 disable throttling.
-             * @note  Applied atomically via plain assignment; values below 1 are clamped to 0 (ReLU).
+             * @note  Stored atomically with relaxed ordering; values below 1 are clamped to 0 (ReLU).
              */
-            void                                                        SetBandwidth(Int64 bandwidth) noexcept { bandwidth_ = bandwidth < 1 ? 0 : bandwidth; /* ReLU */ }
+            void                                                        SetBandwidth(Int64 bandwidth) noexcept { bandwidth_.store(bandwidth < 1 ? 0 : bandwidth, std::memory_order_relaxed); /* ReLU */ }
             /**
              * @brief Checks whether the current second already consumed the configured limit.
              * @return true if reads should be throttled; otherwise false.
@@ -61,7 +61,7 @@ namespace ppp {
                 // The unit "bps" stands for bits per second, where "b" represents bits.
                 // Therefore, 1 Kbps can be correctly expressed in English as "one kilobit per second," 
                 // Where "K" stands for kilo - (representing a factor of 1, 000).
-                Int64 bandwidth = bandwidth_;
+                Int64 bandwidth = bandwidth_.load(std::memory_order_relaxed);
                 if (bandwidth < 1) {
                     return false;
                 }
@@ -159,8 +159,8 @@ namespace ppp {
             SynchronizedObject                                          syncobj_;
             /** @brief Bound io_context used to post deferred callbacks and disposal. */
             std::shared_ptr<boost::asio::io_context>                    context_;
-            /** @brief Configured bandwidth limit in Kbps; 0 means unlimited. */
-            Int64                                                       bandwidth_ = 0;
+            /** @brief Configured bandwidth limit in Kbps; 0 means unlimited. Atomic for lock-free cross-thread reads. */
+            std::atomic<Int64>                                          bandwidth_ = 0;
             /** @brief Millisecond timestamp of the start of the current QoS window. */
             UInt64                                                      last_      = 0;
             /** @brief Byte counter for the current one-second window (scaled; divide by 128 for Kbps). */

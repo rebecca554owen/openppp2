@@ -53,10 +53,29 @@ namespace ppp
         class Firewall  
         {
         public:
-            /** @brief Mutex type used to protect all internal rule tables. */
-            typedef std::mutex                                      SynchronizedObject;
-            /** @brief RAII lock guard type for @ref SynchronizedObject. */
-            typedef std::lock_guard<SynchronizedObject>             SynchronizedObjectScope;
+            /**
+             * @brief Shared mutex type used to protect all internal rule tables.
+             *
+             * @ref std::shared_mutex is chosen over @ref std::mutex so that
+             * concurrent read-only queries (hot packet-processing path) can proceed
+             * in parallel while rule-mutation operations still take an exclusive lock.
+             */
+            typedef std::shared_mutex                               SynchronizedObject;
+            /**
+             * @brief RAII exclusive-lock guard for write operations on @ref syncobj_.
+             *
+             * Used by all mutating methods (Drop*, Clear, Load*) to guarantee
+             * exclusive access while the rule tables are being modified.
+             */
+            typedef std::unique_lock<SynchronizedObject>            SynchronizedObjectScope;
+            /**
+             * @brief RAII shared-lock guard for read-only operations on @ref syncobj_.
+             *
+             * Used by all query methods (IsDropNetworkPort, IsDropNetworkSegment,
+             * IsDropNetworkDomains) so that multiple reader threads can evaluate
+             * drop decisions concurrently without blocking one another.
+             */
+            typedef std::shared_lock<SynchronizedObject>            SharedSynchronizedObjectScope;
             /**
              * @brief Mapping of normalized network base address to prefix length.
              *

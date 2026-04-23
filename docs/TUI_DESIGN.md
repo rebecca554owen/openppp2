@@ -136,7 +136,7 @@ current console handle).
 
 ### System command execution
 
-Non-built-in commands are executed in a **detached std::thread** to avoid blocking the
+Non-built-in commands are executed in a **tracked std::thread** to avoid blocking the
 input loop:
 
 - **Windows**: `cmd /c <command> 2>&1`
@@ -144,28 +144,87 @@ input loop:
 
 Output lines from the subprocess are appended to `cmd_lines_` one at a time via `AppendLine()`.
 
+Thread lifecycle is tracked via a `pending_shell_threads_` atomic counter: the counter is
+incremented before the thread is launched and decremented (with `render_cv_.notify_one()`)
+when it exits.  `Stop()` performs a bounded wait (up to 5 s) for the counter to reach zero
+before tearing down shared state, preventing use-after-free on the ConsoleUI instance.
+
 ---
 
 ## Refresh strategy
 
+The render pipeline is designed around three principles: **no per-frame cursor
+toggling**, **no per-frame full-screen clear**, and **repaint-on-demand** driven
+by a dirty flag.  Together these eliminate all cursor flicker and stdout churn
+that plagued earlier revisions of this subsystem.
+
 ```
-RenderLoop
-  ├─ DrainStatusQueue()    — update vpn_state_text_ / speed_text_
-  ├─ RenderFrame()         — build + write one complete frame
-  └─ Sleep(100 ms)         — ~10 Hz update rate
+RenderLoop (condition_variable tick, max 100 ms)
+  ├─ render_cv_.wait_for(lock, 100ms)
+  ├─ DrainStatusQueue()     — short-lock swap of status_queue_, process outside lock
+  ├─ need_redraw = dirty_.exchange(false) || force_redraw_
+  ├─ if (terminal size changed) force_redraw_ = true; need_redraw = true
+  ├─ if (need_redraw) RenderFrame()
+  └─ (loop — woken immediately by MarkDirty() or up to 100 ms idle wait)
 ```
 
-`RenderFrame()` builds the entire frame as a single `ppp::string` in memory and emits it
-with one `fwrite()` + `fflush()`.  This double-buffering approach prevents partial-frame
-tearing.
+Every public mutator (`AppendLine`, `UpdateStatus`, `SetInfoLines`, every
+`Insert*` / `Move*` / `Erase*` / `Scroll*` method, and `HandleEnter`) calls
+`MarkDirty()` after releasing the lock.  `MarkDirty()` also calls
+`render_cv_.notify_one()`, so the render thread wakes within microseconds of
+any UI state change rather than at a fixed 20 Hz cadence.  The render thread
+coalesces multiple dirty marks into a single frame draw, so bursty input does
+not produce bursty I/O.
 
-When `vt_enabled_` is true:
+`DrainStatusQueue()` uses a two-phase lock pattern: acquire `lock_` for a
+minimum-duration `std::swap` of the queue into a local variable, release
+`lock_`, process the local variable (string parsing, `ToLower`, etc.), then
+acquire `lock_` again only for the final write-back of `vpn_state_text_` and
+`speed_text_`.  This keeps the render thread's lock hold time minimal.
 
-1. `\x1b[?25l` — hide cursor before drawing
-2. `\x1b[2J\x1b[H` — clear screen and home
-3. Full frame content (box borders + colored art + section content)
-4. `\x1b[row;col H` — move cursor to input line position
-5. `\x1b[?25h` — show cursor
+### Cursor handling (flicker-free)
+
+The real terminal cursor is **hidden for the entire lifetime of the TUI
+session** and is only made visible again by `Stop()` during shutdown.  The
+caret position inside the editor line is conveyed by a single
+reverse-video white block that `BuildEditorLine()` embeds at the appropriate
+byte offset:
+
+```
+> Editor text with caret█here
+             ^^^^^^^^^^^
+             rendered as "\x1b[7m h\x1b[0m"  (reverse-video 'h')
+```
+
+Because the block is part of the rendered string, it moves atomically with
+every other character in the frame and never produces the cursor-jitter that
+arises from cyclic `\x1b[?25h` / `\x1b[?25l` sequences.
+
+### Minimal-clear strategy
+
+`RenderFrame()` emits:
+
+| Condition                        | Escape sequence emitted |
+|----------------------------------|--------------------------|
+| First frame after `Start()`      | `\x1b[2J\x1b[H` (full clear + home) |
+| Terminal size changed            | `\x1b[2J\x1b[H` (full clear + home) |
+| All other frames                 | `\x1b[H` (cursor home only)         |
+
+Each row in the frame string already occupies the full terminal width (the
+box builders right-pad to exactly `width` columns), so a simple cursor-home
+followed by a full-height overwrite is sufficient to erase the previous
+frame without the screen flash produced by `\x1b[2J`.
+
+### Alternate screen buffer
+
+`Start()` enters the terminal's alternate screen buffer via `\x1b[?1049h`
+and `Stop()` leaves it via `\x1b[?1049l`.  The alt-screen buffer is
+preserved by the terminal emulator, so when the TUI exits the user's
+original shell prompt, scrollback, and cursor position re-appear exactly
+as they were before the process launched.  On Windows the pre-session
+console output mode (`GetConsoleMode`) and cursor visibility
+(`GetConsoleCursorInfo`) are additionally snapshotted at `Start()` and
+restored in `Stop()`.
 
 ---
 
@@ -202,6 +261,14 @@ copies) and then work on their local copies.
 `running_` is a `std::atomic<bool>` used for lock-free thread lifecycle signaling with
 `compare_exchange_strong(memory_order_acq_rel)`.
 
+`pending_shell_threads_` (`std::atomic<int>`) tracks the count of live shell subprocess
+threads.  `Stop()` waits (bounded by 5 s) until this counter reaches zero before
+destroying shared state.
+
+`render_cv_` (`std::condition_variable`) is used by `MarkDirty()` and the shell threads
+to wake the render thread without spinning.  It is guarded by `render_cv_mutex_`
+(separate from `lock_` to avoid contention).
+
 ---
 
 ## Data flow
@@ -231,10 +298,15 @@ sequenceDiagram
 
 ## Platform differences
 
-| Platform | VT100 setup                               | Raw input mode            |
-|----------|-------------------------------------------|---------------------------|
-| Windows  | `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING)` | `_kbhit()` / `_getch()` polling |
-| POSIX    | Assumed supported                         | `tcsetattr(TCSANOW, raw)` + `O_NONBLOCK` on stdin |
+| Platform | VT100 setup | Raw input mode | stdin mode setup |
+|----------|-------------|----------------|-----------------|
+| Windows  | `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING)` | `_kbhit()` / `_getch()` polling | `PrepareInputTerminal()` clears `ENABLE_ECHO_INPUT` and `ENABLE_LINE_INPUT` on `STD_INPUT_HANDLE`; original flags saved and restored by `RestoreInputTerminal()` |
+| POSIX    | Assumed supported | `tcsetattr(TCSANOW, raw)` + `O_NONBLOCK` on stdin | `tcsetattr` clears `ECHO`, `ICANON`, `ISIG`; original `termios` and `fcntl` flags saved and restored |
+
+**Scroll bounds:** The maximum scroll offset for both the info and cmd panels is clamped
+to `max(0, (int)content_lines - panel_height)`.  This prevents over-scrolling past the
+last content line and eliminates the blank rows that appeared at the top of the panel
+in earlier revisions.
 
 ---
 

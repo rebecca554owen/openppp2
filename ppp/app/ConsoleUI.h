@@ -139,6 +139,25 @@ private:
     /** @brief Drains status_queue_ and updates vpn_state_text_ / speed_text_. */
     void                    DrainStatusQueue() noexcept;
 
+    /**
+     * @brief Marks the UI as dirty so the render loop will redraw on its
+     *        next tick.  Called by every mutator on the data model.
+     */
+    void                    MarkDirty() noexcept;
+
+    /**
+     * @brief Enters the terminal alternate screen buffer (\x1b[?1049h).
+     *
+     * While in the alternate buffer, all output is isolated from the
+     * user's original shell scrollback.  On Stop() the paired
+     * LeaveAlternateScreen() restores the previous buffer contents
+     * verbatim, so the console returns to the exact state it was in
+     * before the TUI launched.
+     */
+    void                    EnterAlternateScreen() noexcept;
+    /** @brief Leaves the terminal alternate screen buffer (\x1b[?1049l). */
+    void                    LeaveAlternateScreen() noexcept;
+
     // -----------------------------------------------------------------------
     // Input editing handlers (all called from InputLoop)
     // -----------------------------------------------------------------------
@@ -271,21 +290,29 @@ private:
     /**
      * @brief Builds the editor display string with a viewport-clipping window.
      *
-     * Handles overflow indicators (<  >) when the text is wider than available
-     * columns, and computes the screen cursor column for VT100 positioning.
+     * The caller-selected cursor byte is rendered as a synthetic white
+     * block (ANSI reverse-video) embedded inside the returned string so the
+     * real terminal cursor can remain permanently hidden.  This eliminates
+     * cursor flicker that would otherwise arise from cyclic show/hide
+     * sequences on each render.
      *
-     * @param prompt       Fixed prefix string (e.g. "> ").
-     * @param input        Current input buffer.
-     * @param cursor_pos   Byte position of the text cursor within input.
-     * @param width        Total display width for the editor area.
+     * Handles overflow indicators (<  >) when the text is wider than available
+     * columns, and computes the screen cursor column for diagnostic use.
+     *
+     * @param prompt        Fixed prefix string (e.g. "> ").
+     * @param input         Current input buffer.
+     * @param cursor_pos    Byte position of the text cursor within input.
+     * @param width         Total display width for the editor area.
+     * @param use_color     Whether to emit ANSI sequences for the cursor block.
      * @param cursor_column Output: zero-indexed display column of the cursor.
-     * @return             Editor line content (without │ borders or ANSI).
+     * @return              Editor line content (without │ borders).
      */
     static ppp::string      BuildEditorLine(
                                 const ppp::string& prompt,
                                 const ppp::string& input,
                                 std::size_t cursor_pos,
                                 int width,
+                                bool use_color,
                                 int& cursor_column) noexcept;
 
     /**
@@ -305,6 +332,32 @@ private:
     std::atomic<bool>           running_{false};
     std::thread                 render_thread_;
     std::thread                 input_thread_;
+
+    /**
+     * @brief Mutex used exclusively as the condition-variable predicate lock.
+     *
+     * Kept separate from lock_ so that MarkDirty() (called from any thread)
+     * can notify render_cv_ without acquiring the heavy data-model lock_.
+     */
+    std::mutex                  render_cv_mutex_;
+
+    /**
+     * @brief Condition variable that wakes the render thread on dirty/stop.
+     *
+     * Replaces the unconditional ppp::Sleep(50) poll loop.  The render thread
+     * waits on this CV with a 100 ms timeout; any mutator that calls MarkDirty()
+     * notifies it immediately.  Stop() also notifies to unblock the thread.
+     */
+    std::condition_variable     render_cv_;
+
+    /**
+     * @brief Reference count of detached shell threads spawned by ExecuteSystemCommand().
+     *
+     * Incremented before each thread starts, decremented when it exits.
+     * Stop() spins (bounded) until this counter reaches zero so that the
+     * singleton's AppendLine() is never called after the TUI has torn down.
+     */
+    std::atomic<int>            pending_shell_threads_{0};
 
     // -----------------------------------------------------------------------
     // Shared mutable state (all accesses must hold lock_)
@@ -358,6 +411,66 @@ private:
 
     /** @brief True when ANSI/VT100 escape codes are supported on this terminal. */
     bool                        vt_enabled_     = false;
+
+    /**
+     * @brief Dirty flag.
+     *
+     * Set by any public mutator (AppendLine, UpdateStatus, SetInfoLines,
+     * Insert*, Move*, Erase*, Scroll*, HandleEnter, etc.) and cleared by
+     * RenderFrame() once the frame has been flushed to stdout.  The render
+     * thread skips redraws when both this flag and the forced-redraw flag
+     * are false, eliminating unnecessary writes and terminal flicker.
+     */
+    std::atomic<bool>           dirty_{true};
+
+    /**
+     * @brief Forced-redraw flag.
+     *
+     * Set when the cached terminal dimensions change between render passes
+     * (window resize) or on the very first frame after Start().  A forced
+     * redraw writes the full \x1b[2J clear sequence before the frame to
+     * guarantee no stale content from the previous size remains.
+     */
+    std::atomic<bool>           force_redraw_{true};
+
+    /** @brief Cached terminal width from the most recent render pass. */
+    int                         last_width_     = 0;
+    /** @brief Cached terminal height from the most recent render pass. */
+    int                         last_height_    = 0;
+
+    // -----------------------------------------------------------------------
+    // Saved terminal state (restored on Stop)
+    // -----------------------------------------------------------------------
+
+    /** @brief True once Start() has successfully entered the alt-screen buffer. */
+    bool                        altscreen_entered_ = false;
+
+#if defined(_WIN32)
+    /** @brief Handle to stdout saved at Start() for state restoration. */
+    void*                       win_stdout_handle_ = NULLPTR;
+    /** @brief Original console output mode restored by Stop(). */
+    unsigned long               win_original_out_mode_  = 0;
+    /** @brief True if win_original_out_mode_ is valid. */
+    bool                        win_out_mode_saved_     = false;
+    /** @brief Original cursor visibility restored by Stop(). */
+    bool                        win_cursor_visible_     = true;
+    /** @brief True if win_cursor_visible_ is valid. */
+    bool                        win_cursor_saved_       = false;
+
+    /**
+     * @brief Handle to stdin used by PrepareInputTerminal() / RestoreInputTerminal().
+     *
+     * On Windows, PrepareInputTerminal() disables ENABLE_ECHO_INPUT and
+     * ENABLE_LINE_INPUT so that _kbhit() / _getch() receive raw keystrokes
+     * without echoing them to the screen.  RestoreInputTerminal() restores
+     * the original mode from win_original_in_mode_.
+     */
+    void*                       win_stdin_handle_       = NULLPTR;
+    /** @brief Original stdin console mode saved by PrepareInputTerminal(). */
+    unsigned long               win_original_in_mode_   = 0;
+    /** @brief True if win_original_in_mode_ is valid. */
+    bool                        win_in_mode_saved_      = false;
+#endif
 
     // -----------------------------------------------------------------------
     // Ring-buffer capacity limits

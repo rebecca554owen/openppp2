@@ -7,6 +7,7 @@
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/ip.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <common/dnslib/message.h>
 #include <cctype>   // for tolower
@@ -798,12 +799,12 @@ namespace ppp {
                     const DNSRequestAsynchronousCallback&                       cb) noexcept {
 
                     if (hostname.empty() || destinations.empty()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     auto ctx = std::make_shared<DNS_RequestContext>(context);
                     if (NULLPTR == ctx || NULLPTR == ctx->socket) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                     }
 
                     ctx->callback = cb;
@@ -830,7 +831,7 @@ namespace ppp {
                     const ppp::function<void(const boost::asio::ip::address&)>& cb) noexcept {
 
                     if (NULLPTR == cb) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     ppp::string hostname_str;
@@ -889,7 +890,7 @@ namespace ppp {
                     const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>& cb) noexcept {
 
                     if (NULLPTR == cb) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     ppp::string hostname_str;

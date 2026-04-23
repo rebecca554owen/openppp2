@@ -272,7 +272,11 @@ namespace ppp {
                                 f();
                             });
                     }
-#else   
+#else
+                    if (disposed_) {
+                        return;
+                    }
+
                     f();
 #endif
                 }

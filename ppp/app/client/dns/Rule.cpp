@@ -137,10 +137,12 @@ namespace ppp
                             }
                             catch (const boost::exception&) 
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                                 continue;
                             }
                             catch (const std::exception&) 
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                                 continue;
                             }
                         }
@@ -301,10 +303,12 @@ namespace ppp
                         }
                         catch (const boost::exception&) 
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                             continue;
                         }
                         catch (const std::exception&) 
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                             continue;
                         }
                     }

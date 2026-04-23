@@ -152,9 +152,27 @@ namespace ppp
         }
 
         /**
-         * @brief Coroutine trampoline that executes user handler and exits.
+         * @brief Coroutine trampoline that executes the user handler and performs final
+         *        context handoff back to the caller.
+         *
+         * @param t  Transfer descriptor injected by jump_fcontext; t.data points to the
+         *           owning YieldContext instance.
+         *
+         * @note  This function MUST be declared noexcept.  It is registered as the entry
+         *        point for a Boost.Context fcontext stack via make_fcontext().  Any C++
+         *        exception that propagates out of an fcontext trampoline crosses stack
+         *        frames that were not constructed with exception support, producing
+         *        undefined behaviour (typically silent memory corruption or a crash at
+         *        the next unwind table lookup).
+         *
+         *        The error condition previously guarded by a throw — a non-null callee_
+         *        after the final Jump() — indicates that a completed coroutine was
+         *        accidentally resumed.  This is a caller-side programming error.  At
+         *        this level we cannot throw, so we clear the stale callee_ reference
+         *        and release the context to prevent a second invalid jump and a memory
+         *        leak.
          */
-        void YieldContext::Handle(boost::context::detail::transfer_t t) noexcept(false)
+        void YieldContext::Handle(boost::context::detail::transfer_t t) noexcept
         {
             YieldContext* y = (YieldContext*)t.data;
             if (y)
@@ -170,10 +188,15 @@ namespace ppp
                 }
 
                 Jump(y->caller_.exchange(NULLPTR), NULLPTR);
-                if (y->callee_.exchange(NULLPTR))
-                {
-                    throw std::runtime_error("The yield_context has a serious abnormal handover exit problem.");
-                }
+
+                // If execution reaches here the coroutine was resumed after completion.
+                // This is a programming error (caller-side bug) that we cannot repair.
+                // Clear the stale callee reference to prevent a second invalid jump,
+                // then release the context so its memory is reclaimed.
+                // We must NOT throw: propagating an exception across an fcontext
+                // boundary is undefined behaviour per Boost.Context documentation.
+                y->callee_.exchange(NULLPTR);
+                YieldContext::Release(y);
             }
         }
  

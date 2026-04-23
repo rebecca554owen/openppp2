@@ -140,6 +140,13 @@ namespace ppp {
                     // Base94 decode first, then binary decrypt.
                     packet = base94_decode(cfg, transmission->BufferAllocator,
                         data, datalen, cfg->key.kf, outlen);
+
+                    // Guard: if base94 decoding failed, do not pass null to DecryptBinary.
+                    if (NULLPTR == packet || outlen < 1) {
+                        return ppp::diagnostics::SetLastError(
+                            ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, packet);
+                    }
+
                     packet = DecryptBinary(transmission, packet.get(), outlen, outlen);
                 }
                 else {
@@ -1082,6 +1089,12 @@ namespace ppp {
          * @brief Finalizes runtime state, cancels timers, and clears optional helpers.
          */
         void ITransmission::Finalize() noexcept {
+            // One-shot guard: only the first caller proceeds; subsequent calls are no-ops.
+            bool expected = false;
+            if (!finalized_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                return;
+            }
+
             DeadlineTimerPtr t = std::move(timeout_);
             disposed_ = true;
             handshaked_ = false;
@@ -1342,34 +1355,37 @@ namespace ppp {
                 expire_ms = RandomNext(expire_ms, expire_ms + (int64_t)cfg.nexcept * 1000);
             }
 
-            auto self = shared_from_this();
+            // static_pointer_cast is required: ITransmission::shared_from_this() returns
+            // shared_ptr<IAsynchronousWriteIoQueue> (the enable_shared_from_this base),
+            // so we cast to the concrete type to access ITransmission members in the lambda.
+            std::shared_ptr<ITransmission> self =
+                std::static_pointer_cast<ITransmission>(shared_from_this());
             timer->expires_from_now(std::chrono::milliseconds(expire_ms));
 
-            // FIXED: async_wait handler must return void.
             timer->async_wait(
-                [self, this](boost::system::error_code ec) noexcept {
+                [self](boost::system::error_code ec) noexcept {
                     if (ec == boost::system::errc::operation_canceled) {
                         return;   // cancelled normally
                     }
 
-                    auto ctx = context_;
+                    auto ctx = self->context_;
                     if (NULLPTR == ctx) {
-                        Dispose();
+                        self->Dispose();
                         return;
                     }
 
-                    auto cfg = configuration_;
+                    auto cfg = self->configuration_;
                     if (NULLPTR == cfg) {
-                        Dispose();
+                        self->Dispose();
                         return;
                     }
 
-                    auto st = strand_;
+                    auto st = self->strand_;
                     // Spawn a coroutine to send final NOPs and dispose.
                     YieldContext::Spawn(NULLPTR, *ctx, st.get(),
-                        [self, this, st, cfg](YieldContext& y) noexcept {
-                            Transmission_Handshake_Nop(cfg, this, y);
-                            Dispose();
+                        [self, st, cfg](YieldContext& y) noexcept {
+                            Transmission_Handshake_Nop(cfg, self.get(), y);
+                            self->Dispose();
                         });
                 });
 

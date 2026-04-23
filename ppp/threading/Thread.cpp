@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/threading/Thread.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file Thread.cpp
@@ -80,6 +81,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
         }
@@ -129,6 +131,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
         }

@@ -25,6 +25,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 typedef ppp::net::IPEndPoint IPEndPoint;
 typedef ppp::net::Ipep       Ipep;
@@ -89,6 +90,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 Mfree(memory);
                 memory = NULLPTR;
             }
