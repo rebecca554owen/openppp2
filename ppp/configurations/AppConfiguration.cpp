@@ -647,10 +647,10 @@ namespace ppp {
                 if (gateway_ec || !configured_gateway.is_v6() || cidr_ec) {
                     config.server.ipv6.gateway.clear();
                 }
-                else if (!ppp::ipv6::PrefixMatch(configured_gateway.to_v6(), cidr_prefix, config.server.ipv6.prefix_length)) {
+                elif (!ppp::ipv6::PrefixMatch(configured_gateway.to_v6(), cidr_prefix, config.server.ipv6.prefix_length)) {
                     config.server.ipv6.gateway.clear();
                 }
-                else if (configured_gateway.to_v6() == cidr_prefix) {
+                elif (configured_gateway.to_v6() == cidr_prefix) {
                     config.server.ipv6.gateway.clear();
                 }
                 else {

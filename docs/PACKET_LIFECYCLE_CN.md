@@ -480,3 +480,402 @@ graph TD
 | [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md) | 客户端运行时与 VEthernet 连接 |
 | [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md) | 服务端运行时与中继连接 |
 | [`TUNNEL_DESIGN.md`](TUNNEL_DESIGN.md) | 端到端隧道架构与设计理念 |
+
+---
+
+## 8. 返回路径 — 服务端到客户端（完整入站流程）
+
+前述章节涵盖了出站路径（客户端 TX）和服务端接收转发逻辑。本节通过追踪从目标网络返回至客户端应用程序的回程，补全完整的数据流闭环。
+
+### 8.1 目标网络响应到达服务端中继套接字
+
+服务端中继套接字（UDP 或 TCP）将原始数据包转发至目标主机并收到响应后，响应字节通过中继套接字的异步读完成回调获得。中继处理器（覆盖了 `OnSendTo` 或 TCP 数据路径）读取响应载荷，并将其传递给服务端 `VirtualEthernetLinklayer` 上对应的 `Do*` 序列化器。
+
+对于 UDP，服务端调用 `DoSendTo(original_client_src_ep, destination_ep_as_new_src, reply_payload)`。这将序列化一个 `PacketAction_SENDTO`（操作码 `0x2E`）帧，其中：
+- 源端点 = 目标主机的地址（服务端中继通过 UDP `recvfrom` 结果得知）
+- 目标端点 = 原始客户端源端点（客户端在 VPN 内的虚拟 IP 和端口）
+
+### 8.2 服务端 ITransmission.Write()
+
+服务端调用 `ITransmission::Write(y, serialized_frame, length)`。加密路径与客户端 TX 加密路径完全相同：协议密码覆盖头部，传输密码覆盖载荷。二进制帧头部（种子字节 + 混淆长度）被前置。
+
+加密后的字节通过与客户端连接的服务端 TCP 或 WebSocket 套接字的 `async_write` 发送。
+
+### 8.3 客户端 ITransmission.Read() 接收响应
+
+在客户端，挂起于 `ITransmission::Read()` 的读循环协程在数据到达时被恢复。它读取二进制帧头部、读取载荷体，并调用 `Decrypt()` 逆向所有变换。
+
+还原后的缓冲区即为服务端序列化的明文 `DoSendTo` 帧。
+
+### 8.4 客户端 VirtualEthernetLinklayer.OnSendTo()
+
+`PacketInput` 读取操作码 `0x2E` 并派发至 `OnSendTo(srcEP, dstEP, payload)`。在客户端侧：
+
+1. 反序列化 `srcEP`（目标主机的真实地址）和 `dstEP`（本地应用程序正在等待的虚拟 IP:端口）。
+2. 构造一个 UDP 数据报：src=`srcEP`，dst=`dstEP`，载荷=响应字节。
+3. 将 `UdpFrame` 序列化回 `IPFrame`（完整的 IPv4 头部 + UDP 头部 + 载荷）。
+4. 将 `IPFrame` 字节传递至 `VEthernet::Output()`。
+
+### 8.5 VEthernet.Output() — 注回 TAP
+
+`VEthernet::Output(IPFrame)` 将 `IPFrame` 序列化为原始字节并调用 `ITap::Output(bytes, length)`。`ITap::Output` 将字节写入 TAP 文件描述符。操作系统内核从 TAP 侧读取，并将数据包投递至虚拟网卡接口。
+
+由于数据包的目标 IP 与本地应用程序绑定套接字一致，内核 IP 栈通过 UDP 或 TCP 套接字将数据包路由至本地进程。应用程序读取响应，如同直接来自目标主机——隧道对应用层完全透明。
+
+### 完整返回路径时序图
+
+```mermaid
+sequenceDiagram
+    participant NET as 目标网络
+    participant RELAY as 服务端 UDP 中继
+    participant LL_S as VEthernetLinklayer（服务端）
+    participant TX_S as ITransmission（服务端）
+    participant WIRE as TCP/WebSocket 链路
+    participant TX_C as ITransmission（客户端）
+    participant LL_C as VEthernetLinklayer（客户端）
+    participant VE as VEthernet（客户端）
+    participant TAP as TAP 设备（客户端）
+    participant APP as 本地应用程序
+
+    NET-->>RELAY: UDP 响应包
+    RELAY->>LL_S: DoSendTo(dst_as_src, client_src, reply)
+    Note over LL_S: 序列化 0x2E 帧
+    LL_S->>TX_S: Write(y, frame, len)
+    TX_S->>TX_S: Encrypt() + 前置帧头
+    TX_S->>WIRE: async_write 加密字节
+
+    WIRE-->>TX_C: async_read 完成
+    TX_C->>TX_C: Read() → Decrypt()
+    TX_C->>LL_C: PacketInput(解密缓冲)
+    LL_C->>LL_C: 操作码 0x2E → OnSendTo()
+    LL_C->>VE: 构建 UdpFrame → IPFrame
+    VE->>TAP: Output(裸 IP 字节)
+    TAP->>APP: 内核投递 UDP 数据报
+```
+
+---
+
+## 9. 隧道内 TCP 会话生命周期
+
+TCP 会话比 UDP 更为复杂，因为它是有状态的。隧道必须从 `SYN` 经数据交换到 `FIN` 全程跟踪连接状态。
+
+### 9.1 连接建立（SYN / SYNOK）
+
+```mermaid
+sequenceDiagram
+    participant APP as 本地应用（客户端）
+    participant LWIP as lwIP（客户端）
+    participant LL_C as 链路层（客户端）
+    participant TX as ITransmission
+    participant LL_S as 链路层（服务端）
+    participant REAL as 真实 TCP 服务器
+
+    APP->>LWIP: connect(dst_ip, dst_port)
+    LWIP->>LL_C: OnNewConnection(conn_id, dst)
+    LL_C->>TX: DoConnect(conn_id, dst_ip, dst_port)
+    TX-->>LL_S: OnConnect(conn_id, dst)
+    LL_S->>REAL: TCP connect(dst_ip, dst_port)
+    REAL-->>LL_S: TCP SYN-ACK
+    LL_S->>TX: DoConnectOK(conn_id, ERRORS_SUCCESS)
+    TX-->>LL_C: OnConnectOK(conn_id, ERRORS_SUCCESS)
+    LL_C->>LWIP: 通知连接成功
+    LWIP->>APP: connect() 返回 0
+```
+
+`conn_id` 是一个会话级 32 位连接标识符，由客户端在 `OnNewConnection` 触发时分配，在连接生命周期内用于多路复用同一 VPN 会话中的多个并发 TCP 连接。
+
+### 9.2 数据传输（PSH）
+
+连接建立后，数据使用操作码 `0x2C`（`PacketAction_PSH`）双向流动：
+
+```mermaid
+sequenceDiagram
+    participant APP as 本地应用
+    participant LWIP as lwIP
+    participant LL_C as 链路层（客户端）
+    participant TX as ITransmission
+    participant LL_S as 链路层（服务端）
+    participant REAL as 真实 TCP 服务器
+
+    APP->>LWIP: write(data)
+    LWIP->>LL_C: OnDataReceived(conn_id, data)
+    LL_C->>TX: DoPush(conn_id, data)
+    TX-->>LL_S: OnPush(conn_id, data)
+    LL_S->>REAL: TCP write(data)
+    REAL-->>LL_S: TCP read(reply)
+    LL_S->>TX: DoPush(conn_id, reply)
+    TX-->>LL_C: OnPush(conn_id, reply)
+    LL_C->>LWIP: 注入响应数据
+    LWIP->>APP: read() 返回响应
+```
+
+### 9.3 连接拆除（FIN）
+
+任意一侧均可通过发送操作码 `0x2D`（`PacketAction_FIN`）发起拆除：
+
+```mermaid
+sequenceDiagram
+    participant APP as 本地应用
+    participant LWIP as lwIP
+    participant LL_C as 链路层（客户端）
+    participant TX as ITransmission
+    participant LL_S as 链路层（服务端）
+    participant REAL as 真实 TCP 服务器
+
+    APP->>LWIP: close(fd)
+    LWIP->>LL_C: OnConnectionClosed(conn_id)
+    LL_C->>TX: DoDisconnect(conn_id)
+    TX-->>LL_S: OnDisconnect(conn_id)
+    LL_S->>REAL: TCP close()
+    REAL-->>LL_S: TCP FIN-ACK
+    Note over LL_S: 中继套接字释放，NAT 条目删除
+```
+
+若真实服务器先关闭连接，服务端中继检测到 TCP EOF，向客户端调用 `DoDisconnect(conn_id)`，客户端 lwIP 栈通过虚拟套接字通知本地应用程序。
+
+### 9.4 连接 ID 管理
+
+连接 ID 由客户端在每个会话内通过单调递增计数器（带回绕）分配。服务端中继 NAT 表将 `(session_id, conn_id)` 映射至中继套接字。`OnDisconnect` 触发时，NAT 条目被删除，中继套接字被关闭。
+
+该表存储在 `VirtualEthernetExchanger`（服务端）和 `VEthernetExchanger`（客户端）中。两者均通过 `shared_ptr` 进行引用计数，确保残留的中继套接字不会比会话对象存活更长时间。
+
+---
+
+## 10. ICMP Echo 代理生命周期
+
+ICMP echo（ping）请求通过专用 ICMP 代理路径处理，而非通用 NAT 机制。
+
+### 10.1 客户端侧 ICMP 处理
+
+当 lwIP 处理虚拟栈内来自本地应用程序（执行 `ping`）的 ICMP echo 请求时，调用 OPENPPP2 的 ICMP 钩子：
+
+1. 从 `IPFrame::icmp_hdr` 指针解析 `IcmpFrame`。
+2. 分配一个 `echo_id` 用于关联。
+3. 调用 `DoEcho(echo_id, payload_bytes)` 以操作码 `0x2F` 向服务端发送。
+
+### 10.2 服务端侧 ICMP 转发
+
+服务端的 `OnEcho()` 接收 `echo_id` 和载荷，然后：
+
+1. 使用 `IcmpFrame::ToIp()` 构造 ICMP echo 请求。
+2. 通过原始 ICMP 套接字发送至目标 IP。
+3. 在待响应表中注册 `echo_id`。
+4. 异步等待 ICMP echo 响应。
+
+响应到达后，服务端以 ack-id 形式（操作码 `0x30`）调用 `DoEcho(echo_id)` 返回给客户端。
+
+### 10.3 客户端侧响应注入
+
+客户端的 `OnEcho(echo_id)` 通过 `echo_id` 查找待处理请求，重建 ICMP echo 响应帧，并通过 `VEthernet::Output()` 将其注入 TAP。本地 `ping` 应用程序收到响应，如同直接来自目标主机。
+
+```mermaid
+sequenceDiagram
+    participant PING as ping 应用
+    participant LWIP as lwIP（客户端）
+    participant LL_C as 链路层（客户端）
+    participant TX as ITransmission
+    participant LL_S as 链路层（服务端）
+    participant NET as 目标主机
+
+    PING->>LWIP: ICMP echo 请求
+    LWIP->>LL_C: OnIcmpEcho(dst_ip, echo_id, payload)
+    LL_C->>TX: DoEcho(echo_id, payload) [0x2F]
+    TX-->>LL_S: OnEcho(echo_id, payload)
+    LL_S->>NET: raw ICMP sendto(dst_ip, echo_req)
+    NET-->>LL_S: ICMP echo 响应
+    LL_S->>TX: DoEcho(echo_id) [0x30 ack 形式]
+    TX-->>LL_C: OnEcho(echo_id) ack
+    LL_C->>LWIP: 注入 ICMP echo 响应
+    LWIP->>PING: ping RTT 结果
+```
+
+---
+
+## 11. QoS 与统计集成
+
+### 11.1 ITransmissionQoS
+
+`ITransmission` 可选地持有一个 `ITransmissionQoS` 对象（通过 `SetQoS()` 设置）。当 QoS 附加时：
+
+- `Write()` 在写入前消耗带宽令牌。若令牌不足，协程挂起，直到补充定时器重新填充令牌桶。
+- 令牌桶补充速率来自 `appsettings.json` 的 `bandwidth` 字段（字节/秒）。
+- QoS 按会话执行：每个 `ITransmission` 拥有独立的令牌桶。
+
+### 11.2 ITransmissionStatistics
+
+`ITransmissionStatistics` 跟踪每会话计数器：
+
+| 计数器 | 描述 |
+|--------|------|
+| `TotalOutgoingBytes` | 写入线缆的原始字节数（含头部）|
+| `TotalIncomingBytes` | 从线缆读取的原始字节数 |
+| `TotalOutgoingPackets` | `Write()` 调用次数 |
+| `TotalIncomingPackets` | `Read()` 调用次数 |
+
+这些计数器向 TUI 状态展示和 `VirtualEthernetInformation` 配额报告机制提供数据。
+
+### 11.3 数据包丢弃点
+
+数据包可能在生命周期的多个阶段被静默丢弃：
+
+| 丢弃点 | 条件 | 动作 |
+|--------|------|------|
+| `VEthernet::OnPacketInput` | IP 头部无效（校验和、版本、长度）| 丢弃，不设错误码 |
+| `VEthernet::OnPacketInput` | 防火墙规则命中 | 丢弃，`FirewallSegmentBlocked` 或 `FirewallDomainBlocked` |
+| `IPFragment` | 分片集超时 | 丢弃，不通知应用 |
+| `VirtualEthernetLinklayer::PacketInput` | 未知操作码字节 | 丢弃，`ProtocolPacketActionInvalid` |
+| `ITransmission::Read` | 校验和 / 解密失败 | 丢弃，`ProtocolDecodeFailed` |
+| QoS 令牌桶 | 令牌耗尽（丢弃策略）| 丢弃，`GenericRateLimited` |
+| 服务端中继 | 目标不可达 | DoDisconnect 或携带错误的 DoSendTo |
+
+---
+
+## 12. MUX（多路复用器）通道
+
+### 12.1 用途
+
+MUX 功能允许多个逻辑子连接共享单个 `ITransmission` 实例，减少为每个新数据流单独建立 TCP/WebSocket 连接的开销。通过 `PacketAction_MUX`（`0x35`）和 `PacketAction_MUXON`（`0x36`）操作码协商。
+
+### 12.2 协商流程
+
+```mermaid
+sequenceDiagram
+    participant CLIENT as 客户端链路层
+    participant TX as ITransmission
+    participant SERVER as 服务端链路层
+
+    CLIENT->>TX: DoMux(vlan_tag, max_subconn, accel_flag) [0x35]
+    TX-->>SERVER: OnMux(vlan_tag, max_subconn, accel_flag)
+    SERVER->>TX: DoMuxON(vlan_tag, seq, ack) [0x36]
+    TX-->>CLIENT: OnMuxON(vlan_tag, seq, ack)
+    Note over CLIENT,SERVER: MUX 通道建立
+    Note over CLIENT,SERVER: 后续子连接使用此通道
+```
+
+### 12.3 VLAN 标签与子连接解复用
+
+MUX 通道内的每个子连接由以下信息标识：
+- **VLAN 标签**（通道建立时协商）用于标识通道
+- **连接 ID**（与常规 TCP 会话相同的 `conn_id` 方案）
+
+服务端 `OnMux` 处理器在会话的 MUX 表中注册 VLAN 标签。后续携带匹配 VLAN 标签的 `SYN` 帧通过多路复用通道路由，而不是开启新的传输连接。
+
+---
+
+## 13. FRP（弹性反向代理）数据包流程
+
+### 13.1 概述
+
+FRP 功能允许外部客户端连接至 OPENPPP2 服务端上的某个端口，并将该连接通过隧道反向传回 VPN 客户端本地网络上运行的服务。这是普通隧道方向的逆向操作。
+
+### 13.2 FRP 注册
+
+```mermaid
+sequenceDiagram
+    participant CLIENT as 客户端链路层
+    participant TX as ITransmission
+    participant SERVER as 服务端链路层
+    participant EXT as 外部客户端
+
+    CLIENT->>TX: DoFrpEntry(proto, direction, remote_port) [0x20]
+    TX-->>SERVER: OnFrpEntry(proto, direction, remote_port)
+    Note over SERVER: 在服务端开启 remote_port 监听端口
+    EXT->>SERVER: TCP/UDP 连接至 remote_port
+    SERVER->>TX: DoFrpConnect(conn_id, direction, remote_port) [0x21]
+    TX-->>CLIENT: OnFrpConnect(conn_id, direction, remote_port)
+    CLIENT->>TX: DoFrpConnectOK(conn_id, ERRORS_SUCCESS) [0x22]
+    TX-->>SERVER: OnFrpConnectOK(conn_id, ERRORS_SUCCESS)
+    Note over SERVER: 桥接 EXT ↔ 隧道 conn_id
+```
+
+### 13.3 FRP 数据流
+
+建立后，FRP 数据使用以下操作码双向流动：
+- `PacketAction_FRP_PUSH`（`0x23`）— 承载 FRP 连接的 TCP 流数据
+- `PacketAction_FRP_SENDTO`（`0x25`）— 承载 FRP 连接的 UDP 数据报
+- `PacketAction_FRP_DISCONNECT`（`0x24`）— 拆除 FRP 连接
+
+数据流在结构上与普通 `PSH`/`SENDTO`/`FIN` 流程完全相同，但使用专用 FRP 操作码，以便服务端路由能区分 FRP 连接与普通 VPN 连接。
+
+---
+
+## 14. 静态模式 — 直接 IP 层转发
+
+### 14.1 静态模式的使用场景
+
+静态模式绕过常规 TCP/UDP/ICMP 解复用，使用 `PacketAction_NAT`（`0x29`）将原始 IP 帧直接通过隧道发送。适用于：
+
+- 既不是 TCP 也不是 UDP 的协议（如 GRE、ESP 及其他 IP 协议）
+- 服务端对目标有直接 L3 访问且无需 NAT 的场景
+- 跳过 lwIP 开销的诊断或透传场景
+
+### 14.2 静态数据包查询/确认
+
+在对某会话使用静态模式之前，客户端可发送 `PacketAction_STATIC`（`0x31`）查询：
+
+```mermaid
+sequenceDiagram
+    participant CLIENT as 客户端链路层
+    participant TX as ITransmission
+    participant SERVER as 服务端链路层
+
+    CLIENT->>TX: DoStatic(query) [0x31]
+    TX-->>SERVER: OnStatic(query)
+    SERVER->>TX: DoStaticACK(fsid, session_id, remote_port) [0x32]
+    TX-->>CLIENT: OnStaticACK(fsid, session_id, remote_port)
+    Note over CLIENT: 会话 FSID 已确认；静态路径可用
+```
+
+`fsid` 是一个 128 位会话 FSID（`Int128`），唯一标识静态流。`remote_port` 是服务端用于静态路径套接字的端口。
+
+### 14.3 NAT 数据包流程
+
+静态模式激活后，IP 帧无需协议级解复用即可转发：
+
+```mermaid
+graph LR
+    A["本地 IP 数据包"] --> B["VEthernet::OnPacketInput()"]
+    B --> C{"协议类型？"}
+    C -- "TCP/UDP/ICMP" --> D["常规中继路径"]
+    C -- "其他（GRE/ESP/...）" --> E["DoNat(raw_ip_bytes)"]
+    E --> F["ITransmission::Write()"]
+    F --> G["服务端 OnNat()"]
+    G --> H["原始套接字 sendto(dst_ip)"]
+```
+
+---
+
+## 15. 源码参考索引
+
+下表将每个生命周期阶段映射至对应的源文件和函数：
+
+| 阶段 | 源文件 | 函数 / 方法 |
+|------|--------|-----------|
+| TAP 接收循环 | `linux/ppp/tap/TapLinux.cpp` | `AsynchronousReadPacketLoops()` |
+| TAP 接收循环（Windows）| `windows/ppp/tap/TapWindows.cpp` | `AsynchronousReadPacketLoops()` |
+| 裸帧派发 | `ppp/ethernet/VEthernet.cpp` | `OnPacketInput(Byte*, int, bool)` |
+| IP 头部解析 + 分片检查 | `ppp/ethernet/VEthernet.cpp` | `OnPacketInput(ip_hdr*, int, int, int, bool)` |
+| 分片累积 | `ppp/net/packet/IPFragment.cpp` | `Input()` / `OnUpdate()` |
+| lwIP 注入 | `ppp/ethernet/VNetstack.cpp` | `Input(pbuf*)` |
+| UDP 钩子 | `ppp/ethernet/VNetstack.cpp` | `udp_recv_fn` 回调 |
+| TCP 钩子 | `ppp/ethernet/VNetstack.cpp` | `tcp_recv_fn` / `tcp_sent_fn` 回调 |
+| ICMP 钩子 | `ppp/ethernet/VNetstack.cpp` | `raw_recv_fn` 回调 |
+| 序列化 UDP 帧 | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoSendTo()` |
+| 序列化 TCP 连接 | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoConnect()` |
+| 序列化 TCP 数据 | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoPush()` |
+| 序列化 TCP 关闭 | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoDisconnect()` |
+| 序列化 ICMP echo | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoEcho()` |
+| 序列化裸 IP（NAT）| `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoNat()` |
+| 加密 + 帧写入 | `ppp/transmissions/ITransmission.cpp` | `Write()` / `Encrypt()` |
+| WebSocket 异步写 | `ppp/transmissions/IWebsocketTransmission.cpp` | `DoWriteBytes()` |
+| TCP 异步写 | `ppp/transmissions/ITcpipTransmission.cpp` | `DoWriteBytes()` |
+| 帧读取 + 解密 | `ppp/transmissions/ITransmission.cpp` | `Read()` / `Decrypt()` |
+| 操作码派发 | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `PacketInput()` |
+| 服务端 UDP 中继 | `ppp/app/server/VirtualEthernetExchanger.cpp` | `OnSendTo()` |
+| 服务端 TCP 中继 | `ppp/app/server/VirtualEthernetExchanger.cpp` | `OnConnect()` / `OnPush()` / `OnDisconnect()` |
+| 服务端 ICMP 代理 | `ppp/app/server/VirtualEthernetExchanger.cpp` | `OnEcho()` |
+| 客户端响应注入 | `ppp/app/client/VEthernetExchanger.cpp` | `OnSendTo()` / `OnPush()` |
+| TAP 回写 | `ppp/ethernet/VEthernet.cpp` | `Output(IPFrame)` |
+| TAP fd 写入 | `linux/ppp/tap/TapLinux.cpp` | `Output(Byte*, int)` |
+| 静态数据包打包 | `ppp/app/protocol/VirtualEthernetPacket.cpp` | `Pack()` / `PackBy()` |
+| 静态数据包解包 | `ppp/app/protocol/VirtualEthernetPacket.cpp` | `Unpack()` / `UnpackBy()` |

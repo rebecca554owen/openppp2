@@ -5,39 +5,48 @@
 ## Scope
 
 This document explains how OPENPPP2 is deployed according to the source tree.
+It covers the deployment surfaces, startup order, platform prerequisites, and operational expectations.
 
-## Main Deployment Facts
+---
+
+## Core Facts
 
 - The C++ runtime is a single executable: `ppp`.
-- It can run in client mode or server mode.
+- It can run in `client` mode or `server` mode.
 - An optional Go backend can be linked by the server through `server.backend`.
+- Administrator or root privilege is always required.
+
+---
 
 ## Deployment Is Two Layers
 
-Deployment has a node layer and a host layer.
+```mermaid
+flowchart TD
+    A[OPENPPP2 Deployment] --> B[Node Layer]
+    A --> C[Host Layer]
+    B --> D[Role: client or server]
+    B --> E[Persistent config JSON]
+    B --> F[Optional Go backend]
+    B --> G[Service intent]
+    C --> H[Virtual adapters]
+    C --> I[Routing table]
+    C --> J[DNS behavior]
+    C --> K[Privileges]
+    C --> L[Local proxy surfaces]
+```
 
 | Layer | Meaning |
-|---|---|
-| node layer | persistent JSON, role, backend, and service intent |
-| host layer | adapters, routes, DNS, privileges, local proxy surfaces |
+|-------|---------|
+| Node layer | Persistent JSON, role, backend, and service intent |
+| Host layer | Adapters, routes, DNS, privileges, local proxy surfaces |
 
 The source tree treats these as related but not identical concerns.
 
-## Hard Requirements
-
-- administrator/root privilege is required.
-- a real configuration file is required.
-
-`LoadConfiguration(...)` searches explicit `-c`/`--config` forms first, then `./config.json`, then `./appsettings.json`.
+---
 
 ## Deployment Surfaces
 
 OPENPPP2 deployment can be read as four surfaces:
-
-- host surface: adapters, routes, DNS, privileges.
-- listener surface: TCP/UDP/WS/WSS ingress.
-- data plane surface: sessions, mappings, static path, IPv6 transit.
-- management surface: optional Go backend.
 
 ```mermaid
 flowchart TD
@@ -51,64 +60,346 @@ flowchart TD
     E --> I[Optional Go backend]
 ```
 
+| Surface | Components | Notes |
+|---------|-----------|-------|
+| Host | Privileges, virtual adapters, OS routing, DNS settings | Must be ready before runtime opens |
+| Listener | TCP, WebSocket, TLS WebSocket, static UDP | Configured in `server.listen.*` |
+| Data plane | Sessions, NAT mappings, IPv6 transit, static echo | Per-session runtime state |
+| Management | Go backend via WebSocket | Optional; extends policy, not packet transport |
+
+---
+
+## Hard Requirements
+
+- Administrator or root privilege is required.
+- A real configuration file is required.
+
+`LoadConfiguration(...)` searches in this order:
+1. Explicit `-c` / `--config` CLI argument.
+2. `./config.json` in the working directory.
+3. `./appsettings.json` in the working directory.
+
+Source: `ppp/app/PppApplication.cpp`
+
+---
+
 ## Client Deployment
 
-The client deployment creates a virtual adapter, prepares route/DNS/bypass inputs, opens `VEthernetNetworkSwitcher`, and then establishes the remote exchanger session.
+The client deployment creates a virtual adapter, prepares route/DNS/bypass inputs, opens `VEthernetNetworkSwitcher`, and establishes the remote exchanger session.
 
-Practical order:
+### Client Startup Sequence
 
-1. acquire privilege.
-2. load configuration.
-3. prepare NIC / gateway / TAP.
-4. open client switcher.
-5. connect exchanger.
-6. apply routes and DNS.
-7. enter forwarding state.
+```mermaid
+flowchart TD
+    A[Start ppp --mode=client] --> B[Acquire privilege]
+    B --> C[Load configuration]
+    C --> D[Prepare NIC / gateway / TAP]
+    D --> E[Open VEthernetNetworkSwitcher]
+    E --> F[Connect VEthernetExchanger to server]
+    F --> G[Apply routes and DNS]
+    G --> H[Apply bypass IP lists]
+    H --> I[Enter forwarding state]
+    I --> J[Tick loop: keepalive, VIRR, vBGP refresh]
+```
+
+### Client Deployment Checklist
+
+| Step | Requirement |
+|------|-------------|
+| 1 | Privilege: administrator on Windows, root on Linux/macOS/Android |
+| 2 | Configuration file present at known path |
+| 3 | `client.guid` set to a valid UUID |
+| 4 | `client.server` pointing to an accessible server address |
+| 5 | Virtual adapter support available on host |
+| 6 | DNS and routing change permissions available |
+| 7 | Optional: `client.bypass` IP-list files or URLs accessible |
+| 8 | Optional: `client.dns-rules` file accessible |
+
+### Client Platform Notes
+
+| Platform | Adapter Type | Routing Method | DNS Method |
+|----------|-------------|----------------|------------|
+| Windows | TAP-Windows / WinTUN | IPv4 route API | System DNS override |
+| Linux | TUN/TAP | `ip route` / `rtnetlink` | `/etc/resolv.conf` |
+| macOS | utun | `route` command | `scutil` |
+| Android | VPNService | VPNService routes | VPNService DNS |
+
+---
 
 ## Server Deployment
 
 The server deployment opens listeners, firewall, namespace cache, datagram socket, optional managed backend, and optional IPv6 transit plumbing through `VirtualEthernetSwitcher`.
 
-Practical order:
+### Server Startup Sequence
 
-1. acquire privilege.
-2. load configuration.
-3. open listeners.
-4. create session switcher.
-5. optionally open managed backend.
-6. optionally enable IPv6 transit.
-7. accept and route sessions.
+```mermaid
+flowchart TD
+    A[Start ppp] --> B[Acquire privilege]
+    B --> C[Load configuration]
+    C --> D[Open firewall]
+    D --> E[Open namespace cache]
+    E --> F[Open datagram socket]
+    F --> G{server.backend?}
+    G -->|yes| H[Connect to Go backend]
+    G -->|no| I[Skip]
+    H --> J{server.ipv6?}
+    I --> J
+    J -->|yes| K[Open IPv6 transit plane]
+    J -->|no| L[Skip]
+    K --> M[Open TCP listener]
+    L --> M
+    M --> N[Open WebSocket listener]
+    N --> O{static echo?}
+    O -->|yes| P[Open static echo session]
+    O -->|no| Q[Server ready]
+    P --> Q
+    Q --> R[Accept connections]
+    R --> S[Tick loop: session maintenance, backend refresh]
+```
+
+### Server Deployment Checklist
+
+| Step | Requirement |
+|------|-------------|
+| 1 | Privilege: root on Linux, administrator on Windows |
+| 2 | Configuration file present |
+| 3 | At least one listener enabled (`server.listen.tcp` or `server.listen.ws`) |
+| 4 | `server.listen.port` set to a valid, available port |
+| 5 | Firewall config file present if `server.firewall` is set |
+| 6 | Go backend reachable if `server.backend` is set |
+| 7 | IPv6 capable interface if `server.ipv6` is enabled |
+
+### Server Listener Types
+
+| Listener | Config Key | Protocol | TLS |
+|----------|-----------|----------|-----|
+| TCP | `server.listen.tcp` | Raw TCP | No |
+| WebSocket | `server.listen.ws` | HTTP WebSocket | No |
+| TLS WebSocket | `server.listen.wss` | HTTPS WebSocket | Yes |
+| Static UDP | `server.listen.udp` | Raw UDP | No |
+
+---
 
 ## Go Backend
 
-The Go backend is optional and is used for managed deployments, not for the core data plane.
+The Go backend is optional and is used for managed deployments — not for the core data plane.
 
-That means the C++ executable can operate without it; the backend extends policy and management rather than defining packet transport.
+```mermaid
+sequenceDiagram
+    participant Server as C++ Server
+    participant Backend as Go Backend
+    participant Client as Client
 
-## Deployment Checklist
+    Client->>Server: Connect with credentials
+    Server->>Backend: Authenticate(user, token)
+    Backend-->>Server: auth result + quota
+    Server-->>Client: Allow or deny
+    loop Traffic reporting
+        Server->>Backend: ReportTraffic(session_id, in, out)
+        Backend-->>Server: quota status
+    end
+    Server->>Backend: SessionEnd(session_id)
+```
 
-1. Configuration file present.
-2. Privilege granted.
-3. Host interfaces known.
-4. Role selected.
-5. Listener or adapter dependencies available.
-6. Optional backend reachable if enabled.
+Key properties:
+- Communication is over WebSocket (`ws://` or `wss://`).
+- If backend is unreachable, server falls back to local cache policy.
+- Backend extends policy and management; it never touches packet bytes.
 
-## Operational Shape
+Source: `ppp/app/server/VirtualEthernetManagedServer.h`
 
-Deployment is not just the first boot. It also includes what host state is expected to remain true after startup:
+---
 
-- default routes may be moved or protected
-- DNS servers may be rewritten
-- proxy behavior may be altered
-- IPv6 transit may need extra host plumbing
+## Privilege Requirements By Platform
+
+| Platform | Requirement | Notes |
+|----------|-------------|-------|
+| Linux | `root` or `CAP_NET_ADMIN` | TUN/TAP creation requires privilege |
+| Windows | Administrator | TAP driver and route modification |
+| macOS | `root` | utun creation |
+| Android | VPNService permission | Declared in `AndroidManifest.xml` |
+
+---
+
+## Network Prerequisites
+
+| Requirement | Client | Server |
+|-------------|--------|--------|
+| Virtual adapter support | Required | Not required |
+| Open TCP port | Not required | Required |
+| DNS modification permission | Required | Not required |
+| Route modification permission | Required | Not required |
+| IPv6 capable NIC | If IPv6 enabled | If `server.ipv6` enabled |
+
+---
+
+## Operational Expectations After Startup
+
+Deployment is not just the first boot. After startup, these host states are expected to remain true:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Deployed
+    Deployed --> RoutesActive : client mode
+    Deployed --> ListenersActive : server mode
+    RoutesActive --> BypassRoutes : IP-list applied
+    RoutesActive --> DefaultRouteRedirected : full-tunnel mode
+    RoutesActive --> DefaultRouteProtected : split-tunnel mode
+    ListenersActive --> AcceptingSessions : open complete
+    AcceptingSessions --> ManagingBackend : if backend enabled
+    AcceptingSessions --> IPv6Transit : if IPv6 enabled
+    RoutesActive --> VIRRRefresh : tick-driven
+    VIRRRefresh --> RoutesActive : refreshed
+```
+
+Ongoing host-side expectations:
+
+| Expectation | Description |
+|-------------|-------------|
+| Default routes managed | Client may redirect or protect the default route |
+| DNS servers stable | DNS server routes must persist |
+| Listeners bound | Server listeners must remain bound |
+| Backend reachable | Go backend connection must be maintained |
+| IPv6 transit active | IPv6 transit plane must stay operational |
+
+---
+
+## Deployment Topology Examples
+
+### Simple Server + Client
+
+```mermaid
+flowchart LR
+    A[Client host] -->|TCP/WS| B[ppp server]
+    B -->|Internet| C[Destination]
+```
+
+### Server With Go Backend
+
+```mermaid
+flowchart LR
+    A[Client host] -->|TCP/WS| B[ppp server]
+    B -->|WebSocket| C[Go backend]
+    B -->|Internet| D[Destination]
+    C --> E[Database / auth]
+```
+
+### Multi-Listener Server
+
+```mermaid
+flowchart TD
+    A[TCP clients] --> B[ppp server]
+    C[WebSocket clients] --> B
+    D[TLS WebSocket clients] --> B
+    B --> E[Session routing]
+    E --> F[Internet]
+```
+
+---
+
+## Deployment Failure Classes
+
+| Class | Symptom | Likely Cause |
+|-------|---------|-------------|
+| Privilege failure | Process exits immediately | Not running as administrator/root |
+| Config not found | "configuration not found" error | Wrong path or missing file |
+| Adapter open failure | Virtual NIC not created | Driver missing or insufficient privilege |
+| Listener bind failure | Port already in use or permission denied | Port conflict or privilege issue |
+| Route add failure | Traffic not flowing through tunnel | Route modification not permitted |
+| Backend unreachable | Sessions denied or cached policy applied | Backend not started or wrong URL |
+
+---
+
+## Configuration File Reference
+
+Minimum viable server configuration:
+
+```json
+{
+  "concurrent": 4,
+  "cdn": [0, 0],
+  "key": {
+    "kf": 154543927,
+    "kx": 128,
+    "kl": 10,
+    "kh": 12,
+    "protocol": "aes-128-cfb",
+    "transport": "aes-256-cfb",
+    "masked": false,
+    "plaintext": false,
+    "delta-encode": false,
+    "shuffle-data": false
+  },
+  "server": {
+    "node": 1,
+    "subnet": true,
+    "listen": {
+      "port": 20000,
+      "ws": false,
+      "wss": false
+    }
+  }
+}
+```
+
+Minimum viable client configuration:
+
+```json
+{
+  "concurrent": 4,
+  "cdn": [0, 0],
+  "key": {
+    "kf": 154543927,
+    "kx": 128,
+    "kl": 10,
+    "kh": 12,
+    "protocol": "aes-128-cfb",
+    "transport": "aes-256-cfb",
+    "masked": false,
+    "plaintext": false,
+    "delta-encode": false,
+    "shuffle-data": false
+  },
+  "client": {
+    "guid": "{F4519CF1-7A8A-4B00-89C8-9172A87B96DB}",
+    "server": "ppp://192.168.0.1:20000/"
+  }
+}
+```
+
+---
+
+## Error Code Reference
+
+Deployment-related `ppp::diagnostics::ErrorCode` values:
+
+| ErrorCode | Description |
+|-----------|-------------|
+| `PrivilegeRequired` | Process requires administrator/root |
+| `ConfigurationNotFound` | Config file not found at any search path |
+| `ConfigurationLoadFailed` | Config file found but failed to parse |
+| `AdapterOpenFailed` | Virtual adapter could not be opened |
+| `ServerListenerOpenFailed` | TCP or WebSocket listener failed to bind |
+| `ServerFirewallOpenFailed` | Firewall subsystem failed to initialize |
+| `ManagedServerConnectionFailed` | Go backend WebSocket connection failed |
+| `IPv6TransitOpenFailed` | IPv6 transit plane failed to open |
+| `DuplicateInstanceDetected` | Another instance of ppp is already running |
+
+---
 
 ## Related Documents
 
-- `CONFIGURATION.md`
-- `PLATFORMS.md`
-- `OPERATIONS.md`
+- [`CONFIGURATION.md`](CONFIGURATION.md)
+- [`CLI_REFERENCE.md`](CLI_REFERENCE.md)
+- [`PLATFORMS.md`](PLATFORMS.md)
+- [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md)
+- [`OPERATIONS.md`](OPERATIONS.md)
+- [`MANAGEMENT_BACKEND.md`](MANAGEMENT_BACKEND.md)
+- [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md)
+- [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)
+
+---
 
 ## Main Conclusion
 
-Deployment in OPENPPP2 is not just “run a binary.” It is a staged host-plus-node setup where the executable, privileges, adapters, routes, listeners, and optional backend must all line up.
+Deployment in OPENPPP2 is not just "run a binary." It is a staged host-plus-node setup where the executable, privileges, adapters, routes, listeners, and optional backend must all line up correctly. A deployment is healthy only when all four surfaces — host, listener, data plane, and management — are configured and operational.

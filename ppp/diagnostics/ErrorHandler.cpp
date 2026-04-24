@@ -53,12 +53,70 @@ namespace ppp {
 
         const char* ErrorHandler::FormatErrorString(ErrorCode code) noexcept {
             switch (code) {
-#define X(name, text) case ErrorCode::name: return text;
+#define X(name, text, severity) case ErrorCode::name: return text;
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
             default:
                 return "Unknown error";
             }
+        }
+
+        ErrorSeverity ErrorHandler::GetErrorSeverity(ErrorCode code) noexcept {
+            switch (code) {
+#define X(name, text, severity) case ErrorCode::name: return severity;
+#include <ppp/diagnostics/ErrorCodes.def>
+#undef X
+            default:
+                return ErrorSeverity::kError;
+            }
+        }
+
+        const char* ErrorHandler::GetErrorSeverityName(ErrorSeverity severity) noexcept {
+            switch (severity) {
+            case ErrorSeverity::kInfo:
+                return "INFO";
+            case ErrorSeverity::kWarning:
+                return "WARNING";
+            case ErrorSeverity::kError:
+                return "ERROR";
+            case ErrorSeverity::kFatal:
+                return "FATAL";
+            default:
+                return "UNKNOWN";
+            }
+        }
+
+        ppp::string ErrorHandler::FormatErrorTriplet(ErrorCode code) noexcept {
+            // Retrieve the numeric ID, code name, and message for the given code.
+            uint32_t    numeric_id   = static_cast<uint32_t>(code);
+            const char* code_name    = "Unknown";
+            const char* code_message = "Unknown error";
+
+            // Use X-macro expansion to map code → name string and message string.
+            switch (code) {
+#define X(name, text, severity) case ErrorCode::name: code_name = #name; code_message = text; break;
+#include <ppp/diagnostics/ErrorCodes.def>
+#undef X
+            default:
+                break;
+            }
+
+            // Build the triplet: "<uint32_id> <CodeName>: <message>"
+            ppp::string result;
+            result.reserve(128);
+            // std::to_string returns std::string (std::allocator); use c_str() to
+            // append via const char* overload, which is compatible with ppp::string.
+            result += std::to_string(numeric_id).c_str();
+            result += ' ';
+            result += code_name;
+            result += ':';
+            result += ' ';
+            result += code_message;
+            return result;
+        }
+
+        bool ErrorHandler::IsErrorFatal(ErrorCode code) noexcept {
+            return ErrorSeverity::kFatal == GetErrorSeverity(code);
         }
 
         void ErrorHandler::RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept {

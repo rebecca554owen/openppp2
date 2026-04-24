@@ -284,6 +284,29 @@ namespace ppp {
                 /** @brief Returns the count of currently active exchanger sessions. */
                 int                                                     GetAllExchangerNumber() noexcept;
 
+                /**
+                 * @brief Returns the IPv6 data-plane runtime state.
+                 *
+                 * @details Encoding:
+                 *  - 0 = off (IPv6 disabled or not yet opened)
+                 *  - 1 = nat66 (NAT66 transit plane active)
+                 *  - 2 = gua  (GUA transit plane with NDP proxy active)
+                 *  - 3 = failed (transit plane attempted but could not be established)
+                 *
+                 * @return Atomic load with acquire semantics for safe cross-thread reads.
+                 */
+                uint8_t                                                 GetIPv6RuntimeState() noexcept { return ipv6_runtime_state_.load(std::memory_order_acquire); }
+
+                /**
+                 * @brief Returns the error code that caused the last IPv6 plane failure.
+                 *
+                 * @details Set atomically whenever the transit plane transitions to
+                 *          state 3 (failed).  Zero when no failure has occurred.
+                 *
+                 * @return Atomic load with acquire semantics.
+                 */
+                uint32_t                                                GetIPv6RuntimeCause() noexcept { return ipv6_runtime_cause_.load(std::memory_order_acquire); }
+
             public:
                 /**
                  * @brief Enumerates inbound TCP acceptor categories used by the switcher.
@@ -764,6 +787,8 @@ namespace ppp {
                 bool                                                    ipv6_ndp_proxy_applied_ = false;       ///< True once the sysctl proxy_ndp enable has been run for the current uplink interface.
                 ITapPtr                                                 ipv6_transit_tap_;              ///< IPv6 transit TAP device handle.
                 ppp::vector<std::shared_ptr<boost::asio::io_context>>   ipv6_transit_ssmt_contexts_;    ///< SSMT io_contexts for the transit TAP.
+                std::atomic<uint8_t>                                    ipv6_runtime_state_{0};         ///< IPv6 plane state: 0=off, 1=nat66, 2=gua, 3=failed.
+                std::atomic<uint32_t>                                   ipv6_runtime_cause_{0};         ///< ErrorCode of the last IPv6 plane state-transition failure.
                 VirtualEthernetNetworkTcpipConnectionTable              connections_;                   ///< Active TCP/IP connection objects.
                 ITransmissionStatisticsPtr                              statistics_;                    ///< Aggregate traffic statistics.
                 VirtualEthernetManagedServerPtr                         managed_server_;                ///< Go managed-server bridge.

@@ -805,8 +805,8 @@ namespace ppp {
                 if (disposed != FALSE) {
                     return false;
                 }
-                // FIXED: changed 'elif' to 'else if'
-                else if (!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
+                // FIXED: restored 'elif' per project convention
+                elif (!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
                     return false;
                 }
                 else {

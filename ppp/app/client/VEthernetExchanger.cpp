@@ -108,6 +108,16 @@ namespace ppp {
                     }
                 }
 
+                // Hint fallback: if no explicit RequestedIPv6() preference was configured,
+                // but a previous session successfully applied an IPv6 address, re-request that
+                // same address so the server can honour address continuity on reconnect.
+                if (!request.HasAny() && switcher) {
+                    boost::asio::ip::address hint = switcher->LastAssignedIPv6();
+                    if (hint.is_v6()) {
+                        request.RequestedIPv6Address = hint;
+                    }
+                }
+
                 if (!request.HasAny()) {
                     return true;
                 }

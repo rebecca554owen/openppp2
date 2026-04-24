@@ -8,7 +8,9 @@ This document explains the transport core of OPENPPP2 from the implementation up
 
 The key source files are `ppp/transmissions/ITransmission.*`, `ppp/transmissions/ITcpipTransmission.*`, `ppp/transmissions/IWebsocketTransmission.*`, and the packet-consuming protocol files in `ppp/app/protocol/*`.
 
-## What The Transmission Layer Solves
+---
+
+## 1. What The Transmission Layer Solves
 
 The transmission subsystem has to do several things at once:
 
@@ -21,7 +23,9 @@ The transmission subsystem has to do several things at once:
 | Pre-handshake mode | Support base94-style pre-handshake or plaintext-compatible traffic |
 | Session-specific working keys | Derive per-connection working cipher state from configured keys and handshake-time entropy |
 
-## Layering Model
+---
+
+## 2. Layering Model
 
 ```mermaid
 flowchart TD
@@ -44,245 +48,471 @@ flowchart TD
 | Payload protection | Body encryption and transform pipeline |
 | Link-layer | Tunnel action semantics |
 
-## `ITransmission`
+---
 
-`ITransmission` is not just an interface. It centralizes protected transport behavior:
-
-- handshake sequencing
-- timeout handling
-- pre-handshake and post-handshake framing modes
-- cipher object ownership
-- read/write dispatch to carrier-specific implementations
+## 3. Class Hierarchy
 
 ```mermaid
 classDiagram
     class ITransmission {
-        +HandshakeClient()
-        +HandshakeServer()
-        +Read()
-        +Write()
-        +Encrypt()
-        +Decrypt()
+        +HandshakeClient(YieldContext) bool
+        +HandshakeServer(YieldContext) bool
+        +Read(YieldContext, length) shared_ptr~Byte~
+        +Write(YieldContext, packet, length) bool
+        +Encrypt(packet, length) bool
+        +Decrypt(packet, length) bool
+        +Dispose() void
+        #DoReadBytes(YieldContext, buf, offset, length) int
+        #DoWriteBytes(YieldContext, buf, offset, length) bool
+        -protocol_  ICiphertext
+        -transport_ ICiphertext
+        -handshaked_ atomic~bool~
+        -disposed_  atomic~bool~
     }
-    class ITcpipTransmission
-    class IWebsocketTransmission
+    class ITcpipTransmission {
+        -socket_ TSocket
+        +DoReadBytes() int
+        +DoWriteBytes() bool
+    }
+    class IWebSocketTransmission {
+        -websocket_ WsStream
+        +DoReadBytes() int
+        +DoWriteBytes() bool
+    }
+    class SslWebSocketTransmission {
+        -ssl_context_ ssl~context~
+    }
     ITransmission <|-- ITcpipTransmission
-    ITransmission <|-- IWebsocketTransmission
+    ITransmission <|-- IWebSocketTransmission
+    IWebSocketTransmission <|-- SslWebSocketTransmission
 ```
 
-## Carrier Types
+### Key Source Anchors
+
+| Class | File |
+|-------|------|
+| `ITransmission` | `ppp/transmissions/ITransmission.h` / `.cpp` |
+| `ITcpipTransmission` | `ppp/transmissions/ITcpipTransmission.h` / `.cpp` |
+| `IWebSocketTransmission` | `ppp/transmissions/IWebsocketTransmission.h` / `.cpp` |
+| `SslWebSocketTransmission` | `ppp/transmissions/IWebsocketTransmission.h` |
+
+---
+
+## 4. Carrier Types
 
 ### TCP
 
-TCP is the most direct carrier path.
+TCP is the most direct carrier path. When `tcp.listen.port` is non-zero, a `boost::asio::ip::tcp::acceptor` binds to that port. Each accepted socket is wrapped in an `ITcpipTransmission`. No HTTP upgrade is involved; the connection starts directly with the OPENPPP2 handshake.
 
 | Config | Meaning |
 |--------|---------|
 | `tcp.listen.port` | Listen port |
-| `tcp.connect.timeout` | Connect timeout |
-| `tcp.inactive.timeout` | Inactive timeout |
-| `tcp.turbo` | Carrier-side optimization |
-| `tcp.fast-open` | TCP Fast Open support |
-| `tcp.backlog` | Listen backlog |
+| `tcp.connect.timeout` | Connect timeout in seconds |
+| `tcp.inactive.timeout` | Inactive (idle) session timeout |
+| `tcp.turbo` | Carrier-side latency optimization (disables Nagle algorithm) |
+| `tcp.fast-open` | TCP Fast Open support (Linux kernel ≥ 3.7) |
+| `tcp.backlog` | Listen backlog queue depth |
 
-### WebSocket
-
-WebSocket is used when HTTP-compatible transport is needed.
-
-| Config | Meaning |
-|--------|---------|
-| `ws.listen.port` | Plain WebSocket listen port |
-| `wss.listen.port` | Secure WebSocket listen port |
-| `ws.path` | Upgrade path |
-| `ws.verify-peer` | Peer certificate verification |
-
-### WSS
-
-WSS adds TLS at the carrier layer. That does not replace the inner OPENPPP2 transport logic. It only changes the carrier protection layer.
-
-## Two Framing Families
-
-OPENPPP2 has two transmission families.
-
-### Base94 Family
-
-Used when either of these is true:
-
-- the handshake has not completed
-- plaintext-compatible mode is enabled
-
-It has two shapes:
-
-- initial extended-header form
-- later simple-header form
-
-The first packet is more expensive because it establishes the initial parse state. Later packets use a simpler form.
-
-### Binary Protected Family
-
-Used after handshake in the normal protected path.
-
-It uses a compact protected header plus a separately transformed payload body.
-
-## Base94 Header Behavior
-
-The base94 header is not a plain literal length prefix.
-
-It uses:
-
-- a random key byte
-- a filler byte
-- base94 digits derived from transformed length data
-- in the first packet, an additional validation field
-
-The packet state switches from extended to simple after the first successful parse.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Extended
-    Extended --> Simple: first packet validated
-    Simple --> Simple: later packets
-```
-
-## Binary Header Behavior
-
-In the binary path, the header stores protected metadata rather than a naked length prefix.
-
-The send-side process is roughly:
-
-1. adjust payload length to avoid zero-length ambiguity
-2. encrypt the length bytes if protocol cipher is configured
-3. XOR-mask with a packet-local factor
-4. shuffle bytes
-5. delta-encode the final header
-
-The receive-side process reverses those steps.
-
-## Why The Length Is Adjusted
-
-The code decrements the length before header protection and adds it back after decoding. That avoids zero-length ambiguity in the protected framing path.
-
-This is a small but important normalization choice. It turns zero into an obvious error state instead of a valid packet length.
-
-## Payload Transform Pipeline
-
-The payload path can include:
-
-- rolling XOR masking
-- deterministic shuffling
-- delta encoding
-- optional transport cipher encryption
-
-The runtime chooses conservative behavior before handshake and more normal behavior after handshake.
-
-```mermaid
-flowchart TD
-    A[Input bytes] --> B{Handshaked?}
-    B -->|no| C[Base94 decode]
-    B -->|yes| D[Binary read]
-    C --> E[Binary decrypt]
-    D --> F[Protected payload]
-    E --> F
-```
-
-## Two Cipher Slots
-
-OPENPPP2 keeps two cipher slots:
-
-| Slot | Role |
-|------|------|
-| `protocol_` | Protects header metadata and protocol-facing bytes |
-| `transport_` | Protects payload body bytes |
-
-This is a meaningful architectural split. Metadata and payload are handled differently because metadata leakage matters even when payload content is protected.
-
-## Handshake In Transmission Terms
-
-The transmission handshake does not just authenticate a peer. It also shapes traffic and creates connection-specific working-key state.
-
-Client side:
-
-1. send NOP prelude
-2. receive real `session_id`
-3. generate fresh `ivv`
-4. send `ivv`
-5. receive `nmux`
-6. mark `handshaked_ = true`
-7. rebuild cipher state using `ivv`
-
-Server side:
-
-1. send NOP prelude
-2. send real `session_id`
-3. generate and send `nmux`
-4. receive `ivv`
-5. mark `handshaked_ = true`
-6. rebuild cipher state using `ivv`
+#### TCP Connection Lifecycle
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant S as Server
-    C->>S: NOP prelude
-    S->>C: NOP prelude
-    S->>C: session_id
-    C->>S: ivv
-    S->>C: nmux
-    Note over C,S: rebuild protocol_ and transport_ using base key + ivv
-    Note over C,S: set handshaked_ = true
+    participant ASIO as Boost.Asio
+
+    C->>S: TCP SYN (plain TCP socket)
+    S->>ASIO: async_accept
+    ASIO-->>S: new TSocket
+    S->>S: ShiftToScheduler(socket)
+    S->>S: wrap in ITcpipTransmission
+    S->>C: HandshakeServer(y)
+    C->>S: HandshakeClient(y)
+    Note over C,S: ITransmission channel established
+    C->>S: tunnel frames (Read/Write loop)
 ```
 
-## Dummy Handshake Packets
+### WebSocket
 
-The NOP prelude is not empty traffic. It is structured dummy traffic.
+WebSocket is used when HTTP-compatible transport is needed (e.g., for traversal of HTTP proxies or CDN nodes that only pass HTTP traffic). The carrier performs a standard HTTP Upgrade handshake before the OPENPPP2 handshake begins.
 
-When `session_id == 0`, the packet packer sets the high bit of the first byte and produces a dummy payload. The receiver recognizes the dummy by that bit and ignores it.
+| Config | Meaning |
+|--------|---------|
+| `ws.listen.port` | Plain WebSocket listen port |
+| `wss.listen.port` | Secure WebSocket (TLS) listen port |
+| `ws.path` | HTTP Upgrade path (e.g., `/tunnel`) |
+| `ws.host` | Host header value for WebSocket upgrade |
+| `ws.verify-peer` | Peer certificate verification for WSS |
+| `ws.ssl.certificate` | Server TLS certificate path |
+| `ws.ssl.certificate-key` | Server TLS private key path |
+| `ws.ssl.ca-certificate` | CA bundle for peer verification |
 
-That means the prelude looks like normal handshake traffic but carries no logical session identity.
+#### Client URI Scheme Mapping
 
-## Connection-Specific Key Derivation
+| URI Form | Transport |
+|----------|-----------|
+| `ppp://host:port/` | Plain TCP |
+| `ppp://ws/host:port/` | Plain WebSocket |
+| `ppp://wss/host:port/` | TLS WebSocket (WSS) |
 
-The client generates `ivv` and the server uses it to rebuild connection-specific cipher state.
+### WSS
 
-The code-grounded statement is:
+WSS adds TLS at the carrier layer via `boost::asio::ssl::stream<TSocket>`. That does not replace the inner OPENPPP2 protocol cipher layer — it only changes the carrier protection layer. The two cipher layers are independently configurable.
 
-- OPENPPP2 derives per-connection working keys dynamically
-- this reduces static key reuse across sessions
+---
 
-## Related Documents
+## 5. Two Framing Families
 
-- `HANDSHAKE_SEQUENCE.md`
-- `PACKET_FORMATS.md`
-- `TRANSMISSION_PACK_SESSIONID.md`
-- this is not the same as claiming formal standard PFS from the visible code alone
+OPENPPP2 has two transmission families depending on whether the handshake has completed.
 
-## Handshake Timeout
+### Base94 Family
 
-Handshake is bounded by a timer derived from connection timeout settings.
+Used when either of these is true:
+- the handshake has not yet completed
+- plaintext-compatible mode is enabled in configuration
 
-If the timer fires, the runtime disposes the transmission and does not leave it in an indefinite handshake state.
+The base94 family has two shapes: an initial extended-header form (used for the first packet) and a later simple-header form (used for all subsequent packets). The first packet is more expensive because it establishes the initial parse state via an extended validation field. Later packets use a simpler 4-byte header.
 
-This is a safety and operational control measure, not just a convenience.
+Control flow:
 
-## Why Base94 Exists
+```mermaid
+stateDiagram-v2
+    [*] --> Extended : connection opened\nframe_tn_ = 0 / frame_rn_ = 0
+    Extended --> Simple : first packet validated\nframe_tn_++ / frame_rn_++
+    Simple --> Simple : later packets\nframe_tn_++ / frame_rn_++
+```
 
-Base94 is not accidental legacy code.
+Fields controlled by frame counters `frame_tn_` (transmit) and `frame_rn_` (receive):
 
-It gives the system:
+- When `frame_tn_ == 0`: extended header is written (4+3 bytes = 7 bytes total header).
+- When `frame_tn_ > 0`: simple header is written (4 bytes total header).
+- Receiver mirrors the logic using `frame_rn_`.
 
-- a pre-handshake framing family
-- a plaintext-compatible fallback path
-- a distinct early-traffic shape
-- compatibility for deployments that cannot use the normal protected binary form immediately
+### Binary Protected Family
 
-## Why `ITransmission` Matters
+Used after handshake in the normal protected path. Uses a compact 3-byte binary header (seed byte + two protected length bytes) followed by the encrypted payload.
+
+#### Binary Header Layout (post-handshake)
+
+```
+Byte 0:  seed (random, drives per-packet kf)
+Byte 1:  protected_length_hi
+Byte 2:  protected_length_lo
+Byte 3…N: encrypted payload body
+```
+
+The length bytes are not a plain 16-bit integer. They undergo: protocol-cipher encryption → XOR masking with `kf`-derived factor → byte shuffling → delta encoding. The receiver reverses all five steps in opposite order.
+
+---
+
+## 6. Base94 Header Behavior
+
+The base94 header is not a plain literal length prefix.
+
+It uses:
+- a random key byte (`ks`) that seeds the per-packet factor `kf`
+- a filler byte derived from `kf`
+- base94 digits derived from transformed length data
+- in the first packet, an additional validation field (3 extra bytes)
+
+The packet state switches from extended to simple after the first successful parse, tracked by `frame_rn_` reaching 1.
+
+```mermaid
+flowchart TD
+    A["Send packet (base94 path)"] --> B{"frame_tn_ == 0?"}
+    B -->|"yes (first packet)"| C["write 7-byte extended header\n(seed + filler + 3 base94 digits + 3 validate bytes)\nframe_tn_++"]
+    B -->|"no (later packets)"| D["write 4-byte simple header\n(seed + filler + 2 base94 digits)\nframe_tn_++"]
+    C --> E["write payload"]
+    D --> E
+
+    F["Receive packet (base94 path)"] --> G{"frame_rn_ == 0?"}
+    G -->|"yes"| H["read 7 bytes\nvalidate extended header\nframe_rn_++"]
+    G -->|"no"| I["read 4 bytes\nparse simple header\nframe_rn_++"]
+    H --> J["read payload (length from header)"]
+    I --> J
+```
+
+---
+
+## 7. Binary Header Behavior
+
+In the binary path, the header stores protected metadata rather than a naked length prefix.
+
+### Send-Side Pipeline (5 Steps)
+
+1. **Adjust length**: decrement payload length by 1 before header encoding. This avoids zero-length ambiguity — a zero payload length after decrement is an obvious error, not a valid empty packet.
+2. **Protocol-cipher encrypt**: if `protocol_` cipher is configured, encrypt the two length bytes using the cipher's ECB-style single-block transform.
+3. **XOR-mask**: derive `header_kf` from the seed byte using the same `kf` derivation as the payload. XOR the length bytes with `header_kf`-derived values.
+4. **Shuffle**: swap the two length bytes according to a deterministic shuffle rule derived from `header_kf`.
+5. **Delta-encode**: apply delta encoding to the final 3-byte header (seed + 2 length bytes) to prevent the header from being a static fingerprint.
+
+### Receive-Side Pipeline (reverse 5 Steps)
+
+1. **Delta-decode**: reverse the 3-byte delta encoding.
+2. **Derive `header_kf`**: compute from the seed byte.
+3. **Unshuffle**: swap bytes back.
+4. **XOR-unmask**: remove the XOR masking.
+5. **Protocol-cipher decrypt**: if cipher configured, decrypt the length bytes.
+6. **Reconstruct length**: add 1 back to the decoded value.
+
+```mermaid
+sequenceDiagram
+    participant S as Sender
+    participant W as Wire
+    participant R as Receiver
+
+    S->>S: payload_len -= 1 (avoid zero ambiguity)
+    S->>S: protocol_cipher.encrypt(len_bytes)
+    S->>S: XOR mask with header_kf
+    S->>S: byte shuffle
+    S->>S: delta encode 3-byte header
+    S->>W: write [seed, protected_len_hi, protected_len_lo, payload...]
+
+    W->>R: read 3-byte header
+    R->>R: delta decode
+    R->>R: derive header_kf from seed
+    R->>R: unshuffle
+    R->>R: XOR unmask
+    R->>R: protocol_cipher.decrypt(len_bytes)
+    R->>R: payload_len += 1
+    R->>W: read payload_len bytes
+    R->>R: transport_cipher.decrypt(payload)
+```
+
+---
+
+## 8. Payload Transform Pipeline
+
+The payload path can include multiple transforms applied in sequence:
+
+| Transform | Controlled By | When Active |
+|-----------|--------------|-------------|
+| Rolling XOR masking | `key.masked` | When `masked = true` in config |
+| Deterministic shuffling | `key.shuffle_data` | When `shuffle_data = true` |
+| Delta encoding | `key.delta_encode` | When `delta_encode = true` |
+| Transport cipher | `transport_` slot | When transport cipher configured and handshaked |
+
+The runtime chooses conservative behavior before handshake (base94 with no transport cipher) and full protection after handshake.
+
+```mermaid
+flowchart LR
+    A["Input payload bytes"] --> B["Rolling XOR mask\n(if key.masked)"]
+    B --> C["Deterministic shuffle\n(if key.shuffle_data)"]
+    C --> D["Delta encode\n(if key.delta_encode)"]
+    D --> E["transport_cipher.encrypt\n(if transport_ && handshaked_)"]
+    E --> F["Output bytes to wire"]
+
+    G["Input bytes from wire"] --> H["transport_cipher.decrypt\n(if transport_ && handshaked_)"]
+    H --> I["Delta decode"]
+    I --> J["Unshuffle"]
+    J --> K["XOR unmask"]
+    K --> L["Recovered payload"]
+```
+
+---
+
+## 9. Two Cipher Slots
+
+OPENPPP2 keeps two independent cipher slots:
+
+| Slot | JSON Config Key | Role | When Applied |
+|------|----------------|------|-------------|
+| `protocol_` | `key.protocol` + `key.protocol-key` | Protects header length metadata | On every frame header |
+| `transport_` | `key.transport` + `key.transport-key` | Protects payload body bytes | On every frame payload |
+
+This is a meaningful architectural split. Metadata and payload are handled differently because metadata leakage matters even when payload content is protected. An attacker who can observe packet lengths and patterns can infer traffic types (DNS, video, VoIP) even without decrypting the payload. Protecting the length field independently raises the bar for traffic analysis.
+
+Both cipher objects are `ppp::cryptography::Ciphertext` instances. The session-specific key material for both is derived during handshake using:
+
+```
+working_key = base_key XOR ivv XOR (nmux low-bit-derived factor)
+```
+
+Where `ivv` is the client-generated per-connection entropy value exchanged during handshake and `nmux` is the server-generated multiplexing hint. This means every connection uses different working keys even if the base key in `appsettings.json` is the same.
+
+---
+
+## 10. Handshake In Transmission Terms
+
+The transmission handshake does not just authenticate a peer. It shapes traffic and creates connection-specific working-key state.
+
+### Client-Side Handshake
+
+1. Send NOP prelude (dummy traffic to obscure handshake start)
+2. Receive real `session_id` from server
+3. Generate fresh `ivv` (random per-connection entropy, typically 16 bytes)
+4. Send `ivv` to server
+5. Receive `nmux` from server (low bit = mux flag)
+6. Mark `handshaked_ = true`
+7. Rebuild `protocol_` and `transport_` cipher state using `ivv`
+
+### Server-Side Handshake
+
+1. Send NOP prelude
+2. Send real `session_id` to client
+3. Generate and send `nmux`
+4. Receive `ivv` from client
+5. Mark `handshaked_ = true`
+6. Rebuild cipher state using `ivv`
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: NOP prelude (session_id = 0, high bit set)
+    S->>C: NOP prelude (session_id = 0, high bit set)
+    S->>C: session_id (real, non-zero)
+    C->>S: ivv (16 random bytes)
+    S->>C: nmux (1 byte: low bit = mux flag)
+    Note over C,S: Both sides rebuild protocol_ and transport_\nusing base_key + ivv + nmux
+    Note over C,S: handshaked_ = true on both sides
+    Note over C,S: Binary protected framing now active
+```
+
+---
+
+## 11. Dummy Handshake Packets (NOP Prelude)
+
+The NOP prelude is not empty traffic. It is structured dummy traffic designed to make the handshake look like normal tunnel data to a passive observer.
+
+When `session_id == 0`, the packet packer:
+1. Sets the high bit of the first byte (distinguishes it from real session traffic).
+2. Generates a random payload of random length (up to MTU).
+3. Writes the dummy bytes in base94 format.
+
+The receiver recognizes the dummy by checking the high bit and ignores the payload content. The random length and content prevent passive observers from identifying the handshake by timing or size.
+
+After both sides have exchanged NOP preludes, the real `session_id` exchange begins and the handshake proceeds normally.
+
+---
+
+## 12. Connection-Specific Key Derivation
+
+The client generates `ivv` fresh for every new connection. The server uses it along with the base key and `nmux` to rebuild connection-specific cipher state. This means:
+
+- Different connections between the same client and server use different working keys.
+- Compromise of one connection's working key does not expose other connections.
+- Passive traffic analysis that relies on key reuse (e.g., replay attacks with static keys) is defeated.
+
+The `nmux` low bit additionally conditions the key derivation on whether multiplexing is active, meaning MUX and non-MUX sessions produce different cipher states even with the same `ivv`.
+
+---
+
+## 13. Handshake Timeout
+
+Handshake is bounded by a timer derived from connection timeout settings:
+
+```
+handshake_timeout = tcp.connect.timeout
+```
+
+If the timer fires before `handshaked_` is set to `true`, the runtime:
+1. Calls `SetLastErrorCode(ErrorCode::SessionHandshakeFailed)`.
+2. Calls `Dispose()` on the transmission.
+3. Does not leave the connection in an indefinite handshake state.
+
+This prevents resource exhaustion from half-open connections where the remote peer starts the handshake but never completes it.
+
+---
+
+## 14. QoS and Statistics Integration
+
+`ITransmission` has two optional integration points for traffic management:
+
+**`ITransmissionStatistics`** — counts bytes read and written. The switcher uses these counters to enforce per-session bandwidth quotas declared in the `INFO` frame and to populate the Console UI speed display.
+
+**`ITransmissionQoS`** — token-bucket rate limiter. When attached, `Write()` will consume tokens before sending. If the bucket is empty, the write yields (coroutine suspension) until tokens refill. This implements the server-side bandwidth cap declared in `client.bandwidth` in the configuration.
+
+```mermaid
+graph LR
+    A["ITransmission::Write(y, buf, len)"] --> B{"ITransmissionQoS\nattached?"}
+    B -->|"yes"| C["ConsumeTokens(len)\n(may yield coroutine)"]
+    B -->|"no"| D["proceed directly"]
+    C --> D
+    D --> E["Encrypt(buf, len)"]
+    E --> F["DoWriteBytes(y, buf, offset, len)"]
+    F --> G["ITransmissionStatistics\nAddOutputBytes(len)"]
+```
+
+---
+
+## 15. Why `ITransmission` Matters
 
 This file is one of the most important in the repository because it centralizes many behaviors that other systems spread across several libraries:
 
 - handshake and timeout control
-- early traffic shaping
-- metadata protection
-- payload protection
+- early traffic shaping (NOP prelude)
+- metadata protection (header transform pipeline)
+- payload protection (payload transform pipeline)
 - carrier-independent I/O dispatch
+- QoS token-bucket integration
+- statistics collection
 
-That density is a consequence of the design, not just an implementation accident.
+That density is a consequence of the design, not just an implementation accident. The alternative — spreading these responsibilities across the TCP carrier, the WebSocket carrier, and the link-layer protocol — would make it much harder to ensure consistent security properties across all carrier types.
+
+---
+
+## 16. Practical Configuration Examples
+
+### Minimum Secure Configuration
+
+```json
+{
+  "tcp": {
+    "listen": { "port": 2096 },
+    "connect": { "timeout": 15 },
+    "inactive": { "timeout": 300 }
+  },
+  "key": {
+    "kf": 154,
+    "kh": 181,
+    "kl": 152,
+    "kx": 191,
+    "sb": 0,
+    "protocol": "aes-128-cfb",
+    "protocol-key": "YourProtocolKey",
+    "transport": "aes-256-cfb",
+    "transport-key": "YourTransportKey",
+    "masked": true,
+    "delta_encode": true,
+    "shuffle_data": true
+  }
+}
+```
+
+### WebSocket over TLS (WSS)
+
+```json
+{
+  "websocket": {
+    "host": "vpn.example.com",
+    "path": "/tunnel",
+    "listen": {
+      "ws": { "port": 0 },
+      "wss": { "port": 443 }
+    },
+    "ssl": {
+      "certificate": "/etc/ssl/certs/server.pem",
+      "certificate-key": "/etc/ssl/private/server.key",
+      "verify-peer": false
+    }
+  }
+}
+```
+
+Client URI for WSS:
+
+```
+ppp://wss/vpn.example.com:443/
+```
+
+---
+
+## Related Documents
+
+- [`HANDSHAKE_SEQUENCE.md`](HANDSHAKE_SEQUENCE.md) — Detailed handshake exchange walkthrough
+- [`PACKET_FORMATS.md`](PACKET_FORMATS.md) — Wire format for all packet types
+- [`TRANSMISSION_PACK_SESSIONID.md`](TRANSMISSION_PACK_SESSIONID.md) — Session ID packaging details
+- [`CONFIGURATION.md`](CONFIGURATION.md) — Full `appsettings.json` schema including transport config
+- [`SECURITY.md`](SECURITY.md) — Security architecture and threat model
+- [`EDSM_STATE_MACHINES.md`](EDSM_STATE_MACHINES.md) — Session state machine lifecycle

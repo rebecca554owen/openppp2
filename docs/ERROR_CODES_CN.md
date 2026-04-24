@@ -770,3 +770,318 @@ graph TD
 3. **返回**适当的哨兵值（`false`、`-1` 或 `NULLPTR`）。
 
 仅返回哨兵值而不设置错误码是不完整的。`.def` 文件中定义但在任何 `.cpp` 中未被引用的错误码应当删除。
+
+---
+
+## 错误码架构深度解析
+
+### X-Macro 展开机制
+
+整个错误码枚举由单一源文件 `ppp/diagnostics/ErrorCodes.def` 通过 X-macro 模式生成：
+
+```cpp
+// ErrorCodes.def（节选）
+X(Success,                     "Success")
+X(GenericUnknown,              "Generic unknown error")
+X(AppStartupFailed,            "Application startup failed")
+// ... 还有 463 条 ...
+
+// ErrorCode.h — 展开为 enum class
+enum class ErrorCode : uint32_t
+{
+#define X(name, desc) name,
+#include "ppp/diagnostics/ErrorCodes.def"
+#undef X
+};
+
+// Error.cpp — 展开为字符串表
+static const char* s_error_strings[] = {
+#define X(name, desc) desc,
+#include "ppp/diagnostics/ErrorCodes.def"
+#undef X
+};
+```
+
+这意味着添加新错误码只需编辑一个 `.def` 文件——枚举成员、字符串表条目和 `FormatErrorString()` 查找均自动派生。
+
+### 线程本地存储 vs. 原子快照
+
+两种错误存储机制并存：
+
+```mermaid
+graph TD
+    SETLAST["SetLastErrorCode(code)"] --> TL["线程本地存储\nGetLastErrorCode()"]
+    SETLAST --> ATOMIC["std::atomic<uint64_t>\nGetLastErrorCodeSnapshot()\nGetLastErrorTimestamp()"]
+
+    TL --> DESC1["线程局部：跟踪此线程上最近的错误"]
+    ATOMIC --> DESC2["跨线程：最后一次全局发布的显著错误"]
+```
+
+`SetLastErrorCode()` 始终更新线程本地值。同时有条件地更新全局原子快照——条件通常是错误码非零（非成功）。原子快照将错误码与时间戳打包进单个 64 位值：高 32 位 = 截断为 32 位的毫秒时间戳，低 32 位 = 错误码值。
+
+`GetLastErrorTimestamp()` 返回最近一次发布的非成功错误的毫秒时间戳，供 TUI 状态栏显示最近问题的发生时间。
+
+### `SetLastError` 模板变体
+
+模板重载使错误路径模式极为简洁：
+
+```cpp
+// 设置错误码后返回 false — 用于返回 bool 的函数
+bool result = ppp::diagnostics::SetLastError(ErrorCode::SocketConnectFailed);
+// result == false
+
+// 设置错误码后返回 -1 — 用于返回 int 的函数
+int fd = ppp::diagnostics::SetLastError<int>(ErrorCode::SocketCreateFailed);
+// fd == -1
+
+// 设置错误码后返回 NULLPTR — 用于返回指针的函数
+SomeObject* ptr = ppp::diagnostics::SetLastError<SomeObject*>(ErrorCode::MemoryAllocationFailed);
+// ptr == NULLPTR
+```
+
+所有三种变体均先调用 `SetLastErrorCode()`，然后返回哨兵值。这消除了两行模式：
+
+```cpp
+// 旧模式（冗长）
+SetLastErrorCode(ErrorCode::SocketConnectFailed);
+return false;
+
+// 新模式（简洁）
+return SetLastError(ErrorCode::SocketConnectFailed);
+```
+
+---
+
+## 各子系统的错误码使用模式
+
+### 启动流水线错误码
+
+启动流水线（`PppApplication::Main()` 和 `PreparedLoopbackEnvironment()`）使用严格线性的错误码递进：每个步骤失败时仅设置一个错误码：
+
+```mermaid
+flowchart TD
+    A["IsUserAnAdministrator() 失败"] --> E1["AppPrivilegeRequired"]
+    B["prevent_rerun_.Exists() 为真"] --> E2["AppAlreadyRunning"]
+    C["prevent_rerun_.Open() 失败"] --> E3["AppLockAcquireFailed"]
+    D["Windows TAP 驱动检查失败"] --> E4["NetworkInterfaceConfigureFailed"]
+    F["ITap::Create() 返回 null"] --> E5["TunnelOpenFailed"]
+    G["ITap::Open() 失败"] --> E6["TunnelListenFailed"]
+    H["VEthernet::Open() 失败，NIC 为 null"] --> E7["NetworkInterfaceUnavailable"]
+    I["VEthernet::Open() 失败，NIC 非 null"] --> E5
+    J["ipv6::PrepareServerEnvironment 失败"] --> E8["IPv6ServerPrepareFailed"]
+    K["VirtualEthernetSwitcher::Open 失败"] --> E5
+    L["VirtualEthernetSwitcher::Run 失败"] --> E6
+    M["NextTickAlwaysTimeout 失败"] --> E9["RuntimeTimerStartFailed"]
+```
+
+### 会话生命周期错误码
+
+会话经历多个生命周期阶段，每个潜在失败点对应特定错误码：
+
+| 阶段 | 失败条件 | 错误码 |
+|------|---------|--------|
+| 握手 NOP 读取 | 读取超时 | `TimerHandshakeTimeout` |
+| 握手 NOP 读取 | 解密失败 | `ProtocolDecodeFailed` |
+| 握手会话 ID | 值无效 | `SessionIdInvalid` |
+| 握手密码重建 | 不支持的密码 | `ProtocolCipherMismatch` |
+| INFO 帧接收 | 帧格式错误 | `SessionInformationInvalid` |
+| INFO 帧接收 | 配额超出 | `SessionQuotaExceeded` |
+| INFO 帧接收 | 会话已过期 | `SessionExpired` |
+| 数据循环读取 | 套接字断开 | `SocketDisconnected` |
+| 数据循环读取 | WebSocket 帧无效 | `WebSocketFrameInvalid` |
+| 心跳检查 | 超过截止时间无 RX | `ProtocolKeepAliveTimeout` |
+| 管理服务器认证 | 认证被拒绝 | `AuthCredentialInvalid` 或 `AuthTokenExpired` |
+| IPv6 分配 | 租约冲突 | `IPv6LeaseConflict` |
+| IPv6 分配 | 无可用地址 | `IPv6LeaseUnavailable` |
+
+### 协议层错误码
+
+协议错误（操作码违规、解码失败）使用 `Protocol*` 类别。这些通常表明客户端与服务端版本不兼容、网络损坏或存在主动攻击者：
+
+| 错误码 | 典型原因 |
+|--------|---------|
+| `ProtocolFrameInvalid` | 帧头部解码失败（种子字节或长度错误）|
+| `ProtocolPacketActionInvalid` | 收到未知操作码字节 |
+| `ProtocolVersionMismatch` | 客户端和服务端编译了不兼容的协议版本 |
+| `ProtocolCipherMismatch` | 密钥材料交换导致派生密钥不同 |
+| `ProtocolDecodeFailed` | 解密或校验和验证失败 |
+| `ProtocolKeepAliveTimeout` | 远端对等节点停止发送心跳 |
+| `ProtocolMuxFailed` | MUX 通道协商失败 |
+
+---
+
+## 错误码诊断工作流
+
+### 第一步 — 捕获快照
+
+问题发生时，第一步是在快照被覆盖之前捕获错误码：
+
+```cpp
+ErrorCode   code = ppp::diagnostics::GetLastErrorCodeSnapshot();
+uint64_t    ts   = ppp::diagnostics::GetLastErrorTimestamp();
+const char* msg  = ppp::diagnostics::FormatErrorString(code);
+
+printf("[%llu ms] 最近错误: %s (0x%08X)\n", ts, msg, (uint32_t)code);
+```
+
+### 第二步 — 映射至类别
+
+错误码值是连续整数（从 0 开始的枚举）。可通过查阅 `ERROR_CODES_CN.md` 或直接检查 `ErrorCodes.def` 文件来识别类别。前 25 个条目是 Generic，后 15 个是 App，以此类推。
+
+### 第三步 — 与 TUI 关联
+
+TUI 状态栏在底部状态行显示最新快照。若 TUI 不可用（重定向了 stdout），启动摘要文本会在进程退出前包含最后一个错误。
+
+### 第四步 — 追踪至源码
+
+每个错误码仅在一处（或极少几处）被设置。使用 `grep` 或 IDE 搜索查找所有 `SetLastErrorCode(ErrorCode::XYZ)` 调用点并检查周围逻辑：
+
+```bash
+# 查找特定错误码的所有调用点
+grep -rn "TunnelOpenFailed" ppp/ linux/ windows/ android/ darwin/
+```
+
+### 第五步 — 区分线程本地值与快照
+
+若快照显示的错误与预期不同，请记住：
+- 快照反映**所有线程中最后一次发布的非成功错误**。
+- 线程本地值反映**被检查的特定线程上的最后一个错误**。
+- 在竞争情况下，两个线程可能同时设置不同的错误；快照捕获赢得原子 CAS 的那个。
+
+---
+
+## 正常运行期间的错误码频率
+
+在有活跃会话的健康运行实例中，以下错误码定期出现，**不表示问题**：
+
+| 错误码 | 正常出现原因 |
+|--------|------------|
+| `GenericCanceled` | 每次 `timer->cancel()` 调用时 | 定时器在销毁时被取消 |
+| `GenericTimeout` | DNS 查询超时时 | 上游 DNS 可能较慢 |
+| `SocketDisconnected` | 任何对等节点关闭连接时 | 正常 TCP 生命周期 |
+| `SessionDisposed` | 每次会话拆除后 | 正常生命周期 |
+| `FirewallSegmentBlocked` | 出站受阻的目标时 | 正常防火墙策略 |
+
+以下错误码表示**实际问题**，应调查：
+
+| 错误码 | 严重性 | 可能原因 |
+|--------|--------|---------|
+| `AppPrivilegeRequired` | 致命（启动）| 进程未以 root/管理员身份运行 |
+| `AppAlreadyRunning` | 致命（启动）| 锁文件残留或重复进程 |
+| `TunnelOpenFailed` | 致命（启动）| TAP 驱动未安装 |
+| `ProtocolKeepAliveTimeout` | 会话丢失 | 网络中断或远端崩溃 |
+| `ProtocolCipherMismatch` | 会话失败 | 客户端/服务端密钥不匹配 |
+| `IPv6LeaseConflict` | IPv6 故障 | 地址池中 IP 冲突 |
+| `ResourceExhaustedSessionSlots` | 容量 | 服务端已达最大连接数 |
+| `ResourceExhaustedEphemeralPorts` | 中继失败 | NAT 表耗尽 |
+| `AuthCredentialInvalid` | 认证失败 | 密码或令牌错误 |
+| `InternalLogicStateCorrupted` | 程序错误 | 向开发者报告 |
+
+---
+
+## 错误处理器注册 API
+
+除错误码存储 API 外，OPENPPP2 还提供了一个用于结构化错误通知的错误处理器派发机制：
+
+```cpp
+// 使用稳定的键注册处理器
+ppp::diagnostics::ErrorHandler::RegisterErrorHandler(
+    "my-module",
+    [](ErrorCode code, uint64_t timestamp_ms) noexcept
+    {
+        // 当显著错误被发布时调用
+        // 必须是 noexcept — 此处的异常会被静默吞掉
+    });
+
+// 移除处理器
+ppp::diagnostics::ErrorHandler::RegisterErrorHandler("my-module", nullptr);
+```
+
+处理器注册详见 `ERROR_HANDLING_API_CN.md`。错误码消费者的关键注意事项：
+
+- 处理器在调用 `SetLastErrorCode()` 的线程上派发。
+- 处理器接收错误码和错误的毫秒时间戳。
+- 处理器不得递归调用 `SetLastErrorCode()`——这会导致无限派发。
+- 所有处理器必须在 worker 线程启动之前注册（在启动初始化窗口内）。
+
+---
+
+## 与诊断错误系统的集成
+
+本文档描述错误码**值**。更高层次的诊断架构——错误如何传播、快照环如何维护以及 TUI 如何消费诊断信息——记录在 [`DIAGNOSTICS_ERROR_SYSTEM.md`](DIAGNOSTICS_ERROR_SYSTEM.md) 中。
+
+两份文档的关系：
+
+```mermaid
+graph LR
+    A["ErrorCodes.def\n（X-macro 源文件）"] --> B["ErrorCode 枚举\n（ErrorCode.h）"]
+    B --> C["SetLastErrorCode()\nGetLastErrorCode()\nGetLastErrorCodeSnapshot()"]
+    C --> D["ERROR_CODES_CN.md\n（本文档）\n值参考手册"]
+    C --> E["DIAGNOSTICS_ERROR_SYSTEM.md\n架构与传播"]
+    E --> F["TUI 状态栏\n（ConsoleUI）"]
+    E --> G["ErrorHandler 派发\n（结构化通知）"]
+```
+
+---
+
+## 常用错误码速查（按功能领域）
+
+### VPN 隧道建立
+
+```
+TunnelOpenFailed           — TAP 设备无法创建或打开
+TunnelListenFailed         — 服务端无法绑定/监听端口
+TunnelDevicePermissionDenied — /dev/net/tun 不可访问
+NetworkInterfaceUnavailable — 指定 NIC 不存在
+NetworkInterfaceConfigureFailed — 无法在 TAP 上配置 IP/GW/DNS
+```
+
+### 会话握手
+
+```
+SessionHandshakeFailed     — 通用握手失败
+TimerHandshakeTimeout      — 握手在超时内未完成
+ProtocolDecodeFailed       — 握手帧解密/解析失败
+ProtocolCipherMismatch     — 密钥派生产生了不同的密码
+SessionIdInvalid           — 收到的会话 ID 为 0 或超出范围
+```
+
+### 进行中的会话
+
+```
+ProtocolKeepAliveTimeout   — 在心跳窗口内未收到数据
+SocketDisconnected         — 远端 TCP 连接断开
+WebSocketFrameInvalid      — WebSocket 帧损坏或意外
+SessionQuotaExceeded       — 会话带宽或流量限制已达
+SessionExpired             — 会话生存时间超出
+```
+
+### 认证（管理服务器）
+
+```
+AuthUserNotFound           — 用户名不在后端数据库中
+AuthCredentialInvalid      — 密码或令牌错误
+AuthTokenExpired           — JWT 或会话令牌已过期
+AuthPolicyDenied           — 基于 IP 或时间的策略拒绝登录
+AuthMfaRequired            — 需要 MFA 步骤但未提供
+```
+
+### IPv6
+
+```
+IPv6ServerPrepareFailed    — 无法设置 NDP 代理或 IPv6 转发
+IPv6LeaseConflict          — 请求的 IPv6 地址已在使用中
+IPv6LeaseUnavailable       — IPv6 地址池已耗尽
+IPv6ForwardingEnableFailed — 无法启用 ip6_forwarding sysctl
+IPv6NeighborProxyAddFailed — netlink NDP 代理添加命令失败
+```
+
+### 平台专属
+
+```
+LinuxIptablesApplyFailed   — iptables/nftables 规则无法应用
+LinuxNetlinkOpenFailed     — netlink 套接字无法打开
+WindowsWintunCreateFailed  — Wintun 适配器创建失败
+WindowsWfpEngineOpenFailed — Windows 过滤平台不可用
+WindowsRegistryReadFailed  — TAP 组件 ID 注册表查找失败
+```

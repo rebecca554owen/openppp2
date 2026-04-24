@@ -184,7 +184,7 @@ namespace ppp {
                                 }
                             }
                         }
-                        else if (::dns::RecordType::kAAAA == rr.mType) {
+                        elif (::dns::RecordType::kAAAA == rr.mType) {
                             auto rdata = rr.getRData<::dns::RDataAAAA>();
                             if (NULLPTR != rdata) {
                                 ep = IPEndPoint(AddressFamily::InterNetworkV6,
@@ -446,7 +446,7 @@ namespace ppp {
                             if (ack == a_state.id) {
                                 a_state.received = true;
                             }
-                            else if (ack == aaaa_state.id) {
+                            elif (ack == aaaa_state.id) {
                                 aaaa_state.received = true;
                             }
                         }
@@ -775,7 +775,7 @@ namespace ppp {
                             }
                         }
                     }
-                    else if (NULLPTR != all_cb) {
+                    elif (NULLPTR != all_cb) {
                         all_cb(addresses);
                     }
                 }
@@ -1010,7 +1010,7 @@ namespace ppp {
 
                                 any = true;
                             }
-                            else if (want_v6 && ip.is_v6()) {
+                            elif (want_v6 && ip.is_v6()) {
                                 auto rd_aaaa = make_shared_object<::dns::RDataAAAA>();
                                 if (NULLPTR == rd_aaaa) {
                                     break;

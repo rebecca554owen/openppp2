@@ -12,10 +12,28 @@
 namespace ppp {
     namespace diagnostics {
         /**
+         * @brief Severity classification for diagnostic error codes.
+         *
+         * @details Severity levels are used to classify the urgency and
+         *          recoverability of a diagnostic condition:
+         *          - kInfo    : Normal informational state (no error).
+         *          - kWarning : Recoverable condition; degraded service is possible.
+         *          - kError   : Non-recoverable for the affected session or operation.
+         *          - kFatal   : Unrecoverable; the process must halt or restart.
+         */
+        enum class ErrorSeverity : uint8_t
+        {
+            kInfo    = 0, ///< Informational; normal operation with no error condition.
+            kWarning = 1, ///< Recoverable; degraded service may continue.
+            kError   = 2, ///< Non-recoverable for the affected session or operation.
+            kFatal   = 3, ///< Unrecoverable; process must halt or restart.
+        };
+
+        /**
          * @brief Enumerates framework-specific diagnostic error codes.
          */
         enum class ErrorCode : uint32_t {
-#define X(name, text) name,
+#define X(name, text, severity) name,
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
         };
@@ -98,6 +116,37 @@ namespace ppp {
          * @return Null-terminated message for the provided code.
          */
         const char*                                                         FormatErrorString(ErrorCode code) noexcept;
+
+        /**
+         * @brief Retrieves the severity level associated with a diagnostic error code.
+         * @param code  The error code to classify.
+         * @return      The ErrorSeverity value defined for the given code.
+         * @note        Returns ErrorSeverity::kError for any unrecognized code value.
+         */
+        ErrorSeverity                                                       GetErrorSeverity(ErrorCode code) noexcept;
+
+        /**
+         * @brief Returns a short human-readable name for a severity level.
+         * @param severity  The severity level to name.
+         * @return          A null-terminated ASCII string: "INFO", "WARNING", "ERROR", or "FATAL".
+         *                  Returns "UNKNOWN" for out-of-range values.
+         */
+        const char*                                                         GetErrorSeverityName(ErrorSeverity severity) noexcept;
+
+        /**
+         * @brief Formats a fully-qualified error triplet string for diagnostics output.
+         * @param code  The error code to format.
+         * @return      A ppp::string of the form "<uint32_id> <CodeName>: <message text>".
+         *              Example: "305 IPv6LeasePoolExhausted: The IPv6 lease pool has no remaining addresses..."
+         */
+        ppp::string                                                         FormatErrorTriplet(ErrorCode code) noexcept;
+
+        /**
+         * @brief Tests whether an error code represents a fatal (unrecoverable) condition.
+         * @param code  The error code to test.
+         * @return      true if GetErrorSeverity(code) == ErrorSeverity::kFatal, false otherwise.
+         */
+        bool                                                                IsErrorFatal(ErrorCode code) noexcept;
 
         /**
          * @brief Registers or removes a named callback for later error notifications.

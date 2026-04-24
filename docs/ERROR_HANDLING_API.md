@@ -4,61 +4,419 @@
 
 ## Scope
 
-This document defines the diagnostics error API contract used by startup/runtime paths and operational surfaces.
+This document defines the diagnostics error API contract used by startup/runtime paths and operational surfaces in OPENPPP2.
+
+The API is implemented in:
+- `ppp/diagnostics/Error.h`
+- `ppp/diagnostics/ErrorHandler.h`
+- `ppp/diagnostics/Error.cpp`
+- `ppp/diagnostics/ErrorHandler.cpp`
+
+---
+
+## Architecture Overview
+
+```mermaid
+flowchart TD
+    A[Failure site] -->|SetLastErrorCode / SetLastError| B[Thread-local ErrorCode]
+    B --> C[GetLastErrorCode]
+    B --> D[GetLastErrorCodeSnapshot]
+    D --> E[Console UI]
+    D --> F[Log output]
+    D --> G[Android JNI bridge]
+    H[RegisterErrorHandler] --> I[Handler registry]
+    B -->|dispatch| I
+    I --> J[Registered callbacks]
+```
+
+The design is single-source: every failure path sets diagnostics once, and all presentation layers read from the same snapshot.
+
+---
 
 ## Core API Surface
 
-Anchors:
+### Primary Setter Functions
 
-- `ppp/diagnostics/Error.h`
-- `ppp/diagnostics/ErrorHandler.h`
+#### `SetLastErrorCode`
 
-Primary calls:
+```cpp
+/**
+ * @brief Set the thread-local last error code.
+ * @param code  The ErrorCode value to record.
+ * @note  Also updates the process-wide snapshot and timestamp.
+ *        Dispatches to all registered error handlers.
+ */
+void SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+```
 
-- `SetLastErrorCode(ErrorCode code)`
-- `SetLastError(...)` typed helpers for `bool`, integral, pointer, and caller-provided return values
-- `GetLastErrorCode()` for current thread-local value
-- `GetLastErrorCodeSnapshot()` and `GetLastErrorTimestamp()` for process-wide latest observed snapshot
-- `FormatErrorString(ErrorCode code)`
+This is the primary entry point for recording a failure.
+Call it before returning any failure sentinel (`false`, `-1`, `NULLPTR`).
 
-## Handler Registration Contract
+#### `SetLastError` (overloads)
 
-`RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler)` is key-based.
+```cpp
+/**
+ * @brief Set the error code and return a bool failure value.
+ * @param code   The ErrorCode to record.
+ * @param result The value to return (typically false).
+ * @return       The value of result unchanged.
+ */
+bool SetLastError(ppp::diagnostics::ErrorCode code, bool result) noexcept;
 
-Behavior:
+/**
+ * @brief Set the error code and return an integer failure value.
+ * @param code   The ErrorCode to record.
+ * @param result The integer return value (typically -1).
+ * @return       The value of result unchanged.
+ */
+int SetLastError(ppp::diagnostics::ErrorCode code, int result) noexcept;
 
-- key identifies one registration slot;
-- calling with an existing key replaces the previous handler;
-- passing a null handler removes the key;
-- handlers receive integer form of the current `ErrorCode`.
+/**
+ * @brief Set the error code and return a pointer failure value.
+ * @param code   The ErrorCode to record.
+ * @param result The pointer return value (typically NULLPTR).
+ * @return       The value of result unchanged.
+ */
+void* SetLastError(ppp::diagnostics::ErrorCode code, void* result) noexcept;
+```
 
-## Registration-Time Thread-Safety Boundary
+These helpers let callers combine the error set and return statement:
 
-Registration changes are intended for initialization/teardown phases:
+```cpp
+return SetLastError(ErrorCode::SocketBindFailed, false);
+```
 
-- supported: register/replace/remove handlers before multi-thread runtime starts;
-- supported: remove handlers during controlled shutdown when worker activity is quiesced;
-- not supported as a contract: frequent registration churn while worker threads are actively dispatching errors.
+---
 
-Dispatch paths copy current handlers under lock and invoke callbacks outside the lock. This protects dispatch continuity, but registration mutation should still be treated as lifecycle-managed, not hot-path control flow.
+### Getter Functions
+
+#### `GetLastErrorCode`
+
+```cpp
+/**
+ * @brief Get the current thread-local error code.
+ * @return The most recently set ErrorCode on this thread.
+ * @note  Returns ErrorCode::None if no error has been set.
+ */
+ppp::diagnostics::ErrorCode GetLastErrorCode() noexcept;
+```
+
+#### `GetLastErrorCodeSnapshot`
+
+```cpp
+/**
+ * @brief Get the process-wide most recent error code snapshot.
+ * @return The ErrorCode from the most recent SetLastErrorCode call across all threads.
+ * @note  This is a snapshot; it may be overwritten by concurrent threads.
+ */
+ppp::diagnostics::ErrorCode GetLastErrorCodeSnapshot() noexcept;
+```
+
+#### `GetLastErrorTimestamp`
+
+```cpp
+/**
+ * @brief Get the timestamp of the most recent process-wide error.
+ * @return Unix timestamp (seconds) of the last SetLastErrorCode call.
+ */
+int64_t GetLastErrorTimestamp() noexcept;
+```
+
+---
+
+### Format Function
+
+#### `FormatErrorString`
+
+```cpp
+/**
+ * @brief Format an ErrorCode as a human-readable string.
+ * @param code  The ErrorCode to format.
+ * @return      A descriptive string for the error code.
+ */
+ppp::string FormatErrorString(ppp::diagnostics::ErrorCode code) noexcept;
+```
+
+Used by Console UI and log surfaces to convert error codes to displayable text.
+
+---
+
+## Handler Registration
+
+### `RegisterErrorHandler`
+
+```cpp
+/**
+ * @brief Register or replace an error notification handler.
+ * @param key     Unique string identifier for this registration slot.
+ * @param handler Callback function receiving the integer form of ErrorCode.
+ *                Pass a null function to remove the handler for this key.
+ * @note  Key-based: registering with an existing key replaces the previous handler.
+ * @note  Registration is intended for initialization / teardown phases only.
+ *        Do not call from hot paths while worker threads are active.
+ */
+void RegisterErrorHandler(
+    const ppp::string& key,
+    const ppp::function<void(int err)>& handler) noexcept;
+```
+
+### Handler Dispatch Contract
+
+When `SetLastErrorCode` is called:
+
+1. The thread-local ErrorCode is updated.
+2. The process-wide snapshot is updated.
+3. The handler registry is **copied under lock**.
+4. Handlers are **invoked outside the lock**.
+
+This guarantees:
+- No deadlock between dispatch and registration.
+- Handlers see consistent state.
+- A slow handler does not block other threads from setting errors.
+
+---
+
+## Handler Registration Thread-Safety Boundary
+
+```mermaid
+stateDiagram-v2
+    [*] --> Initialization
+    Initialization --> WorkerThreadsActive : all handlers registered
+    WorkerThreadsActive --> ControlledShutdown : quiesce workers
+    ControlledShutdown --> [*] : remove handlers, destroy
+
+    note right of Initialization
+        Safe to: register, replace, remove handlers
+    end note
+
+    note right of WorkerThreadsActive
+        Unsafe to: mutate handler registry
+        Safe to: read, dispatch errors
+    end note
+
+    note right of ControlledShutdown
+        Safe to: remove handlers (workers quiesced)
+    end note
+```
+
+Registration changes are lifecycle-managed operations, not hot-path controls.
+
+---
 
 ## Diagnostics Coverage Policy
 
-Failure paths should set diagnostics before returning failure sentinels (`false`, `-1`, `NULLPTR`).
+All failure branches in operational code must set diagnostics before returning failure sentinels.
 
-Coverage expectations:
+### Required Coverage Points
 
-- startup and environment preparation failures must set diagnostics;
-- open/reconnect/release failures must set diagnostics;
-- rollback failures must set diagnostics, even if best-effort rollback continues;
-- newly added failure branches should not rely on generic fallback-only messages.
+| Category | Required action |
+|----------|----------------|
+| Startup failures | `SetLastErrorCode(...)` before returning `false` |
+| Environment preparation failures | `SetLastErrorCode(...)` before returning failure |
+| Transport open / reconnect failures | `SetLastErrorCode(...)` in failure branch |
+| Session handshake failures | `SetLastErrorCode(...)` before returning |
+| Rollback failures | `SetLastErrorCode(...)` even if best-effort rollback continues |
+| New failure branches | Must not rely on generic fallback messages only |
 
-## Error Propagation Expectations
+### Coverage Example
 
-Diagnostics flow should remain single-source:
+```cpp
+bool VEthernetNetworkSwitcher::Open() noexcept {
+    // ... attempt to open virtual adapter ...
+    if (!adapter_opened) {
+        return SetLastError(ErrorCode::TapOpenFailed, false);  // CORRECT
+    }
 
-- backend sets `ErrorCode`;
-- Console UI and other presentation layers read snapshots and format text;
-- bridge layers (including Android JNI) preserve semantic mapping instead of introducing unrelated parallel enums where avoidable.
+    if (!route_applied) {
+        return SetLastError(ErrorCode::RouteAddFailed, false);  // CORRECT
+    }
 
-This keeps operational troubleshooting consistent across CLI, logs, and platform integrations.
+    return true;
+}
+```
+
+Anti-pattern (incomplete coverage):
+
+```cpp
+bool SomeFunction() noexcept {
+    if (!DoSomething()) {
+        return false;  // WRONG: no diagnostics set
+    }
+    return true;
+}
+```
+
+---
+
+## Error Propagation Model
+
+```mermaid
+sequenceDiagram
+    participant FailSite as Failure site
+    participant TL as Thread-local store
+    participant PS as Process snapshot
+    participant Handlers as Registered handlers
+    participant UI as Console UI / JNI / Log
+
+    FailSite->>TL: SetLastErrorCode(code)
+    TL->>PS: Update process-wide snapshot + timestamp
+    TL->>Handlers: Copy registry under lock
+    Handlers->>Handlers: Invoke callbacks outside lock
+    UI->>PS: GetLastErrorCodeSnapshot()
+    UI->>PS: GetLastErrorTimestamp()
+    UI->>UI: FormatErrorString(code) → display
+```
+
+Diagnostics flow is single-source:
+- The backend (C++ runtime) sets `ErrorCode`.
+- All presentation layers (Console UI, log, JNI) read snapshots.
+- Bridge layers (Android JNI) preserve semantic mapping instead of introducing parallel enums.
+
+---
+
+## Android JNI Integration
+
+The Android JNI bridge in `android/` maps `ErrorCode` values to Java-visible integer error codes.
+
+Contract:
+- JNI error integers should map to core `ErrorCode` values where practical.
+- `run` / `stop` / `release` transitions preserve consistent error meaning across the native/managed boundary.
+- Android bridge errors are part of the same diagnostics pipeline, not a separate troubleshooting universe.
+
+Example mapping:
+
+```cpp
+// android/src/main/cpp/bridge.cpp
+jint openppp2_run(...) {
+    if (!app.Run()) {
+        return static_cast<jint>(ppp::diagnostics::GetLastErrorCode());
+    }
+    return 0;
+}
+```
+
+---
+
+## Error Code Reference
+
+Key `ppp::diagnostics::ErrorCode` values relevant to the error handling API:
+
+| ErrorCode | Value | Description |
+|-----------|-------|-------------|
+| `None` | 0 | No error |
+| `Unspecified` | 1 | Unspecified error |
+| `InvalidConfiguration` | 100 | Configuration load or validation failure |
+| `PrivilegeInsufficient` | 101 | Insufficient OS privilege |
+| `DuplicateInstance` | 102 | Another instance is already running |
+| `TapOpenFailed` | 200 | Virtual adapter open failed |
+| `RouteAddFailed` | 201 | Route table modification failed |
+| `DnsConfigFailed` | 202 | DNS configuration failed |
+| `SocketBindFailed` | 300 | Socket bind operation failed |
+| `HandshakeFailed` | 400 | Transport handshake did not complete |
+| `HandshakeTimeout` | 401 | Handshake timed out |
+| `AuthenticationFailed` | 402 | Authentication rejected |
+| `ManagedServerConnectionFailed` | 10200 | Cannot reach management backend |
+| `ManagedServerAuthenticationFailed` | 10201 | Backend rejected authentication |
+| `ManagedServerQuotaExceeded` | 10202 | User quota exhausted |
+
+See `ppp/diagnostics/Error.h` for the complete enum definition.
+
+---
+
+## Usage Examples
+
+### Basic failure path
+
+```cpp
+#include "ppp/diagnostics/Error.h"
+
+bool OpenSocket(const IPEndPoint& endpoint) noexcept {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return SetLastError(ErrorCode::SocketCreateFailed, false);
+    }
+
+    if (::bind(fd, ...) < 0) {
+        ::close(fd);
+        return SetLastError(ErrorCode::SocketBindFailed, false);
+    }
+
+    return true;
+}
+```
+
+### Registering an error handler at startup
+
+```cpp
+#include "ppp/diagnostics/ErrorHandler.h"
+
+void InitDiagnostics() {
+    RegisterErrorHandler("console-ui", [](int err) {
+        auto code = static_cast<ppp::diagnostics::ErrorCode>(err);
+        ppp::string msg = FormatErrorString(code);
+        ConsoleUI::Instance().ShowError(msg);
+    });
+
+    RegisterErrorHandler("log-sink", [](int err) {
+        // write to structured log
+        WriteLog("error", err);
+    });
+}
+```
+
+### Reading diagnostics at the presentation layer
+
+```cpp
+void DisplayStatus() {
+    auto code      = GetLastErrorCodeSnapshot();
+    auto timestamp = GetLastErrorTimestamp();
+    auto message   = FormatErrorString(code);
+
+    printf("[%lld] Last error: %s (%d)\n",
+           (long long)timestamp,
+           message.c_str(),
+           static_cast<int>(code));
+}
+```
+
+### Removing a handler during shutdown
+
+```cpp
+void ShutdownDiagnostics() {
+    // Pass null function to remove the handler slot
+    RegisterErrorHandler("console-ui", nullptr);
+    RegisterErrorHandler("log-sink",   nullptr);
+}
+```
+
+---
+
+## Implementation Notes
+
+- Thread-local storage for `ErrorCode` avoids contention between worker threads.
+- The process-wide snapshot uses `std::atomic` operations for lock-free reads.
+- Handler dispatch copies the registry under `std::mutex` then invokes outside.
+  This prevents handlers from deadlocking on re-entrant error calls.
+- `FormatErrorString` returns a static or pool-allocated string.
+  It is safe to call from signal handlers.
+
+---
+
+## Operational Checklist
+
+When adding a new failure branch:
+
+- [ ] Call `SetLastErrorCode(...)` or `SetLastError(...)` before returning failure.
+- [ ] Choose the most specific `ErrorCode` available; do not default to `Unspecified`.
+- [ ] If no specific code exists, add one to `ppp/diagnostics/Error.h` with a clear comment.
+- [ ] Verify the new code appears in `FormatErrorString` with a meaningful message.
+- [ ] Update `ERROR_CODES.md` and `ERROR_CODES_CN.md` if a new code is added.
+
+---
+
+## Related Documents
+
+- [`ERROR_CODES.md`](ERROR_CODES.md)
+- [`DIAGNOSTICS_ERROR_SYSTEM.md`](DIAGNOSTICS_ERROR_SYSTEM.md)
+- [`OPERATIONS.md`](OPERATIONS.md)
+- [`STARTUP_AND_LIFECYCLE.md`](STARTUP_AND_LIFECYCLE.md)

@@ -790,7 +790,11 @@ namespace ppp {
                 applied &= attempted;
 
                 if (applied) {
-                    ipv6_applied_ = true;
+                    ipv6_applied_      = true;
+                    // Memoize the successfully-applied address so that SendRequestedIPv6Configuration()
+                    // can use it as a sticky hint on reconnect to re-request the same address when the
+                    // user has not configured an explicit RequestedIPv6() preference.
+                    last_assigned_ipv6_ = extensions.AssignedIPv6Address;
                 }
                 else {
                     ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, extensions.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
@@ -866,10 +870,10 @@ namespace ppp {
                 if (valid_ipv6_assignment) {
                     if (!ClientSupportsManagedIPv6()) {
                     }
-                    else if (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
+                    elif (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
                         extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Gua) {
                     }
-                    else if (!ipv6_applied_) {
+                    elif (!ipv6_applied_) {
                         ApplyAssignedIPv6(extensions);
                     }
                 }

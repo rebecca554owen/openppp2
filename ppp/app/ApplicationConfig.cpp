@@ -347,10 +347,10 @@ std::shared_ptr<AppConfiguration> PppApplication::LoadConfiguration(int argc, co
         }
 
         if (!configuration->Load(configuration_path)) {
-            if (ppp::diagnostics::ErrorCode::PlatformNotSupportGUAMode == ppp::diagnostics::GetLastErrorCode()) {
-                path.clear();
-                return NULLPTR;
-            }
+            // PlatformNotSupportGUAMode is a soft-degrade condition: the configuration
+            // file was parsed successfully but requested GUA mode on a platform that does
+            // not support it (e.g. Windows).  Treat this as a non-fatal warning and try
+            // the next candidate path rather than aborting the entire config search.
             continue;
         }
 

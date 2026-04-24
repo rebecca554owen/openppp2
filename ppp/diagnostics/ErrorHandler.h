@@ -103,6 +103,39 @@ namespace ppp {
             const char*                                                            FormatErrorString(ErrorCode code) noexcept;
 
             /**
+             * @brief Returns the severity level associated with the given error code.
+             * @param code  The error code to classify.
+             * @return      The ErrorSeverity value from the X-macro definition, or
+             *              ErrorSeverity::kError for any unrecognized code value.
+             */
+            ErrorSeverity                                                          GetErrorSeverity(ErrorCode code) noexcept;
+
+            /**
+             * @brief Returns a short ASCII name for a severity level.
+             * @param severity  The severity level to name.
+             * @return          "INFO", "WARNING", "ERROR", or "FATAL".
+             *                  Returns "UNKNOWN" for values outside the defined range.
+             */
+            const char*                                                            GetErrorSeverityName(ErrorSeverity severity) noexcept;
+
+            /**
+             * @brief Formats a fully-qualified error triplet string.
+             * @param code  The error code to format.
+             * @return      ppp::string of the form "<uint32_id> <CodeName>: <message>".
+             * @note        Numeric ID is the uint32_t cast of the enum value.
+             *              Never returns an empty string; falls back to "0 Success: Success"
+             *              for the Success code.
+             */
+            ppp::string                                                            FormatErrorTriplet(ErrorCode code) noexcept;
+
+            /**
+             * @brief Tests whether the given error code is fatal (unrecoverable).
+             * @param code  The error code to test.
+             * @return      true if severity == ErrorSeverity::kFatal, false otherwise.
+             */
+            bool                                                                   IsErrorFatal(ErrorCode code) noexcept;
+
+            /**
              * @brief Registers or removes a named error notification callback.
              * @param key     Unique string key identifying the handler entry.
              *                Providing an empty or null-target handler with an existing key

@@ -504,3 +504,295 @@ stateDiagram-v2
 - [`ENGINEERING_CONCEPTS_CN.md`](ENGINEERING_CONCEPTS_CN.md) — 基础工程原则
 - [`TRANSMISSION_CN.md`](TRANSMISSION_CN.md) — 传输载体和握手
 - [`LINKLAYER_PROTOCOL_CN.md`](LINKLAYER_PROTOCOL_CN.md) — 隧道动作词汇表
+
+---
+
+## 9. Awaitable — 阻塞调用方桥接
+
+### 9.1 用途
+
+虽然协程是主要执行模型，但某些代码路径运行于专用 OS 线程（非 `io_context` 线程）上，需要同步阻塞等待异步结果。`Executors::Awaitable<T>` 提供了这一桥接机制。
+
+### 9.2 Awaitable API
+
+```cpp
+// 由异步操作生产
+auto awaitable = Executors::NewAwaitable<bool>();
+
+// 在 io_context 线程上——标记完成
+awaitable->Complete(result_value);
+
+// 在调用方 OS 线程上——阻塞直至 Complete() 被调用
+bool result = awaitable->Await();
+```
+
+`Await()` 使用 `std::condition_variable` 进行阻塞。`Complete()` 存储值并通知条件变量。一旦收到通知，`Await()` 返回，Awaitable 被消费。
+
+### 9.3 Awaitable 的适用场景
+
+| 调用方类型 | 适用机制 |
+|-----------|---------|
+| `io_context` 协程 | `YieldContext::Suspend()` / `Resume()` |
+| 专用 worker OS 线程 | `Executors::Awaitable<T>::Await()` |
+| 单元测试或同步 API 调用 | `Executors::Awaitable<T>::Await()` |
+
+**切勿**在 `io_context` 线程内调用 `Awaitable::Await()`——若信号来自同一上下文，则会永久死锁。
+
+### 9.4 `nullof<YieldContext>()` 模式深度解析
+
+`nullof<YieldContext>()` 模式用于在单个调用点选择协程模式与线程阻塞模式。示例：
+
+```cpp
+// 同时支持两种调用方的函数：
+bool SomeLinklayerOperation(YieldContext* y, int param) noexcept
+{
+    if (y && *y)
+    {
+        // 协程模式：异步 I/O，让出事件循环
+        return DoAsyncVariant(y, param);
+    }
+    else
+    {
+        // 线程阻塞模式：使用 Awaitable
+        auto aw = Executors::NewAwaitable<bool>();
+        asio::post(*context_, [aw, param]() {
+            aw->Complete(DoAsyncVariant(nullptr, param));
+        });
+        return aw->Await();
+    }
+}
+```
+
+`nullof<YieldContext>()` 在 `ppp/coroutines/YieldContext.h` 中定义为 constexpr，返回一个零初始化静态变量的地址——始终非空，但 `operator bool()` 返回 `false`。这允许协程调用方在不额外分配堆内存的情况下，跳过阻塞分支。
+
+---
+
+## 10. 线程命名与优先级
+
+### 10.1 线程命名
+
+`Executors` 创建的每个 worker 线程和 scheduler 线程都通过平台原生 API 命名：
+
+| 平台 | API | 示例名称 |
+|------|-----|---------|
+| Linux | `pthread_setname_np()` | `"ppp-worker-0"` |
+| Windows | `SetThreadDescription()` | `L"ppp-worker-0"` |
+| Android | `pthread_setname_np()` | `"ppp-worker-0"` |
+| macOS | `pthread_setname_np()` | `"ppp-worker-0"` |
+
+若命名失败，会设置 `RuntimeThreadNameFailed`，但执行继续——线程命名仅作为提示信息。
+
+### 10.2 线程优先级
+
+Worker 和 scheduler 线程以 `ThreadPriority::Highest` 启动（Windows 映射至 `THREAD_PRIORITY_HIGHEST`，Linux 映射至带高 nice 值的 `SCHED_OTHER`，macOS/iOS 映射至 `QOS_CLASS_USER_INTERACTIVE`）。这确保网络 I/O 不会被低优先级后台任务饿死。
+
+后台 tick 线程以默认优先级运行——它只更新缓存时间戳并驱动 vDNS/ICMP 内务处理，对延迟不敏感。
+
+---
+
+## 11. Asio Executor 组合与 `make_strand`
+
+### 11.1 使用的 Executor 类型
+
+OPENPPP2 在代码库中使用三种 Asio executor 类型：
+
+| 类型 | 描述 |
+|------|------|
+| `io_context::executor_type` | 来自 `io_context` 的原始 executor |
+| `asio::strand<io_context::executor_type>` | 对原始 executor 的串行化封装 |
+| `asio::io_context&`（隐式）| 定时器构造时的直接上下文引用 |
+
+所有会话对象持有一个 `StrandPtr`（`shared_ptr<asio::strand<io_context::executor_type>>`），通过 `asio::make_strand(*io_context_ptr)` 创建。会话内的定时器和套接字均绑定到此 strand。
+
+### 11.2 Strand 创建生命周期
+
+```mermaid
+sequenceDiagram
+    participant ACCEPT as TCP Acceptor
+    participant EX as Executors
+    participant SC as Scheduler Context
+    participant SESSION as 会话对象
+
+    ACCEPT->>EX: ShiftToScheduler(raw_socket)
+    EX->>SC: GetScheduler() → scheduler io_context
+    EX->>SC: asio::make_strand(*scheduler) → 新 Strand
+    EX->>SC: TSocket(*strand) → strand 绑定套接字
+    EX->>ACCEPT: 将原生 fd 重新分配至新套接字
+    ACCEPT->>SESSION: Session(strand, strand_socket)
+    SESSION->>SESSION: 所有定时器/协程使用此 strand
+```
+
+### 11.3 跨 Strand 投递工作
+
+当运行在某个 strand 上的代码需要触发另一个 strand 上的工作时（例如会话通知全局路由器），使用 `asio::post`：
+
+```cpp
+// 从会话 strand：将工作投递至不同 strand 或上下文
+asio::post(*target_strand_or_context,
+    [self = shared_from_this(), data = std::move(data)]() noexcept
+    {
+        self->ProcessCrossStrandData(data);
+    });
+```
+
+这始终安全：`asio::post` 是线程安全的，不要求调用方处于任何特定线程上。
+
+---
+
+## 12. 数据包缓冲区的内存模型
+
+### 12.1 每 Context 64 KB 缓冲区
+
+每个 `io_context`（存储在 `Executors::Buffers` 中）的 64 KB 缓冲区是热路径中最重要的内存优化手段。每次 UDP 接收、TAP 帧读取和 ITransmission 读循环都复用此缓冲区，而不是新分配。
+
+缓冲区生命周期与 `io_context` 生命周期绑定：
+
+```mermaid
+graph LR
+    A["Executors::SetMaxThreads(N)"] --> B["对每个 worker："]
+    B --> C["创建 io_context"]
+    C --> D["通过 ppp::Malloc 分配 64KB 缓冲区"]
+    D --> E["注册到 Internal->Buffers 映射"]
+    E --> F["Worker 线程启动，调用 io_context::run()"]
+    F --> G["会话代码调用 Executors::GetCachedBuffer(ctx)"]
+    G --> H["返回预分配的 64KB 区域指针"]
+    H --> I["用于 recv、read、inject；操作期间不释放"]
+    I --> G
+```
+
+调用 `Executors::Exit()` 时，`ContextFifo`、`ContextTable`、`Buffers` 和 `Threads` 全部清空。`shared_ptr` 析构通过 `ppp::Mfree` 释放缓冲区。
+
+### 12.2 IPFrame 和 UdpFrame 堆分配
+
+虽然 64 KB 接收缓冲区避免了原始字节读取的逐包分配，但解析后的协议对象（`IPFrame`、`UdpFrame`、`IcmpFrame`）通过 `ppp::Malloc`（在定义了 `JEMALLOC` 宏时路由至 jemalloc）在堆上分配。这些对象被 `shared_ptr` 封装，当最后持有者（通常是链路层序列化器）释放引用时被销毁。
+
+这种两级方法平衡了热路径效率（原始读取缓冲区无需分配）与正确性（可能比原始缓冲区存活更长的结构化对象使用堆分配）。
+
+### 12.3 jemalloc 集成
+
+当 `JEMALLOC` 预处理器宏定义时（由 CMake 在启用 jemalloc 支持时设置）：
+
+- `ppp::Malloc(size)` 调用 `je_malloc(size)`
+- `ppp::Mfree(ptr)` 调用 `je_free(ptr)`
+- `ppp::allocator<T>` 将所有 STL 容器分配路由至 jemalloc
+
+Android 系统 libc 已内置 jemalloc，无需额外 jemalloc 层。Linux 和 Windows 通过三方库目录静态链接（`THIRD_PARTY_LIBRARY_DIR/jemalloc/lib/libjemalloc.a`）。
+
+---
+
+## 13. YieldContext 状态迁移详解
+
+### 13.1 状态机表
+
+| 起始状态 | 事件 | 目标状态 | 动作 |
+|----------|------|----------|------|
+| `RESUMED(0)` | 协程调用 `Suspend()` | `SUSPENDING(1)` | CAS 从 0 → 1 |
+| `SUSPENDING(1)` | 无 `Resume()` 竞争 | `SUSPEND(2)` | `jump_fcontext` 跳回调用方 |
+| `SUSPENDING(1)` | `Resume()` 发生竞争 | `RESUMED(0)` | CAS 检测到竞争；跳过跳转 |
+| `SUSPEND(2)` | `Resume()` 被调用 | `RESUMING(-1)` | CAS 从 2 → -1 |
+| `RESUMING(-1)` | 通过 `jump_fcontext` 重新进入 | `RESUMED(0)` | CAS 从 -1 → 0 |
+
+`Suspend()` 与 `Resume()` 之间的竞争被正确处理：若 `Resume()` 在协程完全挂起之前触发（`SUSPENDING` 窗口），`Suspend()` 中的 CAS 检测到状态不再是 `SUSPENDING`，跳过上下文切换，保持协程运行。这无需任何互斥锁即消除了丢失唤醒竞争。
+
+### 13.2 栈帧示意图
+
+```mermaid
+graph TD
+    subgraph AsioEventLoop["Asio 事件循环（调用方栈）"]
+        EL["io_context::run()\n→ 派发处理器\n→ YieldContext::Invoke()\n→ jump_fcontext(callee)"]
+    end
+
+    subgraph Coroutine["协程栈（被调方）"]
+        CO["make_fcontext → handler(y)\n→ ITransmission::Read(y)\n→ async_read_some + Suspend()\n← （I/O 后从此恢复）"]
+    end
+
+    EL -- "jump_fcontext" --> CO
+    CO -- "jump_fcontext（Suspend 时）" --> EL
+    CO -- "jump_fcontext（返回时）" --> EL
+```
+
+两个栈是完全独立的内存区域。协程栈从堆分配（通过 `ppp::Malloc`），大小固定；调用方栈是普通 OS 线程栈。`jump_fcontext` 在单次调用中保存/恢复所有被调方保存的寄存器。
+
+---
+
+## 14. 并发问题实用调试指南
+
+### 14.1 死锁识别
+
+若进程挂起且所有 `io_context` 线程均被阻塞，最常见的原因：
+
+1. **在 `Suspend()` 期间持有互斥锁**：用调试器检查每个 worker 线程的调用栈。若在调用栈的 `YieldContext::Suspend()` 下方看到 `SpinLock::Enter()` 或 `std::mutex::lock()`，即为根本原因。
+2. **在 io_context 线程上调用 `Awaitable::Await()`**：查找在同时拥有 `io_context` 的线程上出现的 `std::condition_variable::wait()`。若信号发送方运行在同一上下文上，永远不会完成。
+3. **循环 strand 依赖**：较罕见，但若 strand A 投递工作至 strand B 且 strand B 同步等待 strand A 完成，则可能发生。
+
+### 14.2 悬空引用检测
+
+症状：处理器在会话拆除后触发时崩溃或数据损坏。
+
+诊断：
+1. 确认处理器是否捕获了 `shared_from_this()`。若捕获了裸指针或未调用 `lock()` 的 `weak_ptr`，会话可能在处理器运行前已被销毁。
+2. 检查处理器入口是否测试了 `disposed_`。
+3. 在调试版本上使用 AddressSanitizer（`-fsanitize=address`）捕获确切的访问位置。
+
+### 14.3 性能瓶颈
+
+单个 worker 线程 CPU 高，尽管存在多个 worker 上下文：
+
+- 检查 `Executors::GetExecutor()` 轮转。若所有会话创建在同一 `io_context`（例如从不调用 `ShiftToScheduler` 的服务端），所有工作集中在一个线程上。
+- 验证是否调用了 `SetMaxSchedulers()`。没有 scheduler 上下文，新连接建立在默认上下文上运行。
+- 使用 `perf`（Linux）或 VTune（Windows）进行分析。常见热点：`jump_fcontext`、`malloc/free`、OpenSSL `EVP_EncryptUpdate`。
+
+### 14.4 协程泄漏检测
+
+协程泄漏发生在 `YieldContext` 被挂起而 `Resume()` 永远不被调用时，导致协程栈无法释放。
+
+检测：跟踪 `YieldContext` 的构造和析构计数。若构造计数无限超过析构计数，则存在泄漏。
+
+常见原因：异步操作（定时器、套接字）被取消但完成处理器从未被投递。Boost.Asio 保证取消始终以携带 `operation_aborted` 的处理器投递——确保被取消操作的处理器无条件调用 `Resume()`（协程在恢复后检查错误码）。
+
+---
+
+## 15. 并发架构全局图
+
+```mermaid
+graph TD
+    subgraph ProcessBoundary["进程（PppApplication）"]
+        subgraph ThreadPool["线程池（Executors）"]
+            DEFAULT["Default Context\n（主线程）"]
+            W0["Worker 0\nio_context + 64KB buf"]
+            W1["Worker 1\nio_context + 64KB buf"]
+            WN["Worker N\nio_context + 64KB buf"]
+            SC["Scheduler Context\n（1+ 线程）"]
+            TICK["Tick 线程\n（缓存毫秒时钟\nvDNS + ICMP 内务）"]
+        end
+
+        subgraph Sessions["会话对象（每 VPN 会话）"]
+            S0["会话 0\nstrand(W0)\nYieldContext(读循环)\nYieldContext(写循环)\nTimer(心跳)"]
+            S1["会话 1\nstrand(W1)\n..."]
+            SN["会话 N\nstrand(WN)\n..."]
+        end
+
+        subgraph Infrastructure["共享基础设施"]
+            CFG["AppConfiguration\n（只读，无锁）"]
+            FBUF["每 Context 64KB 缓冲区\n（无锁，线程局部）"]
+            CTXTBL["ContextTable\n（std::mutex 保护）"]
+        end
+    end
+
+    DEFAULT --> S0
+    DEFAULT --> S1
+    SC --> S0
+    SC --> S1
+    W0 --> S0
+    W1 --> S1
+    WN --> SN
+    S0 --> CFG
+    S1 --> CFG
+    S0 --> FBUF
+    S1 --> FBUF
+    CTXTBL --> W0
+    CTXTBL --> W1
+    CTXTBL --> WN
+    TICK --> W0
+    TICK --> W1
+```

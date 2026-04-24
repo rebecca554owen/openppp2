@@ -137,7 +137,7 @@ namespace ppp {
                             return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                         }
                     } else {
-                        // it's a valid IP address – apply network segment filter
+                        // it's a valid IP address �?apply network segment filter
                         if (NULLPTR != firewall) {
                             if (firewall->IsDropNetworkSegment(address)) {
                                 return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
@@ -209,7 +209,7 @@ namespace ppp {
                 }
 
                 // -----------------------------------------------------------------
-                // Read a 3‑byte connection ID (big‑endian) – used in SYN/PSH/FIN.
+                // Read a 3‑byte connection ID (big‑endian) �?used in SYN/PSH/FIN.
                 // -----------------------------------------------------------------
                 /** @brief Reads a 3-byte connection identifier from packet stream. */
                 static int PACKET_ConnectId(Byte*& stream, int& packet_length) noexcept {
@@ -272,7 +272,7 @@ namespace ppp {
                 }
 
                 // -----------------------------------------------------------------
-                // Validate an endpoint – port range, address type, no multicast/broadcast.
+                // Validate an endpoint �?port range, address type, no multicast/broadcast.
                 // -----------------------------------------------------------------
                 template <class TProtocol>
                 /** @brief Validates protocol endpoint for protocol-level constraints. */
@@ -331,7 +331,7 @@ namespace ppp {
                                 return false;   // truncation or error
                             }
 
-                            // port length must fit into a single Byte (0‑255)
+                            // port length must fit into a single Byte (0�?55)
                             if (address_port_string_size > 255) {
                                 return false;
                             }
@@ -530,14 +530,14 @@ namespace ppp {
                         return OnPush(transmission, connection_id, p, packet_length, y);
                     }
                 }
-                else if (packet_action == PacketAction_NAT) {           // NAT data
+                elif (packet_action == PacketAction_NAT) {           // NAT data
                     if (packet_length > 0) {
                         return OnNat(transmission, p, packet_length, y);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_SENDTO) {        // UDP send‑to
+                elif (packet_action == PacketAction_SENDTO) {        // UDP send‑to
                     ppp::string destinationHost;
                     boost::asio::ip::udp::endpoint destinationEP = 
                         global::PACKET_IPEndPoint<boost::asio::ip::udp>(GetFirewall(), p, packet_length, y, destinationHost);
@@ -556,7 +556,7 @@ namespace ppp {
                     }
                     // fall through -> failure
                 }
-                else if (packet_action == PacketAction_FRP_PUSH) {      // FRP data push
+                elif (packet_action == PacketAction_FRP_PUSH) {      // FRP data push
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -573,7 +573,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_SENDTO) {    // FRP UDP send‑to
+                elif (packet_action == PacketAction_FRP_SENDTO) {    // FRP UDP send‑to
                     ppp::string destinationHost;
                     boost::asio::ip::udp::endpoint destinationEP = 
                         global::PACKET_IPEndPoint<boost::asio::ip::udp>(GetFirewall(), p, packet_length, y, destinationHost);
@@ -588,14 +588,14 @@ namespace ppp {
                         }
                     }
                 }
-                else if (packet_action == PacketAction_ECHO) {          // echo request
+                elif (packet_action == PacketAction_ECHO) {          // echo request
                     if (packet_length > 0) {
                         return OnEcho(transmission, p, packet_length, y);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_ECHOACK) {       // echo reply
+                elif (packet_action == PacketAction_ECHOACK) {       // echo reply
                     if (packet_length >= 3) {
                         int ack_id = global::PACKET_ConnectId(p, packet_length);
                         return OnEcho(transmission, ack_id, y);
@@ -603,7 +603,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_SYN) {           // TCP connection request
+                elif (packet_action == PacketAction_SYN) {           // TCP connection request
                     int connection_id = global::PACKET_ConnectId(p, packet_length);
                     if (connection_id != 0) {
                         ppp::string destinationHost;
@@ -616,7 +616,7 @@ namespace ppp {
                         }
                     }
                 }
-                else if (packet_action == PacketAction_SYNOK) {         // TCP connection acknowledgment
+                elif (packet_action == PacketAction_SYNOK) {         // TCP connection acknowledgment
                     int connection_id = global::PACKET_ConnectId(p, packet_length);
                     if (connection_id != 0 && packet_length > 0) {
                         Byte error_code = *p;
@@ -624,13 +624,13 @@ namespace ppp {
                         return OnConnectOK(transmission, connection_id, error_code, y);
                     }
                 }
-                else if (packet_action == PacketAction_FIN) {           // TCP disconnection
+                elif (packet_action == PacketAction_FIN) {           // TCP disconnection
                     int connection_id = global::PACKET_ConnectId(p, packet_length);
                     if (connection_id != 0) {
                         return OnDisconnect(transmission, connection_id, y);
                     }
                 }
-                else if (packet_action == PacketAction_LAN) {           // LAN advertisement
+                elif (packet_action == PacketAction_LAN) {           // LAN advertisement
                     if (packet_length >= static_cast<int>(sizeof(uint32_t) * 2)) {
                         uint32_t* addresses = reinterpret_cast<uint32_t*>(p);
                         return OnLan(transmission, addresses[0], addresses[1], y);
@@ -638,7 +638,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_DISCONNECT) { // FRP disconnection
+                elif (packet_action == PacketAction_FRP_DISCONNECT) { // FRP disconnection
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -655,7 +655,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_CONNECT) {    // FRP connection request
+                elif (packet_action == PacketAction_FRP_CONNECT) {    // FRP connection request
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -674,7 +674,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_CONNECTOK) {  // FRP connection acknowledgment
+                elif (packet_action == PacketAction_FRP_CONNECTOK) {  // FRP connection acknowledgment
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -694,7 +694,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
+                elif (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
                     if (packet_length >= static_cast<int>(sizeof(VirtualEthernetInformation))) {
                         InformationEnvelope info;
                         info.Base = *reinterpret_cast<VirtualEthernetInformation*>(p);
@@ -717,7 +717,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_ENTRY) {      // FRP entry registration
+                elif (packet_action == PacketAction_FRP_ENTRY) {      // FRP entry registration
                     if (packet_length > 0) {
                         bool tcp = (*p != 0);
                         ++p;
@@ -737,10 +737,10 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_STATIC) {         // static route request
+                elif (packet_action == PacketAction_STATIC) {         // static route request
                     return OnStatic(transmission, y);
                 }
-                else if (packet_action == PacketAction_STATICACK) {      // static route acknowledgment (single entry)
+                elif (packet_action == PacketAction_STATICACK) {      // static route acknowledgment (single entry)
                     int session_id = global::PACKET_Dword(p, packet_length);
                     if (packet_length >= (2 + 16)) {    // need remote_port (2) + fsid (16)
                         int remote_port = global::PACKET_Word(p, packet_length);
@@ -755,7 +755,7 @@ namespace ppp {
                     }
                     return false;
                 }
-                else if (packet_action == PacketAction_MUX) {            // MUX setup request
+                elif (packet_action == PacketAction_MUX) {            // MUX setup request
                     static constexpr int MUX_IL_REFT = sizeof(VirtualEthernetLinklayer_MUX_IL) - 1;
 
                     if (packet_length >= MUX_IL_REFT) {
@@ -766,7 +766,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_MUXON) {          // MUXON acknowledgment
+                elif (packet_action == PacketAction_MUXON) {          // MUXON acknowledgment
                     static constexpr int MUXON_IL_REF = sizeof(VirtualEthernetLinklayer_MUXON_IL) - 1;
 
                     if (packet_length >= MUXON_IL_REF) {
@@ -776,7 +776,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_KEEPALIVED) {     // keep‑alive heartbeat
+                elif (packet_action == PacketAction_KEEPALIVED) {     // keep‑alive heartbeat
                     last_ = Executors::GetTickCount();   // update last activity time
                     return true;
                 }

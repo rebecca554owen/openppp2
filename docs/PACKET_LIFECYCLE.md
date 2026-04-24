@@ -482,3 +482,402 @@ graph TD
 | [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md) | Client-side runtime and VEthernet wiring |
 | [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md) | Server-side runtime and relay wiring |
 | [`TUNNEL_DESIGN.md`](TUNNEL_DESIGN.md) | End-to-end tunnel architecture and design rationale |
+
+---
+
+## 8. Return Path — Server to Client (Complete Inbound Flow)
+
+The previous sections covered the outbound path (client TX) and the server-side receive-and-forward logic. This section completes the picture by tracing the return path: a reply from the destination network travelling back to the client application.
+
+### 8.1 Destination Network Reply Arrives at Server Relay Socket
+
+After the server's relay socket (UDP or TCP) forwards the original packet to the destination host and receives a reply, the reply bytes are available on the relay socket's async read completion. The relay handler (overriding `OnSendTo` or the TCP data path) reads the reply payload and passes it to the appropriate `Do*` serializer on the server-side `VirtualEthernetLinklayer`.
+
+For UDP, the server calls `DoSendTo(original_client_src_ep, destination_ep_as_new_src, reply_payload)`. This serializes a `PacketAction_SENDTO` (opcode `0x2E`) frame with:
+- Source endpoint = the destination host's address (the server's relay learned this from the UDP `recvfrom` result)
+- Destination endpoint = the original client source endpoint (the client's virtual IP and port inside the VPN)
+
+### 8.2 ITransmission.Write() on Server Side
+
+The server calls `ITransmission::Write(y, serialized_frame, length)`. The encryption path is identical to the client TX encryption path: protocol cipher covers the header, transport cipher covers the payload. The binary frame header is prepended (seed + obfuscated length).
+
+The encrypted bytes are passed to `async_write` on the server-side TCP or WebSocket socket connected to the client.
+
+### 8.3 Client ITransmission.Read() Receives the Reply
+
+On the client side, the read-loop coroutine suspended in `ITransmission::Read()` is resumed when data arrives. It reads the binary frame header, reads the payload body, and calls `Decrypt()` to reverse all transforms.
+
+The recovered buffer is the plaintext `DoSendTo` frame that the server serialized.
+
+### 8.4 Client VirtualEthernetLinklayer.OnSendTo()
+
+`PacketInput` reads opcode `0x2E` and dispatches to `OnSendTo(srcEP, dstEP, payload)`. On the client side:
+
+1. The client deserializes `srcEP` (the destination host's real address) and `dstEP` (the virtual IP:port the local application is waiting on).
+2. It constructs a UDP datagram with src=`srcEP`, dst=`dstEP`, payload=reply bytes.
+3. The `UdpFrame` is serialized back into an `IPFrame` (full IPv4 header + UDP header + payload).
+4. The `IPFrame` bytes are passed to `VEthernet::Output()`.
+
+### 8.5 VEthernet.Output() — Injecting Back into TAP
+
+`VEthernet::Output(IPFrame)` serializes the `IPFrame` back to raw bytes and calls `ITap::Output(bytes, length)`. `ITap::Output` writes the bytes to the TAP file descriptor. The OS kernel reads from the TAP side and delivers the packet to the virtual network interface.
+
+Since the packet's destination IP matches the local application's bound socket, the kernel's IP stack routes the packet to the local process via its UDP or TCP socket. The application reads the response as if it came directly from the destination host — the tunnel is entirely transparent.
+
+### Complete Return Path Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant NET as Destination Network
+    participant RELAY as Server UDP Relay
+    participant LL_S as VEthernetLinklayer (Server)
+    participant TX_S as ITransmission (Server)
+    participant WIRE as TCP/WebSocket Wire
+    participant TX_C as ITransmission (Client)
+    participant LL_C as VEthernetLinklayer (Client)
+    participant VE as VEthernet (Client)
+    participant TAP as TAP Device (Client)
+    participant APP as Local Application
+
+    NET-->>RELAY: UDP reply packet
+    RELAY->>LL_S: DoSendTo(dst_as_src, client_src, reply)
+    Note over LL_S: serialize 0x2E frame
+    LL_S->>TX_S: Write(y, frame, len)
+    TX_S->>TX_S: Encrypt() + prepend header
+    TX_S->>WIRE: async_write encrypted bytes
+
+    WIRE-->>TX_C: async_read completes
+    TX_C->>TX_C: Read() → Decrypt()
+    TX_C->>LL_C: PacketInput(decrypted buffer)
+    LL_C->>LL_C: opcode 0x2E → OnSendTo()
+    LL_C->>VE: build UdpFrame → IPFrame
+    VE->>TAP: Output(raw IP bytes)
+    TAP->>APP: kernel delivers UDP datagram
+```
+
+---
+
+## 9. TCP Session Lifecycle Within the Tunnel
+
+TCP sessions are more complex than UDP because they are stateful. The tunnel must track connection state from `SYN` through data exchange to `FIN`.
+
+### 9.1 Connection Establishment (SYN / SYNOK)
+
+```mermaid
+sequenceDiagram
+    participant APP as Local App (client)
+    participant LWIP as lwIP (client)
+    participant LL_C as Linklayer (client)
+    participant TX as ITransmission
+    participant LL_S as Linklayer (server)
+    participant REAL as Real TCP Server
+
+    APP->>LWIP: connect(dst_ip, dst_port)
+    LWIP->>LL_C: OnNewConnection(conn_id, dst)
+    LL_C->>TX: DoConnect(conn_id, dst_ip, dst_port)
+    TX-->>LL_S: OnConnect(conn_id, dst)
+    LL_S->>REAL: TCP connect(dst_ip, dst_port)
+    REAL-->>LL_S: TCP SYN-ACK
+    LL_S->>TX: DoConnectOK(conn_id, ERRORS_SUCCESS)
+    TX-->>LL_C: OnConnectOK(conn_id, ERRORS_SUCCESS)
+    LL_C->>LWIP: notify connect success
+    LWIP->>APP: connect() returns 0
+```
+
+`conn_id` is a session-scoped 32-bit connection identifier. It is assigned by the client when `OnNewConnection` fires and is used throughout the connection lifetime to demultiplex multiple concurrent TCP connections within the same VPN session.
+
+### 9.2 Data Transfer (PSH)
+
+Once the connection is established, data flows in both directions using opcode `0x2C` (`PacketAction_PSH`):
+
+```mermaid
+sequenceDiagram
+    participant APP as Local App
+    participant LWIP as lwIP
+    participant LL_C as Linklayer (client)
+    participant TX as ITransmission
+    participant LL_S as Linklayer (server)
+    participant REAL as Real TCP Server
+
+    APP->>LWIP: write(data)
+    LWIP->>LL_C: OnDataReceived(conn_id, data)
+    LL_C->>TX: DoPush(conn_id, data)
+    TX-->>LL_S: OnPush(conn_id, data)
+    LL_S->>REAL: TCP write(data)
+    REAL-->>LL_S: TCP read(reply)
+    LL_S->>TX: DoPush(conn_id, reply)
+    TX-->>LL_C: OnPush(conn_id, reply)
+    LL_C->>LWIP: inject reply data
+    LWIP->>APP: read() returns reply
+```
+
+### 9.3 Connection Teardown (FIN)
+
+Either side may initiate teardown by sending opcode `0x2D` (`PacketAction_FIN`):
+
+```mermaid
+sequenceDiagram
+    participant APP as Local App
+    participant LWIP as lwIP
+    participant LL_C as Linklayer (client)
+    participant TX as ITransmission
+    participant LL_S as Linklayer (server)
+    participant REAL as Real TCP Server
+
+    APP->>LWIP: close(fd)
+    LWIP->>LL_C: OnConnectionClosed(conn_id)
+    LL_C->>TX: DoDisconnect(conn_id)
+    TX-->>LL_S: OnDisconnect(conn_id)
+    LL_S->>REAL: TCP close()
+    REAL-->>LL_S: TCP FIN-ACK
+    Note over LL_S: relay socket released, NAT entry removed
+```
+
+If the real server closes the connection first, the server-side relay detects the TCP EOF, calls `DoDisconnect(conn_id)` toward the client, and the client's lwIP stack notifies the local application via the virtual socket.
+
+### 9.4 Connection ID Management
+
+Connection IDs are allocated per-session by the client in a monotonically increasing counter (with wraparound). The server's relay NAT table maps `(session_id, conn_id)` to the relay socket. When `OnDisconnect` fires, the NAT entry is removed and the relay socket is closed.
+
+The table lives inside `VirtualEthernetExchanger` (server) and `VEthernetExchanger` (client). Both are reference-counted with `shared_ptr`, ensuring that a lingering relay socket does not outlive the session object.
+
+---
+
+## 10. ICMP Echo Proxy Lifecycle
+
+ICMP echo (ping) requests are handled via a dedicated ICMP proxy path rather than through the generic NAT mechanism.
+
+### 10.1 Client-Side ICMP Handling
+
+When lwIP processes an inbound ICMP echo request inside the virtual stack (from a local application doing `ping`), it delivers it to OPENPPP2's ICMP hook. The hook:
+
+1. Parses the `IcmpFrame` from the `IPFrame::icmp_hdr` pointer.
+2. Assigns an echo ID (`echo_id`) for correlation.
+3. Calls `DoEcho(echo_id, payload_bytes)` to send opcode `0x2F` toward the server.
+
+### 10.2 Server-Side ICMP Forwarding
+
+`OnEcho()` on the server receives the echo ID and payload. The server:
+
+1. Constructs an ICMP echo request using `IcmpFrame::ToIp()`.
+2. Sends it via a raw ICMP socket to the destination IP.
+3. Registers the `echo_id` in a pending-reply table.
+4. Waits asynchronously for the ICMP echo reply.
+
+When the reply arrives, the server calls `DoEcho(echo_id)` (ack-id form, opcode `0x30`) back toward the client.
+
+### 10.3 Client-Side Reply Injection
+
+`OnEcho(echo_id)` on the client looks up the pending request by `echo_id`, reconstructs the ICMP echo reply frame, and injects it into the TAP via `VEthernet::Output()`. The local `ping` application receives the reply as if it came from the destination directly.
+
+```mermaid
+sequenceDiagram
+    participant PING as ping application
+    participant LWIP as lwIP (client)
+    participant LL_C as Linklayer (client)
+    participant TX as ITransmission
+    participant LL_S as Linklayer (server)
+    participant NET as Destination Host
+
+    PING->>LWIP: ICMP echo request
+    LWIP->>LL_C: OnIcmpEcho(dst_ip, echo_id, payload)
+    LL_C->>TX: DoEcho(echo_id, payload) [0x2F]
+    TX-->>LL_S: OnEcho(echo_id, payload)
+    LL_S->>NET: raw ICMP sendto(dst_ip, echo_req)
+    NET-->>LL_S: ICMP echo reply
+    LL_S->>TX: DoEcho(echo_id) [0x30 ack form]
+    TX-->>LL_C: OnEcho(echo_id) ack
+    LL_C->>LWIP: inject ICMP echo reply
+    LWIP->>PING: ping RTT result
+```
+
+---
+
+## 11. QoS and Statistics Integration
+
+### 11.1 ITransmissionQoS
+
+`ITransmission` optionally holds an `ITransmissionQoS` object (set via `SetQoS()`). When QoS is attached:
+
+- `Write()` consumes bandwidth tokens before writing. If insufficient tokens are available, the coroutine suspends until the refill timer replenishes them.
+- The token bucket refill rate is derived from `appsettings.json` `bandwidth` field (bytes per second).
+- QoS enforcement is per-session: each `ITransmission` has its own token bucket.
+
+### 11.2 ITransmissionStatistics
+
+`ITransmissionStatistics` tracks per-session counters:
+
+| Counter | Description |
+|---------|-------------|
+| `TotalOutgoingBytes` | Raw bytes written to the wire (including headers) |
+| `TotalIncomingBytes` | Raw bytes read from the wire |
+| `TotalOutgoingPackets` | Count of `Write()` calls |
+| `TotalIncomingPackets` | Count of `Read()` calls |
+
+These counters feed the TUI status display and the `VirtualEthernetInformation` quota reporting mechanism.
+
+### 11.3 Packet Drop Points
+
+Packets may be silently dropped at several stages of the lifecycle:
+
+| Drop Point | Condition | Action |
+|------------|-----------|--------|
+| `VEthernet::OnPacketInput` | IP header invalid (checksum, version, length) | Drop, no error code |
+| `VEthernet::OnPacketInput` | Firewall rule match | Drop, `FirewallSegmentBlocked` or `FirewallDomainBlocked` |
+| `IPFragment` | Fragment set timeout | Drop, no notification to application |
+| `VirtualEthernetLinklayer::PacketInput` | Unknown opcode byte | Drop, `ProtocolPacketActionInvalid` |
+| `ITransmission::Read` | Checksum / decrypt failure | Drop, `ProtocolDecodeFailed` |
+| QoS token bucket | Token exhaustion with drop policy | Drop, `GenericRateLimited` |
+| Server relay | Destination unreachable | DoDisconnect or DoSendTo with error |
+
+---
+
+## 12. Mux (Multiplexer) Channel
+
+### 12.1 Purpose
+
+The MUX feature allows multiple logical sub-connections to share a single `ITransmission` instance, reducing the overhead of establishing separate TCP/WebSocket connections for each new data stream. It is negotiated via the `PacketAction_MUX` (`0x35`) and `PacketAction_MUXON` (`0x36`) opcodes.
+
+### 12.2 Negotiation Flow
+
+```mermaid
+sequenceDiagram
+    participant CLIENT as Client Linklayer
+    participant TX as ITransmission
+    participant SERVER as Server Linklayer
+
+    CLIENT->>TX: DoMux(vlan_tag, max_subconn, accel_flag) [0x35]
+    TX-->>SERVER: OnMux(vlan_tag, max_subconn, accel_flag)
+    SERVER->>TX: DoMuxON(vlan_tag, seq, ack) [0x36]
+    TX-->>CLIENT: OnMuxON(vlan_tag, seq, ack)
+    Note over CLIENT,SERVER: MUX channel established
+    Note over CLIENT,SERVER: subsequent sub-connections use this channel
+```
+
+### 12.3 VLAN Tag and Sub-Connection Demultiplexing
+
+Each sub-connection within the MUX channel is identified by:
+- A **VLAN tag** (negotiated at channel setup) identifying the channel
+- A **connection ID** (same `conn_id` scheme as regular TCP sessions)
+
+The server-side `OnMux` handler registers the VLAN tag in the session's MUX table. Subsequent `SYN` frames arriving with the matching VLAN tag are routed through the multiplexed channel rather than opening a new transport connection.
+
+---
+
+## 13. FRP (Flexible Reverse Proxy) Packet Flow
+
+### 13.1 Overview
+
+The FRP feature allows an external client to connect to a port on the OPENPPP2 server and have that connection tunneled back to a service running on the VPN client's local network. This is the reverse of normal tunnel direction.
+
+### 13.2 FRP Registration
+
+```mermaid
+sequenceDiagram
+    participant CLIENT as Client Linklayer
+    participant TX as ITransmission
+    participant SERVER as Server Linklayer
+    participant EXT as External Client
+
+    CLIENT->>TX: DoFrpEntry(proto, direction, remote_port) [0x20]
+    TX-->>SERVER: OnFrpEntry(proto, direction, remote_port)
+    Note over SERVER: opens listening port remote_port on server
+    EXT->>SERVER: TCP/UDP connect to remote_port
+    SERVER->>TX: DoFrpConnect(conn_id, direction, remote_port) [0x21]
+    TX-->>CLIENT: OnFrpConnect(conn_id, direction, remote_port)
+    CLIENT->>TX: DoFrpConnectOK(conn_id, ERRORS_SUCCESS) [0x22]
+    TX-->>SERVER: OnFrpConnectOK(conn_id, ERRORS_SUCCESS)
+    Note over SERVER: bridges EXT ↔ tunnel conn_id
+```
+
+### 13.3 FRP Data Flow
+
+Once established, FRP data flows bidirectionally using:
+- `PacketAction_FRP_PUSH` (`0x23`) — carries TCP stream data for FRP connections
+- `PacketAction_FRP_SENDTO` (`0x25`) — carries UDP datagrams for FRP connections
+- `PacketAction_FRP_DISCONNECT` (`0x24`) — tears down an FRP connection
+
+The data flow is structurally identical to the normal `PSH`/`SENDTO`/`FIN` flow, but uses dedicated FRP opcodes so that server-side routing can distinguish FRP connections from regular VPN connections.
+
+---
+
+## 14. Static Mode — Direct IP-Layer Forwarding
+
+### 14.1 When Static Mode is Used
+
+Static mode bypasses the normal TCP/UDP/ICMP demultiplexing and sends raw IP frames directly through the tunnel using `PacketAction_NAT` (`0x29`). It is used for:
+
+- Protocols that are neither TCP nor UDP (e.g., GRE, ESP, other IP protocols)
+- Cases where the server has direct L3 access to the destination and NAT is not needed
+- Diagnostic or passthrough scenarios where lwIP overhead should be skipped
+
+### 14.2 Static Packet Query / Acknowledgment
+
+Before using static mode for a session, the client may send a `PacketAction_STATIC` (`0x31`) query:
+
+```mermaid
+sequenceDiagram
+    participant CLIENT as Client Linklayer
+    participant TX as ITransmission
+    participant SERVER as Server Linklayer
+
+    CLIENT->>TX: DoStatic(query) [0x31]
+    TX-->>SERVER: OnStatic(query)
+    SERVER->>TX: DoStaticACK(fsid, session_id, remote_port) [0x32]
+    TX-->>CLIENT: OnStaticACK(fsid, session_id, remote_port)
+    Note over CLIENT: session FSID confirmed; static path available
+```
+
+`fsid` is a 128-bit session FSID (`Int128`) that uniquely identifies the static flow. `remote_port` is the server-side port used for the static path socket.
+
+### 14.3 NAT Packet Flow
+
+Once static mode is active, IP frames are forwarded without protocol-level demultiplexing:
+
+```mermaid
+graph LR
+    A["Local IP Packet"] --> B["VEthernet::OnPacketInput()"]
+    B --> C{"Protocol type?"}
+    C -- "TCP/UDP/ICMP" --> D["Normal relay path"]
+    C -- "Other (GRE/ESP/...)" --> E["DoNat(raw_ip_bytes)"]
+    E --> F["ITransmission::Write()"]
+    F --> G["Server OnNat()"]
+    G --> H["Raw socket sendto(dst_ip)"]
+```
+
+---
+
+## 15. Source Code Reference Index
+
+The following table maps each lifecycle stage to the precise source file and function responsible:
+
+| Stage | Source File | Function / Method |
+|-------|-------------|-------------------|
+| TAP receive loop | `linux/ppp/tap/TapLinux.cpp` | `AsynchronousReadPacketLoops()` |
+| TAP receive loop (Windows) | `windows/ppp/tap/TapWindows.cpp` | `AsynchronousReadPacketLoops()` |
+| Raw frame dispatch | `ppp/ethernet/VEthernet.cpp` | `OnPacketInput(Byte*, int, bool)` |
+| IP header parse + fragment check | `ppp/ethernet/VEthernet.cpp` | `OnPacketInput(ip_hdr*, int, int, int, bool)` |
+| Fragment accumulation | `ppp/net/packet/IPFragment.cpp` | `Input()` / `OnUpdate()` |
+| lwIP injection | `ppp/ethernet/VNetstack.cpp` | `Input(pbuf*)` |
+| UDP hook | `ppp/ethernet/VNetstack.cpp` | `udp_recv_fn` callback |
+| TCP hook | `ppp/ethernet/VNetstack.cpp` | `tcp_recv_fn` / `tcp_sent_fn` callbacks |
+| ICMP hook | `ppp/ethernet/VNetstack.cpp` | `raw_recv_fn` callback |
+| Serialize UDP frame | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoSendTo()` |
+| Serialize TCP connect | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoConnect()` |
+| Serialize TCP data | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoPush()` |
+| Serialize TCP close | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoDisconnect()` |
+| Serialize ICMP echo | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoEcho()` |
+| Serialize raw IP (NAT) | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `DoNat()` |
+| Encrypt + frame write | `ppp/transmissions/ITransmission.cpp` | `Write()` / `Encrypt()` |
+| WebSocket async write | `ppp/transmissions/IWebsocketTransmission.cpp` | `DoWriteBytes()` |
+| TCP async write | `ppp/transmissions/ITcpipTransmission.cpp` | `DoWriteBytes()` |
+| Frame read + decrypt | `ppp/transmissions/ITransmission.cpp` | `Read()` / `Decrypt()` |
+| Opcode dispatch | `ppp/app/protocol/VirtualEthernetLinklayer.cpp` | `PacketInput()` |
+| Server UDP relay | `ppp/app/server/VirtualEthernetExchanger.cpp` | `OnSendTo()` |
+| Server TCP relay | `ppp/app/server/VirtualEthernetExchanger.cpp` | `OnConnect()` / `OnPush()` / `OnDisconnect()` |
+| Server ICMP proxy | `ppp/app/server/VirtualEthernetExchanger.cpp` | `OnEcho()` |
+| Client reply inject | `ppp/app/client/VEthernetExchanger.cpp` | `OnSendTo()` / `OnPush()` |
+| TAP write-back | `ppp/ethernet/VEthernet.cpp` | `Output(IPFrame)` |
+| TAP fd write | `linux/ppp/tap/TapLinux.cpp` | `Output(Byte*, int)` |
+| Static packet pack | `ppp/app/protocol/VirtualEthernetPacket.cpp` | `Pack()` / `PackBy()` |
+| Static packet unpack | `ppp/app/protocol/VirtualEthernetPacket.cpp` | `Unpack()` / `UnpackBy()` |

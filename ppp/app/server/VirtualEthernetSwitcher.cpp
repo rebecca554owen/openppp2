@@ -571,7 +571,7 @@ namespace ppp {
                     if (gateway.is_v6()) {
                         extensions.AssignedIPv6Gateway = gateway;
                     }
-                    else if (mode == AppConfiguration::IPv6Mode_Gua) {
+                    elif (mode == AppConfiguration::IPv6Mode_Gua) {
                         extensions.Clear();
                         extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Rejected;
                         extensions.IPv6StatusMessage = "server-gua-requires-gateway";
@@ -595,7 +595,7 @@ namespace ppp {
 
                     return extensions.HasAny();
                 }
-                else if (mode == AppConfiguration::IPv6Mode_Gua) {
+                elif (mode == AppConfiguration::IPv6Mode_Gua) {
                     extensions.AssignedIPv6Mode = VirtualEthernetInformationExtensions::IPv6Mode_Gua;
                     extensions.AssignedIPv6AddressPrefixLength = ppp::ipv6::IPv6_MAX_PREFIX_LENGTH;
                     extensions.AssignedIPv6Flags |= VirtualEthernetInformationExtensions::IPv6Flag_NeighborProxy;
@@ -721,6 +721,7 @@ namespace ppp {
 
                 if (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
                     extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Gua) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     extensions.Clear();
                     return false;
                 }
@@ -737,12 +738,14 @@ namespace ppp {
             bool VirtualEthernetSwitcher::TryGetAssignedIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
                 extensions.Clear();
                 if (!IsIPv6ServerEnabled()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
                 const auto& ipv6 = configuration_->server.ipv6;
                 AppConfiguration::IPv6Mode mode = ipv6.mode;
                 if (mode != AppConfiguration::IPv6Mode_Nat66 && mode != AppConfiguration::IPv6Mode_Gua) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
@@ -752,6 +755,7 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     auto lease_it = ipv6_leases_.find(session_id);
                     if (lease_it == ipv6_leases_.end() || !lease_it->second.Address.is_v6()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseUnavailable);
                         return false;
                     }
                     lease = lease_it->second;
@@ -760,6 +764,7 @@ namespace ppp {
                     ppp::string lease_ip_key(lease_ip_std.data(), lease_ip_std.size());
                     auto owner_it = ipv6s_.find(lease_ip_key);
                     if (owner_it == ipv6s_.end() || !owner_it->second || owner_it->second->GetId() != session_id) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseUnavailable);
                         return false;
                     }
                 }
@@ -772,10 +777,12 @@ namespace ppp {
                 }
                 boost::asio::ip::address prefix = StringToAddress(prefix_string, ec);
                 if (ec || !prefix.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6CidrInvalid);
                     return false;
                 }
 
                 if (!ppp::ipv6::PrefixMatch(lease.Address.to_v6(), prefix.to_v6(), ipv6.prefix_length)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetMaskInvalid);
                     return false;
                 }
 
@@ -786,6 +793,7 @@ namespace ppp {
                 extensions.AssignedIPv6Address = lease.Address;
                 extensions.AssignedIPv6Gateway = GetIPv6TransitGateway();
                 if (mode == AppConfiguration::IPv6Mode_Gua && !extensions.AssignedIPv6Gateway.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6GatewayInvalid);
                     return false;
                 }
                 if (mode == AppConfiguration::IPv6Mode_Gua) {
@@ -1339,12 +1347,14 @@ namespace ppp {
              */
             int VirtualEthernetSwitcher::Run(const ContextPtr& context, const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return STATUS_ERROR;
                 }
         
                 bool mux = false;
                 Int128 session_id = transmission->HandshakeClient(y, mux);
                 if (session_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return STATUS_ERROR;
                 }
 
@@ -1639,6 +1649,7 @@ namespace ppp {
                 if (y) {
                     VirtualEthernetExchangerPtr exchanger = GetExchanger(session_id);
                     if (NULLPTR == exchanger) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                         return STATUS_ERROR;
                     }
 
@@ -1892,6 +1903,32 @@ namespace ppp {
                     OpenNamespaceCacheIfNeed() &&
                     OpenDatagramSocket() &&
                     OpenIPv6NeighborProxyIfNeed();
+
+                // Update IPv6 data-plane runtime state atomically so all cross-thread
+                // readers (GetIPv6RuntimeState, OnTick, inet6: console field) observe a
+                // consistent view without holding syncobj_.
+                {
+                    bool ipv6_enabled = IsIPv6ServerEnabled();
+                    if (!ipv6_enabled) {
+                        // IPv6 is not configured; plane is off.
+                        ipv6_runtime_state_.store(0, std::memory_order_release);
+                        ipv6_runtime_cause_.store(0, std::memory_order_release);
+                    }
+                    elif (ok) {
+                        // Plane came up successfully; record nat66 (1) or gua (2).
+                        const auto& ipv6cfg = configuration_->server.ipv6;
+                        uint8_t state = (ipv6cfg.mode == AppConfiguration::IPv6Mode_Gua) ? 2 : 1;
+                        ipv6_runtime_state_.store(state, std::memory_order_release);
+                        ipv6_runtime_cause_.store(0, std::memory_order_release);
+                    }
+                    else {
+                        // Plane attempted but failed; capture the diagnostic cause.
+                        ipv6_runtime_state_.store(3, std::memory_order_release);
+                        uint32_t cause = static_cast<uint32_t>(ppp::diagnostics::GetLastErrorCode());
+                        ipv6_runtime_cause_.store(cause, std::memory_order_release);
+                    }
+                }
+
                 if (ok) {
                     OpenLogger();
                 }
@@ -3131,6 +3168,17 @@ namespace ppp {
                         }
                     }
 
+                    // Remove the stale address-to-exchanger mapping from ipv6s_ before
+                    // evicting the lease record.  Without this cleanup, a dangling key
+                    // remains in ipv6s_ and TryGetAssignedIPv6Extensions would wrongly
+                    // consider the expired address as still assigned.
+                    if (lease.Address.is_v6()) {
+                        std::string addr_std = lease.Address.to_string();
+                        ppp::string addr_key(addr_std.data(), addr_std.size());
+                        ipv6s_.erase(addr_key);
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseExpired);
                     it = ipv6_leases_.erase(it);
                 }
 

@@ -771,3 +771,318 @@ Every failure branch must:
 
 A sentinel-only return without setting an error code is insufficient. Unused error
 codes (defined in the `.def` file but never referenced in any `.cpp`) should be removed.
+
+---
+
+## Error Code Architecture Deep Dive
+
+### X-Macro Expansion
+
+The entire error code enumeration is generated from a single source file `ppp/diagnostics/ErrorCodes.def` using the X-macro pattern:
+
+```cpp
+// ErrorCodes.def (excerpt)
+X(Success,                     "Success")
+X(GenericUnknown,              "Generic unknown error")
+X(AppStartupFailed,            "Application startup failed")
+// ... 463 more entries ...
+
+// ErrorCode.h — expansion into enum class
+enum class ErrorCode : uint32_t
+{
+#define X(name, desc) name,
+#include "ppp/diagnostics/ErrorCodes.def"
+#undef X
+};
+
+// Error.cpp — expansion into string table
+static const char* s_error_strings[] = {
+#define X(name, desc) desc,
+#include "ppp/diagnostics/ErrorCodes.def"
+#undef X
+};
+```
+
+This means adding a new error code requires only one `.def` file edit — the enum member, the string table entry, and the `FormatErrorString()` lookup are all derived automatically.
+
+### Thread-Local vs. Atomic Snapshot
+
+Two error storage mechanisms coexist:
+
+```mermaid
+graph TD
+    SETLAST["SetLastErrorCode(code)"] --> TL["Thread-local storage\nGetLastErrorCode()"]
+    SETLAST --> ATOMIC["std::atomic<uint64_t>\nGetLastErrorCodeSnapshot()\nGetLastErrorTimestamp()"]
+
+    TL --> DESC1["Per-thread: tracks most recent\nerror on this thread"]
+    ATOMIC --> DESC2["Cross-thread: last 'significant'\nerror published globally"]
+```
+
+`SetLastErrorCode()` always updates the thread-local value. It also conditionally updates the global atomic snapshot — the condition is typically that the error code is non-zero (non-success). The atomic snapshot stores both the error code and a timestamp packed into a single 64-bit value: high 32 bits = millisecond timestamp truncated to 32 bits, low 32 bits = error code value.
+
+`GetLastErrorTimestamp()` returns the millisecond timestamp of the most recently published non-success error. This is used by the TUI status bar to display the recency of the last problem.
+
+### `SetLastError` Template Variants
+
+The template overloads make the error-path pattern maximally concise:
+
+```cpp
+// Returns false after setting error code — used in bool-returning functions
+bool result = ppp::diagnostics::SetLastError(ErrorCode::SocketConnectFailed);
+// result == false
+
+// Returns -1 after setting error code — used in int-returning functions
+int fd = ppp::diagnostics::SetLastError<int>(ErrorCode::SocketCreateFailed);
+// fd == -1
+
+// Returns NULLPTR after setting error code — used in pointer-returning functions
+SomeObject* ptr = ppp::diagnostics::SetLastError<SomeObject*>(ErrorCode::MemoryAllocationFailed);
+// ptr == NULLPTR
+```
+
+All three variants call `SetLastErrorCode()` first, then return their sentinel value. This eliminates the two-line pattern:
+
+```cpp
+// Old pattern (verbose)
+SetLastErrorCode(ErrorCode::SocketConnectFailed);
+return false;
+
+// New pattern (concise)
+return SetLastError(ErrorCode::SocketConnectFailed);
+```
+
+---
+
+## Error Code Usage Patterns by Subsystem
+
+### Startup Pipeline Error Codes
+
+The startup pipeline (`PppApplication::Main()` and `PreparedLoopbackEnvironment()`) uses a strictly linear error-code progression. Each step sets exactly one error code on failure:
+
+```mermaid
+flowchart TD
+    A["IsUserAnAdministrator() fails"] --> E1["AppPrivilegeRequired"]
+    B["prevent_rerun_.Exists() true"] --> E2["AppAlreadyRunning"]
+    C["prevent_rerun_.Open() fails"] --> E3["AppLockAcquireFailed"]
+    D["Windows TAP driver check fails"] --> E4["NetworkInterfaceConfigureFailed"]
+    F["ITap::Create() returns null"] --> E5["TunnelOpenFailed"]
+    G["ITap::Open() fails"] --> E6["TunnelListenFailed"]
+    H["VEthernet::Open() fails, NIC null"] --> E7["NetworkInterfaceUnavailable"]
+    I["VEthernet::Open() fails, NIC not null"] --> E5
+    J["ipv6::PrepareServerEnvironment fails"] --> E8["IPv6ServerPrepareFailed"]
+    K["VirtualEthernetSwitcher::Open fails"] --> E5
+    L["VirtualEthernetSwitcher::Run fails"] --> E6
+    M["NextTickAlwaysTimeout fails"] --> E9["RuntimeTimerStartFailed"]
+```
+
+### Session Lifecycle Error Codes
+
+A session progresses through several lifecycle stages. Each potential failure maps to a specific error code:
+
+| Stage | Failure Condition | Error Code |
+|-------|------------------|-----------|
+| Handshake NOP read | Read timeout | `TimerHandshakeTimeout` |
+| Handshake NOP read | Decrypt failure | `ProtocolDecodeFailed` |
+| Handshake session ID | Invalid value | `SessionIdInvalid` |
+| Handshake cipher rebuild | Unsupported cipher | `ProtocolCipherMismatch` |
+| INFO frame receive | Malformed frame | `SessionInformationInvalid` |
+| INFO frame receive | Quota exceeded | `SessionQuotaExceeded` |
+| INFO frame receive | Session expired | `SessionExpired` |
+| Data loop read | Socket disconnected | `SocketDisconnected` |
+| Data loop read | WebSocket frame invalid | `WebSocketFrameInvalid` |
+| Keepalive check | No RX beyond deadline | `ProtocolKeepAliveTimeout` |
+| Managed server auth | Auth rejected | `AuthCredentialInvalid` or `AuthTokenExpired` |
+| IPv6 assignment | Lease conflict | `IPv6LeaseConflict` |
+| IPv6 assignment | No addresses available | `IPv6LeaseUnavailable` |
+
+### Protocol-Layer Error Codes
+
+Protocol errors (opcode violations, decode failures) use the `Protocol*` category. These typically indicate either a version mismatch between client and server, network corruption, or an active attacker:
+
+| Error Code | Typical Cause |
+|-----------|--------------|
+| `ProtocolFrameInvalid` | Frame header decode failed (bad seed byte or length) |
+| `ProtocolPacketActionInvalid` | Unknown opcode byte received |
+| `ProtocolVersionMismatch` | Client and server compiled with incompatible protocol versions |
+| `ProtocolCipherMismatch` | Key material exchange resulted in different derived keys |
+| `ProtocolDecodeFailed` | Decryption or checksum verification failed |
+| `ProtocolKeepAliveTimeout` | Remote peer stopped sending keepalives |
+| `ProtocolMuxFailed` | MUX channel negotiation failed |
+
+---
+
+## Error Code Diagnostic Workflow
+
+### Step 1 — Capture the Snapshot
+
+When a problem occurs, the first step is to capture the error code snapshot before it is overwritten:
+
+```cpp
+ErrorCode code = ppp::diagnostics::GetLastErrorCodeSnapshot();
+uint64_t  ts   = ppp::diagnostics::GetLastErrorTimestamp();
+const char* msg = ppp::diagnostics::FormatErrorString(code);
+
+printf("[%llu ms] Last error: %s (0x%08X)\n", ts, msg, (uint32_t)code);
+```
+
+### Step 2 — Map to Category
+
+The error code value is a contiguous integer (0-based enum). The category can be identified by inspecting `ERROR_CODES.md` or by examining the `ErrorCodes.def` file directly. The first 25 entries are Generic, the next 15 are App, and so on.
+
+### Step 3 — Correlate with TUI
+
+The TUI status bar displays the most recent snapshot in the bottom status line. If the TUI is not available (piped stdout), the startup summary text includes the last error before the process exits.
+
+### Step 4 — Trace to Source
+
+Each error code is set in exactly one (or very few) places in the source. Use `grep` or an IDE search to find all `SetLastErrorCode(ErrorCode::XYZ)` call sites and examine the surrounding logic.
+
+```bash
+# Find all call sites for a specific error code
+grep -rn "TunnelOpenFailed" ppp/ linux/ windows/ android/ darwin/
+```
+
+### Step 5 — Check Thread-Local vs. Snapshot
+
+If the snapshot shows a different error than expected, remember:
+- The snapshot reflects the **last non-success error published across all threads**.
+- The thread-local value reflects the **last error on the specific thread** being inspected.
+- In a race, two threads may set different errors simultaneously; the snapshot captures whichever atomic CAS wins.
+
+---
+
+## Error Code Frequency in Normal Operation
+
+In a healthy running instance with active sessions, the following error codes appear routinely and are **not** indicative of problems:
+
+| Error Code | Normal Occurrence | Reason |
+|-----------|------------------|--------|
+| `GenericCanceled` | On every `timer->cancel()` call | Timers are cancelled during disposal |
+| `GenericTimeout` | On DNS query timeouts | Upstream DNS may be slow |
+| `SocketDisconnected` | When any peer closes a connection | Normal TCP lifecycle |
+| `SessionDisposed` | After every session teardown | Normal lifecycle |
+| `FirewallSegmentBlocked` | For outbound-blocked destinations | Normal firewall policy |
+
+The following error codes indicate **actual problems** and should be investigated:
+
+| Error Code | Severity | Likely Cause |
+|-----------|----------|-------------|
+| `AppPrivilegeRequired` | Fatal (startup) | Process not running as root/admin |
+| `AppAlreadyRunning` | Fatal (startup) | Stale lock file or duplicate process |
+| `TunnelOpenFailed` | Fatal (startup) | TAP driver not installed |
+| `ProtocolKeepAliveTimeout` | Session loss | Network interruption or remote crash |
+| `ProtocolCipherMismatch` | Session fail | Client/server key mismatch |
+| `IPv6LeaseConflict` | IPv6 failure | IP collision in the address pool |
+| `ResourceExhaustedSessionSlots` | Capacity | Server at maximum connection limit |
+| `ResourceExhaustedEphemeralPorts` | Relay failure | NAT table exhausted |
+| `AuthCredentialInvalid` | Auth failure | Wrong password or token |
+| `InternalLogicStateCorrupted` | Bug | Report to developers |
+
+---
+
+## Error Handler Registration API
+
+Beyond the error code storage API, OPENPPP2 provides an error handler dispatch mechanism for structured error notifications:
+
+```cpp
+// Register a handler with a stable key
+ppp::diagnostics::ErrorHandler::RegisterErrorHandler(
+    "my-module",
+    [](ErrorCode code, uint64_t timestamp_ms) noexcept
+    {
+        // Called when a significant error is published
+        // Must be noexcept — exceptions here are silently swallowed
+    });
+
+// Remove the handler
+ppp::diagnostics::ErrorHandler::RegisterErrorHandler("my-module", nullptr);
+```
+
+Handler registration is described in detail in `ERROR_HANDLING_API.md`. Key points for error-code consumers:
+
+- Handlers are dispatched on the thread that calls `SetLastErrorCode()`.
+- The handler receives the error code and the millisecond timestamp of the error.
+- Handlers must not call back into `SetLastErrorCode()` recursively — this would cause infinite dispatch.
+- All handlers must be registered before worker threads start (during the startup initialization window).
+
+---
+
+## Integration with Diagnostics Error System
+
+`ERROR_CODES.md` documents the error code *values*. The higher-level diagnostics architecture — how errors propagate, how the snapshot ring is maintained, and how the TUI consumes diagnostics — is documented in [`DIAGNOSTICS_ERROR_SYSTEM.md`](DIAGNOSTICS_ERROR_SYSTEM.md).
+
+The relationship between the two documents:
+
+```mermaid
+graph LR
+    A["ErrorCodes.def\n(X-macro source)"] --> B["ErrorCode enum\n(ErrorCode.h)"]
+    B --> C["SetLastErrorCode()\nGetLastErrorCode()\nGetLastErrorCodeSnapshot()"]
+    C --> D["ERROR_CODES.md\n(this document)\nvalue reference"]
+    C --> E["DIAGNOSTICS_ERROR_SYSTEM.md\narchitecture & propagation"]
+    E --> F["TUI status bar\n(ConsoleUI)"]
+    E --> G["ErrorHandler dispatch\n(structured notifications)"]
+```
+
+---
+
+## Quick Reference: Most Common Error Codes by Feature Area
+
+### VPN Tunnel Establishment
+
+```
+TunnelOpenFailed          — TAP device could not be created or opened
+TunnelListenFailed        — Server could not bind/listen on port
+TunnelDevicePermissionDenied — /dev/net/tun not accessible
+NetworkInterfaceUnavailable — Specified NIC does not exist
+NetworkInterfaceConfigureFailed — Could not configure IP/GW/DNS on TAP
+```
+
+### Session Handshake
+
+```
+SessionHandshakeFailed    — Generic handshake failure
+TimerHandshakeTimeout     — Handshake did not complete within timeout
+ProtocolDecodeFailed      — Handshake frame decrypt/parse failed
+ProtocolCipherMismatch    — Key derivation resulted in different ciphers
+SessionIdInvalid          — Received session ID is 0 or out of range
+```
+
+### Ongoing Session
+
+```
+ProtocolKeepAliveTimeout  — No data received within keepalive window
+SocketDisconnected        — TCP connection dropped by remote
+WebSocketFrameInvalid     — WebSocket frame corrupt or unexpected
+SessionQuotaExceeded      — Session bandwidth or traffic limit hit
+SessionExpired            — Session time-to-live exceeded
+```
+
+### Authentication (Managed Server)
+
+```
+AuthUserNotFound          — Username not in backend database
+AuthCredentialInvalid     — Wrong password or token
+AuthTokenExpired          — JWT or session token expired
+AuthPolicyDenied          — IP-based or time-based policy rejected login
+AuthMfaRequired           — MFA step required but not provided
+```
+
+### IPv6
+
+```
+IPv6ServerPrepareFailed   — Could not set up NDP proxy or IPv6 forwarding
+IPv6LeaseConflict         — Requested IPv6 address already in use
+IPv6LeaseUnavailable      — IPv6 address pool exhausted
+IPv6ForwardingEnableFailed — Could not enable ip6_forwarding sysctl
+IPv6NeighborProxyAddFailed — netlink NDP proxy add command failed
+```
+
+### Platform-Specific
+
+```
+LinuxIptablesApplyFailed  — iptables/nftables rule could not be applied
+LinuxNetlinkOpenFailed    — netlink socket could not be opened
+WindowsWintunCreateFailed — Wintun adapter creation failed
+WindowsWfpEngineOpenFailed — Windows Filtering Platform unavailable
+WindowsRegistryReadFailed — TAP component ID registry lookup failed
+```

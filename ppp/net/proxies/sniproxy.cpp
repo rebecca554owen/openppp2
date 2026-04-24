@@ -631,7 +631,7 @@ namespace ppp {
                 if (addr.is_v4()) {
                     remote_socket_.open(boost::asio::ip::tcp::v4(), ec);
                 }
-                else if (addr.is_v6()) {
+                elif (addr.is_v6()) {
                     remote_socket_.open(boost::asio::ip::tcp::v6(), ec);
                 }
                 else {

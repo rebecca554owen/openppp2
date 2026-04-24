@@ -46,6 +46,7 @@
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/SpinLock.h>
+#include <ppp/diagnostics/Error.h>
 
 // ip tuntap add mode tun dev tun0
 // ip addr add 10.0.0.1/24 dev tun0
@@ -194,6 +195,7 @@ namespace ppp {
 
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return false;
             }
 
@@ -206,6 +208,7 @@ namespace ppp {
             addr->sin_addr.s_addr = inet_addr(addressIP.data());
 
             if (ioctl(ifc_ctl_sock.sock_v4, SIOCSIFADDR, &ifr)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 return false;
             }
             else {
@@ -386,16 +389,22 @@ namespace ppp {
 
         bool TapLinux::AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
                 return false;
             }
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 neigh replace proxy %s dev %s > /dev/null 2>&1", addressIP.data(), ifrName.data());
-            return ExecuteIpCommand(command);
+            bool ok = ExecuteIpCommand(command);
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            }
+            return ok;
         }
 
         bool TapLinux::DeleteIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
                 return false;
             }
 
@@ -1035,12 +1044,14 @@ namespace ppp {
             SynchronizedObjectScope scope(syncobj_);
             int tun = OpenDriver(dev.data());
             if (tun == -1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
                 return false;
             }
 
             std::shared_ptr<boost::asio::posix::stream_descriptor> sd = make_shared_object<boost::asio::posix::stream_descriptor>(*context, tun);
             if (NULLPTR == sd) {
                 ::close(tun);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 

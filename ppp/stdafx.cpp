@@ -379,7 +379,7 @@ namespace ppp {
                         if (token_len == name_len) {
                             return true;
                         }
-                        else if (line[start + name_len] == '=') {
+                        elif (line[start + name_len] == '=') {
                             return true;
                         }
                     }
@@ -481,7 +481,7 @@ namespace ppp {
                             if (token_len == name_len) {
                                 waiting_for_value = true;
                             }
-                            else if (token_len > name_len && token[name_len] == '=') {
+                            elif (token_len > name_len && token[name_len] == '=') {
                                 size_t value_start = name_len + 1;
                                 if (value_start < token_len) {
                                     return unquote(token + value_start, token_len - value_start);

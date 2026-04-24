@@ -503,3 +503,295 @@ Before writing any code that touches session state or is posted to an `io_contex
 - [`ENGINEERING_CONCEPTS.md`](ENGINEERING_CONCEPTS.md) — foundational engineering principles
 - [`TRANSMISSION.md`](TRANSMISSION.md) — transport carrier and handshake
 - [`LINKLAYER_PROTOCOL.md`](LINKLAYER_PROTOCOL.md) — tunnel action vocabulary
+
+---
+
+## 9. Awaitable — Blocking Caller Bridge
+
+### 9.1 Purpose
+
+While coroutines are the dominant execution model, some code paths run on dedicated OS threads (not `io_context` threads) and need to block synchronously waiting for an async result. `Executors::Awaitable<T>` provides this bridge.
+
+### 9.2 Awaitable API
+
+```cpp
+// Produced by an async operation
+auto awaitable = Executors::NewAwaitable<bool>();
+
+// On the io_context thread — signal completion
+awaitable->Complete(result_value);
+
+// On the caller OS thread — block until Complete() is called
+bool result = awaitable->Await();
+```
+
+`Await()` uses a `std::condition_variable` to block. `Complete()` stores the value and notifies the condition. Once signalled, `Await()` returns and the awaitable is consumed.
+
+### 9.3 When Awaitable is Appropriate
+
+| Caller type | Appropriate mechanism |
+|-------------|----------------------|
+| `io_context` coroutine | `YieldContext::Suspend()` / `Resume()` |
+| Dedicated worker OS thread | `Executors::Awaitable<T>::Await()` |
+| Unit test or synchronous API call | `Executors::Awaitable<T>::Await()` |
+
+**Never** call `Awaitable::Await()` from within an `io_context` thread — it will deadlock if the completion handler also runs on that context.
+
+### 9.4 `nullof<YieldContext>()` Pattern in Depth
+
+The `nullof<YieldContext>()` pattern is used to select between coroutine-mode and thread-blocking-mode at a single call site. Consider:
+
+```cpp
+// Function supports both callers:
+bool SomeLinklayerOperation(YieldContext* y, int param) noexcept
+{
+    if (y && *y)
+    {
+        // Coroutine mode: async I/O, yield to event loop
+        return DoAsyncVariant(y, param);
+    }
+    else
+    {
+        // Thread-blocking mode: use Awaitable
+        auto aw = Executors::NewAwaitable<bool>();
+        asio::post(*context_, [aw, param]() {
+            aw->Complete(DoAsyncVariant(nullptr, param));
+        });
+        return aw->Await();
+    }
+}
+```
+
+`nullof<YieldContext>()` is defined in `ppp/coroutines/YieldContext.h` as a constexpr returning the address of a zero-initialized static variable — it is always non-null, but `operator bool()` returns `false`. This allows one branch to remain unused in coroutine callers without any extra heap allocation.
+
+---
+
+## 10. Thread Naming and Priority
+
+### 10.1 Thread Naming
+
+Every worker thread and scheduler thread created by `Executors` is named using the platform-native API:
+
+| Platform | API | Example name |
+|----------|-----|-------------|
+| Linux | `pthread_setname_np()` | `"ppp-worker-0"` |
+| Windows | `SetThreadDescription()` | `L"ppp-worker-0"` |
+| Android | `pthread_setname_np()` | `"ppp-worker-0"` |
+| macOS | `pthread_setname_np()` | `"ppp-worker-0"` |
+
+If naming fails, `RuntimeThreadNameFailed` is set but execution continues — thread naming is advisory only.
+
+### 10.2 Thread Priority
+
+Worker and scheduler threads are started at `ThreadPriority::Highest` (platform-mapped to `THREAD_PRIORITY_HIGHEST` on Windows, `SCHED_OTHER` with high nice value on Linux, `QOS_CLASS_USER_INTERACTIVE` on macOS/iOS). This ensures that network I/O is not starved by low-priority background tasks.
+
+The background tick thread runs at default priority — it only updates cached timestamps and drives vDNS/ICMP housekeeping, so latency is not critical.
+
+---
+
+## 11. Asio Executor Composition and `make_strand`
+
+### 11.1 Executor Types Used
+
+OPENPPP2 uses three Asio executor types across the codebase:
+
+| Type | Description |
+|------|-------------|
+| `io_context::executor_type` | Raw executor from an `io_context` |
+| `asio::strand<io_context::executor_type>` | Serializing wrapper around the raw executor |
+| `asio::io_context&` (implicit) | Direct context reference for timer construction |
+
+All session objects hold a `StrandPtr` (a `shared_ptr<asio::strand<io_context::executor_type>>`) created via `asio::make_strand(*io_context_ptr)`. Timers and sockets within a session bind to this strand.
+
+### 11.2 Strand Creation Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant ACCEPT as TCP Acceptor
+    participant EX as Executors
+    participant SC as Scheduler Context
+    participant SESSION as Session Object
+
+    ACCEPT->>EX: ShiftToScheduler(raw_socket)
+    EX->>SC: GetScheduler() → scheduler io_context
+    EX->>SC: asio::make_strand(*scheduler) → new Strand
+    EX->>SC: TSocket(*strand) → strand-bound socket
+    EX->>ACCEPT: reassign native fd to new socket
+    ACCEPT->>SESSION: Session(strand, strand_socket)
+    SESSION->>SESSION: all timers/coroutines use this strand
+```
+
+### 11.3 Posting Cross-Strand Work
+
+When code running on one strand needs to trigger work on a different strand (e.g., a session notifying a global router), it uses `asio::post`:
+
+```cpp
+// From session strand: post work onto a different strand or context
+asio::post(*target_strand_or_context,
+    [self = shared_from_this(), data = std::move(data)]() noexcept
+    {
+        self->ProcessCrossStrandData(data);
+    });
+```
+
+This is always safe: `asio::post` is thread-safe and does not require the caller to be on any particular thread.
+
+---
+
+## 12. Memory Model for Packet Buffers
+
+### 12.1 Per-Context 64 KB Buffer
+
+The 64 KB buffer per `io_context` (stored in `Executors::Buffers`) is the single most important memory optimization in the hot path. Every UDP receive, TAP frame read, and ITransmission read cycle reuses this buffer rather than allocating a new one.
+
+The buffer lifetime is tied to the `io_context` lifecycle:
+
+```mermaid
+graph LR
+    A["Executors::SetMaxThreads(N)"] --> B["For each worker:"]
+    B --> C["Create io_context"]
+    C --> D["Allocate 64KB buffer via ppp::Malloc"]
+    D --> E["Register in Internal->Buffers map"]
+    E --> F["Worker thread starts, calls io_context::run()"]
+    F --> G["Session code calls Executors::GetCachedBuffer(ctx)"]
+    G --> H["Returns pointer to pre-allocated 64KB region"]
+    H --> I["Used for recv, read, inject; never freed mid-operation"]
+    I --> G
+```
+
+When `Executors::Exit()` is called, `ContextFifo`, `ContextTable`, `Buffers`, and `Threads` are all cleared. `shared_ptr` destruction frees the buffers via `ppp::Mfree`.
+
+### 12.2 IPFrame and UdpFrame Heap Allocation
+
+While the 64 KB receive buffer avoids per-packet allocations for raw byte reads, parsed protocol objects (`IPFrame`, `UdpFrame`, `IcmpFrame`) are allocated on the heap via `ppp::Malloc` (which routes through jemalloc when `JEMALLOC` is defined). These objects are wrapped in `shared_ptr` and freed when the last holder (typically the linklayer serializer) drops its reference.
+
+This two-tier approach balances hot-path efficiency (no allocation for the raw read buffer) against correctness (heap allocation for structured objects that may outlive the raw buffer).
+
+### 12.3 jemalloc Integration
+
+When the `JEMALLOC` preprocessor macro is defined (set by CMake when building with jemalloc support):
+
+- `ppp::Malloc(size)` calls `je_malloc(size)`
+- `ppp::Mfree(ptr)` calls `je_free(ptr)`
+- `ppp::allocator<T>` routes all STL container allocations through jemalloc
+
+On Android, jemalloc is already embedded in the system libc — no additional jemalloc layer is added. On Linux and Windows, jemalloc is linked statically from the third-party library directory (`THIRD_PARTY_LIBRARY_DIR/jemalloc/lib/libjemalloc.a`).
+
+---
+
+## 13. Detailed `YieldContext` State Transitions
+
+### 13.1 State Machine Table
+
+| From State | Event | To State | Action |
+|------------|-------|----------|--------|
+| `RESUMED(0)` | `Suspend()` called by coroutine | `SUSPENDING(1)` | CAS from 0 → 1 |
+| `SUSPENDING(1)` | No `Resume()` raced | `SUSPEND(2)` | `jump_fcontext` to caller |
+| `SUSPENDING(1)` | `Resume()` raced | `RESUMED(0)` | CAS detects race; skip jump |
+| `SUSPEND(2)` | `Resume()` called | `RESUMING(-1)` | CAS from 2 → -1 |
+| `RESUMING(-1)` | Re-entered via `jump_fcontext` | `RESUMED(0)` | CAS from -1 → 0 |
+
+The race between `Suspend()` and `Resume()` is correctly handled: if `Resume()` fires before the coroutine fully suspends (the `SUSPENDING` window), the CAS in `Suspend()` detects that state is no longer `SUSPENDING` and skips the context switch, keeping the coroutine running. This eliminates a lost-wakeup race without any mutex.
+
+### 13.2 Stack Frame Diagram
+
+```mermaid
+graph TD
+    subgraph AsioEventLoop["Asio Event Loop (caller stack)"]
+        EL["io_context::run()\n→ dispatch handler\n→ YieldContext::Invoke()\n→ jump_fcontext(callee)"]
+    end
+
+    subgraph Coroutine["Coroutine Stack (callee)"]
+        CO["make_fcontext → handler(y)\n→ ITransmission::Read(y)\n→ async_read_some + Suspend()\n← (resumed here after I/O)"]
+    end
+
+    EL -- "jump_fcontext" --> CO
+    CO -- "jump_fcontext (on Suspend)" --> EL
+    CO -- "jump_fcontext (on return)" --> EL
+```
+
+The two stacks are completely independent memory regions. The coroutine stack is allocated from the heap (via `ppp::Malloc`) at a fixed size; the caller stack is the normal OS thread stack. `jump_fcontext` saves/restores all callee-saved registers in a single call.
+
+---
+
+## 14. Practical Debugging Guide for Concurrency Issues
+
+### 14.1 Deadlock Identification
+
+If the process hangs and all `io_context` threads are blocked, the most common causes are:
+
+1. **Mutex held across `Suspend()`**: Use a debugger to examine each worker thread's stack. If you see `SpinLock::Enter()` or `std::mutex::lock()` below `YieldContext::Suspend()` in the call stack, that is the root cause.
+2. **`Awaitable::Await()` on io_context thread**: Look for `std::condition_variable::wait()` on a thread that is also the owner of an `io_context`. This will never complete if the signaller runs on the same context.
+3. **Circular strand dependency**: Rare but possible if strand A posts to strand B and strand B synchronously waits for strand A to complete.
+
+### 14.2 Use-After-Free Detection
+
+Symptoms: crash or data corruption in a handler that fires after session teardown.
+
+Diagnosis:
+1. Confirm whether the handler captures `shared_from_this()`. If it captures a raw pointer or a `weak_ptr` without calling `lock()`, the session may be destroyed before the handler runs.
+2. Check whether `disposed_` is tested at handler entry.
+3. Use AddressSanitizer (`-fsanitize=address`) on a debug build to catch the exact access.
+
+### 14.3 Performance Bottlenecks
+
+High CPU on a single worker thread despite multiple worker contexts:
+
+- Check `Executors::GetExecutor()` rotation. If all sessions are created on the same `io_context` (e.g., a server that never calls `ShiftToScheduler`), all work concentrates on one thread.
+- Verify `SetMaxSchedulers()` is called. Without a scheduler context, new connection setup runs on the default context.
+- Profile with `perf` (Linux) or VTune (Windows). Common hot spots: `jump_fcontext`, `malloc/free`, OpenSSL `EVP_EncryptUpdate`.
+
+### 14.4 Coroutine Leak Detection
+
+A coroutine leak occurs when a `YieldContext` is suspended and `Resume()` is never called, preventing the coroutine stack from being freed.
+
+Detection: track `YieldContext` construction and destruction counts. If construction count exceeds destruction count indefinitely, there is a leak.
+
+Common cause: an async operation (timer, socket) is cancelled but the completion handler is never delivered. Boost.Asio guarantees that cancellation always delivers a handler with `operation_aborted` — ensure that the cancelled operations' handlers call `Resume()` unconditionally (the coroutine checks the error code after resumption).
+
+---
+
+## 15. Concurrency Architecture Diagram (Full System)
+
+```mermaid
+graph TD
+    subgraph ProcessBoundary["Process (PppApplication)"]
+        subgraph ThreadPool["Thread Pool (Executors)"]
+            DEFAULT["Default Context\n(Main Thread)"]
+            W0["Worker 0\nio_context + 64KB buf"]
+            W1["Worker 1\nio_context + 64KB buf"]
+            WN["Worker N\nio_context + 64KB buf"]
+            SC["Scheduler Context\n(1+ threads)"]
+            TICK["Tick Thread\n(cached ms clock\nvDNS + ICMP housekeep)"]
+        end
+
+        subgraph Sessions["Session Objects (per VPN session)"]
+            S0["Session 0\n strand(W0)\nYieldContext(read loop)\nYieldContext(write loop)\nTimer(keepalive)"]
+            S1["Session 1\nstrand(W1)\n..."]
+            SN["Session N\nstrand(WN)\n..."]
+        end
+
+        subgraph Infrastructure["Shared Infrastructure"]
+            CFG["AppConfiguration\n(read-only, no locks)"]
+            FBUF["Per-Context 64KB Bufs\n(no locks, thread-local)"]
+            CTXTBL["ContextTable\n(guarded by std::mutex)"]
+        end
+    end
+
+    DEFAULT --> S0
+    DEFAULT --> S1
+    SC --> S0
+    SC --> S1
+    W0 --> S0
+    W1 --> S1
+    WN --> SN
+    S0 --> CFG
+    S1 --> CFG
+    S0 --> FBUF
+    S1 --> FBUF
+    CTXTBL --> W0
+    CTXTBL --> W1
+    CTXTBL --> WN
+    TICK --> W0
+    TICK --> W1
+```

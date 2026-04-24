@@ -74,7 +74,7 @@ namespace ppp
                 {
                     hour_diff += 24;
                 }
-                else if (local->tm_yday < gmt->tm_yday) 
+                elif (local->tm_yday < gmt->tm_yday) 
                 {
                     hour_diff -= 24;
                 }

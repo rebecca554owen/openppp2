@@ -182,19 +182,19 @@ namespace ppp {
             if (proto_string == "tcp" || proto_string == BOOST_BEAST_VERSION_STRING) {
                 protocol_type = ProtocolType_PPP;
             }
-            else if (proto_string == "ws") {
+            elif (proto_string == "ws") {
                 protocol_type = ProtocolType_WebSocket;
             }
-            else if (proto_string == "wss") {
+            elif (proto_string == "wss") {
                 protocol_type = ProtocolType_WebSocketSSL;
             }
-            else if (proto_string == "http") {
+            elif (proto_string == "http") {
                 protocol_type = ProtocolType_Http;
             }
-            else if (proto_string == "https") {
+            elif (proto_string == "https") {
                 protocol_type = ProtocolType_HttpSSL;
             }
-            else if (proto_string == "socks") {
+            elif (proto_string == "socks") {
                 protocol_type = ProtocolType_Socks;
             }
             else {
@@ -262,7 +262,7 @@ namespace ppp {
                 if (protocol_type == ProtocolType_Http || protocol_type == ProtocolType_WebSocket) {
                     port_number = PPP_HTTP_SYS_PORT;
                 }
-                else if (protocol_type == ProtocolType_HttpSSL || protocol_type == ProtocolType_WebSocketSSL) {
+                elif (protocol_type == ProtocolType_HttpSSL || protocol_type == ProtocolType_WebSocketSSL) {
                     port_number = PPP_HTTPS_SYS_PORT;
                 }
                 else {
@@ -293,7 +293,7 @@ namespace ppp {
             if (is_ipv6 && !address_string.empty()) {
                 normalized += "[" + address_string + "]";
             }
-            else if (!hostname.empty()) {
+            elif (!hostname.empty()) {
                 normalized += hostname;
             }
             else {
@@ -306,7 +306,7 @@ namespace ppp {
                 if (is_ipv6 && !address_string.empty()) {
                     abs_string += "[" + address_string + "]";
                 }
-                else if (!hostname.empty()) {
+                elif (!hostname.empty()) {
                     abs_string += hostname;
                 }
                 else {

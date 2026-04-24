@@ -19,7 +19,9 @@ Anchors:
 - `main.cpp::GetNetworkInterface(...)`
 - `main.cpp::PreparedArgumentEnvironment(...)`
 
-## Why This Layer Matters
+---
+
+## 1. Why This Layer Matters
 
 Configuration in OPENPPP2 is not just a bag of scalars. It is a policy object that decides:
 
@@ -29,256 +31,547 @@ Configuration in OPENPPP2 is not just a bag of scalars. It is a policy object th
 - which values are considered safe enough to keep
 - which values must be normalized or discarded
 
-That makes configuration a control surface for the entire repository.
+That makes configuration a control surface for the entire repository. A misconfigured node does not just fail to connect — it may expose a degraded security posture, fail to route traffic correctly, or refuse to start at all. The staged admission flow exists precisely to prevent misconfigured nodes from entering the running state silently.
 
-## Staged Admission Flow
+---
+
+## 2. Staged Admission Flow
 
 ```mermaid
 flowchart TD
-    A[Default construction] --> B["Clear()"]
-    B --> C[Load JSON]
-    C --> D["Loaded() normalize"]
-    D --> E[CLI overrides]
-    E --> F[Runtime objects]
+    A["Default construction\n(zero-initialize all fields)"] --> B["Clear()\n(safe defaults, sentinel values)"]
+    B --> C["Load(json_string)\n(parse JSON, merge into struct)"]
+    C --> D["Loaded()\n(normalize, clamp, validate, derive)"]
+    D --> E["CLI overrides\n(main.cpp GetNetworkInterface)"]
+    E --> F["Runtime object construction\n(ITransmission, VEthernet, etc.)"]
 ```
 
-## Configuration Shape
+### Stage 1: `Clear()`
 
-`AppConfiguration` is organized around these blocks:
+`Clear()` populates every field with a known-safe sentinel. This is important because `Load()` only writes fields present in the JSON; any absent field retains its `Clear()` value, not a zero or garbage value.
 
-- `concurrent`
-- `cdn`
-- `ip`
-- `udp`
-- `tcp`
-- `mux`
-- `websocket`
-- `key`
-- `vmem`
-- `server`
-- `client`
-- `virr`
-- `vbgp`
+### Stage 2: `Load(json_string)`
 
-Each block corresponds to a specific code region or runtime concern. The structure is not arbitrary.
+`Load()` parses the JSON string using the embedded `nlohmann::json` library and maps JSON keys to struct fields. Fields not present in the JSON are left at their `Clear()` values. Parsing errors do not abort — they are surfaced via the return value and by setting `SetLastErrorCode(ConfigFileMalformed)`.
 
-## Defaults From `Clear()`
+### Stage 3: `Loaded()`
+
+`Loaded()` is the policy compiler. It validates, clamps, repairs, and derives all runtime-ready state. The rules are documented in Section 6 below.
+
+### Stage 4: CLI Overrides
+
+After `Loaded()`, `main.cpp` reads CLI arguments and applies host-specific overrides that are not stored in `appsettings.json` because they describe the physical host environment (which NIC to use, which gateway to route through, which bypass list file to load).
+
+---
+
+## 3. Configuration Shape
+
+`AppConfiguration` is organized around these top-level blocks:
+
+| Block | Runtime Concern |
+|-------|----------------|
+| `concurrent` | Worker thread pool size |
+| `cdn` | Service channel listen ports |
+| `ip` | Public and interface IP declarations |
+| `udp` | UDP socket policy, DNS, relay timeouts |
+| `tcp` | TCP socket policy, connect/inactive timeouts |
+| `mux` | MUX (multiplexing) channel parameters |
+| `websocket` | WebSocket carrier configuration |
+| `key` | Protocol/transport cipher and obfuscation flags |
+| `vmem` | Virtual memory-backed file behavior |
+| `server` | Server-side node identity, IPv6, management backend |
+| `client` | Client-side identity, server target, proxy, static mappings |
+| `virr` | Automatic IP list refresh (Virtual IP Route Refresh) |
+| `vbgp` | Periodic virtual BGP route refresh |
+
+### Structural Diagram
+
+```mermaid
+graph TD
+    CFG["AppConfiguration"] --> CONC["concurrent\n(int: thread count)"]
+    CFG --> CDN["cdn\n(port array)"]
+    CFG --> IP["ip\n(public_ip, interface_ip)"]
+    CFG --> UDP["udp\n(timeout, dns, port, static)"]
+    CFG --> TCP["tcp\n(listen, connect, inactive, turbo, fast-open)"]
+    CFG --> MUX["mux\n(timeout, keepalive)"]
+    CFG --> WS["websocket\n(host, path, listen, ssl, headers)"]
+    CFG --> KEY["key\n(kf,kh,kl,kx,sb, protocol, transport,\nmasked, delta_encode, shuffle_data)"]
+    CFG --> VMEM["vmem\n(path, size)"]
+    CFG --> SRV["server\n(node, log, backend, ipv6, subnet, mapping)"]
+    CFG --> CLI["client\n(guid, bandwidth, server, proxy, routes,\nmappings, static, tun, dns-rules)"]
+    CFG --> VIRR["virr\n(file, update-interval, retry-interval)"]
+    CFG --> VBGP["vbgp\n(server, update-interval)"]
+```
+
+---
+
+## 4. Defaults From `Clear()`
 
 Important defaults from `Clear()` include:
 
-- `concurrent = Thread::GetProcessorCount()`.
-- `cdn[*] = IPEndPoint::MinPort`.
-- UDP DNS timeout, TTL, cache, and redirect defaults.
-- TCP and MUX timeout defaults.
-- WebSocket listeners off by default.
-- key material defaults such as `kf`, `kh`, `kl`, `kx`, `sb`.
-- `server.subnet = true`.
-- `server.mapping = true`.
-- server IPv6 disabled by default.
-- client GUID sentinel value.
-- client bandwidth limit `0`.
-- Windows-only `paper_airplane.tcp = true`.
-- `virr.update-interval = 86400`.
-- `virr.retry-interval = 300`.
-- `vbgp.update-interval = 3600`.
+| Field | Default | Reason |
+|-------|---------|--------|
+| `concurrent` | `Thread::GetProcessorCount()` | Use all available CPU cores |
+| `cdn[*]` | `IPEndPoint::MinPort` (0) | Disabled until explicitly set |
+| `udp.dns.timeout` | 4000 ms | Reasonable DNS query timeout |
+| `udp.dns.ttl` | 60 s | DNS cache entry TTL |
+| `udp.inactive.timeout` | 72 s | UDP relay idle timeout |
+| `tcp.inactive.timeout` | 300 s | TCP relay idle timeout |
+| `tcp.connect.timeout` | 15 s | TCP connect attempt timeout |
+| `tcp.listen.backlog` | 511 | Standard listen backlog |
+| `websocket.listen.ws.port` | 0 | WS disabled |
+| `websocket.listen.wss.port` | 0 | WSS disabled |
+| `key.kf` | 154 | Default XOR masking seed |
+| `key.kh` | 181 | Default header shuffle seed |
+| `key.kl` | 152 | Default length encoding seed |
+| `key.kx` | 191 | Default extra masking seed |
+| `key.sb` | 0 | Default seed baseline |
+| `key.masked` | `true` | Payload XOR masking on |
+| `key.delta_encode` | `true` | Delta encoding on |
+| `key.shuffle_data` | `true` | Byte shuffling on |
+| `server.subnet` | `true` | Server LAN subnet advertising on |
+| `server.mapping` | `true` | Port mapping on |
+| `server.ipv6.mode` | disabled | IPv6 off by default |
+| `client.guid` | sentinel UUID | Placeholder GUID |
+| `client.bandwidth` | 0 (unlimited) | No bandwidth cap |
+| `virr.update-interval` | 86400 s (1 day) | IP list refresh once per day |
+| `virr.retry-interval` | 300 s (5 min) | Retry after download failure |
+| `vbgp.update-interval` | 3600 s (1 hour) | Route refresh once per hour |
 
-These defaults are important because they describe the repository's safe boot posture.
+---
 
-## Meaning Of The Main Blocks
+## 5. Meaning Of The Main Blocks
 
 ### `concurrent`
 
-This is the process-level concurrency hint. It influences how the runtime expects to use CPU resources.
+This is the process-level concurrency hint. It directly sets the number of worker `io_context` threads spawned by `Executors::SetMaxThreads()`. Setting it to 1 creates a single-threaded event loop; setting it to the CPU core count creates a fully parallel pool. Values below 1 are reset to the CPU count by `Loaded()`.
 
 ### `cdn`
 
-These are listen-related defaults for some service channels.
+CDN ports define listen endpoints for additional service channels. Each entry is an `IPEndPoint`. `IPEndPoint::MinPort` (0) means that entry is disabled. These are used when the server needs to listen on multiple ports for load-balancing or CDN relay scenarios.
 
 ### `ip`
 
-Holds public and interface IP strings used by the launcher.
+Holds two string fields:
+- `ip.public` — the server's publicly reachable IP address, advertised to clients in the INFO frame.
+- `ip.interface` — the local interface IP to bind listeners to. Empty string means bind to `0.0.0.0` (all interfaces).
 
 ### `udp`
 
-Contains UDP timeout policy, DNS policy, listener port, and static UDP policy.
+Contains all UDP policy:
+- `udp.listen.port` — UDP relay listen port.
+- `udp.inactive.timeout` — how long a UDP relay socket is kept alive after the last packet.
+- `udp.dns.timeout` — timeout for DNS queries forwarded through the tunnel.
+- `udp.dns.ttl` — how long resolved DNS entries are cached in the namespace cache.
+- `udp.dns.redirect` — comma-separated list of DNS server IPs to redirect queries to.
+- `udp.static.port` — static UDP relay port (for fixed-port static mappings).
 
 ### `tcp`
 
-Contains TCP timeouts, connect policy, listen port, backlog, and fast open settings.
+Contains TCP socket policy:
+- `tcp.listen.port` — main TCP tunnel listen port.
+- `tcp.connect.timeout` — timeout for client-side outbound TCP connect attempts.
+- `tcp.inactive.timeout` — idle session timeout; sessions with no traffic for this duration are disposed.
+- `tcp.turbo` — disables Nagle algorithm (`TCP_NODELAY`) for lower latency at the cost of higher packet rate.
+- `tcp.fast-open` — enables TCP Fast Open where supported.
+- `tcp.backlog` — listen queue depth; higher values prevent connection drops under burst load.
 
 ### `mux`
 
-Controls multiplexing timeouts and keepalive behavior.
+Controls multiplexing channel behavior:
+- `mux.connect.timeout` — timeout for MUX sub-connection establishment.
+- `mux.inactive.timeout` — idle timeout for MUX sub-connections.
+- `mux.keepalive.timeout` — MUX keepalive interval.
+- `mux.max-connections` — maximum number of parallel MUX sub-connections per session.
 
 ### `websocket`
 
-Groups WebSocket listen settings, TLS settings, host/path, and HTTP header customization.
+Groups WebSocket carrier configuration:
+- `websocket.host` — HTTP Host header value for the WebSocket upgrade request.
+- `websocket.path` — HTTP path for the WebSocket upgrade (e.g., `/vpn`).
+- `websocket.listen.ws.port` — plain WebSocket listen port (0 = disabled).
+- `websocket.listen.wss.port` — TLS WebSocket listen port (0 = disabled).
+- `websocket.ssl.*` — TLS certificate, private key, CA bundle, and verification settings.
+- `websocket.http.request` / `websocket.http.response` — custom HTTP header injection for the WebSocket upgrade request/response.
+
+Both listeners are disabled by `Loaded()` if `host` or `path` is empty or if required TLS files are invalid.
 
 ### `key`
 
-Defines protocol identity and packet transformation policy.
+Defines protocol identity and packet transformation policy:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `kf` | uint8 | Packet-level XOR masking factor seed |
+| `kh` | uint8 | Header shuffle seed |
+| `kl` | uint8 | Length encoding seed |
+| `kx` | uint8 | Extra masking factor |
+| `sb` | uint8 | Seed baseline added to random seed byte |
+| `protocol` | string | Protocol-layer cipher name (e.g., `aes-128-cfb`) |
+| `protocol-key` | string | Protocol-layer cipher key string |
+| `transport` | string | Transport-layer cipher name (e.g., `aes-256-cfb`) |
+| `transport-key` | string | Transport-layer cipher key string |
+| `masked` | bool | Enable payload XOR masking |
+| `delta_encode` | bool | Enable delta encoding of header |
+| `shuffle_data` | bool | Enable deterministic byte shuffling |
+| `plaintext` | bool | Disable all cipher protection (debug/testing only) |
+
+Unsupported cipher names fall back to a no-op cipher (equivalent to `plaintext = true`) and a warning is set in diagnostics.
 
 ### `vmem`
 
-Defines memory-backed virtual file behavior.
+Defines memory-backed virtual file behavior used for session scratch storage:
+- `vmem.path` — filesystem path for the virtual memory file.
+- `vmem.size` — size in bytes. Values below 1 disable vmem entirely.
 
 ### `server`
 
-Defines server-side node identity, logging, backend, and IPv6 behavior.
+Defines server-side node identity and behavior:
+- `server.node` — integer node ID; clamped to ≥ 0 by `Loaded()`.
+- `server.backend` — WebSocket URL of the Go management backend (empty = disabled).
+- `server.log` — log file path (empty = disabled).
+- `server.subnet` — enable LAN subnet advertisement to clients.
+- `server.mapping` — enable static port mapping.
+- `server.ipv6` — IPv6 transit plane configuration (mode, CIDR, prefix-length, gateway, static addresses).
 
 ### `client`
 
-Defines client-side identity, server target, proxy surfaces, route mappings, and restart behavior.
+Defines client-side identity, target server, and traffic policy:
+- `client.guid` — client identity UUID; used in session identification.
+- `client.bandwidth` — upload/download bandwidth cap in bytes/second (0 = unlimited).
+- `client.server.host` / `client.server.port` — VPN server address.
+- `client.http.proxy.*` — HTTP CONNECT proxy settings.
+- `client.routes` — static routes to inject into the OS routing table.
+- `client.mappings` — static port mapping declarations (array of `{local, remote}` endpoint pairs).
+- `client.static.port` — static tunnel port for server-side static mapping.
+- `client.tun.*` — virtual adapter configuration (IP, gateway, mask, name).
+- `client.dns-rules` — DNS split-tunneling rules file path.
 
 ### `virr`
 
-Controls automatic IP-list refresh cadence.
+Controls automatic IP-list (bypass list) refresh:
+- `virr.file` — source URL or file path for the IP list download.
+- `virr.update-interval` — refresh interval in seconds (clamped to ≥ 1).
+- `virr.retry-interval` — interval before retrying a failed download (clamped to ≥ 1).
 
 ### `vbgp`
 
-Controls periodic vBGP route refresh cadence.
+Controls periodic vBGP route refresh from the server:
+- `vbgp.server` — vBGP server URL.
+- `vbgp.update-interval` — route refresh interval in seconds (clamped to ≥ 1).
 
-## Normalization Rules From `Loaded()`
+---
 
-`Loaded()` does the real shaping work. Notable rules:
+## 6. Normalization Rules From `Loaded()`
 
-- `concurrent < 1` resets to CPU count.
-- `server.node` is clamped to `>= 0`.
-- `server.ipv6.prefix_length` is clamped to the IPv6 prefix range.
-- non-positive timeouts fall back to defaults.
-- invalid ports become `IPEndPoint::MinPort`.
-- negative keepalive counts become `0`.
-- string fields are trimmed before use.
-- empty client GUID falls back to the sentinel GUID.
-- invalid IP strings are cleared.
-- unsupported key protocol or transport names fall back to defaults.
-- WebSocket serving is disabled when host/path or certificates are invalid.
-- `vmem` is cleared if path is empty or size is below `1`.
-- `server.ipv6.static_addresses` is filtered to valid, unique, in-prefix IPv6 entries.
-- `virr.update-interval` and `vbgp.update-interval` are clamped to at least `1`.
-- `virr.retry-interval` is clamped to at least `1`.
+`Loaded()` does the real shaping work. The rules, in category order:
 
 ```mermaid
 flowchart TD
-    A[Raw JSON] --> B[Trim strings]
-    B --> C[Clamp numbers]
-    C --> D[Validate IPs and ports]
-    D --> E[Disable unsupported subfeatures]
-    E --> F[Derived runtime config]
+    A["Raw JSON merged into AppConfiguration"] --> B["Trim all string fields\n(remove leading/trailing whitespace)"]
+    B --> C["Clamp numeric fields\n(concurrent ≥ 1, ports ≥ 0, timeouts > 0)"]
+    C --> D["Validate IPs and ports\n(clear invalid values)"]
+    D --> E["Validate TLS files\n(disable WS/WSS if cert/key missing)"]
+    E --> F["Validate IPv6 block\n(disable if mode/CIDR/prefix invalid)"]
+    F --> G["Rebuild client.mappings\n(filter out invalid endpoint pairs)"]
+    G --> H["Validate key material\n(fallback to no-op cipher if unsupported name)"]
+    H --> I["Validate vmem\n(disable if path empty or size < 1)"]
+    I --> J["Clamp interval fields\n(virr, vbgp: ≥ 1 second)"]
+    J --> K["Clear client.guid if empty\n(insert sentinel UUID)"]
+    K --> L["Final runtime-ready AppConfiguration"]
 ```
 
-## Derived State Is Important
+Notable normalization rules:
+
+- `concurrent < 1` resets to `Thread::GetProcessorCount()`.
+- `server.node < 0` is clamped to 0.
+- `server.ipv6.prefix_length` is clamped to `[1, 128]`.
+- Non-positive timeouts fall back to their `Clear()` defaults.
+- Invalid port numbers become `IPEndPoint::MinPort` (0 = disabled).
+- Negative keepalive counts become 0 (disabled).
+- String fields are trimmed before use (leading/trailing spaces removed).
+- Empty client GUID falls back to the sentinel GUID.
+- Invalid IP strings are cleared to empty string.
+- Unsupported cipher protocol/transport names fall back to no-op cipher.
+- WebSocket serving is disabled when host/path is empty or certificates are invalid.
+- `vmem` is cleared if path is empty or size is below 1.
+- `server.ipv6.static_addresses` is filtered: only valid, unique, in-prefix IPv6 addresses are kept.
+- `virr.update-interval` is clamped to ≥ 1.
+- `virr.retry-interval` is clamped to ≥ 1.
+- `vbgp.update-interval` is clamped to ≥ 1.
+
+---
+
+## 7. Derived State Is Important
 
 `Loaded()` is not just input validation. It derives runtime-ready state.
 
 Examples:
 
-- If the websocket host/path pair is unusable, the subsystem is turned off.
-- If IPv6 mode is unsupported by the platform, related fields are cleared.
-- If the client GUID is empty, a deterministic fallback is inserted.
-- If static addresses are invalid, they are removed rather than preserved.
+- If the websocket host/path pair is unusable, the WS and WSS listeners are disabled — the server will not attempt to bind a port that cannot function correctly.
+- If IPv6 mode is unsupported by the platform, related fields are cleared — the IPv6 code paths will not run.
+- If the client GUID is empty, a deterministic fallback is inserted — the session will have a valid identity even if the config omitted it.
+- If static addresses are invalid (not in the configured prefix), they are removed rather than preserved — the IPv6 assignment table will not contain garbage entries.
 
 This is why `AppConfiguration` is more like a configuration compiler than a passive struct.
 
-## IPv6 Server Behavior
+---
 
-IPv6 server mode is not just a boolean. `Loaded()` validates mode, CIDR, prefix length, gateway, and static address map.
+## 8. IPv6 Server Configuration
 
-If server IPv6 support is unavailable, the IPv6 server settings are disabled and related fields are cleared. If the configured prefix is invalid, the IPv6 server feature is disabled.
+IPv6 server mode is not just a boolean. `Loaded()` validates a chain of dependent fields:
+
+| Field | Validation Rule |
+|-------|----------------|
+| `server.ipv6.mode` | Must be `ula`, `gua`, or similar recognized string |
+| `server.ipv6.cidr` | Must parse as a valid IPv6 CIDR block |
+| `server.ipv6.prefix_length` | Must be in `[1, 128]` |
+| `server.ipv6.gateway` | Must be a valid IPv6 address within the CIDR |
+| `server.ipv6.static_addresses` | Each entry must be valid IPv6 and within CIDR |
+
+If any required field is invalid, the entire IPv6 server feature is disabled for that run:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Disabled
-    Disabled --> Validating
-    Validating --> Enabled: mode + CIDR + prefix ok
-    Validating --> Disabled: invalid or unsupported
+    [*] --> Disabled : Clear() default
+    Disabled --> Validating : Loaded() runs
+    Validating --> Enabled : mode + CIDR + prefix_length + gateway all valid
+    Validating --> Disabled : any field invalid or platform unsupported
+    Enabled --> Running : server starts
+    Running --> Disabled : FinalizeServerEnvironment() on shutdown
 ```
 
-## WebSocket Behavior
+---
 
-WebSocket serving depends on a valid host name and path. If those are not valid, both listeners are disabled. If `wss` is disabled, certificate-related fields are cleared.
+## 9. WebSocket Carrier Validation
 
-The important point is that transport policy is not considered valid just because the user typed a string. The runtime checks that the string combination is coherent.
+WebSocket serving depends on a valid host name, a valid path, and (for WSS) valid TLS certificate files:
 
-## Client Routing Data
+```mermaid
+flowchart TD
+    A["Loaded() websocket block"] --> B{"host empty?"}
+    B -->|"yes"| C["disable WS and WSS\n(set ports to 0)"]
+    B -->|"no"| D{"path empty?"}
+    D -->|"yes"| C
+    D -->|"no"| E{"wss.port > 0?"}
+    E -->|"yes"| F{"certificate file readable?"}
+    F -->|"no"| G["disable WSS\n(set wss.port to 0)\nclear ssl fields"]
+    F -->|"yes"| H{"private key file readable?"}
+    H -->|"no"| G
+    H -->|"yes"| I["WSS enabled"]
+    E -->|"no"| J["WS-only (no TLS)"]
+    I --> K["WebSocket subsystem active"]
+    J --> K
+```
 
-`client.mappings` is rebuilt from validated mapping entries. The loader accepts either one mapping object or an array of mappings. Invalid endpoints, invalid IPs, and multicast addresses are rejected.
+---
 
-That means mapping configuration is converted into a normalized runtime table, not copied verbatim.
+## 10. Client Route Mappings
 
-## CLI And JSON
+`client.mappings` is rebuilt from validated mapping entries. The loader accepts either one mapping object or an array of mappings. For each entry:
+
+1. Parse `local` as a valid `IPEndPoint` (host + port).
+2. Parse `remote` as a valid `IPEndPoint`.
+3. Reject entries where either endpoint has an invalid IP or port.
+4. Reject multicast and loopback addresses.
+5. Deduplicate by local endpoint.
+
+The result is a normalized `std::vector<MappingEntry>` where every entry is guaranteed to have valid, non-overlapping endpoints. Invalid entries are silently removed rather than causing startup failure — this ensures a partially valid mapping list still produces a functional configuration.
+
+---
+
+## 11. CLI And JSON Relationship
 
 JSON config is durable node intent. CLI values are launch-local overrides.
 
-- `--mode` chooses client or server.
-- `--dns` populates local DNS input for the current run.
-- `--nic`, `--ngw`, `--tun-*`, `--bypass*`, and `--dns-rules` shape the current host environment.
-
 ```mermaid
 flowchart LR
-    A[JSON file] --> B[Persistent intent]
-    C[CLI] --> D[Launch-local override]
-    B --> E[AppConfiguration]
-    D --> E
-    E --> F[Runtime objects]
+    A["appsettings.json\n(persisted node shape)"] --> C["AppConfiguration"]
+    B["CLI args\n(launch-local host shape)"] --> C
+    C --> D["ITransmission factory"]
+    C --> E["VEthernet / ITap factory"]
+    C --> F["VirtualEthernetSwitcher"]
+    C --> G["IPv6 auxiliary"]
 ```
 
-## Key Material And Mode
+The CLI layer (`main.cpp::GetNetworkInterface`) writes fields into a `NetworkInterface` struct that is later applied on top of the loaded configuration. CLI-settable values:
 
-The `key` block deserves special attention because it controls more than encryption names.
+| CLI Flag | Overrides |
+|---------|-----------|
+| `--mode` | Chooses client or server branch |
+| `--dns` | `NetworkInterface::DnsAddresses` |
+| `--nic` | Physical NIC selection |
+| `--ngw` | Physical gateway |
+| `--tun-ip` / `--tun-gw` / `--tun-mask` | Virtual adapter addressing |
+| `--bypass` | Bypass IP list file(s) |
+| `--dns-rules` | DNS rules file |
+| `--firewall-rules` | Firewall rules file |
 
-It carries:
+---
 
-- `kf`, `kh`, `kl`, `kx`, `sb`.
-- protocol identity string.
-- transport identity string.
-- protocol key string.
-- transport key string.
-- `masked`, `plaintext`, `delta_encode`, `shuffle_data`.
+## 12. Key Material And Cipher Mode Details
 
-These fields influence the packet transform pipeline directly.
+The `key` block controls more than encryption names. The full set of flags that influence the packet transform pipeline:
 
-## Runtime Shape And Configuration
+```mermaid
+graph TD
+    KEY["key block"] --> KF["kf: XOR mask seed\n(uint8, default 154)"]
+    KEY --> KH["kh: header shuffle seed\n(uint8, default 181)"]
+    KEY --> KL["kl: length encoding seed\n(uint8, default 152)"]
+    KEY --> KX["kx: extra mask factor\n(uint8, default 191)"]
+    KEY --> SB["sb: seed baseline\n(uint8, default 0)"]
+    KEY --> PROTO["protocol: cipher name\n+ protocol-key: cipher key"]
+    KEY --> TRANS["transport: cipher name\n+ transport-key: cipher key"]
+    KEY --> FLAGS["masked: XOR masking on/off\ndelta_encode: delta enc on/off\nshuffle_data: byte shuffle on/off\nplaintext: disable all ciphers"]
+```
+
+Setting `plaintext = true` disables all cipher protection — the `protocol_` and `transport_` slots are replaced with no-op pass-through implementations. This is useful for debugging but must never be used in production.
+
+---
+
+## 13. Runtime Shape And Configuration
 
 The configuration decides the shape of the runtime:
 
-- whether a client proxy exists.
-- whether a server backend exists.
-- whether IPv6 is enabled.
-- whether static mode and subnet mode are active.
-- whether TCP/WebSocket listeners are present.
-- which routes and DNS servers are protected.
+| Config Field | Runtime Effect |
+|-------------|---------------|
+| `concurrent` | Number of worker `io_context` threads |
+| `tcp.listen.port > 0` | TCP acceptor is created |
+| `websocket.listen.ws.port > 0` | WS acceptor is created |
+| `websocket.listen.wss.port > 0` | WSS acceptor with TLS is created |
+| `server.backend` non-empty | Go management backend connection is attempted |
+| `server.ipv6.mode` valid | IPv6 data plane is initialized |
+| `client.http.proxy.*` set | CONNECT-through-proxy mode for outbound connection |
+| `client.bandwidth > 0` | `ITransmissionQoS` rate limiter is attached |
+| `client.mappings` non-empty | Static port mapping table is built |
+| `vmem.path` non-empty | Memory-backed scratch file is created |
 
-## What To Watch For When Reading The Code
+---
 
-1. A field might be present in JSON but removed in `Loaded()`.
-2. A missing field may intentionally fall back to a safe default.
+## 14. What To Watch For When Reading The Code
+
+1. A field might be present in JSON but removed in `Loaded()` — always read `Loaded()` logic before assuming a field from JSON is available at runtime.
+2. A missing field may intentionally fall back to a safe default from `Clear()`.
 3. A platform-specific branch may clear or ignore fields that are otherwise valid on another OS.
-4. The runtime may treat a field as policy input rather than a direct command.
+4. The runtime may treat a field as policy input rather than a direct command (e.g., `server.ipv6` enables a whole subsystem, not just one flag).
+5. `AppConfiguration` is not `const` after construction — `Loaded()` modifies it in place.
 
-## Practical Rule
+---
 
-Use JSON for persistent node shape. Use CLI for host-specific startup shape. Do not expect CLI to replace the configuration model.
+## 15. Complete `appsettings.json` Template
 
-## Deep Structure Notes
+```json
+{
+  "concurrent": 4,
+  "cdn": [],
+  "ip": {
+    "public": "",
+    "interface": ""
+  },
+  "udp": {
+    "listen": { "port": 0 },
+    "inactive": { "timeout": 72 },
+    "dns": {
+      "timeout": 4000,
+      "ttl": 60,
+      "redirect": ""
+    },
+    "static": { "port": 0 }
+  },
+  "tcp": {
+    "listen": { "port": 2096, "backlog": 511 },
+    "connect": { "timeout": 15 },
+    "inactive": { "timeout": 300 },
+    "turbo": true,
+    "fast-open": false
+  },
+  "mux": {
+    "connect": { "timeout": 15 },
+    "inactive": { "timeout": 300 },
+    "keepalive": { "timeout": 60 },
+    "max-connections": 8
+  },
+  "websocket": {
+    "host": "",
+    "path": "",
+    "listen": {
+      "ws": { "port": 0 },
+      "wss": { "port": 0 }
+    },
+    "ssl": {
+      "certificate": "",
+      "certificate-key": "",
+      "ca-certificate": "",
+      "verify-peer": false
+    }
+  },
+  "key": {
+    "kf": 154,
+    "kh": 181,
+    "kl": 152,
+    "kx": 191,
+    "sb": 0,
+    "protocol": "aes-128-cfb",
+    "protocol-key": "ChangeThisProtocolKey",
+    "transport": "aes-256-cfb",
+    "transport-key": "ChangeThisTransportKey",
+    "masked": true,
+    "plaintext": false,
+    "delta_encode": true,
+    "shuffle_data": true
+  },
+  "server": {
+    "node": 0,
+    "log": "",
+    "backend": "",
+    "subnet": true,
+    "mapping": true,
+    "ipv6": {
+      "mode": "",
+      "cidr": "",
+      "prefix-length": 0,
+      "gateway": ""
+    }
+  },
+  "client": {
+    "guid": "00000000-0000-0000-0000-000000000000",
+    "bandwidth": 0,
+    "server": {
+      "host": "your-server.example.com",
+      "port": 2096
+    },
+    "http": {
+      "proxy": {
+        "host": "",
+        "port": 0,
+        "username": "",
+        "password": ""
+      }
+    },
+    "routes": [],
+    "mappings": [],
+    "static": { "port": 0 },
+    "dns-rules": ""
+  },
+  "virr": {
+    "file": "",
+    "update-interval": 86400,
+    "retry-interval": 300
+  },
+  "vbgp": {
+    "server": "",
+    "update-interval": 3600
+  }
+}
+```
 
-The config object is also a bridge between layers:
-
-- transport settings feed `ITransmission`
-- key and framing settings feed packet transforms
-- server settings feed listener and management setup
-- client settings feed host shaping and proxy behavior
-- host-local overrides feed `main.cpp`
-
-This is why the configuration file should be thought of as a node contract, not as a dump of knobs.
+---
 
 ## Related Documents
 
-- `README.md`
-- `CLI_REFERENCE.md`
-- `TRANSMISSION.md`
-- `ARCHITECTURE.md`
-
-## Main Conclusion
-
-`AppConfiguration` is a policy compiler for the runtime. It converts untrusted or incomplete input into a constrained, platform-aware, runtime-ready shape.
+- [`README.md`](../README.md) — Quick-start guide
+- [`CLI_REFERENCE.md`](CLI_REFERENCE.md) — All command-line flags
+- [`TRANSMISSION.md`](TRANSMISSION.md) — Transport carrier and cipher details
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — System architecture overview
+- [`SECURITY.md`](SECURITY.md) — Security architecture and threat model
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deployment and operational guidance

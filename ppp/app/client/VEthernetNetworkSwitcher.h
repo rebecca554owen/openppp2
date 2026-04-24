@@ -304,6 +304,22 @@ namespace ppp {
                 ppp::string                                                         RequestedIPv6() noexcept { return requested_ipv6_; }
 
                 /**
+                 * @brief Returns the last IPv6 address successfully applied to the local NIC.
+                 *
+                 * @details Populated inside ApplyAssignedIPv6() on every successful apply.
+                 *          Callers such as SendRequestedIPv6Configuration() use this as a
+                 *          sticky hint so a reconnect can re-request the same address when
+                 *          the user has not configured an explicit RequestedIPv6() preference.
+                 *
+                 * @return The last-applied IPv6 address, or a default-constructed (unspecified)
+                 *         address when no assignment has ever been applied.
+                 * @note   Thread-safe only when called from the same IO-context strand as
+                 *         ApplyAssignedIPv6().  Do not call from an unrelated thread without
+                 *         external synchronisation.
+                 */
+                boost::asio::ip::address                                            LastAssignedIPv6() noexcept { return last_assigned_ipv6_; }
+
+                /**
                  * @brief Gets the QoS controller used by transport channels.
                  * @return Shared ITransmissionQoS; null if QoS is not enabled.
                  */
@@ -983,12 +999,33 @@ namespace ppp {
                 std::shared_ptr<aggligator::aggligator>                             aggligator_;
                 /** @brief Optional proxy forwarding helper. */
                 IForwardingPtr                                                      forwarding_;
-                /** @brief Last received extended server information. */
+                /**
+                 * @brief Last received extended server information block.
+                 *
+                 * @details Populated inside the exchanger coroutine on the owning
+                 *          io_context strand.  All reads and writes of this field MUST
+                 *          execute on that same strand; no additional mutex is required
+                 *          because the strand already provides exclusive access.
+                 *
+                 * @warning Do NOT read this field from an unrelated thread or a different
+                 *          strand without external synchronisation.  The exchanger strand
+                 *          is the sole owner of this object's lifetime during the session.
+                 */
                 VirtualEthernetInformationExtensions                                information_extensions_;
                 /** @brief Whether a server-assigned IPv6 configuration is currently applied. */
                 bool                                                                ipv6_applied_ = false;
                 /** @brief IPv6 assignment state used for OS-level rollback. */
                 IPv6AppliedState                                                    ipv6_state_;
+                /**
+                 * @brief The IPv6 address most recently and successfully applied to the local NIC.
+                 *
+                 * @details Written by ApplyAssignedIPv6() on every successful apply.  Read by
+                 *          LastAssignedIPv6() so that SendRequestedIPv6Configuration() can
+                 *          supply a sticky hint on reconnect when the user has not set an
+                 *          explicit RequestedIPv6() preference.  Default-initialised to the
+                 *          unspecified address; callers must check is_v6() before use.
+                 */
+                boost::asio::ip::address                                            last_assigned_ipv6_;
                 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 /** @brief Mutex guarding the default-route guard worker. */

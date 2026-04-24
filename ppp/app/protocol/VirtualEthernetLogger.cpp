@@ -657,7 +657,7 @@ namespace ppp {
                             payload_bytes = std::max<int>(0, l4_len - tcp_hdr_len);
                         }
                     }
-                    else if (transport_protocol_number == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
+                    elif (transport_protocol_number == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
                         ppp::net::native::udp_hdr* udp = ppp::net::native::udp_hdr::Parse(v4, packet, packet_length);
                         if (udp) {
                             source_port = ntohs(udp->src);
@@ -702,7 +702,7 @@ namespace ppp {
                                     payload_bytes = std::max<int>(0, l4_len - tcp_hdr_len);
                                     ipv6_l4_parsed = true;
                                 }
-                                else if (next_header == ppp::net::native::ip_hdr::IP_PROTO_UDP && l4_len >= static_cast<int>(sizeof(ppp::net::native::udp_hdr))) {
+                                elif (next_header == ppp::net::native::ip_hdr::IP_PROTO_UDP && l4_len >= static_cast<int>(sizeof(ppp::net::native::udp_hdr))) {
                                     const ppp::net::native::udp_hdr* udp = reinterpret_cast<const ppp::net::native::udp_hdr*>(l4);
                                     source_port = ntohs(udp->src);
                                     destination_port = ntohs(udp->dest);

@@ -28,6 +28,36 @@ Each `io_context` instance maintains a run queue of ready handlers. OS threads c
 
 `Executors::Spawn` creates a stackful coroutine and posts it to the appropriate strand. `YieldContext` captures the coroutine's resume handle. When an async operation completes, its completion handler resumes the coroutine via the yield context. The coroutine then continues executing until it yields again or returns.
 
+### Relationship Between EDSM Layers
+
+```mermaid
+graph TD
+    subgraph ProcessLevel["Process Level"]
+        CTX["io_context thread pool\n(Executors)"]
+        STRAND["asio::strand per session"]
+    end
+
+    subgraph SessionLevel["Session Level"]
+        CO["YieldContext coroutine\n(per session)"]
+        SM["State Machine\n(lifecycle flags + state enum)"]
+        TS["last_, next_ka_, disposed_\n(strand-protected state)"]
+    end
+
+    subgraph ProtocolLevel["Protocol Level"]
+        LL["VirtualEthernetLinklayer\n(PacketInput dispatch)"]
+        VE["VEthernet\n(TAP + lwIP)"]
+        TX["ITransmission\n(cipher + framing)"]
+    end
+
+    CTX --> STRAND
+    STRAND --> CO
+    CO --> SM
+    SM --> TS
+    CO --> LL
+    LL --> VE
+    LL --> TX
+```
+
 ---
 
 ## 2. VirtualEthernetLinklayer State Machine
@@ -68,7 +98,7 @@ stateDiagram-v2
 
 ### PacketAction Opcodes and Their Role in State Transitions
 
-The `PacketAction` enum defines 17 opcodes. `PacketInput` reads the first byte of every inbound frame, selects the opcode, parses the remaining wire format, and calls the corresponding `On*` virtual method. The table below maps each opcode to its wire role and the state change it may trigger in derived classes.
+The `PacketAction` enum defines 21 opcodes. `PacketInput` reads the first byte of every inbound frame, selects the opcode, parses the remaining wire format, and calls the corresponding `On*` virtual method. The table below maps each opcode to its wire role and the state change it may trigger in derived classes.
 
 | Opcode | Hex | Direction | Wire Role | State Effect |
 |--------|-----|-----------|-----------|--------------|
@@ -94,6 +124,29 @@ The `PacketAction` enum defines 17 opcodes. `PacketInput` reads the first byte o
 | `PacketAction_FRP_DISCONNECT` | `0x24` | Bidirectional | FRP: notify connection closure. | `OnFrpDisconnect` closes FRP relay socket. |
 | `PacketAction_FRP_SENDTO` | `0x25` | Bidirectional | FRP: UDP datagram delivery on a registered port. | `OnFrpSendTo` forwards UDP payload via FRP UDP relay. |
 
+### Opcode Dispatch Flow
+
+```mermaid
+flowchart TD
+    A["ITransmission::Read() returns buffer"] --> B["PacketInput(transmission, buf, len, y)"]
+    B --> C["read opcode byte = buf[0]"]
+    C --> D{"opcode switch"}
+    D -->|"0x7E"| E["OnInformation()"]
+    D -->|"0x7F"| F["OnKeepAlived() — update last_"]
+    D -->|"0x28"| G["OnLan()"]
+    D -->|"0x29"| H["OnNat()"]
+    D -->|"0x2A"| I["OnConnect()"]
+    D -->|"0x2B"| J["OnConnectOK()"]
+    D -->|"0x2C"| K["OnPush()"]
+    D -->|"0x2D"| L["OnDisconnect()"]
+    D -->|"0x2E"| M["OnSendTo()"]
+    D -->|"0x2F/0x30"| N["OnEcho()"]
+    D -->|"0x31/0x32"| O["OnStatic()"]
+    D -->|"0x35/0x36"| P["OnMux()/OnMuxON()"]
+    D -->|"0x20-0x25"| Q["OnFrp*()"]
+    D -->|"unknown"| R["return false → Disposed"]
+```
+
 ### Keepalive / Heartbeat Mechanism
 
 `DoKeepAlived(transmission, now)` is called by a per-session timer, typically from the session scheduler on every tick. The logic is:
@@ -104,6 +157,30 @@ The `PacketAction` enum defines 17 opcodes. `PacketInput` reads the first byte o
 4. Schedule the next keep-alive at another random interval.
 
 The receiver side is simple: a `PacketAction_KEEPALIVED` frame updates `last_` and returns `true`. No acknowledgment is sent. The random payload prevents passive observers from identifying keep-alive traffic by size or period.
+
+```mermaid
+sequenceDiagram
+    participant TIMER as Session Timer
+    participant LL as VirtualEthernetLinklayer
+    participant TX as ITransmission
+
+    TIMER->>LL: DoKeepAlived(now)
+    LL->>LL: check now >= last_ + deadline
+    alt deadline exceeded
+        LL-->>TIMER: return false (dispose session)
+    end
+    LL->>LL: check now >= next_ka_
+    alt keepalive due
+        LL->>LL: generate random printable payload
+        LL->>TX: Write(0x7F + random_bytes)
+        LL->>LL: schedule next_ka_ = now + random_interval
+    end
+    LL-->>TIMER: return true (session alive)
+
+    Note over TX: Remote peer receives KEEPALIVED
+    TX-->>LL: PacketInput(0x7F, ...)
+    LL->>LL: update last_ = now
+```
 
 ---
 
@@ -136,6 +213,37 @@ stateDiagram-v2
     Open --> Disposed : TAP open failed\nor session aborted before start
 
     Disposed --> [*]
+```
+
+### VEthernet Data Plane Flows
+
+```mermaid
+graph LR
+    subgraph Outbound["Outbound: App → Tunnel"]
+        APP["OS Application\n(sends IP datagram)"]
+        TAP["TAP fd\n(kernel writes frame)"]
+        OPI["VEthernet::OnPacketInput\n(parse IP header)"]
+        LWIP["lwIP netif_input\n(TCP/UDP/ICMP dispatch)"]
+        DO["VirtualEthernetLinklayer\nDoSendTo / DoNat / DoConnect"]
+        WIRE["ITransmission::Write\n(encrypt + send)"]
+    end
+
+    subgraph Inbound["Inbound: Tunnel → App"]
+        RX["ITransmission::Read\n(decrypt + parse)"]
+        ON["VirtualEthernetLinklayer\nOnSendTo / OnNat / OnPush"]
+        OUT["VEthernet::Output\n(inject into TAP)"]
+        TAPOUT["TAP fd write\n(kernel delivers to app)"]
+    end
+
+    APP -->|"route via VPN NIC"| TAP
+    TAP --> OPI
+    OPI --> LWIP
+    LWIP --> DO
+    DO --> WIRE
+
+    RX --> ON
+    ON --> OUT
+    OUT --> TAPOUT
 ```
 
 ### How TAP Input Triggers State Transitions
@@ -198,6 +306,46 @@ stateDiagram-v2
     }
 ```
 
+### TCP Virtual Accept Retry Schedule
+
+The client-side virtual TCP stack (VTcpServer inside lwIP) retries `Accept()` on failure with an exponential-ish backoff schedule that avoids thundering-herd retries when the remote server is temporarily unreachable:
+
+| Retry Attempt | Wait (ms) |
+|---------------|-----------|
+| 1 | 200 |
+| 2 | 400 |
+| 3 | 800 |
+| 4 | 1200 |
+| 5 | 1600 |
+
+`EndAccept()` cancels any pending retry timer. `Finalize()` is the safety-fallback that cleans up after all retries are exhausted without a successful accept.
+
+```mermaid
+sequenceDiagram
+    participant LWIP as lwIP VTcpServer
+    participant TIMER as Retry Timer
+    participant SESS as VEthernetExchanger
+
+    LWIP->>LWIP: Accept() attempt
+    alt accept fails (remote unreachable)
+        LWIP->>TIMER: schedule retry at +200ms
+        TIMER-->>LWIP: fire after 200ms
+        LWIP->>LWIP: Accept() retry 1
+    end
+    alt still failing
+        LWIP->>TIMER: schedule retry at +400ms
+        TIMER-->>LWIP: fire after 400ms
+        LWIP->>LWIP: Accept() retry 2
+    end
+    alt success
+        LWIP->>SESS: EndAccept() — cancel timer
+        SESS->>SESS: session enters Active
+    end
+    alt all retries exhausted
+        LWIP->>LWIP: Finalize() — cleanup
+    end
+```
+
 ### Dispose Pattern
 
 Both client and server session objects follow a strict dispose pattern to prevent use-after-free in a multi-coroutine environment:
@@ -210,6 +358,19 @@ Both client and server session objects follow a strict dispose pattern to preven
 6. The session map entry is erased under whatever protection the switcher uses for that map.
 7. The `VEthernet` (if client) is disposed.
 8. The `shared_ptr` to the session object is released, triggering the destructor when the last reference is dropped.
+
+```mermaid
+flowchart TD
+    A["Dispose() called"] --> B{"disposed_ CAS\nexpected=false → true"}
+    B -->|"loses CAS"| C["already disposed — return immediately"]
+    B -->|"wins CAS"| D["cancel all timers"]
+    D --> E["close all relay TCP sockets\n(shutdown + close)"]
+    E --> F["close all UDP sockets"]
+    F --> G["release ITransmission\n(shared_ptr reset)"]
+    G --> H["erase session map entry\n(switcher-level protection)"]
+    H --> I["dispose VEthernet\n(if client)"]
+    I --> J["release session shared_ptr\n(→ destructor when refcount = 0)"]
+```
 
 ---
 
@@ -268,6 +429,137 @@ The diagram shows two threads competing to run handlers on the same strand. The 
 
 ---
 
+## 6. MUX Channel State Machine
+
+### Overview
+
+The MUX (multiplexing) subsystem allows a single tunnel session to carry multiple logical virtual channels, increasing throughput and resilience. When `--tun-mux=N` is set on the CLI, the client sends `PacketAction_MUX` to establish N parallel connections under one session.
+
+### MUX States
+
+| State | Description |
+|-------|-------------|
+| `Inactive` | MUX not requested; single-connection mode. |
+| `Requesting` | Client sent `PacketAction_MUX`; waiting for `PacketAction_MUXON`. |
+| `Active` | Server acknowledged with `MUXON`; multiple sub-connections active. |
+| `Teardown` | Session disposal triggered; sub-connections being closed. |
+
+### MUX Handshake
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    Note over C: --tun-mux=4 set on CLI
+    C->>S: PacketAction_MUX\n(vlan_id, max_connections=4, acceleration_flag)
+    S->>S: create MUX context for session
+    S->>C: PacketAction_MUXON\n(vlan_id, seq, ack)
+    Note over C,S: MUX Active — 4 sub-connections available
+    C->>S: data on sub-connection 0
+    C->>S: data on sub-connection 1
+    C->>S: data on sub-connection 2
+    C->>S: data on sub-connection 3
+```
+
+---
+
+## 7. FRP (Fast Reverse Proxy) State Machine
+
+### Overview
+
+FRP allows an external client to connect through the server's public port and have the tunnel forward that connection to a service running on the VPN client side. This is the reverse of normal VPN traffic flow.
+
+### FRP States
+
+| State | Description |
+|-------|-------------|
+| `Unregistered` | No FRP rule exists for this client. |
+| `Registered` | Client sent `FRP_ENTRY`; server has registered the port mapping. |
+| `Connecting` | External connection arrived; server sent `FRP_CONNECT` to client. |
+| `Tunneling` | Client acknowledged with `FRP_CONNECTOK`; data relay active. |
+| `Closed` | Either side sent `FRP_DISCONNECT`; relay cleaned up. |
+
+### FRP Connection Flow
+
+```mermaid
+sequenceDiagram
+    participant EXT as External Client
+    participant S as Server
+    participant C as VPN Client
+    participant SVC as Local Service
+
+    C->>S: PacketAction_FRP_ENTRY\n(proto=TCP, port=8080)
+    Note over S: register mapping: public port 8080 → this VPN session
+
+    EXT->>S: TCP connect to server:8080
+    S->>C: PacketAction_FRP_CONNECT\n(conn_id, direction=in, port=8080)
+    C->>SVC: TCP connect to localhost:8080
+    C->>S: PacketAction_FRP_CONNECTOK\n(conn_id, ERRORS_SUCCESS)
+
+    EXT->>S: TCP data
+    S->>C: PacketAction_FRP_PUSH\n(conn_id, data)
+    C->>SVC: forward data
+
+    SVC->>C: response data
+    C->>S: PacketAction_FRP_PUSH\n(conn_id, response)
+    S->>EXT: TCP response
+
+    EXT->>S: TCP FIN
+    S->>C: PacketAction_FRP_DISCONNECT\n(conn_id)
+    C->>SVC: close local connection
+```
+
+---
+
+## 8. Error Handling in State Transitions
+
+Every state transition that fails must:
+
+1. Call `ppp::diagnostics::SetLastErrorCode(ErrorCode::SomeCode)` with a specific code.
+2. Return the appropriate sentinel value (`false`, `-1`, or `NULLPTR`).
+3. Not leave the session in an undefined intermediate state.
+
+The calling layer (typically the session scheduler or the dispose chain) reads the error code via `GetLastErrorCode()` or the snapshot API and surfaces it to the Console UI status bar.
+
+```mermaid
+flowchart TD
+    A["State transition attempt"] --> B{"Transition succeeds?"}
+    B -->|"yes"| C["update state field\nreturn true / new state"]
+    B -->|"no"| D["SetLastErrorCode(ErrorCode::XYZ)"]
+    D --> E["return false / -1 / NULLPTR\n(sentinel)"]
+    E --> F["caller checks sentinel"]
+    F --> G["Dispose() if fatal\nor retry if transient"]
+```
+
+### Common Error Codes for State Transitions
+
+| Error Code | When Set |
+|------------|----------|
+| `SessionHandshakeFailed` | Handshake timed out or received malformed response |
+| `SessionInformationInvalid` | INFO frame carried invalid quota or address data |
+| `ProtocolKeepAliveTimeout` | `DoKeepAlived()` determined deadline exceeded |
+| `TunnelReadFailed` | `ITransmission::Read()` returned null |
+| `TunnelWriteFailed` | `ITransmission::Write()` returned false |
+| `SessionDisposed` | Handler entered already-disposed session |
+| `RuntimeCoroutineSpawnFailed` | `YieldContext::Spawn()` failed to allocate stack |
+
+---
+
+## 9. Diagnostics and Observability
+
+Session state transitions are observable through two mechanisms:
+
+**Thread-local error codes**: `GetLastErrorCode()` returns the most recent error set by the calling thread. This is the first line of diagnostics when a single transition fails.
+
+**Process-wide error snapshot**: `GetLastErrorCodeSnapshot()` and `GetLastErrorTimestamp()` return the last error that was published process-wide. The Console UI status bar uses these to show the most recent failure without polling individual threads.
+
+**ConsoleUI Info Output**: The `openppp2 info` command in the Console UI prints a snapshot of the current session state, including VPN state, session count, bandwidth, and error snapshot.
+
+See `DIAGNOSTICS_ERROR_SYSTEM.md` for the full diagnostics API.
+
+---
+
 ## Related Documents
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)
@@ -276,3 +568,5 @@ The diagram shows two threads competing to run handlers on the same strand. The 
 - [`HANDSHAKE_SEQUENCE.md`](HANDSHAKE_SEQUENCE.md)
 - [`SOURCE_READING_GUIDE.md`](SOURCE_READING_GUIDE.md)
 - [`PACKET_LIFECYCLE.md`](PACKET_LIFECYCLE.md)
+- [`DIAGNOSTICS_ERROR_SYSTEM.md`](DIAGNOSTICS_ERROR_SYSTEM.md)
+- [`ERROR_CODES.md`](ERROR_CODES.md)

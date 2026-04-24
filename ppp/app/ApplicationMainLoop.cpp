@@ -218,6 +218,39 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
             }
         }
 
+        // IPv6 transit-plane state: only meaningful in server mode.
+        if (NULLPTR != server_) {
+            uint8_t ipv6_st = server_->GetIPv6RuntimeState();
+            ppp::string line = "inet6               : ";
+            switch (ipv6_st) {
+                case 1:
+                    line += "nat66";
+                    break;
+                case 2:
+                    line += "gua";
+                    break;
+                case 3: {
+                    // Plane failed: append the diagnostic error string when available.
+                    uint32_t cause = server_->GetIPv6RuntimeCause();
+                    line += "failed";
+                    if (0 != cause) {
+                        using namespace ppp::diagnostics;
+                        const char* msg = FormatErrorString(static_cast<ErrorCode>(cause));
+                        if (NULLPTR != msg && '\0' != *msg) {
+                            line += " (";
+                            line += msg;
+                            line += ")";
+                        }
+                    }
+                    break;
+                }
+                default:
+                    line += "off";
+                    break;
+            }
+            info.emplace_back(std::move(line));
+        }
+
         ConsoleUI::GetInstance().SetInfoLines(info);
     }
 

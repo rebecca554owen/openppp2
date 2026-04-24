@@ -481,7 +481,7 @@ namespace ppp {
                             }
                         }
                         // Handle common host:port format (IPv4/domain).
-                        else if (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
+                        elif (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
                             port = atoi(p + 1);
                             if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
                                 port = PPP_HTTP_SYS_PORT;
@@ -646,7 +646,7 @@ namespace ppp {
                             protocolRoot->Host = host + ":443";
                         }
                     }
-                    else if (host.find(':') == ppp::string::npos) {
+                    elif (host.find(':') == ppp::string::npos) {
                         protocolRoot->Host = host + ":80";
                     }
 

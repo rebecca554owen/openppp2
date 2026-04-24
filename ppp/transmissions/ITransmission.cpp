@@ -305,7 +305,7 @@ namespace ppp {
 
                     f = RandomNext('\x20', '\x7e');
                 }
-                else if ((k & '\x01') == '\x00') {
+                elif ((k & '\x01') == '\x00') {
                     if (++k > '\x7e') {
                         k = '\x21';
                     }
