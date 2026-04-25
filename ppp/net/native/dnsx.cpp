@@ -233,7 +233,7 @@ namespace ppp {
                 {
                     // Validate that predicates are callable.
                     if (false == static_cast<bool>(fPredicateB) || false == static_cast<bool>(fPredicateE)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsxExtractHostNullPredicate);
                         return ppp::string();
                     }
 

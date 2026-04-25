@@ -69,7 +69,7 @@ namespace ppp
             {
                 if (utunnum < 0 || utunnum > UINT8_MAX)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunOpenInvalidUnitNumber);
                     return -1;
                 }
 
@@ -121,7 +121,7 @@ namespace ppp
             {
                 if (tun == -1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunSetMtuInvalidHandle);
                     return false;
                 }
                 else
@@ -152,7 +152,7 @@ namespace ppp
                 ifrName.clear();
                 if (tun == -1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunGetInterfaceNameInvalidHandle);
                     return false;
                 }
 
@@ -173,7 +173,7 @@ namespace ppp
             {
                 if (tun == -1 || ip.empty() || mask.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunSetAddressInvalidArguments);
                     return false;
                 }
 
@@ -206,7 +206,7 @@ namespace ppp
             {
                 if (tun == -1 || mac.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunSetMacInvalidArguments);
                     return false;
                 }
 

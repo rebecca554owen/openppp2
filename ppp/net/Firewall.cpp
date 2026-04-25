@@ -56,7 +56,7 @@ namespace ppp
 
             SynchronizedObjectScope scope(syncobj_);
             bool inserted = ports_.emplace(port).second;
-            ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+            ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::FirewallDropPortAlreadyExists);
             return inserted;
         }
 
@@ -84,7 +84,7 @@ namespace ppp
             {
                 inserted = ports_udp_.emplace(port).second;
             }
-            ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+            ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::FirewallDropPortProtocolAlreadyExists);
             return inserted;
         }
 
@@ -118,7 +118,7 @@ namespace ppp
                         }
                         else
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallDropSegmentAlreadyExists);
                             return false;
                         }
                     }
@@ -185,7 +185,7 @@ namespace ppp
             {
                 SynchronizedObjectScope scope(syncobj_);
                 bool inserted = network_domains_.emplace(host_lower).second;
-                ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+                ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::FirewallDropDomainAlreadyExists);
                 return inserted;
             }
         }
@@ -357,7 +357,7 @@ namespace ppp
                 }
                 catch (const std::bad_alloc&)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallDomainSnapshotCopyOutOfMemory);
                     return false; // Cannot snapshot; fail-safe
                 }
             }
@@ -472,7 +472,7 @@ namespace ppp
             std::size_t slash_index = line.find('/');
             if (slash_index == ppp::string::npos)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallRuleDropIpMissingSlash);
                 return false;
             }
 
@@ -481,7 +481,7 @@ namespace ppp
             host = LTrim<ppp::string>(RTrim<ppp::string>(host));
             if (host.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallRuleDropIpHostEmpty);
                 return false;
             }
 
@@ -574,13 +574,13 @@ namespace ppp
         {
             if (path.empty())
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallLoadFileInputPathEmpty);
             }
 
             ppp::string file_path = File::GetFullPath(File::RewritePath(path.data()).data());
             if (file_path.empty())
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallLoadFileFullPathEmpty);
             }
 
             ppp::string rules = File::ReadAllText(file_path.data());
@@ -598,19 +598,19 @@ namespace ppp
 
             if (rules.empty())
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallLoadRulesInputEmpty);
             }
 
             ppp::vector<ppp::string> lines;
             if (ppp::Tokenize<ppp::string>(rules, lines, "\r\n") < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallLoadRulesTokenizeFailed);
                 return false;
             }
 
             if (lines.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FirewallLoadRulesNoLines);
                 return false;
             }
 

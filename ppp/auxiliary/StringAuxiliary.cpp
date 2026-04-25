@@ -17,7 +17,7 @@ namespace ppp
         {
             if (guid_string.empty()) 
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::StringAuxiliaryGuidStringEmpty);
                 return 0;
             }
 
@@ -28,7 +28,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::StringAuxiliaryGuidStringParseFailed);
                 return 0;
             }
         }

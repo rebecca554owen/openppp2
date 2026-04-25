@@ -820,7 +820,7 @@ namespace ppp {
 
             Json::Value json = JsonAuxiliary::FromString(json_string);
             if (!json.isObject()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationLoadJsonNotObject);
             }
             else {
                 bool loaded = Load(json);

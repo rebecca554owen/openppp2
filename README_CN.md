@@ -248,7 +248,7 @@ sequenceDiagram
 │   │   └── ConsoleUI.h/.cpp      # TUI：渲染线程 + 输入线程
 │   ├── diagnostics/
 │   │   ├── Error.h/.cpp          # 错误码定义与设置函数
-│   │   ├── ErrorCodes.def        # X-macro 源：466 个错误码
+│   │   ├── ErrorCodes.def        # X-macro 源：542 个错误码
 │   │   └── ErrorHandler.h/.cpp   # 错误处理器注册与分发
 │   ├── tap/
 │   │   └── ITap.h/.cpp           # 虚拟网卡抽象接口
@@ -695,7 +695,7 @@ stateDiagram-v2
 
 ## 错误处理概述
 
-错误用类型化错误码表示，定义在 `ppp/diagnostics/ErrorCodes.def`（X-macro 宏展开）。共有 **466 个错误码，分属 22 个类别**。
+错误用类型化错误码表示，定义在 `ppp/diagnostics/ErrorCodes.def`（X-macro 宏展开）。当前共有 **542 个错误码**。
 
 ```mermaid
 flowchart LR

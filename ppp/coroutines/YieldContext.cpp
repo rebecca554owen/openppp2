@@ -213,7 +213,7 @@ namespace ppp
         {
             if (!spawn)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::YieldContextSpawnNullHandler);
                 return false;
             }
 

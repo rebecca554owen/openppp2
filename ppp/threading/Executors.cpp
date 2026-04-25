@@ -818,7 +818,7 @@ namespace ppp
 #if defined(_WIN32)
             if (!ppp::win32::Win32Native::IsWindows81OrLaterVersion())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericNotSupported);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ExecutorsSetMaxSchedulersPlatformUnsupported);
                 return false;
             }
 #endif

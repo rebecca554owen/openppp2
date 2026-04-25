@@ -27,12 +27,12 @@ namespace ppp {
              */
             bool websocket::Write(const void* buffer, int offset, int length, const AsynchronousWriteCallback& cb) noexcept {
                 if (NULLPTR == buffer || 0 > offset || 1 > length) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteInvalidArguments);
                     return false;
                 }
 
                 if (NULLPTR == cb) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteNullCallback);
                     return false;
                 }
 

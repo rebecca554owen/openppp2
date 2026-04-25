@@ -774,7 +774,7 @@ namespace ppp {
                 }
                 
                 if (!timeouts_.emplace(socket.get(), cb).second) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetExchangerTimeoutEntryConflict);
                     return false;
                 }
 

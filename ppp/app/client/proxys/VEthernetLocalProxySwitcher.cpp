@@ -119,7 +119,7 @@ namespace ppp {
                     using NetworkState = VEthernetExchanger::NetworkState;
 
                     if (NULLPTR != acceptor_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetLocalProxySwitcherOpenAcceptorAlreadyInitialized);
                         return false;
                     }
 

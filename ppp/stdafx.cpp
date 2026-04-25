@@ -1001,7 +1001,7 @@ namespace ppp {
      */
     static bool MoveConsoleCursorPositionToPreviousNextLine(bool previous, int line) noexcept {
         if (line < 0) {
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::StdAfxMoveConsoleCursorInvalidLine);
         }
 
         if (line == 0) {
@@ -1245,7 +1245,7 @@ namespace ppp {
     /** @brief Assigns a human-readable name to current thread. */
     bool SetThreadName(const char* name) noexcept {
         if (NULLPTR == name || *name == '\x0') {
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::StdAfxSetThreadNameEmptyName);
         }
 
 #if defined(_WIN32)

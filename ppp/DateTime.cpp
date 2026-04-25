@@ -104,12 +104,12 @@ namespace ppp
         out = MinValue();
         if (s == NULLPTR && len != 0) 
         {
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNullInputWithNonZeroLength);
         }
 
         if (s != NULLPTR && len == 0) 
         {
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNonNullInputWithZeroLength);
         }
 
         if (len < 0) 
@@ -119,7 +119,7 @@ namespace ppp
 
         if (len < 1) 
         {
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseInputLengthInvalid);
         }
 
         static constexpr int max_segments_length = 7;
@@ -168,7 +168,7 @@ namespace ppp
 
         if (0 == length) 
         {
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNoNumericSegments);
         }
         else 
         {

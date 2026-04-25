@@ -111,7 +111,7 @@ namespace ppp
                             if ((ProtoInfo = (LPWSAPROTOCOL_INFOW)GlobalAlloc(GPTR, ProtoInfoSize)) == NULLPTR)
                             {
                                 Debugger::Write(L"GlobalAlloc Error!");
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneRootProtocolTableAllocFailed);
                                 return FALSE;
                             }
 
@@ -252,7 +252,7 @@ namespace ppp
                     {
                         if (NULLPTR == clasid || s == INVALID_SOCKET)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneRootExtensionFunctionInvalidArguments);
                             return NULLPTR;
                         }
 
@@ -654,7 +654,7 @@ namespace ppp
                     {
                         if (NULL == s || s == (SOCKET)INVALID_HANDLE_VALUE)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneRootGetLocalEndpointInvalidSocket);
                             return 0;
                         }
 
@@ -747,7 +747,7 @@ namespace ppp
                     {
                         if (NULLPTR == name || namelen < (int)sizeof(struct sockaddr))
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneRootGetForwardPortInvalidArguments);
                             return { 0, 0 };
                         }
 
@@ -879,7 +879,7 @@ namespace ppp
 
                         if (NULLPTR == add_port_forward_handling)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneRootPacketInputNullHandler);
                             return false;
                         }
 

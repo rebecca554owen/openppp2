@@ -141,7 +141,7 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR != tx_socket) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAcceptSocketAlreadyExists);
             return false;
         }
         else {
@@ -174,7 +174,7 @@ namespace vmux {
                 tx_socket_ = tx_socket;
 
                 if (NULLPTR == tx_socket || NULLPTR == tx_buffer_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAcceptBufferAllocFailed);
                     return false;
                 }
             }
@@ -213,7 +213,7 @@ namespace vmux {
         return vmux_post_exec(mux_->context_, mux_->strand_,
             [self, this]() noexcept {
                 if (!status_.connected_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketRunNotConnected);
                     return false;
                 }
 
@@ -278,7 +278,7 @@ namespace vmux {
      */
     bool vmux_skt::accept(const template_string& host_and_port) noexcept {
         if (host_and_port.empty()) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAddressParseInputEmpty);
             return false;
         }
 
@@ -290,7 +290,7 @@ namespace vmux {
         if (slen > 0 && sdata[0] == '[') {
             const char* right = strchr(sdata + 1, ']');
             if (NULLPTR == right || right[1] != ':') {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAddressParseBracketMismatch);
                 return false;
             }
 
@@ -300,7 +300,7 @@ namespace vmux {
         else {
             const char* colon = strrchr(sdata, ':');
             if (NULLPTR == colon) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAddressParseMissingPortSeparator);
                 return false;
             }
 
@@ -309,7 +309,7 @@ namespace vmux {
         }
 
         if (host.empty()) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAddressParseHostEmpty);
             return false;
         }
 
@@ -327,7 +327,7 @@ namespace vmux {
      */
     bool vmux_skt::connect(const ContextPtr& context, const StrandPtr& strand, const template_string& host, int port, const ConnectAsynchronousCallback& ac) noexcept {
         if (NULLPTR == ac || NULLPTR == context) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketConnectNullCallbackOrContext);
             return false;
         }
 
@@ -337,7 +337,7 @@ namespace vmux {
         }
 
         if (host.empty()) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketConnectHostEmpty);
             return false;
         }
 
@@ -348,13 +348,13 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketConnectSocketMissing);
             return false;
         }
 
         tx_buffer_ = mux_->make_byte_array(vmux_net::max_buffers_size);
         if (NULLPTR == tx_buffer_) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketConnectSendBufferAllocFailed);
             return false;
         }
 
@@ -396,12 +396,12 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketConnectAckSocketMissing);
             return false;
         }
         
         if (status_.connected_) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketConnectAckAlreadyConnected);
             return false;
         }
 
@@ -435,7 +435,7 @@ namespace vmux {
                 memcpy(buffer.get(), payload, payload_size);
             }
             else {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketInputBufferAllocFailed);
                 return false;
             }
 
@@ -469,7 +469,7 @@ namespace vmux {
      */
     bool vmux_skt::send_to_peer(const void* packet, int packet_length, const SendAsynchronousCallback& ac) noexcept {
         if (NULLPTR == packet || packet_length < 1) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendInvalidPayload);
             return false;
         }
 
@@ -480,7 +480,7 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket || NULLPTR == tx_buffer_) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
             return false;
         }
 
@@ -514,13 +514,13 @@ namespace vmux {
         using atomic_boolean = std::atomic<int>;
 
         if (NULLPTR == packet || packet_length < 1) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendYieldInvalidPayload);
             return false;
         }
 
         std::shared_ptr<vmux_net::atomic_int> status = ppp::make_shared_object<vmux_net::atomic_int>(-1);
         if (NULLPTR == status) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendYieldStatusAllocFailed);
             return false;
         }
 
@@ -780,7 +780,7 @@ namespace vmux {
         
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket || NULLPTR == tx_buffer_) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketForwardRxContextInvalid);
             return false;
         }
 
@@ -869,7 +869,7 @@ namespace vmux {
      */
     bool vmux_skt::forward_to_tx_socket(const std::shared_ptr<Byte>& payload, int payload_size, packet_queue::iterator* packet_tail) noexcept {
         if (NULLPTR == payload || payload_size < 1) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketForwardTxInvalidPayload);
             return false;
         }
 
@@ -880,7 +880,7 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketForwardTxSocketMissing);
             return false;
         }
 

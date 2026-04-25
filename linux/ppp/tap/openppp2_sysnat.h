@@ -150,33 +150,33 @@ static inline ppp::diagnostics::ErrorCode openppp2_sysnat_to_error_code(int sysn
         case 0:
             return ppp::diagnostics::ErrorCode::Success;
         case ERR_IFINDEX:
-            return ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable;
+            return ppp::diagnostics::ErrorCode::SysnatInvalidInterfaceName;
         case ERR_BPF_OPEN:
-            return ppp::diagnostics::ErrorCode::TunnelOpenFailed;
+            return ppp::diagnostics::ErrorCode::SysnatBpfObjectOpenFailed;
         case ERR_BPF_PROG:
-            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+            return ppp::diagnostics::ErrorCode::SysnatBpfProgramNotFound;
         case ERR_BPF_LOAD:
-            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+            return ppp::diagnostics::ErrorCode::SysnatBpfLoadFailed;
         case ERR_MAP_PIN:
-            return ppp::diagnostics::ErrorCode::MappingOpenFailed;
+            return ppp::diagnostics::ErrorCode::SysnatMapPinFailed;
         case ERR_TC_CREATE:
-            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+            return ppp::diagnostics::ErrorCode::SysnatTcHookCreateFailed;
         case ERR_TC_ATTACH:
-            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+            return ppp::diagnostics::ErrorCode::SysnatTcAttachFailed;
         case ERR_TC_DETACH:
-            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+            return ppp::diagnostics::ErrorCode::SysnatTcDetachFailed;
         case ERR_MAP_OPEN:
-            return ppp::diagnostics::ErrorCode::MappingOpenFailed;
+            return ppp::diagnostics::ErrorCode::SysnatMapOpenFailed;
         case ERR_MAP_UPDATE:
-            return ppp::diagnostics::ErrorCode::MappingCreateFailed;
+            return ppp::diagnostics::ErrorCode::SysnatMapUpdateFailed;
         case ERR_MAP_DELETE:
-            return ppp::diagnostics::ErrorCode::MappingCreateFailed;
+            return ppp::diagnostics::ErrorCode::SysnatMapDeleteFailed;
         case ERR_ALREADY_ATTACHED:
-            return ppp::diagnostics::ErrorCode::GenericAlreadyExists;
+            return ppp::diagnostics::ErrorCode::SysnatAlreadyAttached;
         case ERR_NOT_ATTACHED:
-            return ppp::diagnostics::ErrorCode::GenericInvalidState;
+            return ppp::diagnostics::ErrorCode::SysnatNotAttached;
         default:
-            return ppp::diagnostics::ErrorCode::GenericUnknown;
+            return ppp::diagnostics::ErrorCode::SysnatUnknownFailure;
     }
 }
 

@@ -77,7 +77,7 @@ namespace ppp {
          */
         bool Ciphertext::Support(const ppp::string& method) noexcept {
             if (method.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CiphertextSupportMethodEmpty);
                 return false;
             }
 

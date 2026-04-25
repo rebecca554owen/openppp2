@@ -43,7 +43,7 @@ namespace ppp {
                 status = 0;
 
                 if (this->_host.empty() || (NULLPTR == data && size != 0)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientRequestInvalidArguments);
                     return "";
                 }
 
@@ -94,13 +94,13 @@ namespace ppp {
                 using ProtocolType = UriAuxiliary::ProtocolType;
 
                 if (url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriInputEmpty);
                     return false;
                 }
 
                 ppp::string final_url = LTrim(RTrim(url));
                 if (final_url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriTrimmedEmpty);
                     return false;
                 }
 
@@ -112,13 +112,13 @@ namespace ppp {
 
                 ppp::string return_url = ppp::auxiliary::UriAuxiliary::Parse(final_url, tmp_host, tmp_address, tmp_path, tmp_port, protocol_type, NULLPTR, nullof<ppp::coroutines::YieldContext>(), false);
                 if (return_url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriParseFailed);
                     return false;
                 }
 
                 /** @brief Reject non-HTTP protocols after successful URI parsing. */
                 if (protocol_type != ProtocolType::ProtocolType_Http && protocol_type != ProtocolType::ProtocolType_HttpSSL) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericNotSupported);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriProtocolUnsupported);
                     return false;
                 }
 

@@ -85,7 +85,7 @@ namespace ppp
                         boost::asio::ip::tcp::acceptor& acceptor = acceptors_[i];
                         if (acceptor.is_open())
                         {
-                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerOpenAcceptorAlreadyOpen);
                         }
                     }
 
@@ -118,7 +118,7 @@ namespace ppp
                     std::shared_ptr<PaperAirplaneControlBlockPort> block_port = make_shared_object<PaperAirplaneControlBlockPort>();
                     if (NULLPTR == block_port)
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerControlBlockAllocFailed);
                     }
 
                     bool available = block_port->IsAvailable();
@@ -195,7 +195,7 @@ namespace ppp
 
                     if (NULLPTR == handler)
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerTimeoutNullHandler);
                     }
 
                     if (milliseconds < 0)
@@ -238,7 +238,7 @@ namespace ppp
                     std::shared_ptr<TimeoutHandler> h = make_shared_object<TimeoutHandler>();
                     if (NULLPTR == h)
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerTimeoutHandlerAllocFailed);
                     }
                     
                     h->k = NULLPTR;
@@ -259,7 +259,7 @@ namespace ppp
                     if (!ok)
                     {
                         timeout->Dispose();
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericConflict);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerTimeoutEntryConflict);
                     }
 
                     return true;
@@ -378,7 +378,7 @@ namespace ppp
                     NetworkState network_state = exchanger->GetNetworkState();
                     if (network_state != NetworkState::NetworkState_Established) 
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerForwardClientNetworkStateInvalid);
                     }
 
                     AppConfigurationPtr configuration = exchanger->GetConfiguration();
@@ -390,7 +390,7 @@ namespace ppp
                     std::shared_ptr<PaperAirplaneConnection> connection = NewConnection(context, strand, socket);
                     if (NULLPTR == connection)
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerForwardClientConnectionAllocFailed);
                     }
 
                     auto kv = connections_.emplace(connection.get(), connection);
@@ -432,7 +432,7 @@ namespace ppp
                 {
                     if (NULLPTR == connection)
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerReleaseNullConnection);
                     }
 
                     auto self = shared_from_this();
@@ -737,7 +737,7 @@ namespace ppp
                 {
                     if (path.empty())
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerNoLspPathEmpty);
                     }
 
                     ppp::string fullpath = File::GetFullPath(File::RewritePath(path.data()).data());
@@ -749,7 +749,7 @@ namespace ppp
                     std::wstring fullpath_wstr = ppp::text::Encoding::ascii_to_wstring(std::string(fullpath.data(), fullpath.size()));
                     if (fullpath_wstr.empty())
                     {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::PaperAirplaneControllerNoLspPathConvertFailed);
                     }
 
                     return paper_airplane::NoLsp(fullpath_wstr.data());

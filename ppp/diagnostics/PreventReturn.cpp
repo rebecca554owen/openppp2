@@ -33,7 +33,7 @@ namespace ppp
         {
             if (NULLPTR == name || *name == '\x0')
             {
-                SetLastErrorCode(ErrorCode::GenericInvalidArgument);
+                SetLastErrorCode(ErrorCode::PreventReturnNameTransformEmptyInput);
                 return ppp::string();
             }
 
@@ -123,7 +123,7 @@ namespace ppp
         {
             if (NULLPTR == name || *name == '\x0')
             {
-                SetLastErrorCode(ErrorCode::GenericInvalidArgument);
+                SetLastErrorCode(ErrorCode::PreventReturnNameTransformEmptyInput);
                 return { -1, "", false };
             }
 

@@ -96,7 +96,7 @@ namespace ppp {
                 }
 
                 if (remote_socket_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RinetdConnectionOpenSocketAlreadyAllocated);
                     return false;
                 }
 

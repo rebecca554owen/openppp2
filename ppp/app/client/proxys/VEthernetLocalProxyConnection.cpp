@@ -130,7 +130,7 @@ namespace ppp {
                  */
                 bool VEthernetLocalProxyConnection::SendBufferToPeer(YieldContext& y, const void* messages, int messages_size) noexcept {
                     if (NULLPTR == messages || messages_size < 1) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetLocalProxyConnectionSendInvalidPayload);
                     }
 
                     if (disposed_) {

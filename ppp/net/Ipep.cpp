@@ -57,7 +57,7 @@ namespace ppp {
             destinationAddress.clear();
 
             if (address.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseEndpointInputEmpty);
                 return false;
             }
 
@@ -65,7 +65,7 @@ namespace ppp {
             if (leftBracket != ppp::string::npos) {
                 size_t rightBracket = address.find(']', leftBracket);
                 if (rightBracket == ppp::string::npos) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseEndpointMissingRightBracket);
                     return false;  
                 }
 
@@ -135,7 +135,7 @@ namespace ppp {
                         destinationAddress = address;
                     }
                     else {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseEndpointInvalidHostPortSeparator);
                         return false;
                     }
                 }
@@ -377,20 +377,20 @@ namespace ppp {
         /** @brief Parses comma-separated endpoint strings and emits normalized addresses. */
         bool Ipep::ToEndPoint(const ppp::string& addresses, ppp::vector<ppp::string>& out) noexcept {
             if (addresses.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepToEndpointListInputEmpty);
                 return false;
             }
 
             ppp::string dns_addresses = ppp::auxiliary::StringAuxiliary::Lstrings(addresses);
             if (dns_addresses.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepToEndpointListTrimmedEmpty);
                 return false;
             }
 
             ppp::vector<ppp::string> lines;
             Tokenize<ppp::string>(dns_addresses, lines, ",");
             if (lines.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepToEndpointListTokenizeFailed);
                 return false;
             }
 
@@ -524,7 +524,7 @@ namespace ppp {
 #endif
 
             if (addresses.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepExtractAddressesInputEmpty);
                 return -1;
             }
 
@@ -632,7 +632,7 @@ namespace ppp {
             static constexpr int ERR_PREFIX_VALUE = ppp::net::native::MIN_PREFIX_VALUE - 1;
 
             if (cidr_number_string.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepNetmaskPrefixInputEmpty);
                 return ERR_PREFIX_VALUE;
             }
 
@@ -666,30 +666,30 @@ namespace ppp {
             cidr = ppp::net::native::MIN_PREFIX_VALUE;
 
             if (cidr_ip_string.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseCidrInputEmpty);
                 return false;
             }
 
             std::size_t index = cidr_ip_string.find('/');
             if (index == ppp::string::npos) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseCidrMissingSlash);
                 return false;
             }
 
             int cidr_number = NetmaskToPrefix(cidr_ip_string.substr(index + 1));
             if (cidr_number < ppp::net::native::MIN_PREFIX_VALUE) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseCidrPrefixTooSmall);
                 return false;
             }
 
             if (cidr_number > ppp::net::native::MAX_PREFIX_VALUE_V6) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseCidrPrefixTooLarge);
                 return false;
             }
 
             ppp::string address_string = cidr_ip_string.substr(index);
             if (address_string.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseCidrAddressPartEmpty);
                 return false;
             }
 
@@ -926,7 +926,7 @@ namespace ppp {
          */
         bool Ipep::PacketIsQUIC(const IPEndPoint& destinationEP, Byte* p, int length) noexcept {
             if (NULLPTR == p || length < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepQuicPacketInvalidInput);
                 return false;
             }
 
@@ -1050,7 +1050,7 @@ namespace ppp {
          */
         bool Ipep::GetAddressByHostName(boost::asio::io_context& context, const ppp::string& hostname, int port, const GetAddressByHostNameCallback& callback) noexcept {
             if (NULLPTR == callback) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepResolveAsyncNullCallback);
                 return false;
             }
 
@@ -1064,7 +1064,7 @@ namespace ppp {
             if (ec == boost::system::errc::success) {
                 std::shared_ptr<IPEndPoint> localEP = make_shared_object<IPEndPoint>(IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(address, port)));
                 if (NULLPTR == localEP) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepResolveAsyncEndpointAllocFailed);
                     return false;
                 }
 
@@ -1093,7 +1093,7 @@ namespace ppp {
 
             std::shared_ptr<boost::asio::ip::tcp::resolver> resolver = make_shared_object<boost::asio::ip::tcp::resolver>(context);
             if (NULLPTR == resolver) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepResolveAsyncResolverAllocFailed);
                 return false;
             }
 

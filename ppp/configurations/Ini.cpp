@@ -410,7 +410,7 @@ namespace ppp {
         /** @brief Loads INI content from raw text. */
         std::shared_ptr<Ini> Ini::LoadFrom(const ppp::string& config) noexcept {
             if (config.empty()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed, make_shared_object<Ini>());
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IniLoadFromConfigEmpty, make_shared_object<Ini>());
             }
 
             return make_shared_object<Ini>(config);

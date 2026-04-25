@@ -2,11 +2,11 @@
 
 > **Subsystem:** `ppp::diagnostics`  
 > **Files:**  
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (503 lines)  
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (542 entries)  
 > - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum  
 > - `ppp/diagnostics/Error.cpp` — Free function delegations  
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration  
-> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` implementation (133 lines)
+> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` implementation (173 lines)
 
 ---
 
@@ -42,7 +42,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 | **Zero allocation on hot path** | Error codes are `uint32_t`-backed enums; `SetLastErrorCode` stores to `thread_local` and an atomic. No heap. |
 | **Thread isolation** | Each thread maintains its own `tls_last_error_code_`. No locking on read or write of per-thread state. |
 | **Process-wide observability** | `last_error_code_snapshot_` is a `std::atomic<uint32_t>` visible to all threads. |
-| **Single source of truth** | All 503 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
+| **Single source of truth** | All 542 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
 | **No exceptions for error reporting** | `SetLastErrorCode` is `noexcept`. Error conditions are communicated via return values. |
 | **Observer pattern** | Named handlers registered via `RegisterErrorHandler` are called synchronously on error. |
 | **Severity awareness** | Each error code carries a `kInfo`/`kWarning`/`kError`/`kFatal` classification. |
@@ -54,7 +54,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 ```mermaid
 graph TB
     subgraph ppp/diagnostics
-        Def[ErrorCodes.def\nX-macro definitions\n503 error codes]
+        Def[ErrorCodes.def\nX-macro definitions\n542 error codes]
         Eh[Error.h\nErrorSeverity enum\nErrorCode enum\nfree functions]
         Ec[Error.cpp\ndelegates to ErrorHandler::GetDefault()]
         Ehh[ErrorHandler.h\nErrorHandler class\nsingleton]
@@ -70,8 +70,7 @@ graph TB
     subgraph Process-Wide State
         Snap[last_error_code_snapshot_\nstd::atomic<uint32_t>]
         TS[last_error_timestamp_snapshot_\nstd::atomic<uint64_t>]
-        Handlers[error_handlers_\nunordered_map<string, function>]
-        Mutex[error_handlers_sync_\nstd::mutex]
+        Handlers[error_handlers_\nlist<ErrorHandlerEntry>]
     end
 
     Def --> Eh
@@ -84,7 +83,6 @@ graph TB
     Ehc --> Snap
     Ehc --> TS
     Ehc --> Handlers
-    Mutex -->|serializes registration| Handlers
 ```
 
 ---
@@ -100,10 +98,9 @@ X(name, text, severity)
 // Examples (lines 1–25):
 X(Success,                  "Success",               ErrorSeverity::kInfo)
 X(GenericUnknown,           "Generic unknown error", ErrorSeverity::kError)
-X(GenericTimeout,           "Operation timed out",   ErrorSeverity::kWarning)
-X(AppStartupFailed,         "Application startup failed", ErrorSeverity::kFatal)
-X(IPv6LeasePoolExhausted,   "The IPv6 lease pool has no remaining addresses available ...",
-                                                     ErrorSeverity::kError)
+X(SocketTimeout,            "Socket timeout",        ErrorSeverity::kWarning)
+X(RuntimeInitializationFailed, "Runtime initialization failed", ErrorSeverity::kFatal)
+X(IPv6LeaseConflict,        "IPv6 lease conflict",   ErrorSeverity::kError)
 ```
 
 The file is included three times in `ErrorHandler.cpp`, each time with a different expansion of `X`:
@@ -124,7 +121,7 @@ enum class ErrorCode : uint32_t {
     Success = 0,
     GenericUnknown = 1,
     GenericInvalidArgument = 2,
-    // ... 500+ more
+    // ... additional entries
 };
 ```
 
@@ -203,18 +200,18 @@ enum class ErrorSeverity : uint8_t {
 | Level | Value | Meaning | Example Codes |
 |---|---|---|---|
 | `kInfo` | 0 | Normal; not an error. Only `Success` has this level. | `Success` |
-| `kWarning` | 1 | Degraded service; operation retried or skipped gracefully. | `GenericTimeout`, `GenericCanceled`, `GenericRateLimited` |
-| `kError` | 2 | Operation failed; session may be terminated but process continues. | Most IPv6 and session errors |
-| `kFatal` | 3 | Unrecoverable; process should exit and restart. | `AppStartupFailed`, `IPv6Unsupported`, `PlatformNotSupportGUAMode` |
+| `kWarning` | 1 | Degraded service; operation retried or skipped gracefully. | `SocketTimeout`, `TcpConnectTimeout`, `IPv6LeaseUnavailable` |
+| `kError` | 2 | Operation failed; session may be terminated but process continues. | Most network, socket, and IPv6 errors |
+| `kFatal` | 3 | Unrecoverable; process should exit and restart. | `RuntimeInitializationFailed`, `IPv6Unsupported`, `PlatformNotSupportGUAMode` |
 
-### Severity Distribution (approximate, from ErrorCodes.def)
+### Severity Distribution (from ErrorCodes.def)
 
 ```mermaid
 pie title ErrorCode Severity Distribution
     "kInfo (1)" : 1
-    "kWarning (18)" : 18
-    "kError (420)" : 420
-    "kFatal (64)" : 64
+    "kWarning (7)" : 7
+    "kError (506)" : 506
+    "kFatal (28)" : 28
 ```
 
 ---
@@ -231,23 +228,21 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` is a strongly-typed `uint32_t` enum with 503 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based line number in `ErrorCodes.def`.
+`ErrorCode` is a strongly-typed `uint32_t` enum with 542 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`.
 
 ### Category Structure of `ErrorCodes.def`
 
-The file is organized into logical sections:
+The file is organized into logical sections and extended subsystem blocks. The live catalog grows continuously and should be treated as dynamic.
 
-| Line Range | Category | Count |
-|---|---|---|
-| 1 | `Success` | 1 |
-| 2–25 | `Generic*` — platform-neutral base errors | 24 |
-| 27–41 | `App*` — application lifecycle errors | 15 |
-| 43–60 | `Config*` — configuration parsing errors | 18 |
-| ~61–100 | `Net*` / socket errors | ~40 |
-| ~101–200 | Session / handshake / authentication | ~100 |
-| ~201–310 | IPv6 subsystem | ~110 |
-| ~311–460 | TAP, TUN, routing | ~150 |
-| ~461–503 | PPP / protocol / misc | ~43 |
+Primary group families:
+
+- Core/runtime: `App*`, `Config*`, `Runtime*`, `Memory*`, `File*`
+- Networking: `Network*`, `Socket*`, `Tcp*`, `Udp*`, `Dns*`, `Http*`, `WebSocket*`
+- Tunnel/routing: `Tunnel*`, `Firewall*`, `Route*`, `Mapping*`
+- IPv6 and protocol/session planes: `IPv6*`, `Session*`, `Protocol*`, `Auth*`, `Crypto*`
+- Platform and subsystem-specific extensions: `Windows*`, `Darwin*`, `Tap*`, `Vmux*`, `VEthernet*`, `PaperAirplane*`, `AsyncWriteQueue*`, etc.
+
+For exact, current counts, always derive directly from `ErrorCodes.def`.
 
 ---
 
@@ -261,18 +256,15 @@ public:
     static ErrorHandler& GetDefault() noexcept;
     // ... methods
 private:
-    ErrorHandler() noexcept = default;
-    ErrorHandler(const ErrorHandler&) = delete;
-    ErrorHandler& operator=(const ErrorHandler&) = delete;
-
-    static thread_local ErrorCode  tls_last_error_code_;
-    static thread_local uint64_t   tls_last_error_timestamp_;
+    struct ErrorHandlerEntry {
+        ppp::string                  key;
+        ppp::function<void(int err)> handler;
+    };
 
     std::atomic<uint32_t>          last_error_code_snapshot_{0};
     std::atomic<uint64_t>          last_error_timestamp_snapshot_{0};
 
-    std::mutex                     error_handlers_sync_;
-    ppp::unordered_map<ppp::string, ppp::function<void(int err)>> error_handlers_;
+    ppp::list<ErrorHandlerEntry>   error_handlers_;
 };
 ```
 
@@ -304,11 +296,18 @@ ErrorCode SetLastErrorCode(ErrorCode code) noexcept {
 
 ## 7. Thread-Local Error State
 
-**Location:** `ErrorHandler.cpp`, lines 6–7
+**Location:** `ErrorHandler.cpp`, lines 7–15
 
 ```cpp
-thread_local ErrorCode ErrorHandler::tls_last_error_code_ = ErrorCode::Success;
-thread_local uint64_t  ErrorHandler::tls_last_error_timestamp_ = 0;
+ErrorCode& ErrorHandler::ThreadLastErrorCode() noexcept {
+    static thread_local ErrorCode tls_last_error_code = ErrorCode::Success;
+    return tls_last_error_code;
+}
+
+uint64_t& ErrorHandler::ThreadLastErrorTimestamp() noexcept {
+    static thread_local uint64_t tls_last_error_timestamp = 0;
+    return tls_last_error_timestamp;
+}
 ```
 
 Each OS thread has its own independent copy of:
@@ -318,7 +317,7 @@ Each OS thread has its own independent copy of:
 ```mermaid
 graph LR
     T1[IO Thread 1] -->|SetLastErrorCode\nIPv6LeaseConflict| TLS1[tls_last_error_code_\n= IPv6LeaseConflict]
-    T2[IO Thread 2] -->|SetLastErrorCode\nGenericTimeout| TLS2[tls_last_error_code_\n= GenericTimeout]
+    T2[IO Thread 2] -->|SetLastErrorCode\nSocketTimeout| TLS2[tls_last_error_code_\n= SocketTimeout]
     T3[Timer Thread] -->|SetLastErrorCode\nIPv6NeighborProxyDeleteFailed| TLS3[tls_last_error_code_\n= ...]
     TLS1 -->|no interference| TLS2
     TLS2 -->|no interference| TLS3
@@ -362,8 +361,8 @@ sequenceDiagram
     participant Snap as last_error_code_snapshot_
 
     T1->>Snap: store(IPv6LeaseConflict, relaxed) [t=100ms]
-    T2->>Snap: store(GenericTimeout, relaxed) [t=105ms]
-    Mon->>Snap: load(relaxed) → GenericTimeout [t=110ms]
+    T2->>Snap: store(SocketTimeout, relaxed) [t=105ms]
+    Mon->>Snap: load(relaxed) → SocketTimeout [t=110ms]
     Note over Mon: Sees most recent write; may miss T1's write
 ```
 
@@ -384,33 +383,34 @@ It is **not** suitable for precise error tracking within a single operation chai
 
 ```cpp
 ErrorCode ErrorHandler::SetLastErrorCode(ErrorCode code) noexcept {
-    // 1. Store into thread-local:
-    tls_last_error_code_ = code;
+    ErrorCode& tls_last_error_code = ThreadLastErrorCode();
+    uint64_t& tls_last_error_timestamp = ThreadLastErrorTimestamp();
 
-    // 2. Capture timestamp:
-    tls_last_error_timestamp_ = ppp::threading::Executors::GetTickCount();
+    tls_last_error_code = code;
+    tls_last_error_timestamp = ppp::threading::Executors::GetTickCount();
+    last_error_code_snapshot_.store(static_cast<uint32_t>(code), std::memory_order_relaxed);
+    last_error_timestamp_snapshot_.store(tls_last_error_timestamp, std::memory_order_relaxed);
 
-    // 3. Atomic process-wide snapshot update:
-    last_error_code_snapshot_.store(
-        static_cast<uint32_t>(code), std::memory_order_relaxed);
-    last_error_timestamp_snapshot_.store(
-        tls_last_error_timestamp_, std::memory_order_relaxed);
-
-    // 4. Snapshot the handler map (lock, copy, unlock):
-    ppp::unordered_map<ppp::string, ppp::function<void(int err)>> error_handlers;
-    {
-        std::lock_guard<std::mutex> scope(error_handlers_sync_);
-        error_handlers = error_handlers_;
+    static thread_local bool tls_error_handler_invoking = false;
+    if (tls_error_handler_invoking) {
+        return code;
     }
 
-    // 5. Invoke each handler (outside the lock, catching exceptions):
+    struct RecursiveDispatchGuard {
+        explicit RecursiveDispatchGuard(bool& flag_ref) noexcept : flag(flag_ref) { flag = true; }
+        ~RecursiveDispatchGuard() noexcept { flag = false; }
+        bool& flag;
+    } recursive_dispatch_guard(tls_error_handler_invoking);
+
     int error_value = static_cast<int>(code);
-    for (auto&& error_handler : error_handlers) {
-        if (NULLPTR == error_handler.second) { continue; }
+    for (const ErrorHandlerEntry& error_handler : error_handlers_) {
+        if (NULLPTR == error_handler.handler) {
+            continue;
+        }
+
         try {
-            error_handler.second(error_value);
+            error_handler.handler(error_value);
         } catch (...) {
-            // Handler exceptions must never propagate; suppress all.
         }
     }
 
@@ -420,15 +420,15 @@ ErrorCode ErrorHandler::SetLastErrorCode(ErrorCode code) noexcept {
 
 ### Critical Implementation Notes
 
-1. **Handler map is copied before invocation** (line 33–37): The map is snapshot-copied under `error_handlers_sync_`, then the lock is released before handlers are called. This ensures:
-   - Handlers cannot deadlock by calling `RegisterErrorHandler` (which also acquires the lock).
-   - New handler registrations during dispatch do not affect the current dispatch.
+1. **Recursive dispatch is guarded**: a thread-local guard prevents callback re-entry loops when a handler path calls `SetLastErrorCode()` again.
 
-2. **Exceptions are swallowed** (line 47–48): A handler that throws must not crash `SetLastErrorCode`. The `try-catch(...)` ensures the function remains `noexcept`-safe.
+2. **Handlers are iterated in-place**: there is no lock/copy on the hot path. This is safe only because registration is initialization-only.
 
-3. **Handlers are called synchronously**: Invocation happens on the calling thread, inside `SetLastErrorCode`. Handlers must complete quickly and must not call `SetLastErrorCode` recursively (would not deadlock, but could cause infinite recursion if the handler triggers another error).
+3. **Exceptions are swallowed**: a handler that throws must not crash `SetLastErrorCode`. The `try-catch(...)` ensures the function remains `noexcept`-safe.
 
-4. **Return value**: `SetLastErrorCode` returns the same code it received. This enables patterns like:
+4. **Handlers are called synchronously** on the calling thread and must complete quickly.
+
+5. **Return value**: `SetLastErrorCode` returns the same code it received. This enables patterns like:
    ```cpp
    return ppp::diagnostics::SetLastError(ErrorCode::IPv6LeaseConflict, false);
    ```
@@ -531,18 +531,28 @@ auto triplet = ppp::diagnostics::FormatErrorTriplet(
 **Location:** `ErrorHandler.cpp`, lines 122–131
 
 ```cpp
-void ErrorHandler::RegisterErrorHandler(
-    const ppp::string& key,
-    const ppp::function<void(int err)>& handler) noexcept {
+void ErrorHandler::RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept {
+    for (auto it = error_handlers_.begin(); error_handlers_.end() != it; ++it) {
+        if (it->key != key) {
+            continue;
+        }
 
-    std::lock_guard<std::mutex> scope(error_handlers_sync_);
-
-    if (NULLPTR == handler) {
-        error_handlers_.erase(key);
+        if (NULLPTR == handler) {
+            error_handlers_.erase(it);
+        } else {
+            it->handler = handler;
+        }
         return;
     }
 
-    error_handlers_[key] = handler;
+    if (NULLPTR == handler) {
+        return;
+    }
+
+    ErrorHandlerEntry entry;
+    entry.key = key;
+    entry.handler = handler;
+    error_handlers_.push_back(std::move(entry));
 }
 ```
 
@@ -550,7 +560,7 @@ void ErrorHandler::RegisterErrorHandler(
 
 - **Key-based upsert**: Registering with the same `key` replaces the previous handler.
 - **Removal**: Passing `NULLPTR` as the handler removes the registration for `key`.
-- **Thread safety**: Registration is serialized by `error_handlers_sync_`. However, calling `RegisterErrorHandler` after the multi-thread runtime has started is **not safe** (documented in the header).
+- **Thread safety**: Registration is **not thread-safe** and must be done before worker threads start.
 
 ### Registration Policy
 
@@ -603,10 +613,10 @@ if (!ok) {
 return ppp::diagnostics::SetLastError(ErrorCode::IPv6LeaseConflict);
 
 // Returns -1 (or other integral sentinel) and sets error code:
-return ppp::diagnostics::SetLastError<int>(ErrorCode::GenericOutOfMemory);
+return ppp::diagnostics::SetLastError<int>(ErrorCode::MemoryAllocationFailed);
 
 // Returns NULLPTR and sets error code:
-return ppp::diagnostics::SetLastError<SomePointer*>(ErrorCode::GenericNotFound);
+return ppp::diagnostics::SetLastError<SomePointer*>(ErrorCode::TunnelDeviceMissing);
 ```
 
 These helpers prevent the common mistake of setting the error code but forgetting to return the sentinel:
@@ -646,16 +656,16 @@ Full classification summary for the major error categories:
 ```mermaid
 graph TD
     All[All ErrorCodes] --> Info[kInfo\nSuccess only]
-    All --> Warning[kWarning\nGenericTimeout\nGenericCanceled\nGenericRateLimited\n...]
+    All --> Warning[kWarning\nSocketTimeout\nTcpConnectTimeout\nIPv6LeaseUnavailable\n...]
     All --> Error[kError\nIPv6 lease errors\nNDP proxy errors\nSession errors\nSocket errors\n...]
-    All --> Fatal[kFatal\nAppStartupFailed\nIPv6Unsupported\nPlatformNotSupportGUAMode\nConfigFieldMissing\n...]
+    All --> Fatal[kFatal\nRuntimeInitializationFailed\nIPv6Unsupported\nPlatformNotSupportGUAMode\nConfigFieldMissing\n...]
 ```
 
 ### Fatal Codes — Operator Action Required
 
 | Code | Message | Required Action |
 |---|---|---|
-| `AppStartupFailed` | Application startup failed | Check log; may need root privileges. |
+| `RuntimeInitializationFailed` | Runtime initialization failed | Check startup sequence and dependent subsystems. |
 | `AppAlreadyRunning` | Application already running | Remove stale PID file. |
 | `AppInvalidCommandLine` | Invalid command-line arguments | Correct the launch command. |
 | `AppConfigurationMissing` | Configuration missing | Create `appsettings.json`. |
@@ -721,8 +731,8 @@ To add a new error code:
 | `<Subsystem><Resource>Invalid` | `IPv6PrefixInvalid` |
 | `<Subsystem><Resource>Exhausted` | `IPv6LeasePoolExhausted` |
 | `<Subsystem><Resource>Conflict` | `IPv6AddressConflict` |
-| `Generic<Condition>` | `GenericTimeout` |
-| `App<Stage>Failed` | `AppStartupFailed` |
+| `<Subsystem><Condition>` | `VmuxSocketSendInvalidPayload` |
+| `App<Stage>Failed` | `AppPreflightCheckFailed` |
 | `Config<Field/Stage>Invalid` | `ConfigFieldInvalid` |
 
 ---

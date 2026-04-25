@@ -2333,7 +2333,7 @@ namespace ppp {
             /** @brief Loads DNS redirect rules from file or inline content. */
             bool VEthernetNetworkSwitcher::LoadAllDnsRules(const ppp::string& rules, bool load_file_or_string) noexcept {
                 if (rules.empty()) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetNetworkSwitcherDnsRulesEmpty);
                 }
 
                 int events = 0;

@@ -332,7 +332,7 @@ namespace ppp
         {
             if (NULLPTR == tap)
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOpenNullTap);
             }
 
             if (disposed_.load(std::memory_order_acquire))
@@ -930,7 +930,7 @@ namespace ppp
         {
             if (NULLPTR == packet)
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOutputFrameNullPacket);
             }
 
             if (disposed_.load(std::memory_order_acquire)) 
@@ -955,7 +955,7 @@ namespace ppp
         {
             if (NULLPTR == packet || packet_length < 1)
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOutputRawInvalidArguments);
             }
 
             if (disposed_.load(std::memory_order_acquire))
@@ -979,7 +979,7 @@ namespace ppp
         {
             if (NULLPTR == packet || packet_length < 1)
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOutputSharedInvalidArguments);
             }
             
             if (disposed_.load(std::memory_order_acquire))

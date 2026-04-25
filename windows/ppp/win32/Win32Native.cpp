@@ -279,7 +279,7 @@ namespace ppp
 
             if (NULLPTR == functionName || *functionName == '\x0')
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeGetProcAddressFunctionNameEmpty);
                 return NULLPTR;
             }
 
@@ -368,7 +368,7 @@ namespace ppp
         {
             if (handle == INVALID_HANDLE_VALUE)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCloseHandleInvalidHandleValue);
                 return false;
             }
 
@@ -388,7 +388,7 @@ namespace ppp
         {
             if (NULLPTR == handle)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCloseWsaEventNullHandle);
                 return false;
             }
 
@@ -455,7 +455,7 @@ namespace ppp
         {
             if (NULLPTR == commandText || *commandText == '\x0')
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeExecuteCommandTextEmpty);
                 return false;
             }
 
@@ -1320,7 +1320,7 @@ namespace ppp
             std::wstring name_wstr = ppp::text::Encoding::ascii_to_wstring(name);
             if (name_wstr.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeSetThreadDescriptionNameConvertFailed);
                 return false;
             }
 

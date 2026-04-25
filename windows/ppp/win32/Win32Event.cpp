@@ -47,7 +47,7 @@ namespace ppp
 
             if (name.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventOpenKernelEventNameEmpty);
                 return -1;
             }
 

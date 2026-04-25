@@ -159,17 +159,17 @@ namespace ppp {
             protocol = ProtocolType_PPP;
 
             if (url.empty()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, ppp::string());
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UriAuxiliaryParseInputUrlEmpty, ppp::string());
             }
 
             ppp::string url_string = ToLower(LTrim(RTrim(url)));
             if (url_string.empty()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, ppp::string());
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UriAuxiliaryParseTrimmedUrlEmpty, ppp::string());
             }
 
             std::size_t scheme_sep = url_string.find("://");
             if (scheme_sep == ppp::string::npos) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed, ppp::string());
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UriAuxiliaryParseMissingSchemeDelimiter, ppp::string());
             }
 
             /**
@@ -246,7 +246,7 @@ namespace ppp {
                  */
                 std::size_t right_bracket = host_string.find(']', left_bracket);
                 if (right_bracket == ppp::string::npos || left_bracket > right_bracket) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed, ppp::string());
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UriAuxiliaryParseBracketMismatch, ppp::string());
                 }
 
                 address_string = host_string.substr(left_bracket + 1, right_bracket - left_bracket - 1);

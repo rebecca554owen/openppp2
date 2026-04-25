@@ -55,7 +55,7 @@ namespace ppp {
             /** @brief Creates a shared copy of raw bytes using configured allocator strategy. */
             std::shared_ptr<Byte> IAsynchronousWriteIoQueue::Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen) noexcept {
                 if (NULLPTR == data || 1 > datalen) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueCopyInvalidArguments);
                     return NULLPTR;
                 }
 
@@ -72,7 +72,7 @@ namespace ppp {
                     memcpy(memory, data, datalen);
                 }
                 else {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueCopyAllocFailed);
                 }
 
                 return chunk;
@@ -111,18 +111,18 @@ namespace ppp {
                 }
 
                 if (NULLPTR == packet || 1 > packet_length) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueWriteInvalidPacket);
                     return false;
                 }
 
                 if (NULLPTR == cb) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueWriteNullCallback);
                     return false;
                 }
 
                 std::shared_ptr<AsynchronousWriteIoContext> context = make_shared_object<AsynchronousWriteIoContext>();
                 if (NULLPTR == context) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueWriteContextAllocFailed);
                     return false;
                 }
 

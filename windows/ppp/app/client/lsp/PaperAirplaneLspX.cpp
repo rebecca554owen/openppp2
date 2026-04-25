@@ -400,7 +400,7 @@ namespace ppp
                     {
                         if (NULLPTR == wszExePath)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspNoLspNullExePath);
                             return false;
                         }
 

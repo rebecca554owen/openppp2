@@ -98,7 +98,7 @@ namespace ppp {
 
                 bool opened = socket_.is_open();
                 if (opened) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetDatagramPortOpenSocketAlreadyOpen);
                     return false;
                 }
 

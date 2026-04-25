@@ -160,7 +160,7 @@ namespace ppp {
          */
         bool Socket::PolH(int s, int64_t microSeconds, SelectMode mode) noexcept {
             if (-1 == s) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -322,7 +322,7 @@ namespace ppp {
                 return Closesocket(*socket);
             }
             else {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullInstance);
                 return false;
             }
         }
@@ -333,7 +333,7 @@ namespace ppp {
                 return Closesocket(*socket);
             }
             else {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullInstance);
                 return false;
             }
         }
@@ -344,7 +344,7 @@ namespace ppp {
                 return Closesocket(*acceptor);
             }
             else {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullInstance);
                 return false;
             }
         }
@@ -508,7 +508,7 @@ namespace ppp {
          */
         bool Socket::SetTypeOfService(int fd, int tos) noexcept {
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -550,7 +550,7 @@ namespace ppp {
         bool Socket::SetSignalPipeline(int fd, bool sigpipe) noexcept {
             int err = 0;
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -571,7 +571,7 @@ namespace ppp {
          */
         bool Socket::ReuseSocketAddress(int fd, bool reuse) noexcept {
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -592,7 +592,7 @@ namespace ppp {
          */
         int Socket::GetTcpMss(int fd) noexcept {
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return -1;
             }
 
@@ -615,7 +615,7 @@ namespace ppp {
             static constexpr int TCP_MAX_MSS = 1460;
 
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -640,7 +640,7 @@ namespace ppp {
          */
         bool Socket::SetKeepAlive(int fd, bool enable, int idle_seconds, int interval_seconds, int probe_count) noexcept {
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -699,7 +699,7 @@ namespace ppp {
          */
         bool Socket::SetWindowSizeIfNotZero(int sockfd, int cwnd, int rwnd) noexcept {
             if (-1 == sockfd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -803,7 +803,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
             return false;
         }
 
@@ -825,7 +825,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
             return false;
         }
 
@@ -847,7 +847,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
             return false;
         }
 
@@ -857,7 +857,7 @@ namespace ppp {
         int Socket::GetHandle(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (!socket.is_open()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return -1;
             }
 
@@ -866,7 +866,7 @@ namespace ppp {
                 return ndfs;
             }
             catch (const std::exception&) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericUnknown);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNativeHandleQueryFailed);
                 return -1;
             }
         }
@@ -877,7 +877,7 @@ namespace ppp {
         int Socket::GetHandle(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (!s.is_open()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return -1;
             }
 
@@ -886,7 +886,7 @@ namespace ppp {
                 return ndfs;
             }
             catch (const std::exception&) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericUnknown);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNativeHandleQueryFailed);
                 return -1;
             }
         }
@@ -897,7 +897,7 @@ namespace ppp {
         int Socket::GetHandle(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (!s.is_open()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return -1;
             }
 
@@ -906,7 +906,7 @@ namespace ppp {
                 return ndfs;
             }
             catch (const std::exception&) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericUnknown);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNativeHandleQueryFailed);
                 return -1;
             }
         }
@@ -919,13 +919,13 @@ namespace ppp {
             const AcceptLoopbackCallback&                           callback,
             const GetContextCallback&                               context) noexcept {
             if (!acceptor || !acceptor->is_open()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return false;
             }
 
             if (!callback) {
                 Closesocket(acceptor);
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullAcceptCallback);
                 return false;
             }
 
@@ -954,7 +954,7 @@ namespace ppp {
             const Socket::GetContextCallback&                       context,
             const Socket::AcceptLoopbackSchedulerCallback&          scheduler) noexcept {
             if (!acceptor.is_open()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return false;
             }
 
@@ -1055,7 +1055,7 @@ namespace ppp {
             const AcceptLoopbackCallback&                           callback,
             const GetContextCallback&                               context) noexcept {
             if (!callback) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullAcceptCallback);
                 return false;
             }
 
@@ -1068,7 +1068,7 @@ namespace ppp {
          */
         bool Socket::AcceptLoopbackSchedulerAsync(const boost::asio::ip::tcp::acceptor& acceptor, const AcceptLoopbackSchedulerCallback& callback) noexcept {
             if (!callback) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullAcceptCallback);
                 return false;
             }
 
@@ -1100,7 +1100,7 @@ namespace ppp {
 
             boost::asio::ip::tcp::acceptor& acceptor_ = constantof(acceptor);
             if (acceptor_.is_open()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidState);
                 return false;
             }
 
@@ -1177,7 +1177,7 @@ namespace ppp {
             boost::asio::ip::udp::socket& socket_ = constantof(socket);
             if (!opened) {
                 if (socket_.is_open()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidState);
                     return false;
                 }
 
@@ -1253,7 +1253,7 @@ namespace ppp {
          */
         bool Socket::SetNonblocking(int fd, bool nonblocking) noexcept {
             if (-1 == fd) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -1294,7 +1294,7 @@ namespace ppp {
          */
         bool Socket::Closestream(boost::asio::posix::stream_descriptor* stream) noexcept {
             if (NULLPTR == stream) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::StreamDescriptorNull);
                 return false;
             }
 
@@ -1313,7 +1313,7 @@ namespace ppp {
                 }
             }
             catch (const std::exception&) {}
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericUnknown);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
             return false;
         }
 
@@ -1323,7 +1323,7 @@ namespace ppp {
         bool Socket::AdjustDefaultSocketOptional(boost::asio::ip::tcp::socket& socket, bool turbo) noexcept {
             bool opened = socket.is_open();
             if (!opened) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return false;
             }
 

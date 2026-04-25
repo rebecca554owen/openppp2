@@ -94,7 +94,7 @@ namespace ppp {
 
                 bool opened = socket_.is_open();
                 if (opened) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetDatagramPortStaticOpenSocketAlreadyOpen);
                     return false;
                 }
 
@@ -212,7 +212,7 @@ namespace ppp {
                 const boost::asio::ip::udp::endpoint&               remoteEP) noexcept {
 
                 if (NULLPTR == switcher || NULLPTR == exchanger) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetDatagramPortStaticOutputInvalidContext);
                     return false;
                 }
 

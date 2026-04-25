@@ -82,19 +82,19 @@ namespace ppp
 
             if (listenfd_ != INVALID_SOCKET)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketAcceptorOpenSocketAlreadyInitialized);
                 return false;
             }
 
             if (NULLPTR != hEvent_)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketAcceptorOpenEventAlreadyInitialized);
                 return false;
             }
 
             if (NULLPTR != afo_)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketAcceptorOpenHandleAlreadyInitialized);
                 return false;
             }
 
@@ -251,21 +251,21 @@ namespace ppp
             boost::asio::windows::object_handle* afo = reinterpret_cast<boost::asio::windows::object_handle*>(afo_.get());
             if (NULLPTR == afo)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketAcceptorNextHandleUnavailable);
                 return false;
             }
 
             int listenfd = listenfd_;
             if (listenfd == INVALID_SOCKET)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketAcceptorNextSocketUnavailable);
                 return false;
             }
 
             void* hEvent = hEvent_;
             if (NULLPTR == hEvent)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketAcceptorNextEventUnavailable);
                 return false;
             }
 

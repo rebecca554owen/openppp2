@@ -200,10 +200,10 @@ static ppp::diagnostics::ErrorCode                                          libo
     case LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING:
         return ErrorCode::RuntimeThreadStartFailed;
     case LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING:
-        return ErrorCode::GenericInvalidState;
+        return ErrorCode::AndroidLibInvalidState;
     case LIBOPENPPP2_ERROR_UNKNOWN:
     default:
-        return ErrorCode::GenericUnknown;
+        return ErrorCode::AndroidLibUnknownFailure;
     }
 }
 
@@ -420,7 +420,7 @@ bool                                                                        libo
 
 bool                                                                        libopenppp2_application::PostJNI(const ppp::function<void(JNIEnv*)>& task) noexcept {
     if (NULLPTR == task) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AndroidLibNullCallback);
         return false;
     }
 
@@ -1431,7 +1431,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_stop(JNIEnv* en
 
             bool ok = app->Release();
             if (!ok) {
-                return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::GenericInvalidState, LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING);
+                return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AndroidLibInvalidState, LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING);
             }
 
             return LIBOPENPPP2_ERROR_SUCCESS;

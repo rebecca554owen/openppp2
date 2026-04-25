@@ -262,7 +262,7 @@ bool WintunAdapter::SendPacket(const uint8_t* data, uint32_t len) noexcept {
     if (old & STOP_BIT) {
         // Already stopped – rollback and reject
         state_.fetch_sub(1, std::memory_order_release);
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WintunAdapterSendStoppedState);
         return false;
     }
 
@@ -298,7 +298,7 @@ bool WintunAdapter::Ready() noexcept {
 void WintunAdapter::ReceiveLoop() noexcept {
     HANDLE read_event = WintunGetReadWaitEvent(session_handle_);
     if (!read_event || !quit_event_) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WintunAdapterReceiveLoopInvalidState);
         return;
     }
 

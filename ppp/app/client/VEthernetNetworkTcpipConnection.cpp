@@ -266,7 +266,7 @@ namespace ppp {
                 }
 
                 if (NULLPTR == coroutine) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetNetworkTcpipConnectionSpawnNullCoroutine);
                     return false;
                 }
 

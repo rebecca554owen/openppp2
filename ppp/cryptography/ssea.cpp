@@ -108,7 +108,7 @@ namespace ppp
         {
             if (NULLPTR == data || data_size < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaDeltaEncodeInvalidInput);
                 return 0;
             }
 
@@ -163,7 +163,7 @@ namespace ppp
         {
             if (NULLPTR == data || data_size < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaDeltaDecodeInvalidInput);
                 return 0;
             }
 
@@ -227,7 +227,7 @@ namespace ppp
 
             if (NULLPTR == data || datalen < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94EncodeInvalidInput);
                 return NULLPTR;
             }
 
@@ -309,7 +309,7 @@ namespace ppp
 
             if (NULLPTR == data || datalen < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeInvalidInput);
                 return NULLPTR;
             }
 
@@ -320,14 +320,14 @@ namespace ppp
                 Byte b = bytes[i];
                 if (b < '\x20')
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeCharBelowPrintable);
                     return NULLPTR;   // Character below printable range
                 }
 
                 b -= '\x20';
                 if (b > BASE94_RADIX)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeCharOutOfAlphabet);
                     return NULLPTR;   // Character beyond the 94 symbols
                 }
 
@@ -339,20 +339,20 @@ namespace ppp
                         b = bytes[i];
                         if (b < '\x20')
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeEscapeCharBelowPrintable);
                             return NULLPTR;
                         }
 
                         b -= '\x20';
                         if (b > BASE93_RADIX)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeEscapeCharOutOfRange);
                             return NULLPTR;
                         }
                     }
                     else
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeTruncatedEscape);
                         return NULLPTR;   // Unexpected end of string
                     }
 
@@ -375,7 +375,7 @@ namespace ppp
                         int v = (((b - BASE93_RADIX) + 1) * BASE93_RADIX) + (bytes[++i] - '\x20');
                         if (v > 0xff)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeValueOverflow);
                             return NULLPTR;   // Decoded value out of byte range
                         }
 
@@ -431,7 +431,7 @@ namespace ppp
             uint8_t* p = (uint8_t*)data;
             if (NULLPTR == p || datalen < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecimalInvalidInput);
                 return 0;
             }
 
@@ -441,14 +441,14 @@ namespace ppp
                 uint8_t b = *p++;
                 if (b < '\x20')
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecimalCharBelowPrintable);
                     return 0;
                 }
 
                 b -= '\x20';
                 if (b >= BASE94_SYMBOL_COUNT)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecimalCharOutOfAlphabet);
                     return 0;
                 }
 
@@ -590,7 +590,7 @@ namespace ppp
 
             if (length < 0) 
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaMaskedXorInvalidRange);
                 return false;
             }
 

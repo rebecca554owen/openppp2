@@ -68,11 +68,11 @@ namespace ppp {
          */
         std::shared_ptr<Byte> ITransmissionQoS::ReadBytes(YieldContext& y, int length, const ReadBytesAsynchronousCallback& cb) noexcept {
             if (length < 1) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionQosReadBytesLengthInvalid, NULLPTR);
             }
 
             if (NULLPTR == cb) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionQosReadBytesNullCallback, NULLPTR);
             }
 
             YieldContext* co = y.GetPtr();
@@ -120,7 +120,7 @@ namespace ppp {
          */
         bool ITransmissionQoS::EndRead(int bytes_transferred) noexcept {
             if (bytes_transferred < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionQosEndReadInvalidBytes);
                 return false;
             }
             else {
@@ -163,7 +163,7 @@ namespace ppp {
                 return true;
             }
 
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionQosBeginReadNullCallback);
             return false;
         }
 

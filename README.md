@@ -248,7 +248,7 @@ The repository contains paired English/Chinese documents plus the root README pa
 │   │   └── ConsoleUI.h/.cpp      # TUI: render + input threads
 │   ├── diagnostics/
 │   │   ├── Error.h/.cpp          # Error code definitions and setters
-│   │   ├── ErrorCodes.def        # X-macro source: 466 error codes
+│   │   ├── ErrorCodes.def        # X-macro source: 542 error codes
 │   │   └── ErrorHandler.h/.cpp   # Handler registration / dispatch
 │   ├── tap/
 │   │   └── ITap.h/.cpp           # Virtual NIC abstraction interface
@@ -695,7 +695,7 @@ Full reference: [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md)
 
 ## Error Handling Summary
 
-Errors are represented as typed error codes defined in `ppp/diagnostics/ErrorCodes.def` via X-macro. There are **466 error codes across 22 categories**.
+Errors are represented as typed error codes defined in `ppp/diagnostics/ErrorCodes.def` via X-macro. There are **542 error codes**.
 
 ```mermaid
 flowchart LR

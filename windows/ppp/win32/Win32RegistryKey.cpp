@@ -43,7 +43,7 @@ namespace ppp
             }
             if (type != REG_SZ)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32RegistryReadTypeMismatch);
                 return L"";
             }
 
@@ -86,7 +86,7 @@ namespace ppp
             }
             if (type != REG_DWORD)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32RegistryReadTypeMismatch);
                 return 0;
             }
 
@@ -127,7 +127,7 @@ namespace ppp
             }
             if (type != REG_BINARY)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32RegistryReadTypeMismatch);
                 RegCloseKey(keyHandle);
                 return ppp::vector<WORD>();
             }

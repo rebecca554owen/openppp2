@@ -80,7 +80,7 @@ namespace ppp {
             bool sniproxy::be_http(const void* p) noexcept {
                 const char* data = static_cast<const char*>(p);
                 if (NULLPTR == data) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyHttpProbeNullInput);
                     return false;
                 }
                 
@@ -99,7 +99,7 @@ namespace ppp {
              */
             bool sniproxy::post(const ppp::function<void()>& callback) noexcept {
                 if (NULLPTR == callback) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyPostNullCallback);
                     return false;
                 }
 
@@ -120,7 +120,7 @@ namespace ppp {
              */
             bool sniproxy::be_host(ppp::string host, ppp::string domain) noexcept {
                 if (host.empty() || domain.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyHostMatchEmptyInput);
                     return false;
                 }
 
@@ -348,7 +348,7 @@ namespace ppp {
 
                 // Store the payload for later forwarding
                 if (!messages_.Write(local_socket_buf_, 0, static_cast<int>(tls_payload))) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyTlsHandshakeMessageWriteAllocFailed);
                     return false; // Memory allocation failure
                 }
 
@@ -373,7 +373,7 @@ namespace ppp {
             bool sniproxy::do_httpd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
                 auto response = std::make_shared<boost::asio::streambuf>();
                 if (NULLPTR == response) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyHttpHandshakeResponseAllocFailed);
                     return false;
                 }
 
@@ -413,7 +413,7 @@ namespace ppp {
                 }
 
                 if (!messages_.Write(buf.data(), 0, static_cast<int>(buf.size()))) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyHttpHandshakeMessageWriteAllocFailed);
                     return false; // Memory allocation failure
                 }
 
@@ -602,7 +602,7 @@ namespace ppp {
                 if (hostname_.empty() ||
                     (forward_connect_port <= IPEndPoint::MinPort) ||
                     (forward_connect_port > IPEndPoint::MaxPort)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyConnectForwardInvalidArguments);
                     return false;
                 }
 
@@ -647,7 +647,7 @@ namespace ppp {
                         boost::asio::ip::address iface = StringToAddress(configuration_->ip.interface_.data(), ignore);
                         boost::asio::ip::address pub = StringToAddress(configuration_->ip.public_.data(), ignore);
                         if ((addr == pub) || (addr == iface)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericConflict);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyConnectForwardCdnLoopConflict);
                             return false;
                         }
                     }
@@ -938,7 +938,7 @@ namespace ppp {
 
                 MemoryStream ms;
                 if (!ms.Write(local_socket_buf_, 0, hdr_sz)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyHandshakePrefetchWriteAllocFailed);
                     return false;
                 }
 
@@ -963,7 +963,7 @@ namespace ppp {
                 }
 
                 if (!ms.Write(local_socket_buf_ + hdr_sz, 0, http_probe_sz - hdr_sz)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SniProxyHandshakeHttpProbeWriteAllocFailed);
                     return false;
                 }
 

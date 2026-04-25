@@ -199,7 +199,7 @@ namespace ppp {
 
                 bool SetRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
                     if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinIPv6RouteCommandUnsafeToken);
                         return false;
                     }
 
@@ -248,7 +248,7 @@ namespace ppp {
 
                 bool DeleteRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
                     if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinIPv6RouteCommandUnsafeToken);
                         return false;
                     }
 

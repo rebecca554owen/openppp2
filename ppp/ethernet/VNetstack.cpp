@@ -391,7 +391,7 @@ namespace ppp {
          */
         bool VNetstack::Input(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept {
             if (NULLPTR == ip || NULLPTR == tcp || tcp_len < 1) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VNetstackNullPacketInput);
             }
 
             std::shared_ptr<ITap> tap = this->Tap;
@@ -790,7 +790,7 @@ namespace ppp {
          */
         bool VNetstack::CloseTcpLink(const std::shared_ptr<TapTcpLink>& link) noexcept {
             if (NULLPTR == link) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VNetstackNullLinkInput);
             }
 
             std::shared_ptr<ITap> tap = this->Tap;
@@ -1205,7 +1205,7 @@ namespace ppp {
          */
         bool VNetstack::TapTcpClient::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
             if (NULLPTR == socket) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VNetstackNullSocketInput);
             }
 
             std::shared_ptr<boost::asio::io_context> context = this->context_;
@@ -1250,13 +1250,13 @@ namespace ppp {
 
             int packet_length = this->sync_ack_bytes_size_.load(std::memory_order_acquire);
             if (packet_length < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VNetstackSyncAckInvalidState);
                 return false;
             }
 
             Byte sync_ack_state = VNETSTACK_SYNC_ACK_STATE_SYN_SENT;
             if (!this->sync_ack_state_.compare_exchange_strong(sync_ack_state, VNETSTACK_SYNC_ACK_STATE_SYN_RECVD)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VNetstackSyncAckInvalidState);
                 return false;
             }
 

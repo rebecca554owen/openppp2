@@ -108,7 +108,7 @@ namespace ppp {
                         auto tail = allocateds_.find(identification);
                         auto endl = allocateds_.end();
                         if (tail == endl) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolDeallocateUnknownIdentification);
                             return false;
                         }
 
@@ -147,7 +147,7 @@ namespace ppp {
                     auto tail = allocateds_map_.begin();
                     auto endl = allocateds_map_.end();
                     if (tail == endl) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolSweepStateEmpty);
                         return false;
                     }
 
@@ -364,7 +364,7 @@ namespace ppp {
                 using EchoAsynchronousContext = InternetControlMessageProtocol_EchoAsynchronousContext;
 
                 if (true == disposed_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolEchoDisposed);
                     return false;
                 }
 
@@ -418,7 +418,7 @@ namespace ppp {
                 const std::shared_ptr<EchoAsynchronousContext> context = make_shared_object<EchoAsynchronousContext>(identification_nat);
                 if (!context) {
                     Socket::Closesocket(socket);
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, false);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IcmpProtocolEchoContextAllocFailed, false);
                 }
                 else {
                     const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = this->BufferAllocator;
@@ -450,7 +450,7 @@ namespace ppp {
                     });
                 if (!timeout_cb) {
                     Socket::Closesocket(socket);
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, false);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IcmpProtocolEchoTimeoutCallbackAllocFailed, false);
                 }
 
                 context->timeout_ = Timer::Timeout(executor_, MAX_ICMP_TIMEOUT, *timeout_cb);
@@ -467,7 +467,7 @@ namespace ppp {
                 }
                 else {
                     context->Release();
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericAlreadyExists, false);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IcmpProtocolEchoTimeoutEntryConflict, false);
                 }
             }
 
@@ -475,7 +475,7 @@ namespace ppp {
             std::shared_ptr<IPFrame> InternetControlMessageProtocol::ER(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, int ttl, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IcmpFrame> e = make_shared_object<IcmpFrame>();
                 if (NULLPTR == e) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolEchoReplyFrameAllocFailed);
                     return NULLPTR;
                 }
 
@@ -496,7 +496,7 @@ namespace ppp {
             std::shared_ptr<IPFrame> InternetControlMessageProtocol::TE(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, UInt32 source, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IcmpFrame> e = make_shared_object<IcmpFrame>();
                 if (NULLPTR == e) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolTimeExceededFrameAllocFailed);
                     return NULLPTR;
                 }
 

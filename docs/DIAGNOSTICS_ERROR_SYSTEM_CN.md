@@ -2,11 +2,11 @@
 
 > **子系统：** `ppp::diagnostics`
 > **相关文件：**
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（503 行）
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（542 条）
 > - `ppp/diagnostics/Error.h` — 公共 API、`ErrorCode` 枚举、`ErrorSeverity` 枚举
 > - `ppp/diagnostics/Error.cpp` — 自由函数委托实现
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` 单例声明
-> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` 实现（133 行）
+> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` 实现（173 行）
 
 ---
 
@@ -42,7 +42,7 @@
 | **热路径零分配** | 错误码基于 `uint32_t` 枚举；`SetLastErrorCode` 写入 `thread_local` 及原子变量，无堆分配 |
 | **线程隔离** | 每个线程维护独立的 `tls_last_error_code_`，读写无需加锁 |
 | **全进程可观测性** | `last_error_code_snapshot_` 是 `std::atomic<uint32_t>`，所有线程均可见 |
-| **单一信息源** | 所有 503 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
+| **单一信息源** | 所有 542 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
 | **错误报告不抛异常** | `SetLastErrorCode` 声明为 `noexcept`；错误条件通过返回值传递 |
 | **观察者模式** | 通过 `RegisterErrorHandler` 注册具名回调，错误发生时同步调用 |
 | **严重级别感知** | 每个错误码携带 `kInfo`/`kWarning`/`kError`/`kFatal` 分级 |
@@ -54,7 +54,7 @@
 ```mermaid
 graph TB
     subgraph ppp/diagnostics
-        Def[ErrorCodes.def\nX-macro 定义\n503 个错误码]
+        Def[ErrorCodes.def\nX-macro 定义\n542 个错误码]
         Eh[Error.h\nErrorSeverity 枚举\nErrorCode 枚举\n自由函数]
         Ec[Error.cpp\n委托给 ErrorHandler::GetDefault()]
         Ehh[ErrorHandler.h\nErrorHandler 类\n单例]
@@ -70,8 +70,7 @@ graph TB
     subgraph 全进程状态
         Snap[last_error_code_snapshot_\nstd::atomic<uint32_t>]
         TS[last_error_timestamp_snapshot_\nstd::atomic<uint64_t>]
-        Handlers[error_handlers_\nunordered_map<string, function>]
-        Mutex[error_handlers_sync_\nstd::mutex]
+        Handlers[error_handlers_\nlist<ErrorHandlerEntry>]
     end
 
     Def --> Eh
@@ -84,7 +83,6 @@ graph TB
     Ehc --> Snap
     Ehc --> TS
     Ehc --> Handlers
-    Mutex -->|串行化注册| Handlers
 ```
 
 ---
@@ -100,10 +98,9 @@ X(名称, 描述文本, 严重级别)
 // 示例（第 1–25 行）：
 X(Success,                "Success",               ErrorSeverity::kInfo)
 X(GenericUnknown,         "Generic unknown error", ErrorSeverity::kError)
-X(GenericTimeout,         "Operation timed out",   ErrorSeverity::kWarning)
-X(AppStartupFailed,       "Application startup failed", ErrorSeverity::kFatal)
-X(IPv6LeasePoolExhausted, "The IPv6 lease pool has no remaining addresses available ...",
-                                                   ErrorSeverity::kError)
+X(SocketTimeout,          "Socket timeout",        ErrorSeverity::kWarning)
+X(RuntimeInitializationFailed, "Runtime initialization failed", ErrorSeverity::kFatal)
+X(IPv6LeaseConflict,      "IPv6 lease conflict",   ErrorSeverity::kError)
 ```
 
 该文件在 `ErrorHandler.cpp` 中被三次 `#include`，每次用不同的 `X` 宏展开：
@@ -124,7 +121,7 @@ enum class ErrorCode : uint32_t {
     Success = 0,
     GenericUnknown = 1,
     GenericInvalidArgument = 2,
-    // ... 500+ 个枚举值
+    // ... 其他条目
 };
 ```
 
@@ -202,18 +199,18 @@ enum class ErrorSeverity : uint8_t {
 | 级别 | 值 | 含义 | 示例码 |
 |---|---|---|---|
 | `kInfo` | 0 | 正常；仅 `Success` 使用此级别 | `Success` |
-| `kWarning` | 1 | 服务降级；操作可重试或跳过 | `GenericTimeout`、`GenericCanceled`、`GenericRateLimited` |
+| `kWarning` | 1 | 服务降级；操作可重试或跳过 | `SocketTimeout`、`TcpConnectTimeout`、`IPv6LeaseUnavailable` |
 | `kError` | 2 | 操作失败；会话可能终止，进程继续运行 | 大多数 IPv6 及会话错误 |
-| `kFatal` | 3 | 不可恢复；进程应退出并重启 | `AppStartupFailed`、`IPv6Unsupported`、`PlatformNotSupportGUAMode` |
+| `kFatal` | 3 | 不可恢复；进程应退出并重启 | `RuntimeInitializationFailed`、`IPv6Unsupported`、`PlatformNotSupportGUAMode` |
 
 ### 严重级别分布（来自 ErrorCodes.def）
 
 ```mermaid
 pie title ErrorCode 严重级别分布
     "kInfo (1)" : 1
-    "kWarning (18)" : 18
-    "kError (420)" : 420
-    "kFatal (64)" : 64
+    "kWarning (7)" : 7
+    "kError (506)" : 506
+    "kFatal (28)" : 28
 ```
 
 ---
@@ -230,23 +227,21 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 503 个值。每个错误码的数值即其在 `ErrorCodes.def` 中从 0 开始的行号。
+`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 542 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配。
 
 ### `ErrorCodes.def` 的分类结构
 
-文件按逻辑分段组织：
+文件按逻辑分段与扩展子系统块组织，实时目录会持续增长，应按“动态目录”理解。
 
-| 行号范围 | 分类 | 数量 |
-|---|---|---|
-| 1 | `Success` | 1 |
-| 2–25 | `Generic*` — 平台无关基础错误 | 24 |
-| 27–41 | `App*` — 应用生命周期错误 | 15 |
-| 43–60 | `Config*` — 配置解析错误 | 18 |
-| ~61–100 | `Net*` / 套接字错误 | ~40 |
-| ~101–200 | 会话 / 握手 / 认证 | ~100 |
-| ~201–310 | IPv6 子系统 | ~110 |
-| ~311–460 | TAP、TUN、路由 | ~150 |
-| ~461–503 | PPP / 协议 / 杂项 | ~43 |
+主要分组族如下：
+
+- 核心运行时：`App*`、`Config*`、`Runtime*`、`Memory*`、`File*`
+- 网络：`Network*`、`Socket*`、`Tcp*`、`Udp*`、`Dns*`、`Http*`、`WebSocket*`
+- 隧道与路由：`Tunnel*`、`Firewall*`、`Route*`、`Mapping*`
+- IPv6 与协议/会话平面：`IPv6*`、`Session*`、`Protocol*`、`Auth*`、`Crypto*`
+- 平台与子系统扩展：`Windows*`、`Darwin*`、`Tap*`、`Vmux*`、`VEthernet*`、`PaperAirplane*`、`AsyncWriteQueue*` 等
+
+若需准确实时数量，请始终以 `ErrorCodes.def` 直接统计结果为准。
 
 ---
 
@@ -270,8 +265,7 @@ private:
     std::atomic<uint32_t>          last_error_code_snapshot_{0};
     std::atomic<uint64_t>          last_error_timestamp_snapshot_{0};
 
-    std::mutex                     error_handlers_sync_;
-    ppp::unordered_map<ppp::string, ppp::function<void(int err)>> error_handlers_;
+    ppp::list<ErrorHandlerEntry>   error_handlers_;
 };
 ```
 
@@ -302,11 +296,18 @@ ErrorCode SetLastErrorCode(ErrorCode code) noexcept {
 
 ## 7. 线程本地错误状态
 
-**位置：** `ErrorHandler.cpp` 第 6–7 行
+**位置：** `ErrorHandler.cpp` 第 7–15 行
 
 ```cpp
-thread_local ErrorCode ErrorHandler::tls_last_error_code_ = ErrorCode::Success;
-thread_local uint64_t  ErrorHandler::tls_last_error_timestamp_ = 0;
+ErrorCode& ErrorHandler::ThreadLastErrorCode() noexcept {
+    static thread_local ErrorCode tls_last_error_code = ErrorCode::Success;
+    return tls_last_error_code;
+}
+
+uint64_t& ErrorHandler::ThreadLastErrorTimestamp() noexcept {
+    static thread_local uint64_t tls_last_error_timestamp = 0;
+    return tls_last_error_timestamp;
+}
 ```
 
 每个操作系统线程独立持有：
@@ -316,7 +317,7 @@ thread_local uint64_t  ErrorHandler::tls_last_error_timestamp_ = 0;
 ```mermaid
 graph LR
     T1[IO 线程 1] -->|SetLastErrorCode\nIPv6LeaseConflict| TLS1[tls_last_error_code_\n= IPv6LeaseConflict]
-    T2[IO 线程 2] -->|SetLastErrorCode\nGenericTimeout| TLS2[tls_last_error_code_\n= GenericTimeout]
+    T2[IO 线程 2] -->|SetLastErrorCode\nSocketTimeout| TLS2[tls_last_error_code_\n= SocketTimeout]
     T3[定时器线程] -->|SetLastErrorCode\nIPv6NeighborProxyDeleteFailed| TLS3[tls_last_error_code_\n= ...]
     TLS1 -->|互不干扰| TLS2
     TLS2 -->|互不干扰| TLS3
@@ -360,8 +361,8 @@ sequenceDiagram
     participant Snap as last_error_code_snapshot_
 
     T1->>Snap: store(IPv6LeaseConflict, relaxed) [t=100ms]
-    T2->>Snap: store(GenericTimeout, relaxed) [t=105ms]
-    Mon->>Snap: load(relaxed) → GenericTimeout [t=110ms]
+    T2->>Snap: store(SocketTimeout, relaxed) [t=105ms]
+    Mon->>Snap: load(relaxed) → SocketTimeout [t=110ms]
     Note over Mon: 看到最后一次写入；可能错过 T1 的写入
 ```
 
@@ -381,33 +382,34 @@ sequenceDiagram
 
 ```cpp
 ErrorCode ErrorHandler::SetLastErrorCode(ErrorCode code) noexcept {
-    // 1. 写入线程本地：
-    tls_last_error_code_ = code;
+    ErrorCode& tls_last_error_code = ThreadLastErrorCode();
+    uint64_t& tls_last_error_timestamp = ThreadLastErrorTimestamp();
 
-    // 2. 记录时间戳：
-    tls_last_error_timestamp_ = ppp::threading::Executors::GetTickCount();
+    tls_last_error_code = code;
+    tls_last_error_timestamp = ppp::threading::Executors::GetTickCount();
+    last_error_code_snapshot_.store(static_cast<uint32_t>(code), std::memory_order_relaxed);
+    last_error_timestamp_snapshot_.store(tls_last_error_timestamp, std::memory_order_relaxed);
 
-    // 3. 原子更新全进程快照：
-    last_error_code_snapshot_.store(
-        static_cast<uint32_t>(code), std::memory_order_relaxed);
-    last_error_timestamp_snapshot_.store(
-        tls_last_error_timestamp_, std::memory_order_relaxed);
-
-    // 4. 快照回调表（加锁、复制、释锁）：
-    ppp::unordered_map<ppp::string, ppp::function<void(int err)>> error_handlers;
-    {
-        std::lock_guard<std::mutex> scope(error_handlers_sync_);
-        error_handlers = error_handlers_;
+    static thread_local bool tls_error_handler_invoking = false;
+    if (tls_error_handler_invoking) {
+        return code;
     }
 
-    // 5. 在锁外逐一调用回调（捕获所有异常）：
+    struct RecursiveDispatchGuard {
+        explicit RecursiveDispatchGuard(bool& flag_ref) noexcept : flag(flag_ref) { flag = true; }
+        ~RecursiveDispatchGuard() noexcept { flag = false; }
+        bool& flag;
+    } recursive_dispatch_guard(tls_error_handler_invoking);
+
     int error_value = static_cast<int>(code);
-    for (auto&& error_handler : error_handlers) {
-        if (NULLPTR == error_handler.second) { continue; }
+    for (const ErrorHandlerEntry& error_handler : error_handlers_) {
+        if (NULLPTR == error_handler.handler) {
+            continue;
+        }
+
         try {
-            error_handler.second(error_value);
+            error_handler.handler(error_value);
         } catch (...) {
-            // 回调抛出的异常绝不能向外传播；全部吞掉。
         }
     }
 
@@ -417,15 +419,15 @@ ErrorCode ErrorHandler::SetLastErrorCode(ErrorCode code) noexcept {
 
 ### 关键实现说明
 
-1. **调用前先复制回调表**（第 33–37 行）：在 `error_handlers_sync_` 保护下将 map 快照复制出来，释放锁后再调用回调。这保证了：
-   - 回调本身可以安全调用 `RegisterErrorHandler`（也需要获取该锁），不会死锁。
-   - 分发过程中新注册的回调不会影响本次分发。
+1. **递归分发有保护**：通过线程局部守卫避免回调链路内部再次调用 `SetLastErrorCode()` 造成无限重入。
 
-2. **吞掉所有异常**（第 47–48 行）：抛出异常的回调不得使 `SetLastErrorCode` 崩溃。`try-catch(...)` 确保函数语义上是 `noexcept` 安全的。
+2. **回调表原地遍历**：热路径不做锁与复制。该设计依赖“注册只在初始化阶段进行”的前提。
 
-3. **同步调用**：回调在调用线程上、`SetLastErrorCode` 内部同步执行。回调必须快速完成，且不得递归调用 `SetLastErrorCode`（不会死锁，但若回调本身触发新错误可能导致无限递归）。
+3. **吞掉所有异常**：抛出异常的回调不得使 `SetLastErrorCode` 崩溃。`try-catch(...)` 确保函数语义上是 `noexcept` 安全的。
 
-4. **返回值**：`SetLastErrorCode` 返回收到的同一错误码，便于如下写法：
+4. **同步调用**：回调在调用线程上、`SetLastErrorCode` 内部同步执行。回调必须快速完成。
+
+5. **返回值**：`SetLastErrorCode` 返回收到的同一错误码，便于如下写法：
    ```cpp
    return ppp::diagnostics::SetLastError(ErrorCode::IPv6LeaseConflict, false);
    ```
@@ -528,18 +530,28 @@ auto triplet = ppp::diagnostics::FormatErrorTriplet(
 **位置：** `ErrorHandler.cpp` 第 122–131 行
 
 ```cpp
-void ErrorHandler::RegisterErrorHandler(
-    const ppp::string& key,
-    const ppp::function<void(int err)>& handler) noexcept {
+void ErrorHandler::RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept {
+    for (auto it = error_handlers_.begin(); error_handlers_.end() != it; ++it) {
+        if (it->key != key) {
+            continue;
+        }
 
-    std::lock_guard<std::mutex> scope(error_handlers_sync_);
-
-    if (NULLPTR == handler) {
-        error_handlers_.erase(key);
+        if (NULLPTR == handler) {
+            error_handlers_.erase(it);
+        } else {
+            it->handler = handler;
+        }
         return;
     }
 
-    error_handlers_[key] = handler;
+    if (NULLPTR == handler) {
+        return;
+    }
+
+    ErrorHandlerEntry entry;
+    entry.key = key;
+    entry.handler = handler;
+    error_handlers_.push_back(std::move(entry));
 }
 ```
 
@@ -547,7 +559,7 @@ void ErrorHandler::RegisterErrorHandler(
 
 - **基于 key 的 upsert**：使用相同 `key` 重复注册会覆盖之前的回调。
 - **移除**：传入 `NULLPTR` 作为 handler 可移除该 `key` 对应的注册。
-- **线程安全**：注册由 `error_handlers_sync_` 串行化。但在多线程运行时启动后调用 `RegisterErrorHandler` **不安全**（头文件中有文档说明）。
+- **线程安全**：注册操作**不是线程安全**的，必须在 worker 线程启动前完成。
 
 ### 注册时机规范
 
@@ -600,10 +612,10 @@ if (!ok) {
 return ppp::diagnostics::SetLastError(ErrorCode::IPv6LeaseConflict);
 
 // 返回 -1（或其他整型哨兵）并设置错误码：
-return ppp::diagnostics::SetLastError<int>(ErrorCode::GenericOutOfMemory);
+return ppp::diagnostics::SetLastError<int>(ErrorCode::MemoryAllocationFailed);
 
 // 返回 NULLPTR 并设置错误码：
-return ppp::diagnostics::SetLastError<SomePointer*>(ErrorCode::GenericNotFound);
+return ppp::diagnostics::SetLastError<SomePointer*>(ErrorCode::TunnelDeviceMissing);
 ```
 
 这些辅助函数防止了常见错误——设置错误码后忘记返回哨兵值：
@@ -643,16 +655,16 @@ void OnErrorObserved(int err_int) {
 ```mermaid
 graph TD
     All[全部 ErrorCode] --> Info[kInfo\n仅 Success]
-    All --> Warning[kWarning\nGenericTimeout\nGenericCanceled\nGenericRateLimited\n...]
+    All --> Warning[kWarning\nSocketTimeout\nTcpConnectTimeout\nIPv6LeaseUnavailable\n...]
     All --> Error[kError\nIPv6 租约错误\nNDP 代理错误\n会话错误\n套接字错误\n...]
-    All --> Fatal[kFatal\nAppStartupFailed\nIPv6Unsupported\nPlatformNotSupportGUAMode\nConfigFieldMissing\n...]
+    All --> Fatal[kFatal\nRuntimeInitializationFailed\nIPv6Unsupported\nPlatformNotSupportGUAMode\nConfigFieldMissing\n...]
 ```
 
 ### Fatal 级别码——需要运维介入
 
 | 错误码 | 消息 | 建议操作 |
 |---|---|---|
-| `AppStartupFailed` | Application startup failed | 检查日志；可能需要 root 权限 |
+| `RuntimeInitializationFailed` | Runtime initialization failed | 检查启动顺序与依赖子系统 |
 | `AppAlreadyRunning` | Application already running | 删除过期 PID 文件 |
 | `AppInvalidCommandLine` | Invalid command-line arguments | 更正启动命令 |
 | `AppConfigurationMissing` | Configuration missing | 创建 `appsettings.json` |
@@ -718,8 +730,8 @@ graph TB
 | `<子系统><资源>Invalid` | `IPv6PrefixInvalid` |
 | `<子系统><资源>Exhausted` | `IPv6LeasePoolExhausted` |
 | `<子系统><资源>Conflict` | `IPv6AddressConflict` |
-| `Generic<条件>` | `GenericTimeout` |
-| `App<阶段>Failed` | `AppStartupFailed` |
+| `<子系统><条件>` | `VmuxSocketSendInvalidPayload` |
+| `App<阶段>Failed` | `AppPreflightCheckFailed` |
 | `Config<字段/阶段>Invalid` | `ConfigFieldInvalid` |
 
 ---

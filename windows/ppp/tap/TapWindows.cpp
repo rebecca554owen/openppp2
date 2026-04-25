@@ -236,7 +236,7 @@ namespace ppp
 
             if (componentId.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapWindowsCreateComponentIdEmpty);
                 return NULLPTR;
             }
 
@@ -743,7 +743,7 @@ namespace ppp
         {
             if (path.empty() || declareTapName.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapWindowsInstallDriverInvalidArguments);
                 return false;
             }
 
@@ -814,7 +814,7 @@ namespace ppp
         {
             if (path.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapWindowsUninstallDriverPathEmpty);
                 return false;
             }
 

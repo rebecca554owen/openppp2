@@ -57,7 +57,7 @@ namespace ppp {
             /** @brief Builds an information object from a JSON value object. */
             std::shared_ptr<VirtualEthernetInformation> VirtualEthernetInformation::FromJson(const Json::Value& json) noexcept {
                 if (!json.isObject()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetInformationFromJsonInvalidObject);
                     return NULLPTR;
                 }
 
@@ -77,7 +77,7 @@ namespace ppp {
             /** @brief Builds an information object from JSON text. */
             std::shared_ptr<VirtualEthernetInformation> VirtualEthernetInformation::FromJson(const ppp::string& json) noexcept {
                 if (json.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetInformationFromJsonTextEmpty);
                     return NULLPTR;
                 }
 
@@ -179,7 +179,7 @@ namespace ppp {
             bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const ppp::string& json) noexcept {
                 if (json.empty()) {
                     value.Clear();
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetInformationExtensionsFromJsonTextEmpty);
                     return false;
                 }
 

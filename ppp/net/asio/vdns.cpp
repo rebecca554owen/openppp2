@@ -737,7 +737,7 @@ namespace ppp {
                     ppp::string&                                out_hostname,
                     NamespaceRecordNodePtr&                     out_node) noexcept {
                     if (NULLPTR == hostname || '\x0' == *hostname) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VdnsResolveFromCacheHostnameInvalid);
                         return false;
                     }
 
@@ -823,7 +823,7 @@ namespace ppp {
                     const DNSRequestAsynchronousCallback&                       cb) noexcept {
 
                     if (hostname.empty() || destinations.empty()) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VdnsSendRequestInvalidArguments);
                     }
 
                     auto ctx = std::make_shared<DNS_RequestContext>(context);
@@ -855,7 +855,7 @@ namespace ppp {
                     const ppp::function<void(const boost::asio::ip::address&)>& cb) noexcept {
 
                     if (NULLPTR == cb) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VdnsResolveAsyncNullCallback);
                     }
 
                     ppp::string hostname_str;
@@ -914,7 +914,7 @@ namespace ppp {
                     const ppp::function<void(const ppp::unordered_set<boost::asio::ip::address>&)>& cb) noexcept {
 
                     if (NULLPTR == cb) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VdnsResolveAsync2NullCallback);
                     }
 
                     ppp::string hostname_str;
@@ -1212,7 +1212,7 @@ namespace ppp {
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV6[] = ".ip6.arpa";
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV4[] = ".in-addr.arpa";
                     if (NULLPTR == hostname || '\x0' == *hostname) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VdnsIsReverseQueryHostnameInvalid);
                         return false;
                     }
 

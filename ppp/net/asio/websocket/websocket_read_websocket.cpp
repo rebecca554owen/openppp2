@@ -25,7 +25,7 @@ namespace ppp {
              */
             bool websocket::Read(const void* buffer, int offset, int length, YieldContext& y) noexcept {
                 if (NULLPTR == buffer || offset < 0 || length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketReadInvalidArguments);
                     return false;
                 }
 

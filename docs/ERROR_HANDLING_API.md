@@ -96,7 +96,7 @@ return SetLastError(ErrorCode::SocketBindFailed, false);
 /**
  * @brief Get the current thread-local error code.
  * @return The most recently set ErrorCode on this thread.
- * @note  Returns ErrorCode::None if no error has been set.
+ * @note  Returns ErrorCode::Success if no error has been set.
  */
 ppp::diagnostics::ErrorCode GetLastErrorCode() noexcept;
 ```
@@ -224,7 +224,7 @@ All failure branches in operational code must set diagnostics before returning f
 bool VEthernetNetworkSwitcher::Open() noexcept {
     // ... attempt to open virtual adapter ...
     if (!adapter_opened) {
-        return SetLastError(ErrorCode::TapOpenFailed, false);  // CORRECT
+        return SetLastError(ErrorCode::TunnelOpenFailed, false);  // CORRECT
     }
 
     if (!route_applied) {
@@ -321,21 +321,21 @@ Key `ppp::diagnostics::ErrorCode` values relevant to the error handling API:
 
 | ErrorCode | Value | Description |
 |-----------|-------|-------------|
-| `None` | 0 | No error |
-| `Unspecified` | 1 | Unspecified error |
-| `InvalidConfiguration` | 100 | Configuration load or validation failure |
-| `PrivilegeInsufficient` | 101 | Insufficient OS privilege |
-| `DuplicateInstance` | 102 | Another instance is already running |
-| `TapOpenFailed` | 200 | Virtual adapter open failed |
-| `RouteAddFailed` | 201 | Route table modification failed |
-| `DnsConfigFailed` | 202 | DNS configuration failed |
-| `SocketBindFailed` | 300 | Socket bind operation failed |
-| `HandshakeFailed` | 400 | Transport handshake did not complete |
-| `HandshakeTimeout` | 401 | Handshake timed out |
-| `AuthenticationFailed` | 402 | Authentication rejected |
-| `ManagedServerConnectionFailed` | 10200 | Cannot reach management backend |
-| `ManagedServerAuthenticationFailed` | 10201 | Backend rejected authentication |
-| `ManagedServerQuotaExceeded` | 10202 | User quota exhausted |
+| `Success` | 0 | No error |
+| `GenericUnknown` | 1 | Generic unknown error |
+| `ConfigLoadFailed` | 54 | Configuration load or validation failure |
+| `AppPrivilegeRequired` | 52 | Insufficient OS privilege |
+| `AppAlreadyRunning` | 46 | Another instance is already running |
+| `TunnelOpenFailed` | 141 | Virtual adapter open failed |
+| `RouteAddFailed` | 156 | Route table modification failed |
+| `ConfigDnsRuleLoadFailed` | 63 | DNS configuration failed |
+| `SocketBindFailed` | 107 | Socket bind operation failed |
+| `SessionHandshakeFailed` | 193 | Transport handshake did not complete |
+| `TcpConnectTimeout` | 121 | Handshake timed out |
+| `SessionAuthFailed` | 192 | Authentication rejected |
+| `NetworkInterfaceOpenFailed` | 94 | Cannot reach management backend |
+| `AuthCredentialInvalid` | 214 | Backend rejected authentication |
+| `SessionQuotaExceeded` | 196 | User quota exhausted |
 
 See `ppp/diagnostics/Error.h` for the complete enum definition.
 
@@ -425,14 +425,14 @@ void ShutdownDiagnostics() {
 When adding a new failure branch:
 
 - [ ] Call `SetLastErrorCode(...)` or `SetLastError(...)` before returning failure.
-- [ ] Choose the most specific `ErrorCode` available; do not default to `Unspecified`.
+- [ ] Choose the most specific `ErrorCode` available; do not default to broad generic codes.
 - [ ] If no specific code exists, add one to `ppp/diagnostics/Error.h` with a clear comment.
 - [ ] Verify the new code appears in `FormatErrorString` with a meaningful message.
 - [ ] Update `ERROR_CODES.md` and `ERROR_CODES_CN.md` if a new code is added.
 
 Entry-point guardrail:
 
-- [ ] In `main.cpp`, if `Run()` fails but thread-local diagnostics is still `Success`, set a non-success fallback (`GenericUnknown`) before printing.
+- [ ] In `main.cpp`, if `Run()` fails but thread-local diagnostics is still `Success`, set a non-success fallback (`AppMainRunFailedWithoutSpecificError`) before printing.
 
 ---
 

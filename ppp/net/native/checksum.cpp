@@ -64,7 +64,7 @@ namespace ppp
                 struct ip_hdr* iphdr = (struct ip_hdr*)packet;
                 if (NULLPTR == iphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIpParseNullPacket);
                     return NULLPTR;
                 }
 
@@ -161,14 +161,14 @@ namespace ppp
             {
                 if (NULLPTR == iphdr || size < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumTcpParseInvalidArguments);
                     return NULLPTR;
                 }
 
                 struct tcp_hdr* tcphdr = (struct tcp_hdr*)packet;
                 if (NULLPTR == tcphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumTcpParseNullHeader);
                     return NULLPTR;
                 }
 
@@ -214,14 +214,14 @@ namespace ppp
             struct udp_hdr* udp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept {
                 if (NULLPTR == iphdr || size < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumUdpParseInvalidArguments);
                     return NULLPTR;
                 }
 
                 struct udp_hdr* udphdr = (struct udp_hdr*)packet;
                 if (NULLPTR == udphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumUdpParseNullHeader);
                     return NULLPTR;
                 }
 
@@ -268,14 +268,14 @@ namespace ppp
             {
                 if (NULLPTR == iphdr || size < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIcmpParseInvalidArguments);
                     return NULLPTR;
                 }
 
                 struct icmp_hdr* icmphdr = (struct icmp_hdr*)packet;
                 if (NULLPTR == icmphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIcmpParseNullHeader);
                     return NULLPTR;
                 }
 
@@ -529,14 +529,14 @@ namespace ppp
             {
                 if (cidrs.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddAllRoutesInputEmpty);
                     return false;
                 }
 
                 ppp::vector<ppp::string> routes;
                 if (Tokenize<ppp::string>(cidrs, routes, "\r\n") < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddAllRoutesTokenizeFailed);
                     return false;
                 }
 
@@ -553,7 +553,7 @@ namespace ppp
             {
                 if (cidr.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddRouteInputEmpty);
                     return false;
                 }
 
@@ -570,7 +570,7 @@ namespace ppp
                 {
                     if (i == 0)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddRouteMissingHostBeforeSlash);
                         return false;
                     }
 

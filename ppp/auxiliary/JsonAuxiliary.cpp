@@ -33,24 +33,24 @@ namespace ppp {
          */
         Json::Value JsonAuxiliary::FromString(const char* json_string, int json_size) noexcept {
             if (NULLPTR == json_string) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringNullInput);
                 return Json::Value();
             }
 
             if (json_size < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringInvalidSize);
                 return Json::Value();
             }
 
             if (*json_string == '\x0') {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringInputEmpty);
                 return Json::Value();
             }
 
             Json::Reader reader;
             Json::Value json;
             if (!reader.parse(json_string, json_string + json_size, json)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringParseFailed);
                 return Json::Value();
             }
 

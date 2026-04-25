@@ -274,7 +274,7 @@ namespace ppp {
          */
         std::shared_ptr<Timer> Timer::Timeout(const std::shared_ptr<boost::asio::io_context>& context, int milliseconds, const TimeoutEventHandler& handler) noexcept {
             if (NULLPTR == handler) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TimerTimeoutNullHandler);
                 return NULLPTR;
             }
 
@@ -318,7 +318,7 @@ namespace ppp {
          */
         bool Timer::Timeout(int milliseconds, ppp::coroutines::YieldContext& y) noexcept {
             if (!y) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TimerTimeoutYieldInvalidContext);
                 return false;
             }
 

@@ -262,12 +262,12 @@ namespace ppp {
              */
             static bool Write(ITransmission* transmission, const void* packet, int packet_length, const ITransmission::AsynchronousWriteBytesCallback& cb) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionBridgeWriteInvalidPacket);
                     return false;
                 }
 
                 if (NULLPTR == cb) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionBridgeWriteNullCallback);
                     return false;
                 }
 
@@ -399,7 +399,7 @@ namespace ppp {
                 int packet_length = outlen + k_size;
                 std::shared_ptr<Byte> packet = BufferswapAllocator::MakeByteArray(allocator, packet_length);
                 if (NULLPTR == packet) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, NULLPTR);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionBase94EncodePacketAllocFailed, NULLPTR);
                 }
 
                 Byte* memory = packet.get();
@@ -566,7 +566,7 @@ namespace ppp {
 
             // Adjust length: 65536 → 65535 (avoid zero‑length packets).
             if (--EVP_payload_length < 0) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionHeaderEncryptInvalidPayloadLength, NULLPTR);
             }
 
             // Header array: [seed_byte, high_byte, low_byte]
@@ -692,7 +692,7 @@ namespace ppp {
             else {
                 output = BufferswapAllocator::MakeByteArray(allocator, datalen);
                 if (NULLPTR == output) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, NULLPTR);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionPayloadEncryptCopyAllocFailed, NULLPTR);
                 }
 
                 memcpy(output.get(), data, datalen);
@@ -863,7 +863,7 @@ namespace ppp {
 
             auto payload = BufferswapAllocator::MakeByteArray(allocator, payload_len);
             if (NULLPTR == payload) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionPacketDecryptPayloadAllocFailed, NULLPTR);
             }
 
             memcpy(payload.get(), data + EVP_HEADER_MSS, payload_len);
@@ -1005,7 +1005,7 @@ namespace ppp {
 
             auto msg = BufferswapAllocator::MakeByteArray(allocator, packet_length += sizeof(kfs));
             if (NULLPTR == msg) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionHandshakePackBufferAllocFailed, NULLPTR);
             }
 
             Byte* mem = msg.get();
@@ -1225,10 +1225,10 @@ namespace ppp {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
                 elif (NULLPTR == packet || packet_length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionWriteAsyncInvalidPacket);
                 }
                 elif (NULLPTR == cb) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionWriteAsyncNullCallback);
                 }
                 else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
@@ -1245,12 +1245,12 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionEncryptInvalidArguments);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionEncryptZeroLengthInput);
                 return NULLPTR;
             }
 
@@ -1269,12 +1269,12 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionDecryptInvalidArguments);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionDecryptZeroLengthInput);
                 return NULLPTR;
             }
 

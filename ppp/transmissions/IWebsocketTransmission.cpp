@@ -75,7 +75,7 @@ namespace ppp {
             YieldContext&                                           y) noexcept {
 
             if (NULLPTR == configuration || NULLPTR == socket) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebsocketTransmissionHandshakeInvalidArguments);
                 return false;
             }
 
@@ -143,7 +143,7 @@ namespace ppp {
             YieldContext&                                           y) noexcept {
 
             if (NULLPTR == configuration || NULLPTR == socket) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebsocketTransmissionHandshakeInvalidArguments);
                 return false;
             }
 

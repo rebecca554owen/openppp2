@@ -443,7 +443,7 @@ namespace ppp {
                 int headers_endoffset = index + 4;
                 int pushfd_array_size = protocol_array_size - headers_endoffset;
                 if (pushfd_array_size < 0) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInsufficientBuffer);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ForwardingHttpHandshakeOverflowLengthInvalid);
                     return false;
                 }
 
@@ -679,7 +679,7 @@ namespace ppp {
                 }
 
                 if (acceptor_.is_open()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ForwardingOpenInternalAcceptorAlreadyOpen);
                     return -1;
                 }
 
@@ -918,7 +918,7 @@ namespace ppp {
             /** @brief Spawns coroutine to connect accepted local socket to upstream proxy. */
             bool IForwarding::ConnectToProxyServer(const std::shared_ptr<boost::asio::io_context>& context, const ppp::net::Socket::AsioStrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, Timer* timeout_key) noexcept {
                 if (NULLPTR == context || NULLPTR == socket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ForwardingConnectProxyInvalidContextOrSocket);
                     return false;
                 }
                 
@@ -1268,7 +1268,7 @@ namespace ppp {
 
                         std::size_t next_size = length + host_size;
                         if ((next_size) >= (sizeof(data) - 2)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInsufficientBuffer);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ForwardingSocksHandshakeHostTooLong);
                             return false;
                         }
 

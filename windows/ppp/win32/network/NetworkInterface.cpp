@@ -924,7 +924,7 @@ namespace ppp
             {
                 if (adapter_name.empty())
                 {
-                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::NetworkInterfaceGetIfIndexEmptyFriendlyName);
                 }
 
                 DWORD dwSize = 0;
@@ -1216,7 +1216,7 @@ namespace ppp
             {
                 if (interface_name.empty() || ip.empty() || mask.empty())
                 {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceSetIpAddressesInvalidArguments);
                 }
 
                 PROCESS_INFORMATION pi;
@@ -1262,7 +1262,7 @@ namespace ppp
 
             static bool ExecuteNetshCommand(const ppp::string& command_line, ppp::diagnostics::ErrorCode error_code, bool publish_error) noexcept {
                 if (command_line.empty()) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceExecuteNetshCommandEmpty);
                 }
 
                 PROCESS_INFORMATION pi;

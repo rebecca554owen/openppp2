@@ -96,7 +96,7 @@ return SetLastError(ErrorCode::SocketBindFailed, false);
 /**
  * @brief 获取当前线程局部错误码。
  * @return 本线程最近一次设置的 ErrorCode。
- * @note  如果尚未设置过错误，返回 ErrorCode::None。
+ * @note  如果尚未设置过错误，返回 ErrorCode::Success。
  */
 ppp::diagnostics::ErrorCode GetLastErrorCode() noexcept;
 ```
@@ -224,7 +224,7 @@ stateDiagram-v2
 bool VEthernetNetworkSwitcher::Open() noexcept {
     // ... 尝试打开虚拟适配器 ...
     if (!adapter_opened) {
-        return SetLastError(ErrorCode::TapOpenFailed, false);  // 正确
+        return SetLastError(ErrorCode::TunnelOpenFailed, false);  // 正确
     }
 
     if (!route_applied) {
@@ -321,21 +321,21 @@ jint openppp2_run(...) {
 
 | ErrorCode | 值 | 描述 |
 |-----------|-----|------|
-| `None` | 0 | 无错误 |
-| `Unspecified` | 1 | 未指定错误 |
-| `InvalidConfiguration` | 100 | 配置加载或验证失败 |
-| `PrivilegeInsufficient` | 101 | OS 权限不足 |
-| `DuplicateInstance` | 102 | 另一个实例已在运行 |
-| `TapOpenFailed` | 200 | 虚拟适配器打开失败 |
-| `RouteAddFailed` | 201 | 路由表修改失败 |
-| `DnsConfigFailed` | 202 | DNS 配置失败 |
-| `SocketBindFailed` | 300 | Socket 绑定操作失败 |
-| `HandshakeFailed` | 400 | 传输握手未完成 |
-| `HandshakeTimeout` | 401 | 握手超时 |
-| `AuthenticationFailed` | 402 | 认证被拒绝 |
-| `ManagedServerConnectionFailed` | 10200 | 无法连接管理后端 |
-| `ManagedServerAuthenticationFailed` | 10201 | 后端拒绝认证 |
-| `ManagedServerQuotaExceeded` | 10202 | 用户额度耗尽 |
+| `Success` | 0 | 无错误 |
+| `GenericUnknown` | 1 | 通用未知错误 |
+| `ConfigLoadFailed` | 54 | 配置加载或验证失败 |
+| `AppPrivilegeRequired` | 52 | OS 权限不足 |
+| `AppAlreadyRunning` | 46 | 另一个实例已在运行 |
+| `TunnelOpenFailed` | 141 | 虚拟适配器打开失败 |
+| `RouteAddFailed` | 156 | 路由表修改失败 |
+| `ConfigDnsRuleLoadFailed` | 63 | DNS 配置失败 |
+| `SocketBindFailed` | 107 | Socket 绑定操作失败 |
+| `SessionHandshakeFailed` | 193 | 传输握手未完成 |
+| `TcpConnectTimeout` | 121 | 握手超时 |
+| `SessionAuthFailed` | 192 | 认证被拒绝 |
+| `NetworkInterfaceOpenFailed` | 94 | 无法连接管理后端 |
+| `AuthCredentialInvalid` | 214 | 后端拒绝认证 |
+| `SessionQuotaExceeded` | 196 | 用户额度耗尽 |
 
 完整枚举定义参见 `ppp/diagnostics/Error.h`。
 
@@ -424,14 +424,14 @@ void ShutdownDiagnostics() {
 添加新失败分支时：
 
 - [ ] 在返回失败值前调用 `SetLastErrorCode(...)` 或 `SetLastError(...)`。
-- [ ] 选择最具体的 `ErrorCode`，不要默认用 `Unspecified`。
+- [ ] 选择最具体的 `ErrorCode`，不要默认使用宽泛通用码。
 - [ ] 如果没有合适的码，在 `ppp/diagnostics/Error.h` 中添加，并加上清晰注释。
 - [ ] 验证新码在 `FormatErrorString` 中有有意义的消息。
 - [ ] 如果新增了错误码，同步更新 `ERROR_CODES.md` 和 `ERROR_CODES_CN.md`。
 
 入口兜底约束：
 
-- [ ] 在 `main.cpp` 中，当 `Run()` 失败且线程本地错误仍为 `Success` 时，先设置一个非成功兜底码（`GenericUnknown`）再打印。
+- [ ] 在 `main.cpp` 中，当 `Run()` 失败且线程本地错误仍为 `Success` 时，先设置一个非成功兜底码（`AppMainRunFailedWithoutSpecificError`）再打印。
 
 ---
 

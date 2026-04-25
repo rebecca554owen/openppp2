@@ -244,7 +244,7 @@ namespace ppp {
         // a dedicated non-IO thread (e.g. startup/shutdown paths) are safe without restriction.
         static bool ExecuteIpCommand(const ppp::string& command, ppp::diagnostics::ErrorCode failure_code) noexcept {
             if (command.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxCommandEmpty);
                 return false;
             }
 
@@ -259,7 +259,7 @@ namespace ppp {
 
         bool TapLinux::SetIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -270,7 +270,7 @@ namespace ppp {
 
         bool TapLinux::SetMtu(const ppp::string& ifrName, int mtu) noexcept {
             if (!IsSafeShellToken(ifrName)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -283,7 +283,7 @@ namespace ppp {
 
         bool TapLinux::DeleteIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -294,7 +294,7 @@ namespace ppp {
 
         bool TapLinux::AddRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -320,7 +320,7 @@ namespace ppp {
 
         bool TapLinux::DeleteRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -346,7 +346,7 @@ namespace ppp {
 
         bool TapLinux::EnableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
             if (!IsSafeShellToken(ifrName)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -402,7 +402,7 @@ namespace ppp {
 
         bool TapLinux::DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
             if (!IsSafeShellToken(ifrName)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
             }
 
@@ -996,7 +996,7 @@ namespace ppp {
 
         bool TapLinux::SetInterfaceName(int dev_handle, const ppp::string& ifrName) noexcept {
             if (ifrName.size() >= IF_NAMESIZE) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxInterfaceNameTooLong);
                 return false;
             }
 

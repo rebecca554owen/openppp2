@@ -242,7 +242,7 @@ namespace ppp
         {
             if (max_open_file_descriptors < 1)
             {
-                SetLastErrorCode(ErrorCode::GenericInvalidArgument);
+                SetLastErrorCode(ErrorCode::UnixStackTraceSetMaxOpenFileDescriptorsInvalidArgument);
                 return false;
             }
 

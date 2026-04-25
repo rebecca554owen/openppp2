@@ -109,7 +109,7 @@ namespace ppp {
             }
 
             if (agorithm < DigestAlgorithmic_sha1 || agorithm > DigestAlgorithmic_sha512) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DigestHashHmacInvalidAlgorithm);
                 return false;
             }
 

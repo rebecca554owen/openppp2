@@ -53,7 +53,7 @@ namespace ppp
         {
             if (NULLPTR == predicate)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapDarwinFetchRouteNullPredicate);
                 return -1;
             }
 

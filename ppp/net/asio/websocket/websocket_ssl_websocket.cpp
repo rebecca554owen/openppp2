@@ -116,7 +116,7 @@ namespace ppp {
                 std::string                                                         ciphersuites,
                 YieldContext&                                                       y) noexcept {
                 if (host.empty() || path.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SslWebSocketRunInvalidHostOrPath);
                     return false;
                 }
 

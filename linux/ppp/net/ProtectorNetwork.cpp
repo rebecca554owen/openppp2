@@ -76,7 +76,7 @@ namespace ppp
             fd = -1;
             if (NULLPTR == unix_path)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkRecvfdNullUnixPath);
                 return -1011;
             }
 
@@ -212,7 +212,7 @@ namespace ppp
             r = 0;
             if (NULLPTR == unix_path || milliSecondsTimeout < 1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkSendfdInvalidArguments);
                 return -1001;
             }
 
@@ -411,7 +411,7 @@ namespace ppp
         {
             if (sockfd == -1)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
                 return false;
             }
 

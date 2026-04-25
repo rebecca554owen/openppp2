@@ -94,12 +94,12 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpEncryptInvalidArguments);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpEncryptZeroLengthInput);
                 return NULLPTR;
             }
 
@@ -150,12 +150,12 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpDecryptInvalidArguments);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpDecryptZeroLengthInput);
                 return NULLPTR;
             }
 
@@ -246,7 +246,7 @@ namespace ppp {
          */
         bool EVP::Support(const ppp::string& method) noexcept {
             if (method.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpSupportMethodEmpty);
                 return false;
             }
 
@@ -291,7 +291,7 @@ namespace ppp {
             }
 
             if (EVP_BytesToKey(_cipher, EVP_md5(), NULLPTR, (Byte*)password.data(), (int)password.length(), 1, _key.get(), _iv.get()) < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpInitKeyDerivationFailed);
                 return false;
             }
 
@@ -337,7 +337,7 @@ namespace ppp {
         bool ComputeMD5(const ppp::string& s, const Byte* md5, int& md5len) noexcept {
             if (md5len < 1 || NULLPTR == md5) {
                 md5len = 0;
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpComputeMd5InvalidOutputBuffer);
                 return false;
             }
             else {
@@ -364,7 +364,7 @@ namespace ppp {
                 return hash;
             }
             else {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpComputeDigestInvalidAlgorithm);
                 return ppp::string();
             }
         }
@@ -390,7 +390,7 @@ namespace ppp {
             ppp::string hash;
             if (!hash_hmac(s.data(), s.size(), hash, (DigestAlgorithmic)algorithm, false, false)) {
                 digestlen = 0;
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpComputeDigestInvalidAlgorithm);
                 return false;
             }
 

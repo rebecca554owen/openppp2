@@ -81,7 +81,7 @@ namespace ppp {
             if (certificate_file.empty() ||
                 certificate_key_file.empty() ||
                 certificate_chain_file.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SslVerifyCertificateInvalidArguments);
                 return false;
             }
 

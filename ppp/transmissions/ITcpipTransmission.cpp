@@ -148,7 +148,7 @@ namespace ppp {
             }
 
             if (length < 1) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TcpipTransmissionReadBytesLengthInvalid, NULLPTR);
             }
 
             std::shared_ptr<BufferswapAllocator> allocator = this->BufferAllocator;

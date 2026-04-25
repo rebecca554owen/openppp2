@@ -85,7 +85,7 @@ namespace ppp {
          */
         bool rc4_sbox_impl(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen, bool ascending) noexcept {
             if (NULLPTR == sbox || NULLPTR == key || keylen < 1 || sboxlen < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4SboxInitInvalidArguments);
                 return false;
             }
 
@@ -148,7 +148,7 @@ namespace ppp {
          */
         bool rc4_crypt_sbox(unsigned char* key, int keylen, unsigned char* sbox, int sboxlen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1 || NULLPTR == sbox || sboxlen < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxInvalidArguments);
                 return false;
             }
 
@@ -194,7 +194,7 @@ namespace ppp {
          */
         bool rc4_crypt_sbox_c(unsigned char* key, int keylen, unsigned char* sbox, int sboxlen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1 || NULLPTR == sbox || sboxlen < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCInvalidArguments);
                 return false;
             }
 
@@ -229,7 +229,7 @@ namespace ppp {
          */
         bool rc4_crypt(unsigned char* key, int keylen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptInvalidArguments);
                 return false;
             }
 
@@ -280,7 +280,7 @@ namespace ppp {
         std::shared_ptr<Byte> RC4::Encrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             outlen = -1;
             if ((datalen < 0) || (NULLPTR == data && datalen != 0)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4EncryptInvalidArguments);
                 return NULLPTR;
             }
 
@@ -290,7 +290,7 @@ namespace ppp {
             }
 
             if (_password.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4EncryptPasswordEmpty);
                 return NULLPTR;
             }
 
@@ -311,7 +311,7 @@ namespace ppp {
             if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
                 (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
                 if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCFailedWithoutSpecificError);
                 }
                 return NULLPTR;
             }
@@ -358,7 +358,7 @@ namespace ppp {
          */
         std::shared_ptr<RC4> RC4::Create(const ppp::string& method, const ppp::string& password) noexcept {
             if (method.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CreateMethodEmpty);
                 return NULLPTR;
             }
 
@@ -391,3 +391,4 @@ namespace ppp {
         }
     }
 }
+

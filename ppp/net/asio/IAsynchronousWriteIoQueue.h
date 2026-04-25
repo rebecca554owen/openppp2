@@ -293,7 +293,7 @@ namespace ppp {
 
                     std::shared_ptr<atomic_int> status = ppp::make_shared_object<atomic_int>(-1);
                     if (NULLPTR == status) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueYieldStatusAllocFailed);
                         return false;
                     }
 

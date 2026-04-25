@@ -66,7 +66,7 @@ namespace ppp {
              */
             bool VirtualEthernetManagedServer::ConnectToManagedServer(const ppp::string& url) noexcept {
                 if (url_.empty() || url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedConnectUrlEmpty);
                     return false;
                 }
 
@@ -103,14 +103,14 @@ namespace ppp {
                 }
 
                 if (NULLPTR == ac) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedAuthNullCallback);
                     return false;
                 }
 
                 UInt64 next = Executors::GetTickCount() + PACKET_TIMEOUT_AUTHENTICATION; {
                     SynchronizedObjectScope scope(syncobj_);
                     if (authentications_.find(session_id) != authentications_.end()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedAuthDuplicateSession);
                         return false;
                     }
 
@@ -332,7 +332,7 @@ namespace ppp {
 
                 Int128 length_value = ppp::Int128FromString(ppp::string(length_hex, sizeof(length_hex)), 16);
                 if (length_value > static_cast<Int128>(std::numeric_limits<int>::max())) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOverflow);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedPacketLengthOverflow);
                     return NULLPTR;
                 }
 
@@ -371,7 +371,7 @@ namespace ppp {
 
                 json = JsonAuxiliary::FromString((char*)packet.get(), packet_length);
                 if (!json.isObject()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedPacketJsonParseFailed);
                 }
                 return json.isObject();
             }
@@ -403,12 +403,12 @@ namespace ppp {
                 }
 
                 if (url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedVerifyUrlEmpty);
                     return false;
                 }
 
                 if (NULLPTR == ac) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedVerifyNullCallback);
                     return false;
                 }
 
@@ -449,7 +449,7 @@ namespace ppp {
                 }
 
                 if (url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedEndpointInputUrlEmpty);
                     return "";
                 }
 

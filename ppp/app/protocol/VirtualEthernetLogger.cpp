@@ -492,7 +492,7 @@ namespace ppp {
             /** @brief Adds a line to pending queue with bound on memory growth. */
             bool VirtualEthernetLogger::EnqueueLine(ppp::string line) noexcept {
                 if (line.empty()) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetLoggerEnqueueLineEmpty);
                 }
 
                 if (line.size() > 8192) {
@@ -539,7 +539,7 @@ namespace ppp {
             /** @brief Copies caller buffer and dispatches asynchronous write. */
             bool VirtualEthernetLogger::Write(const void* s, int length, const ppp::function<void(bool)>& cb) noexcept {
                 if (NULLPTR == s || length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetLoggerWriteNullInputBuffer);
                     if (cb) {
                         cb(false);
                     }
@@ -549,7 +549,7 @@ namespace ppp {
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = BufferAllocator;
                 std::shared_ptr<Byte> buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, length);
                 if (NULLPTR == buffer) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetLoggerWriteBufferAllocFailed);
                     if (cb) {
                         cb(false);
                     }
@@ -563,7 +563,7 @@ namespace ppp {
             /** @brief Enqueues owned line and flushes in logger strand/context. */
             bool VirtualEthernetLogger::Write(const std::shared_ptr<Byte>& s, int length, const ppp::function<void(bool)>& cb) noexcept {
                 if (NULLPTR == s || length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetLoggerWriteNullSharedBuffer);
                     if (cb) {
                         cb(false);
                     }
@@ -610,7 +610,7 @@ namespace ppp {
              */
             bool VirtualEthernetLogger::Packet(Int128 guid, const void* packet, int packet_length, PacketDirection direction) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetLoggerPacketInvalidArguments);
                 }
 
                 ppp::DateTime now = ppp::threading::Executors::Now();

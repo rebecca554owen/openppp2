@@ -59,7 +59,7 @@ namespace ppp {
                 int message_data_size = payload_offset + payload_size;
                 std::shared_ptr<Byte> message_data = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, message_data_size);
                 if (NULLPTR == message_data) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSerializeBufferAllocFailed);
                     return NULLPTR;
                 }
 
@@ -109,7 +109,7 @@ namespace ppp {
 
                 std::shared_ptr<IPFrame> frame = make_shared_object<IPFrame>();
                 if (NULLPTR == frame) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParseFrameAllocFailed);
                     return NULLPTR;
                 }
 
@@ -127,14 +127,14 @@ namespace ppp {
                 if (options_size > 0) {
                     std::shared_ptr<BufferSegment> options_ = make_shared_object<BufferSegment>();
                     if (NULLPTR == options_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParseOptionsSegmentAllocFailed);
                         return NULLPTR;
                     }
 
                     options_->Length = options_size;
                     options_->Buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, options_size);
                     if (NULLPTR == options_->Buffer) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParseOptionsBufferAllocFailed);
                         return NULLPTR;
                     }
 
@@ -146,14 +146,14 @@ namespace ppp {
                 if (message_size_ > 0) {
                     std::shared_ptr<BufferSegment> messages_ = make_shared_object<BufferSegment>();
                     if (NULLPTR == messages_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParsePayloadSegmentAllocFailed);
                         return NULLPTR;
                     }
 
                     messages_->Length = message_size_;
                     messages_->Buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, message_size_);
                     if (NULLPTR == messages_->Buffer) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParsePayloadBufferAllocFailed);
                         return NULLPTR;
                     }
 
@@ -172,7 +172,7 @@ namespace ppp {
              */
             int IPFrame::Subpackages(ppp::vector<IPFramePtr>& out, const IPFramePtr& packet) noexcept {
                 if (NULLPTR == packet) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesNullPacket);
                     return 0;
                 }
 
@@ -212,14 +212,14 @@ namespace ppp {
                 while (szz > max) {
                     fragment = make_shared_object<IPFrame>();
                     if (NULLPTR == fragment) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesFragmentAllocFailed);
                         return 0; 
                     }
 
                     std::shared_ptr<BufferSegment> packet_payload = 
                         make_shared_object<BufferSegment>(wrap_shared_pointer(buffer.get() + ofs, buffer), max);
                     if (NULLPTR == packet_payload) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesFragmentPayloadAllocFailed);
                         return 0;
                     }
 
@@ -244,14 +244,14 @@ namespace ppp {
                 if (szz > 0) {
                     fragment = make_shared_object<IPFrame>();
                     if (NULLPTR == fragment) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesTailFragmentAllocFailed);
                         return 0; 
                     }
 
                     std::shared_ptr<BufferSegment> packet_payload = make_shared_object<BufferSegment>(
                         wrap_shared_pointer(buffer.get() + ofs, buffer), szz);
                     if (NULLPTR == packet_payload) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesTailPayloadAllocFailed);
                         return 0;
                     }
 

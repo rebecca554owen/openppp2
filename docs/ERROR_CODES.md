@@ -4,9 +4,13 @@
 
 This page is generated from `ppp/diagnostics/ErrorCodes.def`, which is the single source of truth for `ppp::diagnostics::ErrorCode`.
 
-**Total: 186 error codes across 27 categories.**
+**Live total: 542 error codes.**
 
-Severity distribution: kInfo=1, kWarning=5, kError=152, kFatal=28.
+Severity distribution: kInfo=1, kWarning=7, kError=506, kFatal=28.
+
+`ERROR_CODES.md` currently keeps the original core taxonomy tables (220 baseline entries) for readability.
+For the complete live catalog (including extended subsystem-specific entries and reserved slots),
+use `ppp/diagnostics/ErrorCodes.def` as the single source of truth.
 
 ## API
 
@@ -31,6 +35,14 @@ const char* ppp::diagnostics::FormatErrorString(ErrorCode); // human-readable te
 ```mermaid
 graph TD
     A[ErrorCode] --> C0[Generic - 12]
+    A[ErrorCode] --> C0H[Android Lib - 3]
+    A[ErrorCode] --> C0A[Main Entry - 1]
+    A[ErrorCode] --> C0B[Socket Runtime - 7]
+    A[ErrorCode] --> C0C[VNetstack - 4]
+    A[ErrorCode] --> C0D[SYSNAT - 14]
+    A[ErrorCode] --> C0E[TapLinux - 3]
+    A[ErrorCode] --> C0F[VEthernet Switcher - 1]
+    A[ErrorCode] --> C0G[VEthernet Exchanger - 1]
     A[ErrorCode] --> C1[Application - 8]
     A[ErrorCode] --> C2[Configuration - 11]
     A[ErrorCode] --> C3[Runtime - 12]
@@ -77,6 +89,96 @@ graph TD
 | `GenericParseFailed` | Parse failed | `kError` |
 | `GenericConflict` | Resource conflict | `kError` |
 | `GenericOverflow` | Numeric overflow | `kError` |
+
+---
+
+## Category: Main Entry (1)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `AppMainRunFailedWithoutSpecificError` | Application run returned failure without publishing a specific error code | `kFatal` |
+
+---
+
+## Category: Android Lib (3)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `AndroidLibInvalidState` | Android libopenppp2 state is invalid for this operation | `kError` |
+| `AndroidLibUnknownFailure` | Android libopenppp2 returned an unknown failure | `kError` |
+| `AndroidLibNullCallback` | Android libopenppp2 callback is null | `kError` |
+
+---
+
+## Category: Socket Runtime (7)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `SocketInvalidHandle` | Socket handle is invalid | `kError` |
+| `SocketNotOpen` | Socket is not open | `kError` |
+| `SocketInvalidState` | Socket state is invalid for this operation | `kError` |
+| `SocketNativeHandleQueryFailed` | Failed to query native socket handle | `kError` |
+| `SocketNullInstance` | Socket instance is null | `kError` |
+| `SocketNullAcceptCallback` | Socket accept callback is null | `kError` |
+| `StreamDescriptorNull` | Stream descriptor pointer is null | `kError` |
+
+---
+
+## Category: VNetstack (4)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `VNetstackNullPacketInput` | VNetstack received null packet or invalid packet length | `kError` |
+| `VNetstackNullLinkInput` | VNetstack received null link reference | `kError` |
+| `VNetstackNullSocketInput` | VNetstack received null accepted socket | `kError` |
+| `VNetstackSyncAckInvalidState` | VNetstack sync-ack state transition is invalid | `kError` |
+
+---
+
+## Category: SYSNAT (14)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `SysnatUnknownFailure` | SYSNAT returned an unknown failure code | `kError` |
+| `SysnatInvalidInterfaceName` | SYSNAT interface name is invalid | `kError` |
+| `SysnatBpfObjectOpenFailed` | SYSNAT failed to open BPF object file | `kError` |
+| `SysnatBpfProgramNotFound` | SYSNAT required BPF program was not found | `kError` |
+| `SysnatBpfLoadFailed` | SYSNAT failed to load BPF object | `kError` |
+| `SysnatMapPinFailed` | SYSNAT failed to pin BPF map | `kError` |
+| `SysnatTcHookCreateFailed` | SYSNAT failed to create TC hook | `kError` |
+| `SysnatTcAttachFailed` | SYSNAT failed to attach TC program | `kError` |
+| `SysnatTcDetachFailed` | SYSNAT failed to detach TC program | `kError` |
+| `SysnatMapOpenFailed` | SYSNAT failed to open pinned map | `kError` |
+| `SysnatMapUpdateFailed` | SYSNAT failed to update map rule | `kError` |
+| `SysnatMapDeleteFailed` | SYSNAT failed to delete map rule | `kError` |
+| `SysnatAlreadyAttached` | SYSNAT program is already attached | `kWarning` |
+| `SysnatNotAttached` | SYSNAT program is not attached | `kWarning` |
+
+---
+
+## Category: TapLinux (3)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `TapLinuxCommandEmpty` | TapLinux shell command is empty | `kError` |
+| `TapLinuxUnsafeToken` | TapLinux input contains unsafe shell token | `kError` |
+| `TapLinuxInterfaceNameTooLong` | TapLinux interface name exceeds kernel limit | `kError` |
+
+---
+
+## Category: VEthernet Switcher (1)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `VEthernetNetworkSwitcherDnsRulesEmpty` | VEthernetNetworkSwitcher DNS rule input is empty | `kError` |
+
+---
+
+## Category: VEthernet Exchanger (1)
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `VEthernetExchangerTimeoutEntryConflict` | VirtualEthernetExchanger timeout entry already exists | `kError` |
 
 ---
 
