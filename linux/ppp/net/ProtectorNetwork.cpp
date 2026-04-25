@@ -8,6 +8,7 @@
 #include <string>
 #include <iostream>
 #include <assert.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <sys/types.h>
 
@@ -75,18 +76,21 @@ namespace ppp
             fd = -1;
             if (NULLPTR == unix_path)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return -1011;
             }
 
             int sock = socket(AF_UNIX, SOCK_STREAM, 0);
             if (sock == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                 return -1012;
             }
 
             int flags = fcntl(sock, F_GETFL, 0);
             if (flags == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                 return -1013;
             }
 
@@ -94,6 +98,7 @@ namespace ppp
             {
                 if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return -1014;
                 }
             }
@@ -109,12 +114,14 @@ namespace ppp
             if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                 return -1015;
             }
 
             if (listen(sock, PPP_LISTEN_BACKLOG) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketListenFailed);
                 return -1016;
             }
 
@@ -125,6 +132,7 @@ namespace ppp
                     if (!Socket::Poll(sock, milliSecondsTimeout * 1000, Socket::SelectMode_SelectRead))
                     {
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
                         return -1017;
                     }
                 }
@@ -137,6 +145,7 @@ namespace ppp
                 if (connection == -1)
                 {
                     Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                     return -1018;
                 }
 
@@ -144,6 +153,7 @@ namespace ppp
                 {
                     Socket::Closesocket(connection);
                     Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                     return -1019;
                 }
 
@@ -155,6 +165,7 @@ namespace ppp
                     {
                         Socket::Closesocket(connection);
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                         return -1021;
                     }
 
@@ -162,6 +173,7 @@ namespace ppp
                     {
                         Socket::Closesocket(connection);
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                         return -1022;
                     }
 
@@ -170,6 +182,7 @@ namespace ppp
                     {
                         Socket::Closesocket(connection);
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                         return -1023;
                     }
                 }
@@ -199,12 +212,14 @@ namespace ppp
             r = 0;
             if (NULLPTR == unix_path || milliSecondsTimeout < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return -1001;
             }
 
             int sock = socket(AF_UNIX, SOCK_STREAM, 0);
             if (sock == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                 return -1002;
             }
 
@@ -224,6 +239,7 @@ namespace ppp
             if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                 return -1003;
             }
 
@@ -231,6 +247,7 @@ namespace ppp
             if (ancil_send_fd(sock, fd))
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                 return -1004;
             }
 
@@ -238,6 +255,7 @@ namespace ppp
             if (recv(sock, &err, 1, MSG_NOSIGNAL) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                 return -1005;
             }
 
@@ -253,6 +271,7 @@ namespace ppp
                 if (recv(sock, &err, 1, MSG_NOSIGNAL) < 0)
                 {
                     Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                     return -1006;
                 }
             }
@@ -392,6 +411,7 @@ namespace ppp
         {
             if (sockfd == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -413,13 +433,20 @@ namespace ppp
 
             if (dev_.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
 #if defined(_ANDROID)
             return ProtectorNetwork::Sendfd(dev_.data(), sockfd);
 #else
-            return ::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1;
+            if (::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1)
+            {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
 #endif
         }
     }

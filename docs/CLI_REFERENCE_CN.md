@@ -386,19 +386,24 @@ ppp --pull-iplist ./cn.txt
 
 - `ppp/app/ConsoleUI.cpp::ExecuteCommand(...)` — 命令分发
 - `ppp/app/ConsoleUI.cpp::RenderFrame(...)` — 帧渲染
-- `ppp/app/ConsoleUI.cpp::BuildStatusBarText(...)` — 状态栏构建
+- `ppp/diagnostics/ErrorHandler.cpp::GetLastErrorCodeSnapshot(...)` — 状态栏错误快照
 
 ### 内置 Console 命令
 
-| 命令 | 别名 | 操作 |
-|------|------|------|
-| `openppp2 help` | `help` | 打印可用命令列表 |
-| `openppp2 restart` | `restart` | 通过 `ShutdownApplication(true)` 优雅重启 |
-| `openppp2 reload` | `reload` | restart 的别名 |
-| `openppp2 exit` | `exit` | 通过 `ShutdownApplication(false)` 退出 |
-| `openppp2 info` | `status` | 将当前信息快照打印到命令输出区 |
-| `openppp2 clear` | `clear` | 清空命令输出环形缓冲区并重置滚动 |
-| *（其他任意输入）* | | 作为 shell 命令执行，将输出捕获到命令区 |
+| 命令 | 操作 |
+|------|------|
+| `openppp2 help` | 打印可用命令列表 |
+| `openppp2 restart` | 通过 `ShutdownApplication(true)` 优雅重启 |
+| `openppp2 reload` | 与 restart 相同行为 |
+| `openppp2 exit` | 通过 `ShutdownApplication(false)` 退出 |
+| `openppp2 info` | 拉取并打印完整运行时环境快照 |
+| `openppp2 clear` | 清空命令输出环形缓冲区并重置滚动 |
+| *（其他任意输入）* | 作为 shell 命令执行，将输出捕获到命令区 |
+
+说明：
+
+- `help`、`restart`、`exit`、`clear`、`status` 等裸命令会按系统 shell 命令处理。
+- 内置命令必须使用 `openppp2` 前缀命名空间。
 
 ### 键盘控制
 
@@ -421,22 +426,20 @@ TUI 帧分为以下区域：
 1. **头部**（10 行固定）：顶部边框、提示行、ASCII 艺术字、空行、分隔符
 2. **信息区**（动态，约中间区域的 60%）：可滚动 VPN 状态行，`Home`/`End` 控制
 3. **命令区**（动态，约中间区域的 40%）：可滚动命令输出，`PageUp`/`PageDown` 控制
-4. **输入行**（1 行）：带反显光标的编辑器
-5. **状态栏**（1 行）：错误 + VPN 状态 + 速度
+4. **输入行**（1 行）：带白底光标的编辑器
+5. **状态栏**（1 行）：最新诊断错误快照
 
 完整的布局规范参见 `TUI_DESIGN_CN.md`。
 
 ### 状态栏语义
 
-状态栏文本由以下部分拼接：
+状态栏展示单一诊断行，基于进程级错误快照生成：
 
-- `vpn:<state>` — 当前 VPN 连接状态（如 `Established`、`Connecting`、`Disconnected`）
-- 可选 `note:<最新状态队列文本>` — 最近一次 `UpdateStatus` 文本
-- `err:<FormatErrorString(snapshot)>` — 格式化的最后一次错误描述
-- `err_age:<seconds>s` — 基于 `GetLastErrorTimestamp()` 差值计算的自上次错误以来的秒数
-- `diag_ts:<诊断原始时间戳>` — 用于关联的原始诊断时间戳
+- `No errors`：当前错误码为 `ErrorCode::Success`。
+- `Error: <message> (<age>)`：最近一次非成功错误，其中 `<age>` 基于
+  `GetLastErrorTimestamp()` 计算并显示为 `Ns ago`。
 
-状态栏读取进程级诊断快照，目标是在不中断数据面线程的情况下显示最近一次失败上下文。
+VPN 状态和吞吐仍在内部更新用于命令/信息输出，但不再显示在底部状态栏。
 
 ---
 

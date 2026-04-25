@@ -1,4 +1,5 @@
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp::app {
 
@@ -106,6 +107,7 @@ bool PppApplication::OnShutdownApplication() noexcept {
 bool PppApplication::ShutdownApplication(bool restart) noexcept {
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     if (NULLPTR == context) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
@@ -113,11 +115,15 @@ bool PppApplication::ShutdownApplication(bool restart) noexcept {
     boost::asio::post(*context, [restart, context]() noexcept {
         std::shared_ptr<PppApplication> app = std::move(DEFAULT_);
         if (NULLPTR == app) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             return false;
         }
 
         app->Dispose();
         std::shared_ptr<Timer> timeout = Timer::Timeout(context, 1000, [](Timer*) noexcept { Executors::Exit(); });
+        if (NULLPTR == timeout) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
+        }
         return NULLPTR != timeout;
     });
     return true;
@@ -134,17 +140,20 @@ bool PppApplication::AddShutdownApplicationEventHandler() noexcept {
 bool PppApplication::NextTickAlwaysTimeout(bool next) noexcept {
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     if (NULLPTR == context) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
         return false;
     }
 
     std::shared_ptr<PppApplication> app = DEFAULT_;
     if (NULLPTR == app) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
     std::shared_ptr<VirtualEthernetSwitcher> server = app->server_;
     std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
     if (NULLPTR == server && NULLPTR == client) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
@@ -155,6 +164,7 @@ bool PppApplication::NextTickAlwaysTimeout(bool next) noexcept {
         }
     });
     if (NULLPTR == timeout) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
         return false;
     }
 

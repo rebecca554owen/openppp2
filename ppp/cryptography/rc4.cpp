@@ -4,6 +4,7 @@
  */
 #include "rc4.h"
 #include "digest.h"
+#include <ppp/diagnostics/Error.h>
 
 // ============================================================================
 // Standard RC4 Implementation (for reference)
@@ -84,6 +85,7 @@ namespace ppp {
          */
         bool rc4_sbox_impl(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen, bool ascending) noexcept {
             if (NULLPTR == sbox || NULLPTR == key || keylen < 1 || sboxlen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -146,6 +148,7 @@ namespace ppp {
          */
         bool rc4_crypt_sbox(unsigned char* key, int keylen, unsigned char* sbox, int sboxlen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1 || NULLPTR == sbox || sboxlen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -191,6 +194,7 @@ namespace ppp {
          */
         bool rc4_crypt_sbox_c(unsigned char* key, int keylen, unsigned char* sbox, int sboxlen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1 || NULLPTR == sbox || sboxlen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -225,6 +229,7 @@ namespace ppp {
          */
         bool rc4_crypt(unsigned char* key, int keylen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -275,6 +280,7 @@ namespace ppp {
         std::shared_ptr<Byte> RC4::Encrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             outlen = -1;
             if ((datalen < 0) || (NULLPTR == data && datalen != 0)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
@@ -285,6 +291,7 @@ namespace ppp {
 
             std::shared_ptr<Byte> plaintext = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, datalen);
             if (NULLPTR == plaintext) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -293,6 +300,7 @@ namespace ppp {
             // Uses the variant with (low + keylen) % sboxlen – another intentional modification.
             if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
                 (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return NULLPTR;
             }
 
@@ -338,6 +346,7 @@ namespace ppp {
          */
         std::shared_ptr<RC4> RC4::Create(const ppp::string& method, const ppp::string& password) noexcept {
             if (method.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
@@ -365,6 +374,7 @@ namespace ppp {
                 return make_shared_object<RC4SHA512>(method, password);
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
             return NULLPTR;
         }
     }

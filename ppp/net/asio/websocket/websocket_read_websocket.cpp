@@ -10,6 +10,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/coroutines/asio/asio.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace net {
@@ -24,10 +25,12 @@ namespace ppp {
              */
             bool websocket::Read(const void* buffer, int offset, int length, YieldContext& y) noexcept {
                 if (NULLPTR == buffer || offset < 0 || length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (IsDisposed() || !websocket_.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 

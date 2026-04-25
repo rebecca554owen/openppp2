@@ -1,6 +1,7 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Thread.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/app/mux/vmux.h>
 #include <ppp/app/mux/vmux_net.h>
@@ -159,12 +160,14 @@ namespace ppp
             SynchronizedObjectScope scope(Internal->Lock);
             if (NULLPTR != Internal->Default)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return NULLPTR;
             }
 
             std::shared_ptr<boost::asio::io_context> context = make_shared_object<boost::asio::io_context>();
             if (NULLPTR == context)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return NULLPTR;
             }
 
@@ -186,6 +189,7 @@ namespace ppp
             std::shared_ptr<boost::asio::io_context> context = make_shared_object<boost::asio::io_context>();
             if (NULLPTR == context)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return NULLPTR;
             }
 
@@ -562,6 +566,7 @@ namespace ppp
             std::shared_ptr<Executors::Awaitable> awaitable = make_shared_object<Executors::Awaitable>();
             if (NULLPTR == awaitable)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
@@ -585,16 +590,24 @@ namespace ppp
                 });
             if (NULLPTR == t)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
 
             t->SetPriority(ThreadPriority::Highest);
             if (!t->Start())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
 
-            return awaitable->Await();
+            bool ok = awaitable->Await();
+            if (!ok)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ThreadSyncConditionWaitFailed);
+            }
+
+            return ok;
         }
 
         /**
@@ -798,12 +811,14 @@ namespace ppp
             ExecutorContextPtr scheduler = make_shared_object<boost::asio::io_context>();
             if (NULLPTR == scheduler)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable);
                 return false;
             }
 
 #if defined(_WIN32)
             if (!ppp::win32::Win32Native::IsWindows81OrLaterVersion())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericNotSupported);
                 return false;
             }
 #endif
@@ -827,12 +842,22 @@ namespace ppp
                         }
                     });
 
+                if (NULLPTR == t)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                    return false;
+                }
+
                 if (ppp::RT)
                 {
                     t->SetPriority(ThreadPriority::Highest);
                 }
 
-                t->Start();
+                if (!t->Start())
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                    return false;
+                }
             }
             return true;
         }

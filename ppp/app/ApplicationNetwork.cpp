@@ -4,6 +4,7 @@
  */
 
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp::app {
 
@@ -83,6 +84,7 @@ int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept {
  */
 bool PppApplication::PullIPList(const ppp::string& url, const ppp::function<void(int, const ppp::set<ppp::string>&)>& cb) noexcept {
     if (NULLPTR == cb || url.empty()) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 

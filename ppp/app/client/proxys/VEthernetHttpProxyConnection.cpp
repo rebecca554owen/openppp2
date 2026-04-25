@@ -1,9 +1,10 @@
-﻿#include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxyConnection.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
 #include <ppp/io/MemoryStream.h>
@@ -13,7 +14,6 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
-#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetHttpProxyConnection.cpp

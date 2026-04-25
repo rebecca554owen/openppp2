@@ -1,4 +1,5 @@
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp
 {
@@ -67,6 +68,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
         }
@@ -84,6 +86,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
         }
@@ -104,6 +107,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 YieldContext::Release(y);
             }
         }
@@ -130,6 +134,8 @@ namespace ppp
             {
                 return true;
             }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
             
             throw std::runtime_error("The internal atomic state used for the yield_context switch was corrupted..");
         }
@@ -207,6 +213,7 @@ namespace ppp
         {
             if (!spawn)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -221,6 +228,7 @@ namespace ppp
             YieldContext* y = New<YieldContext>(allocator, context, strand, std::move(spawn), stack_size);
             if (!y)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                 return false;
             }
 
@@ -260,7 +268,13 @@ namespace ppp
                 };
 
             boost::asio::io_context* context = &y->context_;
-            return ppp::threading::Executors::Post(context, y->strand_, invoked);
+            bool ok = ppp::threading::Executors::Post(context, y->strand_, invoked);
+            if (!ok)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+            }
+
+            return ok;
         }
     }
 }

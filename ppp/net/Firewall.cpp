@@ -50,6 +50,7 @@ namespace ppp
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -67,6 +68,7 @@ namespace ppp
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -111,6 +113,7 @@ namespace ppp
                         }
                         else
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false;
                         }
                     }
@@ -149,6 +152,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
         }
@@ -162,12 +166,14 @@ namespace ppp
         {
             if (host.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
             ppp::string host_lower = LTrim(RTrim(ToLower(host)));
             if (host_lower.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
             else
@@ -198,6 +204,7 @@ namespace ppp
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -216,6 +223,7 @@ namespace ppp
                     return true;
                 }
             }
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             return false;
         }
 
@@ -234,6 +242,7 @@ namespace ppp
             static constexpr int MIN_PREFIX_VALUE = ppp::net::native::MIN_PREFIX_VALUE;
             if (network_segments.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -254,6 +263,7 @@ namespace ppp
                     return true;
                 }
             }
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             return false;
         }
 
@@ -287,6 +297,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
         }
@@ -307,12 +318,14 @@ namespace ppp
         {
             if (host.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
             ppp::string host_lower = LTrim(RTrim(ToLower(host)));
             if (host_lower.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -334,6 +347,7 @@ namespace ppp
                 }
                 catch (const std::bad_alloc&)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false; // Cannot snapshot; fail-safe
                 }
             }
@@ -357,6 +371,7 @@ namespace ppp
         {
             if (host.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
             
@@ -437,6 +452,7 @@ namespace ppp
                 }
                 else
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
             }
@@ -444,6 +460,7 @@ namespace ppp
             std::size_t slash_index = line.find('/');
             if (slash_index == ppp::string::npos)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -452,12 +469,14 @@ namespace ppp
             host = LTrim<ppp::string>(RTrim<ppp::string>(host));
             if (host.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
             ip = StringToAddress(host.data(), ec);
             if (ec)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -487,6 +506,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -577,6 +597,7 @@ namespace ppp
 
             if (lines.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 

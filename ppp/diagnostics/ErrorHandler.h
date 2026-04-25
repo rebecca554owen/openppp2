@@ -7,16 +7,17 @@
  *
  * @details
  * Architecture overview:
- * - Each thread maintains its own `tls_last_error_code_` (thread_local) and
- *   `tls_last_error_timestamp_` so that concurrent operations never overwrite each
+ * - Each thread maintains its own error state in function-local
+ *   `static thread_local` slots (see `ThreadLastErrorCode()` and
+ *   `ThreadLastErrorTimestamp()`) so concurrent operations never overwrite each
  *   other's diagnostic state.
  * - When `SetLastErrorCode` is called, the value is also written atomically into
  *   `last_error_code_snapshot_` so that an observer thread can read the most-recently-
  *   seen error across all threads without acquiring any per-thread lock.
  * - Named handlers registered via `RegisterErrorHandler` are invoked synchronously
- *   inside `SetLastErrorCode` on the calling thread.  Registration itself is
- *   serialized by `error_handlers_sync_`, but handler invocations are NOT protected —
- *   registered handlers must be internally thread-safe if accessed from multiple threads.
+ *   inside `SetLastErrorCode` on the calling thread without any lock or container copy.
+ *   Registration is initialization-only and must complete before multi-thread runtime
+ *   startup.
  *
  * @note  The singleton returned by `GetDefault()` is the single source of truth for
  *        all free functions declared in Error.h (`GetLastErrorCode`, `SetLastErrorCode`,
@@ -35,10 +36,10 @@ namespace ppp {
          *
          * @details
          * Storage model:
-         * - Thread-local `tls_last_error_code_`       — per-thread last error code.
-         * - Thread-local `tls_last_error_timestamp_`  — tick count when the error was set.
-         * - Atomic `last_error_code_snapshot_`        — process-wide snapshot, last writer wins.
-         * - Atomic `last_error_timestamp_snapshot_`   — timestamp paired with the snapshot.
+         * - `ThreadLastErrorCode()`       — function-local static thread_local per-thread error.
+         * - `ThreadLastErrorTimestamp()`  — function-local static thread_local per-thread tick.
+         * - Atomic `last_error_code_snapshot_`       — process-wide snapshot, last writer wins.
+         * - Atomic `last_error_timestamp_snapshot_`  — timestamp paired with the snapshot.
          *
          * @note  Copy construction and copy assignment are deleted; obtain the instance
          *        exclusively through `GetDefault()`.
@@ -80,8 +81,8 @@ namespace ppp {
              * @brief Records an error code for the current thread and notifies all observers.
              *
              * @details The implementation:
-             *  1. Stores `code` into the calling thread's `tls_last_error_code_`.
-             *  2. Captures the current tick into `tls_last_error_timestamp_`.
+             *  1. Stores `code` into the calling thread's `ThreadLastErrorCode()` slot.
+             *  2. Captures the current tick into `ThreadLastErrorTimestamp()`.
              *  3. Atomically updates `last_error_code_snapshot_` and
              *     `last_error_timestamp_snapshot_` (visible to all threads).
              *  4. Iterates `error_handlers_` and calls each handler with the raw int
@@ -148,6 +149,19 @@ namespace ppp {
              */
             void                                                                   RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept;
 
+         private:
+            /** @brief Returns the calling thread's function-local static error slot. */
+            static ErrorCode&                                                       ThreadLastErrorCode() noexcept;
+            /** @brief Returns the calling thread's function-local static timestamp slot. */
+            static uint64_t&                                                        ThreadLastErrorTimestamp() noexcept;
+
+        private:
+            /** @brief Linked-list entry for initialization-time error callback registration. */
+            struct ErrorHandlerEntry {
+                ppp::string                                                         key;        ///< Unique handler key.
+                ppp::function<void(int err)>                                        handler;    ///< Callback target.
+            };
+
         private:
             /** @brief Private constructor — access through `GetDefault()` only. */
             ErrorHandler() noexcept = default;
@@ -158,20 +172,13 @@ namespace ppp {
             ErrorHandler& operator=(const ErrorHandler&) = delete;
 
         private:
-            /** @brief Per-thread last error code; default-initialized to `ErrorCode::Success`. */
-            static thread_local ErrorCode                                          tls_last_error_code_;
-            /** @brief Per-thread tick timestamp of the most recent error; zero until first set. */
-            static thread_local uint64_t                                           tls_last_error_timestamp_;
-
             /** @brief Process-wide atomic snapshot of the latest error code (last writer wins). */
             std::atomic<uint32_t>                                                  last_error_code_snapshot_{static_cast<uint32_t>(ErrorCode::Success)};
             /** @brief Process-wide atomic timestamp paired with `last_error_code_snapshot_`. */
             std::atomic<uint64_t>                                                  last_error_timestamp_snapshot_{0};
 
-            /** @brief Mutex that serializes modifications to `error_handlers_`. */
-            std::mutex                                                             error_handlers_sync_;
-            /** @brief Map of named error callbacks; key is caller-supplied identifier. */
-            ppp::unordered_map<ppp::string, ppp::function<void(int err)>>          error_handlers_;
+            /** @brief Linked-list of named callbacks; registration is initialization-only. */
+            ppp::list<ErrorHandlerEntry>                                           error_handlers_;
         };
     }
 }

@@ -1,5 +1,6 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <ppp/net/http/httplib.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/io/File.h>
@@ -42,6 +43,7 @@ namespace ppp {
                 status = 0;
 
                 if (this->_host.empty() || (NULLPTR == data && size != 0)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return "";
                 }
 
@@ -70,6 +72,7 @@ namespace ppp {
                     cli.Post(api.data(), headers, data, size, "application/x-www-form-urlencoded; charset=UTF-8") : 
                     cli.Get(api.data(), headers);
                 if (!res) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
                     return "";
                 }
 
@@ -91,11 +94,13 @@ namespace ppp {
                 using ProtocolType = UriAuxiliary::ProtocolType;
 
                 if (url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 ppp::string final_url = LTrim(RTrim(url));
                 if (final_url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
@@ -107,11 +112,13 @@ namespace ppp {
 
                 ppp::string return_url = ppp::auxiliary::UriAuxiliary::Parse(final_url, tmp_host, tmp_address, tmp_path, tmp_port, protocol_type, NULLPTR, nullof<ppp::coroutines::YieldContext>(), false);
                 if (return_url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return false;
                 }
 
                 /** @brief Reject non-HTTP protocols after successful URI parsing. */
                 if (protocol_type != ProtocolType::ProtocolType_Http && protocol_type != ProtocolType::ProtocolType_HttpSSL) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericNotSupported);
                     return false;
                 }
 

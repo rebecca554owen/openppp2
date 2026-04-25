@@ -1,4 +1,5 @@
 #include <ppp/transmissions/ITransmission.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file ITransmission.cpp
@@ -6,7 +7,6 @@
  */
 
 // Cryptographic and I/O utilities.
-#include <ppp/diagnostics/Error.h>
 #include <ppp/cryptography/ssea.h>
 #include <ppp/io/Stream.h>
 #include <ppp/io/MemoryStream.h>

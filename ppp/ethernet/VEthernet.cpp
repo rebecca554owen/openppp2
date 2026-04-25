@@ -1,9 +1,9 @@
 #include <ppp/ethernet/VEthernet.h>
+#include <ppp/diagnostics/Error.h>
 /**
  * @file VEthernet.cpp
  * @brief Implements TAP-facing virtual Ethernet packet dispatch and timers.
  */
-#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/Timer.h>
@@ -470,7 +470,7 @@ namespace ppp
                         std::shared_ptr<boost::asio::io_context> executor = lwip::netstack::Executor;
                         if (NULLPTR == executor)
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                         }
 
                         /**
@@ -479,7 +479,7 @@ namespace ppp
                         pbuf* packet = lwip::netstack_pbuf_copy(iphdr, packet_length);
                         if (NULLPTR == packet)
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         }
 
                         auto self = shared_from_this();
@@ -767,7 +767,7 @@ namespace ppp
                     {
                         sssmt_.pop_back();
                     }
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 }
 
 #if defined(_LINUX)
@@ -775,19 +775,19 @@ namespace ppp
                 std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_); 
                 if (NULLPTR == netstack)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 auto tap = netstack->Tap; 
                 if (NULLPTR == tap)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
 
                 auto linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get()); 
                 if (NULLPTR == linux_tap)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceUnsupported);
                 }
                 
                 /**
@@ -805,7 +805,7 @@ namespace ppp
                     {
                         sssmt_.pop_back();
                     }
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 }
 
                 if (ssmt_mq_)

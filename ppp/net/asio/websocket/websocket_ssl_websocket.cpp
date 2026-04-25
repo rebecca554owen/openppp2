@@ -1,5 +1,6 @@
 #include <ppp/net/asio/websocket/websocket_async_sslv_websocket.h>
 #include <ppp/net/asio/websocket/websocket_accept_sslv_websocket.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file websocket_ssl_websocket.cpp
@@ -52,6 +53,7 @@ namespace ppp {
                     return true;
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -115,11 +117,13 @@ namespace ppp {
                 std::string                                                         ciphersuites,
                 YieldContext&                                                       y) noexcept {
                 if (host.empty() || path.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_native_;
                 if (NULLPTR == socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -147,6 +151,7 @@ namespace ppp {
                  * @brief The handshake helper encapsulates TLS and websocket upgrade sequencing.
                  */
                 if (NULLPTR == accept) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
                 

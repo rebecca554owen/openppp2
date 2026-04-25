@@ -278,6 +278,7 @@ namespace ppp {
                                         return 1;
                                     }
                                     else {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
                                         transmission->Dispose();
                                         return -1;
                                     }

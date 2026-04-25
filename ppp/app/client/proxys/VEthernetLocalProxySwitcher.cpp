@@ -3,6 +3,7 @@
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
@@ -118,11 +119,13 @@ namespace ppp {
                     using NetworkState = VEthernetExchanger::NetworkState;
 
                     if (NULLPTR != acceptor_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                         return false;
                     }
 
                     std::shared_ptr<ppp::net::SocketAcceptor> acceptor;
                     if (disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
                     else {
@@ -133,6 +136,7 @@ namespace ppp {
                                 boost::asio::ip::address_v4::any()
                             };
                         if (bind_port <= ppp::net::IPEndPoint::MinPort || bind_port > ppp::net::IPEndPoint::MaxPort) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                             return false;
                         }
 
@@ -155,6 +159,7 @@ namespace ppp {
 
                             std::shared_ptr<ppp::net::SocketAcceptor> t = ppp::net::SocketAcceptor::New();
                             if (NULLPTR == t) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 return false;
                             }
 
@@ -168,6 +173,7 @@ namespace ppp {
                         }
 
                         if (NULLPTR == acceptor) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                             return false;
                         }
                     }
@@ -209,12 +215,14 @@ namespace ppp {
                             }
 
                             ppp::net::Socket::Closesocket(sockfd);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false;
                         };
 
                     bool bok = CreateAlwaysTimeout();
                     if (!bok) {
                         acceptor->Dispose();
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                         return false;
                     }
 
@@ -254,6 +262,7 @@ namespace ppp {
                  */
                 std::shared_ptr<boost::asio::ip::tcp::socket> VEthernetLocalProxySwitcher::NewSocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, int sockfd) noexcept {
                     if (NULLPTR == context) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                         return NULLPTR;
                     }
 
@@ -264,6 +273,7 @@ namespace ppp {
                         make_shared_object<boost::asio::ip::tcp::socket>(*strand) : make_shared_object<boost::asio::ip::tcp::socket>(*context);
                     try {
                         if (NULLPTR == socket) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return NULLPTR;
                         }
                         else {
@@ -274,6 +284,7 @@ namespace ppp {
 
                     if (ec) {
                         ppp::net::Socket::Closesocket(sockfd);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         return NULLPTR;
                     }
                     
@@ -287,6 +298,7 @@ namespace ppp {
                  */
                 bool VEthernetLocalProxySwitcher::AddConnection(const std::shared_ptr<VEthernetLocalProxyConnection>& connection) noexcept {
                     if (NULLPTR == connection) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                         return false;
                     }
                     
@@ -300,18 +312,21 @@ namespace ppp {
                 bool VEthernetLocalProxySwitcher::ProcessAcceptSocket(const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, int sockfd) noexcept {
                     if (NULLPTR == context) {
                         ppp::net::Socket::Closesocket(sockfd);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                         return false;
                     }
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = NewSocket(context, strand, sockfd);
                     if (NULLPTR == socket) {
                         ppp::net::Socket::Closesocket(sockfd);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         return false;
                     }
 
                     std::shared_ptr<VEthernetLocalProxyConnection> connection = NewConnection(context, strand, socket);
                     if (NULLPTR == connection) {
                         ppp::net::Socket::Closesocket(sockfd);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
 
@@ -343,6 +358,8 @@ namespace ppp {
                         if (RemoveConnection(connection.get())) {
                             connection->Dispose(); 
                         }
+
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                     }
 
                     return bok;
@@ -361,12 +378,14 @@ namespace ppp {
                  */
                 bool VEthernetLocalProxySwitcher::CreateAlwaysTimeout() noexcept {
                     if (disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
                     auto self = shared_from_this();
                     auto timeout = make_shared_object<ppp::threading::Timer>(context_);
                     if (!timeout) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
 

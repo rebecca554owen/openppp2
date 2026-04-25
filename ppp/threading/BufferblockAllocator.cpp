@@ -168,6 +168,10 @@ namespace ppp
                 memory_start_ = (char*)buddy_arena;
                 memory_maxof_ = (char*)buddy_arena + memory_size;
             }
+            elif (memory_size > 0)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryPoolCreateFailed);
+            }
 
 #if !defined(_WIN32)
             /* After mapping a file into virtual memory, attempting to immediately delete the file created by the mapping. */
@@ -197,6 +201,10 @@ namespace ppp
             {
                 memory_start_ = NULLPTR;
                 memory_maxof_ = NULLPTR;
+            }
+            elif (NULLPTR != memory_start_)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryUnmapFailed);
             }
 #else
             bip_mapped_region_ = NULLPTR;

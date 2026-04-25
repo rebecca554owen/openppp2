@@ -7,9 +7,9 @@
  */
 #include <linux/ppp/ipv6/IPv6Auxiliary.h>
 #include <ppp/ipv6/IPv6Packet.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/net/IPEndPoint.h>
-#include <ppp/diagnostics/Error.h>
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/io/File.h>
 #include <common/unix/UnixAfx.h>

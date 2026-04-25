@@ -5,6 +5,7 @@
 #include <ppp/io/File.h>
 #include <ppp/cryptography/EVP.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file BufferswapAllocator.cpp
@@ -75,11 +76,13 @@ namespace ppp
                     std::shared_ptr<BufferblockAllocator> bufffer_block = make_shared_object<BufferblockAllocator>(bufferblock_path, block_memory_size);
                     if (NULLPTR == bufffer_block)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         break;
                     }
 
                     if (!bufffer_block->IsVaild())
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryPoolCreateFailed);
                         break;
                     }
 
@@ -135,6 +138,7 @@ namespace ppp
                 }
                 elif(block_length++ >= block_count_)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryPoolExhausted);
                     return NULLPTR;
                 }
                 else 

@@ -406,19 +406,24 @@ Source anchors:
 
 - `ppp/app/ConsoleUI.cpp::ExecuteCommand(...)` — command dispatch
 - `ppp/app/ConsoleUI.cpp::RenderFrame(...)` — frame rendering
-- `ppp/app/ConsoleUI.cpp::BuildStatusBarText(...)` — status bar construction
+- `ppp/diagnostics/ErrorHandler.cpp::GetLastErrorCodeSnapshot(...)` — status error snapshot
 
 ### Built-In Console Commands
 
-| Command | Alias | Action |
-|---------|-------|--------|
-| `openppp2 help` | `help` | Print available command list |
-| `openppp2 restart` | `restart` | Graceful restart via `ShutdownApplication(true)` |
-| `openppp2 reload` | `reload` | Alias for restart |
-| `openppp2 exit` | `exit` | Process shutdown via `ShutdownApplication(false)` |
-| `openppp2 info` | `status` | Print current info snapshot to cmd output |
-| `openppp2 clear` | `clear` | Clear cmd output ring buffer and reset scroll |
-| *(any other input)* | | Execute as shell command, capture output to cmd section |
+| Command | Action |
+|---------|--------|
+| `openppp2 help` | Print available command list |
+| `openppp2 restart` | Graceful restart via `ShutdownApplication(true)` |
+| `openppp2 reload` | Same action as restart |
+| `openppp2 exit` | Process shutdown via `ShutdownApplication(false)` |
+| `openppp2 info` | Pull and print a full runtime environment snapshot |
+| `openppp2 clear` | Clear cmd output ring buffer and reset scroll |
+| *(any other input)* | Execute as shell command, capture output to cmd section |
+
+Notes:
+
+- Bare commands such as `help`, `restart`, `exit`, `clear`, and `status` are treated as system shell commands.
+- Built-in handling requires the `openppp2` namespace prefix.
 
 ### Keyboard Controls
 
@@ -441,23 +446,22 @@ The TUI frame is divided into:
 1. **Header** (10 fixed rows): top border, hint lines, ASCII art, spacer, separator
 2. **Info section** (dynamic, ~60% of middle area): scrollable VPN status lines, `Home`/`End`
 3. **Cmd section** (dynamic, ~40% of middle area): scrollable command output, `PageUp`/`PageDown`
-4. **Input line** (1 row): editor with reverse-video caret
-5. **Status bar** (1 row): error + VPN state + speed
+4. **Input line** (1 row): editor with white-background caret
+5. **Status bar** (1 row): latest diagnostics error snapshot
 
 See `TUI_DESIGN.md` for the complete layout specification.
 
 ### Status Bar Semantics
 
-Status bar text is composed from:
+The status bar shows a single diagnostics line generated from the process-wide error
+snapshot:
 
-- `vpn:<state>` — current VPN connection state (e.g. `Established`, `Connecting`, `Disconnected`)
-- optional `note:<latest queued runtime status text>` — most recent `UpdateStatus` text
-- `err:<FormatErrorString(snapshot)>` — formatted last error description
-- `err_age:<seconds>s` — seconds since last error from `GetLastErrorTimestamp()` delta
-- `diag_ts:<raw diagnostics timestamp>` — raw diagnostics timestamp for correlation
+- `No errors` when `ErrorCode::Success` is active.
+- `Error: <message> (<age>)` for the most recent non-success error, where `<age>` is
+  derived from `GetLastErrorTimestamp()` and rendered as `Ns ago`.
 
-The status bar reads process-wide diagnostics snapshots and shows the last observed
-failure context without interrupting data-plane threads.
+VPN state and throughput are still updated internally for command/info output, but they are
+not rendered in the bottom status bar.
 
 ---
 

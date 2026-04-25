@@ -1,4 +1,5 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file ITcpipTransmission.cpp
@@ -89,7 +90,7 @@ namespace ppp {
          */
         std::shared_ptr<Byte> ITcpipTransmission::DoReadBytes(YieldContext& y, int length) noexcept {
             if (disposed_) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
             }
 
             auto self = shared_from_this();
@@ -103,10 +104,12 @@ namespace ppp {
         bool ITcpipTransmission::ShiftToScheduler() noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (!socket || !socket->is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return false;
             }
 
             if (disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }
 
@@ -121,6 +124,10 @@ namespace ppp {
                 GetContext() = scheduler;
             }
 
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            }
+
             return ok;
         }
 
@@ -133,27 +140,27 @@ namespace ppp {
         std::shared_ptr<Byte> ITcpipTransmission::ReadBytes(YieldContext& y, int length) noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (!socket || !socket->is_open()) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed, NULLPTR);
             }
 
             if (disposed_) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
             }
 
             if (length < 1) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
             }
 
             std::shared_ptr<BufferswapAllocator> allocator = this->BufferAllocator;
             std::shared_ptr<Byte> packet = BufferswapAllocator::MakeByteArray(allocator, length);
             if (NULLPTR == packet) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, NULLPTR);
             }
 
             bool ok = ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(packet.get(), length), y);
             if (!ok) {
                 Dispose();
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketReadFailed, NULLPTR);
             }
 
             std::shared_ptr<ITransmissionStatistics> statistics = this->Statistics;
@@ -175,10 +182,12 @@ namespace ppp {
         bool ITcpipTransmission::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (!socket || !socket->is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return false;
             }
 
             if (disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }
 
@@ -206,7 +215,12 @@ namespace ppp {
                     });
                 };
 
-            return ppp::threading::Executors::Post(context, strand, complete_do_write_bytes_async_callback);
+            bool posted = ppp::threading::Executors::Post(context, strand, complete_do_write_bytes_async_callback);
+            if (!posted) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            }
+
+            return posted;
         }
     }
 }

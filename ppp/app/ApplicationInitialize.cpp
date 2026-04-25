@@ -4,6 +4,7 @@
  */
 
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp::app {
 
@@ -20,15 +21,6 @@ namespace ppp::app {
 PppApplication::PppApplication() noexcept {
 #if defined(_WIN32)
     SetConsoleTitle(TEXT("PPP PRIVATE NETWORK™ 2"));
-
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (NULLPTR != hConsole) {
-        COORD cSize = {120, ppp::win32::Win32Native::IsWindows11OrLaterVersion() ? 46 : 47};
-        if (SetConsoleScreenBufferSize(hConsole, cSize)) {
-            SMALL_RECT rSize = {0, 0, cSize.X - 1, cSize.Y - 1};
-            SetConsoleWindowInfo(hConsole, TRUE, &rSize);
-        }
-    }
 
     ppp::win32::Win32Native::EnabledConsoleWindowClosedButton(false);
 #endif
@@ -63,11 +55,13 @@ void PppApplication::Release() noexcept {
 bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkInterface>& network_interface) noexcept {
     std::shared_ptr<AppConfiguration> configuration = GetConfiguration();
     if (NULLPTR == configuration) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPreflightCheckFailed);
         return false;
     }
 
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     if (NULLPTR == context) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPreflightCheckFailed);
         return false;
     }
 
@@ -79,6 +73,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
     if (client_mode_) {
         if (network_interface->HostedNetwork && configuration->client.paper_airplane.tcp) {
             if (ppp::app::client::lsp::PaperAirplaneController::Install() < 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                 return false;
             }
         }
@@ -131,6 +126,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 
             ethernet = ppp::make_shared_object<VEthernetNetworkSwitcher>(context, network_interface->Lwip, network_interface->VNet, configuration->concurrent > 1, configuration);
             if (NULLPTR == ethernet) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 break;
             }
             if (network_interface->IPv6Address.is_v6()) {
@@ -220,6 +216,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId, network_interface->Ssmt, network_interface->SsmtMQ);
 #endif
             if (NULLPTR == ethernet) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 break;
             }
 

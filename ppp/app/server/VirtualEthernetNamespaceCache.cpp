@@ -2,6 +2,7 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetNamespaceCache.cpp
@@ -62,14 +63,17 @@ namespace ppp {
                 using dns_hdr = ppp::net::native::dns::dns_hdr;
 
                 if (key.empty()) { /* min heap. */
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
 
                 if (NULLPTR == response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                     return false;
                 }
 
                 if (response_length < sizeof(dns_hdr)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
 
@@ -85,6 +89,7 @@ namespace ppp {
                 else {
                     node = make_shared_object<NamespaceRecordNode>();
                     if (NULLPTR == node) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
                 }
@@ -99,11 +104,13 @@ namespace ppp {
                     bool b = NamespaceLinkedList_.AddLast(node);
                     if (!b) {
                         Dictionary::TryRemove(NamespaceHashTable_, key);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     }
 
                     return b;
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -149,6 +156,7 @@ namespace ppp {
                 using dns_hdr = ppp::net::native::dns::dns_hdr;
 
                 if (key.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
                 else {
@@ -156,11 +164,13 @@ namespace ppp {
                     SynchronizedObjectScope scope(LockObj_);
 
                     if (!Dictionary::TryGetValue(NamespaceHashTable_, key, node)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                         return false;
                     }
 
                     if (NULLPTR == node) {
                         Dictionary::TryRemove(NamespaceHashTable_, key);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                         return false;
                     }
 
@@ -170,6 +180,7 @@ namespace ppp {
                 }
 
                 if (response_length < sizeof(dns_hdr)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResponseInvalid);
                     return false;
                 }
 

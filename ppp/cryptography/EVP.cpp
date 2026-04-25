@@ -3,6 +3,7 @@
 #include <string>
 #include <sstream>
 #include <iostream>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file EVP.cpp
@@ -93,6 +94,7 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
@@ -101,12 +103,14 @@ namespace ppp {
             }
 
             if (NULLPTR == _cipher) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                 return NULLPTR;
             }
 
             // INIT-CTX
             SynchronizedObjectScope scope(_syncobj);
             if (EVP_CipherInit_ex(_encryptCTX.get(), _cipher, NULLPTR, _key.get(), _iv.get(), 1) < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return NULLPTR;
             }
 
@@ -114,12 +118,14 @@ namespace ppp {
             int feedbacklen = datalen + EVP_CIPHER_block_size(_cipher);
             std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, feedbacklen);
             if (NULLPTR == cipherText) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
             if (EVP_CipherUpdate(_encryptCTX.get(),
                 cipherText.get(), &feedbacklen, data, datalen) < 1) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return NULLPTR;
             }
 
@@ -143,6 +149,7 @@ namespace ppp {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
@@ -151,12 +158,14 @@ namespace ppp {
             }
 
             if (NULLPTR == _cipher) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                 return NULLPTR;
             }
 
             // INIT-CTX
             SynchronizedObjectScope scope(_syncobj);
             if (EVP_CipherInit_ex(_decryptCTX.get(), _cipher, NULLPTR, _key.get(), _iv.get(), 0) < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return NULLPTR;
             }
 
@@ -164,12 +173,14 @@ namespace ppp {
             int feedbacklen = datalen + EVP_CIPHER_block_size(_cipher);
             std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, feedbacklen);
             if (NULLPTR == cipherText) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
             if (EVP_CipherUpdate(_decryptCTX.get(),
                 cipherText.get(), &feedbacklen, data, datalen) < 1) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return NULLPTR;
             }
 
@@ -191,6 +202,7 @@ namespace ppp {
             while (!context) {
                 EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
                 if (!ctx) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     break;
                 }
 
@@ -218,6 +230,7 @@ namespace ppp {
 
             if (exception) {
                 context = NULLPTR;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -231,6 +244,7 @@ namespace ppp {
          */
         bool EVP::Support(const ppp::string& method) noexcept {
             if (method.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -251,6 +265,7 @@ namespace ppp {
         bool EVP::initKey(const ppp::string& method, const ppp::string password) noexcept {
             _cipher = EVP_get_cipherbyname(method.data());
             if (NULLPTR == _cipher) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                 return false;
             }
 
@@ -258,15 +273,18 @@ namespace ppp {
             int ivLen = EVP_CIPHER_iv_length(_cipher);
             _iv = make_shared_alloc<Byte>(ivLen); // RAND_bytes(iv.get(), ivLen);
             if (NULLPTR == _iv) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
             _key = make_shared_alloc<Byte>(EVP_CIPHER_key_length(_cipher));
             if (NULLPTR == _key) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
             if (EVP_BytesToKey(_cipher, EVP_md5(), NULLPTR, (Byte*)password.data(), (int)password.length(), 1, _key.get(), _iv.get()) < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -353,6 +371,7 @@ namespace ppp {
         bool ComputeDigest(const ppp::string& s, const Byte* digest, int& digestlen, int algorithm) noexcept {
             if (digestlen < 1 || NULLPTR == digest) {
                 digestlen = 0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                 return false;
             }
             else {

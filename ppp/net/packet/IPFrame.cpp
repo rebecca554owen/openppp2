@@ -1,6 +1,7 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/tap/ITap.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file IPFrame.cpp
@@ -58,6 +59,7 @@ namespace ppp {
                 int message_data_size = payload_offset + payload_size;
                 std::shared_ptr<Byte> message_data = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, message_data_size);
                 if (NULLPTR == message_data) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
@@ -101,11 +103,13 @@ namespace ppp {
             std::shared_ptr<IPFrame> IPFrame::Parse(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* packet, int size) noexcept {
                 struct ip_hdr* iphdr = ip_hdr::Parse(packet, size);
                 if (NULLPTR == iphdr) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<IPFrame> frame = make_shared_object<IPFrame>();
                 if (NULLPTR == frame) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
@@ -123,12 +127,14 @@ namespace ppp {
                 if (options_size > 0) {
                     std::shared_ptr<BufferSegment> options_ = make_shared_object<BufferSegment>();
                     if (NULLPTR == options_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return NULLPTR;
                     }
 
                     options_->Length = options_size;
                     options_->Buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, options_size);
                     if (NULLPTR == options_->Buffer) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return NULLPTR;
                     }
 
@@ -140,12 +146,14 @@ namespace ppp {
                 if (message_size_ > 0) {
                     std::shared_ptr<BufferSegment> messages_ = make_shared_object<BufferSegment>();
                     if (NULLPTR == messages_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return NULLPTR;
                     }
 
                     messages_->Length = message_size_;
                     messages_->Buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, message_size_);
                     if (NULLPTR == messages_->Buffer) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return NULLPTR;
                     }
 

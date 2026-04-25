@@ -5,6 +5,7 @@
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
 #include <ppp/app/client/proxys/VEthernetLocalProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetLocalProxyConnection.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
 #include <ppp/net/Ipep.h>
@@ -13,7 +14,6 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
-#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetLocalProxyConnection.cpp

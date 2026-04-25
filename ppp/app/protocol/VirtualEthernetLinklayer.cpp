@@ -137,7 +137,7 @@ namespace ppp {
                             return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                         }
                     } else {
-                        // it's a valid IP address â€?apply network segment filter
+                        // it's a valid IP address ï¿½?apply network segment filter
                         if (NULLPTR != firewall) {
                             if (firewall->IsDropNetworkSegment(address)) {
                                 return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
@@ -209,7 +209,7 @@ namespace ppp {
                 }
 
                 // -----------------------------------------------------------------
-                // Read a 3â€‘byte connection ID (bigâ€‘endian) â€?used in SYN/PSH/FIN.
+                // Read a 3â€‘byte connection ID (bigâ€‘endian) ï¿½?used in SYN/PSH/FIN.
                 // -----------------------------------------------------------------
                 /** @brief Reads a 3-byte connection identifier from packet stream. */
                 static int PACKET_ConnectId(Byte*& stream, int& packet_length) noexcept {
@@ -272,7 +272,7 @@ namespace ppp {
                 }
 
                 // -----------------------------------------------------------------
-                // Validate an endpoint â€?port range, address type, no multicast/broadcast.
+                // Validate an endpoint ï¿½?port range, address type, no multicast/broadcast.
                 // -----------------------------------------------------------------
                 template <class TProtocol>
                 /** @brief Validates protocol endpoint for protocol-level constraints. */
@@ -331,7 +331,7 @@ namespace ppp {
                                 return false;   // truncation or error
                             }
 
-                            // port length must fit into a single Byte (0â€?55)
+                            // port length must fit into a single Byte (0ï¿½?55)
                             if (address_port_string_size > 255) {
                                 return false;
                             }

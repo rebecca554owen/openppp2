@@ -270,11 +270,13 @@ namespace ppp {
              */
             static bool PACKET_SendToManagedServer(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, TWebSocketPtr websocket, const ppp::Int128& session_id, int cmd, int id, int node, const TData& data) noexcept {
                 if (NULLPTR == websocket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 char length_hex[8 + 1];
                 if (websocket->IsDisposed()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
@@ -288,12 +290,14 @@ namespace ppp {
                 ppp::string json_string = JsonAuxiliary::ToString(messages);
                 int length_dec = snprintf(length_hex, sizeof(length_hex), "%08x", (unsigned int)json_string.size());
                 if (length_dec < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     return false;
                 }
 
                 int packet_length = json_string.size() + length_dec;
                 std::shared_ptr<Byte> packet = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_length);
                 if (NULLPTR == packet) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
                 
@@ -314,25 +318,30 @@ namespace ppp {
             static std::shared_ptr<Byte> PACKET_ReadBinaryPacket(std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, TWebSocketPtr& websocket, int& packet_length, ppp::coroutines::YieldContext& y) noexcept {
                 char length_hex[8];
                 if (!websocket->Read(length_hex, 0, sizeof(length_hex), y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketReadFailed);
                     return NULLPTR;
                 }
 
                 Int128 length_value = ppp::Int128FromString(ppp::string(length_hex, sizeof(length_hex)), 16);
                 if (length_value > static_cast<Int128>(std::numeric_limits<int>::max())) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOverflow);
                     return NULLPTR;
                 }
 
                 int length_num = static_cast<int>(length_value);
                 if (length_num < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<Byte> packet = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, length_num);
                 if (NULLPTR == packet) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
 
                 if (!websocket->Read(packet.get(), 0, length_num, y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketReadFailed);
                     return NULLPTR;
                 }
 
@@ -348,10 +357,14 @@ namespace ppp {
                 int packet_length = 0;
                 std::shared_ptr<Byte> packet = PACKET_ReadBinaryPacket(allocator, websocket, packet_length, y);
                 if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
                 json = JsonAuxiliary::FromString((char*)packet.get(), packet_length);
+                if (!json.isObject()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                }
                 return json.isObject();
             }
 
@@ -856,6 +869,7 @@ namespace ppp {
                     return p->Read(buffer, offset, length, y);
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 return false;
             }
 
@@ -885,6 +899,7 @@ namespace ppp {
                         y);
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 return false;
             }
 
@@ -898,6 +913,7 @@ namespace ppp {
                     return p->Write(buffer, offset, length, cb);
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 return false;
             }
         }

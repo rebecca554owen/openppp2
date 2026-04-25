@@ -50,10 +50,10 @@ graph TD
 │  [Cmd section — scrollable with PageUp / PageDown]                   │
 │  command output, shell subprocess output, built-in command output... │
 ├──────────────────────────────────────────────────────────────────────┤
-│  > [input line or dim placeholder, reverse-video block as caret]     │
-├────────────────────────────────────┬─────────────────────────────────┤
-│  Error: description (Ns ago)       │  VPN: Established  ↑x  ↓y      │
-└────────────────────────────────────┴─────────────────────────────────┘
+│  > [input line or dim placeholder, white-background block as caret]   │
+├──────────────────────────────────────────────────────────────────────┤
+│  Error: description (Ns ago) / No errors                             │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Fixed rows
@@ -176,15 +176,18 @@ terminal themes with low contrast.
 
 ## Built-In Commands
 
-| Command               | Alias        | Action                                          |
-|-----------------------|--------------|-------------------------------------------------|
-| `openppp2 help`       | `help`       | Print command list to cmd output section        |
-| `openppp2 restart`    | `restart`    | Graceful restart via `ShutdownApplication(true)` |
-| `openppp2 reload`     | `reload`     | Alias for restart                               |
-| `openppp2 exit`       | `exit`       | Exit via `ShutdownApplication(false)`           |
-| `openppp2 info`       | `status`     | Copy current info snapshot to cmd output        |
-| `openppp2 clear`      | `clear`      | Clear cmd output ring buffer                    |
-| *(any other input)*   |              | Execute as shell command, capture output        |
+| Command               | Action                                           |
+|-----------------------|--------------------------------------------------|
+| `openppp2 help`       | Print command list to cmd output section         |
+| `openppp2 restart`    | Graceful restart via `ShutdownApplication(true)` |
+| `openppp2 reload`     | Same action as restart                           |
+| `openppp2 exit`       | Exit via `ShutdownApplication(false)`            |
+| `openppp2 info`       | Pull and print full runtime environment snapshot |
+| `openppp2 clear`      | Clear cmd output ring buffer                     |
+| *(any other input)*   | Execute as shell command, capture output         |
+
+Bare commands such as `help`, `restart`, `exit`, `clear`, and `status` are not mapped to
+built-in handlers. They are executed as shell commands.
 
 ### System Command Execution
 
@@ -281,14 +284,13 @@ sequenceDiagram
 
 The real terminal cursor is **hidden for the entire lifetime of the TUI
 session** and is only made visible again by `Stop()` during shutdown. The
-caret position inside the editor line is conveyed by a single
-reverse-video white block that `BuildEditorLine()` embeds at the appropriate
-byte offset:
+caret position inside the editor line is conveyed by a single white-background
+block that `BuildEditorLine()` embeds at the appropriate byte offset:
 
 ```
 > Editor text with caret█here
              ^^^^^^^^^^^
-             rendered as "\x1b[7m h\x1b[0m"  (reverse-video 'h')
+             rendered as "\x1b[47m h\x1b[0m"  (white-background 'h')
 ```
 
 Because the block is part of the rendered string, it moves atomically with
@@ -472,7 +474,7 @@ sequenceDiagram
 
 | Feature              | Windows                                         | POSIX                                 |
 |----------------------|-------------------------------------------------|---------------------------------------|
-| Input reading        | `_kbhit()` + `_getch()` polling                | `read(STDIN_FILENO)` non-blocking     |
+| Input reading        | `_kbhit()` + `_getch()` polling                | `poll()` + `read(STDIN_FILENO)`        |
 | Input mode           | `PrepareInputTerminal()` clears `ENABLE_ECHO_INPUT` and `ENABLE_LINE_INPUT`; `RestoreInputTerminal()` restores | `tcsetattr` disables `ICANON`/`ECHO`/`ISIG` |
 | Terminal state save  | `GetConsoleMode` + stdin mode                  | `tcgetattr` + `fcntl` flags           |
 | Alt screen buffer    | `\x1b[?1049h/l` (requires VT enabled)         | `\x1b[?1049h/l`                       |
@@ -548,14 +550,23 @@ visibility, and leaves the alternate screen buffer.
 ### `void ConsoleUI::UpdateStatus(ppp::string status)`
 
 **Brief:** Pushes a status string to the internal status queue. The render thread drains
-the queue via `DrainStatusQueue()` and parses it to update `vpn_state_text_` and
-`speed_text_`.
+the queue via `DrainStatusQueue()` and parses it to update runtime state/speed cache.
 
 **Parameters:**
 - `status` — Space-separated key=value pairs, e.g. `"vpn=up rx=1024 tx=2048"`.
 
-**Thread safety:** Acquires `lock_` only for a `std::deque::push_back`. Safe to call
+**Thread safety:** Acquires `lock_` only for a queue push. Safe to call
 from any thread including the IO thread at high frequency.
+
+### Status bar semantics
+
+The bottom status row displays only diagnostics snapshot text:
+
+- `No errors` when `ErrorCode::Success` is active.
+- `Error: <message> (<age>)` for the last non-success error.
+
+VPN state and throughput are still maintained for other UI paths, but they are not shown
+in the bottom status row.
 
 ---
 

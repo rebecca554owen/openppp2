@@ -1,6 +1,7 @@
 #include "vmux.h"
 #include "vmux_net.h"
 #include "vmux_skt.h"
+#include <ppp/diagnostics/Error.h>
 
 #include "ppp/app/client/VEthernetNetworkTcpipConnection.h"
 #include "ppp/app/server/VirtualEthernetNetworkTcpipConnection.h"
@@ -119,6 +120,7 @@ namespace vmux {
     bool vmux_net::ftt(uint32_t seq, uint32_t ack) noexcept {
         SynchronizationObjectScope __SCOPE__(syncobj_);
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
         
@@ -192,20 +194,24 @@ namespace vmux {
      */
     bool vmux_net::underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const PostInternalAsynchronousCallback& posted_ac) noexcept {
         if (NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
         
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
         VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
         if (!connection->IsLinked()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
         ITransmissionPtr transmission = connection->GetTransmission();
         if (NULLPTR == transmission) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
@@ -241,6 +247,7 @@ namespace vmux {
      */
     bool vmux_net::update() noexcept {
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
@@ -320,17 +327,19 @@ namespace vmux {
     bool vmux_net::packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept {
         // Prepare the ack frames.
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
         uint32_t seq = ntohl(h->seq);
         if (status_.rx_ack_ == seq) {
-            if (packet_input(h->cmd, (Byte*)h, length, now)) {
-                status_.rx_ack_++;
-            }
-            else {
-                return false;
-            }
+                if (packet_input(h->cmd, (Byte*)h, length, now)) {
+                    status_.rx_ack_++;
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                    return false;
+                }
 
             for (;;) {
                 rx_packet_ssqueue::iterator packet_tail = rx_queue_.begin();
@@ -344,6 +353,7 @@ namespace vmux {
                         status_.rx_ack_++;
                     }
                     else {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                         return false;
                     }
                 }
@@ -366,11 +376,13 @@ namespace vmux {
             // 'length' here includes the vmux_hdr; ensure it's at least a header
             // and does not exceed header + max_buffers_size.
             if (length < sizeof(vmux_hdr) || length > (sizeof(vmux_hdr) + max_buffers_size)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                 return false;
             }
 
             std::shared_ptr<Byte> buf = make_byte_array(length);
             if (NULLPTR == buf) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 return false;
             }
 
@@ -380,6 +392,7 @@ namespace vmux {
             return rx_queue_.emplace(std::make_pair(seq, packet)).second;
         }
         else {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
     }
@@ -403,6 +416,7 @@ namespace vmux {
     bool vmux_net::packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now) noexcept {
         buffer_size -= sizeof(vmux_hdr);
         if (buffer_size < 0) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
 
@@ -466,6 +480,7 @@ namespace vmux {
             active(now);
         }
         else {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
             return false;
         }
 
@@ -477,6 +492,7 @@ namespace vmux {
      */
     bool vmux_net::process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept {
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
@@ -485,6 +501,7 @@ namespace vmux {
         if (tail != endl) {
             skt = tail->second;
             if (NULLPTR != skt) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericConflict);
                 return false;
             }
         }
@@ -493,6 +510,7 @@ namespace vmux {
         skt = ppp::make_shared_object<vmux_skt>(self, connection_id);
 
         if (NULLPTR == skt) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
             return false;
         }
 
@@ -550,10 +568,12 @@ namespace vmux {
      */
     bool vmux_net::post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
         if (NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
         
         if (base_.disposed_ || !base_.established_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
             return false;
         }
 
@@ -603,6 +623,7 @@ namespace vmux {
 
             bool forwarding = underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac);
             if (!forwarding) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
         }
@@ -615,15 +636,18 @@ namespace vmux {
      */
     bool vmux_net::post_internal(Byte cmd, const void* buffer, int buffer_size, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
         if (NULLPTR != buffer && buffer_size < 0) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             return false;
         }
 
         if (base_.disposed_ || !base_.established_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
             return false;
         }
 
         // Ensure packet length does not exceed negotiated max buffer size.
         if (buffer_size > max_buffers_size) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketTooLarge);
             return false;
         }
 
@@ -631,6 +655,7 @@ namespace vmux {
         std::shared_ptr<Byte> packet_managed = make_byte_array(packet_length);
 
         if (NULLPTR == packet_managed) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
             return false;
         }
 
@@ -652,29 +677,35 @@ namespace vmux {
      */
     bool vmux_net::add_linklayer(const VirtualEthernetTcpipConnectionPtr& connection, vmux_linklayer_ptr& linklayer, const vmux_native_add_linklayer_after_success_before_callback& cb) noexcept {
         if (NULLPTR == connection) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             return false;
         }
 
         SynchronizationObjectScope __SCOPE__(syncobj_);
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
         if (!connection->IsLinked()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
         if (rx_links_.size() >= status_.max_connections) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionQuotaExceeded);
             return false;
         }
 
         linklayer = ppp::make_shared_object<vmux_linklayer>();
         if (NULLPTR == linklayer) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
             return false;
         }
 
         std::shared_ptr<Byte> buffer = make_byte_array(max_buffers_size);
         if (NULLPTR == buffer) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
             return false;
         }
 
@@ -685,12 +716,14 @@ namespace vmux {
         bool unlimited = rx_links_.size() < status_.max_connections;
         if (unlimited) {
             if (NULLPTR != cb && !cb()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
             return true;
         }
         elif(NULLPTR != cb && !cb()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             return false;
         }
 
@@ -724,6 +757,7 @@ namespace vmux {
                 };
 
             if (!ppp::coroutines::YieldContext::Spawn(BufferAllocator.get(), *connection_context, connection_strand.get(), process)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                 return false;
             }
 
@@ -738,16 +772,19 @@ namespace vmux {
      */
     bool vmux_net::handshake(const vmux_linklayer_ptr& linklayer, uint16_t connection_id, ppp::coroutines::YieldContext& y) noexcept {
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
         VirtualEthernetTcpipConnectionPtr& linklayer_socket = linklayer->connection;
         if (!linklayer_socket->IsLinked()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
         ITransmissionPtr linklayer_transmission = linklayer_socket->GetTransmission();
         if (NULLPTR == linklayer_transmission) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
@@ -767,6 +804,7 @@ namespace vmux {
             packet.receive_id = htons(connection_id);
 
             if (!linklayer_transmission->Write(y, &packet, sizeof(vmux_linlayer_add_ack_packet))) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
         }
@@ -774,6 +812,7 @@ namespace vmux {
             int buffer_size = 0;
             std::shared_ptr<Byte> packet_memory = linklayer_transmission->Read(y, buffer_size);
             if (NULLPTR == packet_memory || buffer_size < sizeof(vmux_linlayer_add_ack_packet)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                 return false;
             }
 
@@ -783,6 +822,7 @@ namespace vmux {
             // receive_id is assigned by the server and may arrive out of order
             // while the client is still adding remaining linklayers.
             if (receive_id == 0 || receive_id > status_.max_connections) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
 
@@ -814,16 +854,19 @@ namespace vmux {
      */
     bool vmux_net::forwarding(const vmux_linklayer_ptr& linklayer, ppp::coroutines::YieldContext& y) noexcept {
         if (base_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
         VirtualEthernetTcpipConnectionPtr& linklayer_socket = linklayer->connection;
         if (!linklayer_socket->IsLinked()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
         ITransmissionPtr linklayer_transmission = linklayer_socket->GetTransmission();
         if (NULLPTR == linklayer_transmission) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
 
@@ -885,14 +928,17 @@ namespace vmux {
         int                                                  port) noexcept {
 
         if (base_.disposed_ || !base_.established_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
             return false;
         }
 
         if (host.empty() || port <= 0 || port > UINT16_MAX) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             return false;
         }
 
         if (NULLPTR == sk) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             return false;
         }
 
@@ -912,10 +958,12 @@ namespace vmux {
         const std::shared_ptr<vmux_skt_ptr>&                 return_connection) noexcept {
 
         if (!y || !return_connection) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             return false;
         }
 
         if (NULLPTR == context) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
             return false;
         }
 
@@ -925,6 +973,7 @@ namespace vmux {
 
         std::shared_ptr<vmux_net::atomic_int> status = ppp::make_shared_object<vmux_net::atomic_int>(-1);
         if (NULLPTR == status) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
             return false;
         }
 
@@ -949,6 +998,7 @@ namespace vmux {
             });
 
         if (!posted) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
             return false;
         }
 
@@ -961,6 +1011,9 @@ namespace vmux {
      */
     bool vmux_net::connect(const ContextPtr& context, const StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& sk, const template_string& host, int port, const ConnectAsynchronousCallback& ac) noexcept {
         if (NULLPTR == context || !connect_require(sk, host, port)) {
+            if (NULLPTR == context) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
+            }
             return false;
         }
 
@@ -981,6 +1034,7 @@ namespace vmux {
 
             skt = ppp::make_shared_object<vmux_skt>(self, connection_id);
             if (NULLPTR == skt) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 return false;
             }
 
@@ -995,6 +1049,7 @@ namespace vmux {
         else {
             skt->clear_event();
             skt->close();
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
             return false;
         }
     }

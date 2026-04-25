@@ -97,6 +97,7 @@ namespace ppp {
                         }
                     }
 
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
                 /** @brief Releases a previously allocated identification token. */
@@ -107,6 +108,7 @@ namespace ppp {
                         auto tail = allocateds_.find(identification);
                         auto endl = allocateds_.end();
                         if (tail == endl) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false;
                         }
 
@@ -145,6 +147,7 @@ namespace ppp {
                     auto tail = allocateds_map_.begin();
                     auto endl = allocateds_map_.end();
                     if (tail == endl) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -276,6 +279,7 @@ namespace ppp {
                     }
 
                     Release();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return -1;
                 }
                 /** @brief Creates translated response packet and outputs to destination. */
@@ -356,15 +360,18 @@ namespace ppp {
                 using EchoAsynchronousContext = InternetControlMessageProtocol_EchoAsynchronousContext;
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (!packet || !frame) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 const std::shared_ptr<BufferSegment> messages = packet->Payload;
                 if (!messages || !messages->Buffer || messages->Length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -464,6 +471,7 @@ namespace ppp {
             std::shared_ptr<IPFrame> InternetControlMessageProtocol::ER(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, int ttl, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IcmpFrame> e = make_shared_object<IcmpFrame>();
                 if (NULLPTR == e) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
@@ -484,6 +492,7 @@ namespace ppp {
             std::shared_ptr<IPFrame> InternetControlMessageProtocol::TE(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, UInt32 source, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IcmpFrame> e = make_shared_object<IcmpFrame>();
                 if (NULLPTR == e) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 

@@ -3,6 +3,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file IWebsocketTransmission.cpp
@@ -41,6 +42,7 @@ namespace ppp {
          */
         static inline bool DecoratorWebsocketResponseToWebclient(const ITransmission::AppConfigurationPtr& configuration, boost::beast::websocket::response_type& res) noexcept {
             if (NULLPTR == configuration) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                 return false;
             }
 
@@ -72,6 +74,11 @@ namespace ppp {
             HandshakeType                                           handshake_type,
             YieldContext&                                           y) noexcept {
 
+            if (NULLPTR == configuration || NULLPTR == socket) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return false;
+            }
+
             /**
              * @brief Uses instance overrides when both Host and Path are available.
              */
@@ -79,11 +86,21 @@ namespace ppp {
             ppp::string path = std::move(this->Path);
 
             if (host.size() > 0 && path.size() > 0) {
-                return socket->Run(handshake_type, host, path, y);
+                bool ok = socket->Run(handshake_type, host, path, y);
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                }
+
+                return ok;
             }
             else {
                 auto& cfg = configuration->websocket;
-                return socket->Run(handshake_type, cfg.host, cfg.path, y);
+                bool ok = socket->Run(handshake_type, cfg.host, cfg.path, y);
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                }
+
+                return ok;
             }
         }
 
@@ -93,6 +110,7 @@ namespace ppp {
         bool IWebsocketTransmission::Decorator(boost::beast::websocket::request_type& req) noexcept {
             auto configuration = GetConfiguration();
             if (NULLPTR == configuration) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                 return false;
             }
 
@@ -124,6 +142,11 @@ namespace ppp {
             HandshakeType                                           handshake_type,
             YieldContext&                                           y) noexcept {
 
+            if (NULLPTR == configuration || NULLPTR == socket) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return false;
+            }
+
             /**
              * @brief Uses instance overrides when both Host and Path are available.
              */
@@ -132,7 +155,7 @@ namespace ppp {
 
             if (host.size() > 0 && path.size() > 0) {
                 auto& cfg = configuration->websocket;
-                return socket->Run(handshake_type,
+                bool ok = socket->Run(handshake_type,
                     host,
                     path,
                     cfg.ssl.verify_peer,
@@ -142,10 +165,15 @@ namespace ppp {
                     cfg.ssl.certificate_key_password,
                     cfg.ssl.ciphersuites,
                     y);
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                }
+
+                return ok;
             }
             else {
                 auto& cfg = configuration->websocket;
-                return socket->Run(handshake_type,
+                bool ok = socket->Run(handshake_type,
                     cfg.host,
                     cfg.path,
                     cfg.ssl.verify_peer,
@@ -155,6 +183,11 @@ namespace ppp {
                     cfg.ssl.certificate_key_password,
                     cfg.ssl.ciphersuites,
                     y);
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                }
+
+                return ok;
             }
         }
 
@@ -164,6 +197,7 @@ namespace ppp {
         bool ISslWebsocketTransmission::Decorator(boost::beast::websocket::request_type& req) noexcept {
             auto configuration = GetConfiguration();
             if (NULLPTR == configuration) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                 return false;
             }
 

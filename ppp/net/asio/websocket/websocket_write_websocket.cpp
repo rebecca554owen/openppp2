@@ -4,6 +4,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -26,14 +27,17 @@ namespace ppp {
              */
             bool websocket::Write(const void* buffer, int offset, int length, const AsynchronousWriteCallback& cb) noexcept {
                 if (NULLPTR == buffer || offset < 0 || length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (NULLPTR == cb) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (IsDisposed() || !websocket_.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 

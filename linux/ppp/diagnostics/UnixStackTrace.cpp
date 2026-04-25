@@ -1,4 +1,5 @@
 #include <linux/ppp/diagnostics/UnixStackTrace.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <stdio.h>
 #include <unistd.h>
@@ -187,6 +188,7 @@ namespace ppp
             struct utsname __nm;
             if (uname(&__nm) < 0) /* errno */
             {
+                SetLastErrorCode(ErrorCode::GenericOperationFailed);
                 return false; /* EXIT_FAILURE */
             }
 
@@ -229,6 +231,7 @@ namespace ppp
             struct rlimit limit;
             if (getrlimit(RLIMIT_NOFILE, &limit) < 0)
             {
+                SetLastErrorCode(ErrorCode::ResourceExhaustedFileDescriptors);
                 return -1;
             }
 
@@ -239,13 +242,20 @@ namespace ppp
         {
             if (max_open_file_descriptors < 1)
             {
+                SetLastErrorCode(ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             struct rlimit limit;
             limit.rlim_cur = max_open_file_descriptors; // 设置软限制
             limit.rlim_max = max_open_file_descriptors; // 设置硬限制
-            return setrlimit(RLIMIT_NOFILE, &limit) > -1;
+            if (setrlimit(RLIMIT_NOFILE, &limit) > -1)
+            {
+                return true;
+            }
+
+            SetLastErrorCode(ErrorCode::ResourceExhaustedFileDescriptors);
+            return false;
         }
     }
 }

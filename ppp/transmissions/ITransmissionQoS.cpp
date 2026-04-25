@@ -1,5 +1,6 @@
 #include <ppp/transmissions/ITransmissionQoS.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file ITransmissionQoS.cpp
@@ -67,16 +68,16 @@ namespace ppp {
          */
         std::shared_ptr<Byte> ITransmissionQoS::ReadBytes(YieldContext& y, int length, const ReadBytesAsynchronousCallback& cb) noexcept {
             if (length < 1) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
             }
 
             if (NULLPTR == cb) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument, NULLPTR);
             }
 
             YieldContext* co = y.GetPtr();
             if (NULLPTR == co) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid, NULLPTR);
             }
 
             bool bawait = false; 
@@ -86,7 +87,7 @@ namespace ppp {
             for (;;) { // co_await
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
                 }
 
                 bawait = IsPeek();
@@ -100,7 +101,7 @@ namespace ppp {
             if (bawait) {
                 bool suspend = y.Suspend();
                 if (!suspend) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid, NULLPTR);
                 }
             }
 
@@ -119,11 +120,13 @@ namespace ppp {
          */
         bool ITransmissionQoS::EndRead(int bytes_transferred) noexcept {
             if (bytes_transferred < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
             else {
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
             }
@@ -141,6 +144,7 @@ namespace ppp {
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     if (disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
@@ -159,6 +163,7 @@ namespace ppp {
                 return true;
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             return false;
         }
 

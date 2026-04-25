@@ -4,8 +4,331 @@
  */
 
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp::app {
+
+/**
+ * @brief Appends one formatted line with aligned key column to environment output.
+ * @param lines Output line vector.
+ * @param key Left-side label text.
+ * @param value Right-side value text.
+ */
+static void AppendEnvLine(ppp::vector<ppp::string>& lines, const char* key, const ppp::string& value) noexcept {
+    ppp::string line = key;
+    line = ppp::PaddingRight<ppp::string>(line, 22u, ' ');
+    line += ": ";
+    line += value;
+    lines.emplace_back(std::move(line));
+}
+
+/**
+ * @brief Builds a repeated section separator line at fixed width.
+ * @param width Number of characters in the separator.
+ * @return String filled with '-' characters.
+ */
+static ppp::string BuildSectionSeparator(std::size_t width) noexcept {
+    ppp::string separator;
+    separator = ppp::PaddingRight<ppp::string>(separator, width, '-');
+    return separator;
+}
+
+/**
+ * @brief Converts current build flavor to printable hosting environment text.
+ * @param client_mode Whether process currently runs in client mode.
+ * @return String in format "client:production" / "server:development".
+ */
+static ppp::string BuildHostingEnvironmentText(bool client_mode) noexcept {
+#if defined(_DEBUG)
+    ppp::string env = "development";
+#else
+    ppp::string env = "production";
+#endif
+    return (client_mode ? ppp::string("client:") : ppp::string("server:")) + env;
+}
+
+/**
+ * @brief Formats exchanger link state enum to printable text.
+ * @param state Exchanger runtime network state.
+ * @return One of connecting/established/reconnecting.
+ */
+static const char* ToNetworkStateString(VEthernetExchanger::NetworkState state) noexcept {
+    switch (state) {
+        case VEthernetExchanger::NetworkState_Established:
+            return "established";
+        case VEthernetExchanger::NetworkState_Reconnecting:
+            return "reconnecting";
+        default:
+            return "connecting";
+    }
+}
+
+/**
+ * @brief Builds full runtime environment lines mirrored from legacy foreground console output.
+ * @param lines Output line vector receiving formatted environment rows.
+ */
+void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines) noexcept {
+    lines.clear();
+    lines.reserve(160u);
+
+    static constexpr std::size_t kSectionSeparatorWidth = 96u;
+    ppp::string section_separator = BuildSectionSeparator(kSectionSeparatorWidth);
+
+    ppp::string hosting_environment = BuildHostingEnvironmentText(client_mode_);
+
+    AppendEnvLine(lines, "Application", "started. Press Ctrl+C to shut down.");
+    AppendEnvLine(lines, "Max Concurrent", stl::to_string<ppp::string>(
+        configuration_ ? configuration_->concurrent : 0));
+    AppendEnvLine(lines, "Process", stl::to_string<ppp::string>(
+        static_cast<Int32>(ppp::GetCurrentProcessId())));
+
+#if defined(__SIMD__)
+    if (aesni::aes_cpu_is_support()) {
+        AppendEnvLine(lines, "Triplet", ppp::string(ppp::GetSystemCode()) + ":" + ppp::GetPlatformCode() + "[SIMD]");
+    } else {
+        AppendEnvLine(lines, "Triplet", ppp::string(ppp::GetSystemCode()) + ":" + ppp::GetPlatformCode());
+    }
+#else
+    AppendEnvLine(lines, "Triplet", ppp::string(ppp::GetSystemCode()) + ":" + ppp::GetPlatformCode());
+#endif
+
+    AppendEnvLine(lines, "Cwd", ppp::GetCurrentDirectoryPath());
+    AppendEnvLine(lines, "Template", configuration_path_);
+
+    std::shared_ptr<VirtualEthernetSwitcher> server = server_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
+
+    if (NULLPTR != server) {
+        auto managed_server = server->GetManagedServer();
+        if (NULLPTR != managed_server) {
+            const char* link_state = "connecting";
+            if (managed_server->LinkIsAvailable()) {
+                link_state = "established";
+            } elif (managed_server->LinkIsReconnecting()) {
+                link_state = "reconnecting";
+            }
+
+            AppendEnvLine(lines, "Managed Server", managed_server->GetUri() + " @(" + link_state + ")");
+        }
+    }
+
+    if (NULLPTR != client) {
+        if (ppp::string remote_uri = client->GetRemoteUri(); !remote_uri.empty()) {
+            std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
+            ppp::string mode_text = (NULLPTR != exchanger && exchanger->StaticEchoAllocated()) ? "static" : "dynamic";
+            AppendEnvLine(lines, "VPN Server", remote_uri + " [" + mode_text + "]");
+        }
+
+        struct {
+            const char* tab;
+            std::shared_ptr<VEthernetLocalProxySwitcher> switcher;
+        } proxys[] = {
+            { "http", client->GetHttpProxy() },
+            { "socks", client->GetSocksProxy() }
+        };
+        for (const auto& proxy : proxys) {
+            std::shared_ptr<VEthernetLocalProxySwitcher> switcher = proxy.switcher;
+            if (NULLPTR == switcher) {
+                continue;
+            }
+
+            boost::asio::ip::tcp::endpoint localEP = switcher->GetLocalEndPoint();
+            boost::asio::ip::address localIP = localEP.address();
+            if (localIP.is_unspecified()) {
+                if (auto ni = client->GetUnderlyingNetworkInterface(); NULLPTR != ni) {
+                    localIP = ni->IPAddress;
+                }
+            }
+
+            ppp::string endpoint_text = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(localIP, localEP.port())).ToString();
+            if ("http" == ppp::string(proxy.tab)) {
+                AppendEnvLine(lines, "Http Proxy", endpoint_text + "/http");
+            } else {
+                AppendEnvLine(lines, "Socks Proxy", endpoint_text + "/socks");
+            }
+        }
+
+#if defined(_WIN32)
+        AppendEnvLine(lines, "P/A Controller", client->GetPaperAirplaneController() ? "on" : "off");
+#endif
+    }
+
+    if (NULLPTR != server) {
+        if (std::shared_ptr<AppConfiguration> configuration = configuration_; NULLPTR != configuration) {
+            AppendEnvLine(lines, "Public IP", configuration->ip.public_);
+            AppendEnvLine(lines, "Interface IP", configuration->ip.interface_);
+        }
+
+        using NAC = VirtualEthernetSwitcher::NetworkAcceptorCategories;
+        const char* categories[] = { "ppp+tcp", "ppp+udp", "ppp+ws", "ppp+wss", "cdn+1", "cdn+2" };
+        NAC category_values[] = {
+            NAC::NetworkAcceptorCategories_Tcpip,
+            NAC::NetworkAcceptorCategories_Udpip,
+            NAC::NetworkAcceptorCategories_WebSocket,
+            NAC::NetworkAcceptorCategories_WebSocketSSL,
+            NAC::NetworkAcceptorCategories_CDN1,
+            NAC::NetworkAcceptorCategories_CDN2,
+        };
+
+        for (int i = 0, service_index = 0; i < arraysizeof(categories); ++i) {
+            boost::asio::ip::tcp::endpoint serverEP = server->GetLocalEndPoint(category_values[i]);
+            if (serverEP.port() <= IPEndPoint::MinPort || serverEP.port() > IPEndPoint::MaxPort) {
+                continue;
+            }
+
+            ppp::string service_name = "Service ";
+            service_name += stl::to_string<ppp::string>(++service_index);
+            service_name = ppp::PaddingRight<ppp::string>(service_name, 22u, ' ');
+            service_name += ": ";
+            service_name += IPEndPoint::ToEndPoint(serverEP).ToString();
+            service_name += "/";
+            service_name += categories[i];
+            lines.emplace_back(std::move(service_name));
+        }
+    }
+
+    AppendEnvLine(lines, "Hosting Environment", hosting_environment);
+    lines.emplace_back(ppp::string());
+
+    if (NULLPTR != client) {
+        struct {
+            std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> ni;
+            const char* tab;
+            bool tun;
+        } stnis[] = {
+            { client->GetTapNetworkInterface(), "TUN", true },
+            { client->GetUnderlyingNetworkInterface(), "NIC", false },
+        };
+
+        for (const auto& sti : stnis) {
+            auto ni = sti.ni;
+            if (NULLPTR == ni) {
+                continue;
+            }
+
+            lines.emplace_back(sti.tab);
+            lines.emplace_back(section_separator);
+
+#if defined(_WIN32)
+            AppendEnvLine(lines, "Name", ni->Name + "[" + ni->Description + "]");
+#else
+            AppendEnvLine(lines, "Name", ni->Name);
+#endif
+
+            AppendEnvLine(lines, "Index", stl::to_string<ppp::string>(ni->Index));
+
+#if !defined(_MACOS)
+            if (!ni->Id.empty()) {
+                AppendEnvLine(lines, "Id", ni->Id);
+            }
+#endif
+
+            ppp::string interface_text;
+            interface_text += Ipep::ToAddressString<ppp::string>(ni->IPAddress);
+            interface_text += " ";
+            interface_text += Ipep::ToAddressString<ppp::string>(ni->GatewayServer);
+            interface_text += " ";
+            interface_text += Ipep::ToAddressString<ppp::string>(ni->SubmaskAddress);
+            AppendEnvLine(lines, "Interface", interface_text);
+
+            if (sti.tun) {
+                std::shared_ptr<aggligator::aggligator> aggligator = client->GetAggligator();
+                if (NULLPTR != aggligator) {
+                    const char* aggligator_states[] = { "none", "unknown", "connecting", "reconnecting", "established" };
+                    int max_channel = 0;
+                    int max_servers = 0;
+                    aggligator->client_fetch_concurrency(max_servers, max_channel);
+
+                    aggligator::aggligator::link_status status = aggligator->status();
+                    int state_index = static_cast<int>(status);
+                    if (0 > state_index || state_index >= arraysizeof(aggligator_states)) {
+                        state_index = 1;
+                    }
+
+                    ppp::string aggligator_text = aggligator_states[state_index];
+                    aggligator_text += ", ";
+                    aggligator_text += stl::to_string<ppp::string>(max_servers);
+                    aggligator_text += "-server, ";
+                    aggligator_text += stl::to_string<ppp::string>(max_channel);
+                    aggligator_text += "-channel";
+                    AppendEnvLine(lines, "Aggligator", aggligator_text);
+                } else {
+                    AppendEnvLine(lines, "Aggligator", "none");
+                }
+
+                std::shared_ptr<ppp::transmissions::proxys::IForwarding> forwarding = client->GetForwarding();
+                if (NULLPTR != forwarding) {
+                    AppendEnvLine(lines, "Proxy Interlayer", forwarding->GetProxyUrl());
+                } else {
+                    AppendEnvLine(lines, "Proxy Interlayer", "none");
+                }
+
+                AppendEnvLine(lines, "TCP/IP CC",
+                    client->IsLwip() ? "lwip" :
+#ifdef SYSNAT
+                    (client->IsSysnat() ? "tc" : "ctcp")
+#else
+                    "ctcp"
+#endif
+                );
+                AppendEnvLine(lines, "Block QUIC", client->IsBlockQUIC() ? "blocked" : "unblocked");
+
+                std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
+                if (NULLPTR != exchanger) {
+                    ppp::string mux_state;
+                    if (client->IsMuxEnabled()) {
+                        mux_state = ToNetworkStateString(exchanger->GetMuxNetworkState());
+                        mux_state += ", ";
+                        mux_state += stl::to_string<ppp::string>(client->Mux(NULLPTR));
+                        mux_state += "-channel";
+                    } else {
+                        mux_state = "none";
+                    }
+
+                    AppendEnvLine(lines, "Mux State", mux_state);
+                    AppendEnvLine(lines, "Link State", ToNetworkStateString(exchanger->GetNetworkState()));
+                } else {
+                    AppendEnvLine(lines, "Mux State", "none");
+                    AppendEnvLine(lines, "Link State", "none");
+                }
+            }
+
+            for (std::size_t i = 0, l = ni->DnsAddresses.size(); i < l; ++i) {
+                ppp::string dns_key = "DNS Server ";
+                dns_key += stl::to_string<ppp::string>(i + 1u);
+                dns_key = ppp::PaddingRight<ppp::string>(dns_key, 22u, ' ');
+                dns_key += ": ";
+                dns_key += Ipep::ToAddressString<ppp::string>(ni->DnsAddresses[i]);
+                lines.emplace_back(std::move(dns_key));
+            }
+
+            lines.emplace_back(ppp::string());
+        }
+    }
+
+    uint64_t incoming_traffic = 0;
+    uint64_t outgoing_traffic = 0;
+    std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
+    if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
+        incoming_traffic = 0;
+        outgoing_traffic = 0;
+        statistics_snapshot = NULLPTR;
+    }
+
+    lines.emplace_back("VPN");
+    lines.emplace_back(section_separator);
+    AppendEnvLine(lines, "Duration", stopwatch_.Elapsed().ToString("TT:mm:ss", false));
+    if (NULLPTR != server) {
+        AppendEnvLine(lines, "Sessions", stl::to_string<ppp::string>(server->GetAllExchangerNumber()));
+    }
+
+    AppendEnvLine(lines, "TX", ppp::StrFormatByteSize(static_cast<Int64>(outgoing_traffic)));
+    AppendEnvLine(lines, "RX", ppp::StrFormatByteSize(static_cast<Int64>(incoming_traffic)));
+    if (NULLPTR != statistics_snapshot) {
+        AppendEnvLine(lines, "IN", ppp::StrFormatByteSize(static_cast<Int64>(statistics_snapshot->IncomingTraffic.load())));
+        AppendEnvLine(lines, "OUT", ppp::StrFormatByteSize(static_cast<Int64>(statistics_snapshot->OutgoingTraffic.load())));
+    }
+}
 
 /**
  * @brief Disposes active server/client switchers and clears periodic timers.
@@ -115,144 +438,9 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     status += " tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
     ConsoleUI::GetInstance().UpdateStatus(status);
 
-    /**
-     * @brief Build and push the VPN info snapshot to the TUI info section.
-     *
-     * This block assembles a human-readable set of lines describing the
-     * current runtime environment and pushes them into the ConsoleUI info
-     * section so the user can see live statistics without typing a command.
-     * The block runs on every tick (~1 s) regardless of TUI enabled state;
-     * when no TUI is running, SetInfoLines() is a benign no-op.
-     */
-    {
-        ppp::vector<ppp::string> info;
-        info.reserve(32u);
-
-        // ----------------------------------------------------------------
-        // Static application parameters (stable across ticks)
-        // ----------------------------------------------------------------
-        info.emplace_back("Application started. Press Ctrl+C to shut down.");
-        info.emplace_back("");
-
-        {
-            ppp::string line = "Max Concurrent      : ";
-            line += stl::to_string<ppp::string>(
-                configuration_ ? configuration_->concurrent : 0);
-            info.emplace_back(std::move(line));
-        }
-        {
-            ppp::string line = "Process             : ";
-            line += stl::to_string<ppp::string>(
-                static_cast<Int32>(ppp::GetCurrentProcessId()));
-            info.emplace_back(std::move(line));
-        }
-        {
-            ppp::string line = "Cwd                 : ";
-            line += ppp::GetCurrentDirectoryPath();
-            info.emplace_back(std::move(line));
-        }
-        {
-            ppp::string line = "Hosting Environment : ";
-            line += (client_mode_ ? ppp::string("client") : ppp::string("server"));
-            line += ":production";
-            info.emplace_back(std::move(line));
-        }
-
-        info.emplace_back("");
-
-        // ----------------------------------------------------------------
-        // Dynamic VPN session statistics
-        // ----------------------------------------------------------------
-        info.emplace_back("VPN");
-        info.emplace_back(
-            "---------------------------------------------------------------"
-            "--------------------");
-
-        {
-            uint64_t elapsed_ms = static_cast<uint64_t>(
-                std::max<int64_t>(0LL, stopwatch_.ElapsedMilliseconds()));
-            uint64_t elapsed_s  = elapsed_ms / 1000u;
-            uint64_t hh = elapsed_s / 3600u;
-            uint64_t mm = (elapsed_s % 3600u) / 60u;
-            uint64_t ss = elapsed_s % 60u;
-
-            char dur_buf[32];
-            std::snprintf(dur_buf, sizeof(dur_buf), "%02llu:%02llu:%02llu",
-                static_cast<unsigned long long>(hh),
-                static_cast<unsigned long long>(mm),
-                static_cast<unsigned long long>(ss));
-
-            ppp::string line = "Duration            : ";
-            line += dur_buf;
-            info.emplace_back(std::move(line));
-        }
-
-        {
-            ppp::string line = "Link State          : ";
-            if ("up" == vpn_state) {
-                line += "Established";
-            } elif ("reconnect" == vpn_state) {
-                line += "Reconnecting";
-            } elif ("connect" == vpn_state) {
-                line += "Connecting";
-            } elif ("init" == vpn_state) {
-                line += "Initializing";
-            } else {
-                line += "Down";
-            }
-            info.emplace_back(std::move(line));
-        }
-
-        if (NULLPTR != statistics_snapshot) {
-            {
-                ppp::string line = "TX                  : ";
-                line += ppp::StrFormatByteSize(
-                    static_cast<Int64>(outgoing_traffic));
-                info.emplace_back(std::move(line));
-            }
-            {
-                ppp::string line = "RX                  : ";
-                line += ppp::StrFormatByteSize(
-                    static_cast<Int64>(incoming_traffic));
-                info.emplace_back(std::move(line));
-            }
-        }
-
-        // IPv6 transit-plane state: only meaningful in server mode.
-        if (NULLPTR != server_) {
-            uint8_t ipv6_st = server_->GetIPv6RuntimeState();
-            ppp::string line = "inet6               : ";
-            switch (ipv6_st) {
-                case 1:
-                    line += "nat66";
-                    break;
-                case 2:
-                    line += "gua";
-                    break;
-                case 3: {
-                    // Plane failed: append the diagnostic error string when available.
-                    uint32_t cause = server_->GetIPv6RuntimeCause();
-                    line += "failed";
-                    if (0 != cause) {
-                        using namespace ppp::diagnostics;
-                        const char* msg = FormatErrorString(static_cast<ErrorCode>(cause));
-                        if (NULLPTR != msg && '\0' != *msg) {
-                            line += " (";
-                            line += msg;
-                            line += ")";
-                        }
-                    }
-                    break;
-                }
-                default:
-                    line += "off";
-                    break;
-            }
-            info.emplace_back(std::move(line));
-        }
-
-        ConsoleUI::GetInstance().SetInfoLines(info);
-    }
+    ppp::vector<ppp::string> info;
+    GetEnvironmentInformationLines(info);
+    ConsoleUI::GetInstance().SetInfoLines(info);
 
 #if defined(_WIN32)
     ppp::win32::Win32Native::OptimizedProcessWorkingSize();

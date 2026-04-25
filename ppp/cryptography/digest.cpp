@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file digest.cpp
@@ -97,6 +98,7 @@ namespace ppp {
                     Byte md5[16];
                     int md5len;
                     if (!ComputeMD5(ppp::string((char*)data, size), md5, md5len)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                         return false;
                     }
                     else {
@@ -107,6 +109,7 @@ namespace ppp {
             }
 
             if (agorithm < DigestAlgorithmic_sha1 || agorithm > DigestAlgorithmic_sha512) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 

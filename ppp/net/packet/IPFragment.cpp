@@ -2,6 +2,7 @@
 #include <ppp/io/Stream.h>
 #include <ppp/io/MemoryStream.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file IPFragment.cpp
@@ -37,6 +38,7 @@ namespace ppp {
                 if ((packet->Flags & IPFlags::IP_MF) != 0 || ((packet->Flags & IPFlags::IP_OFFMASK) != 0 && packet->GetFragmentOffset() > 0)) {
                     std::shared_ptr<BufferSegment> payload = packet->Payload;
                     if (NULLPTR == payload || payload->Length <= 0) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -60,6 +62,7 @@ namespace ppp {
                             else {
                                 subpackage = make_shared_object<Subpackage>();
                                 if (NULLPTR == subpackage) {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                     return false;
                                 }
 
@@ -115,6 +118,7 @@ namespace ppp {
                             std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = this->BufferAllocator;
                             std::shared_ptr<Byte> buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, nextFragementOffset);
                             if (NULLPTR == buffer) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
@@ -127,11 +131,13 @@ namespace ppp {
 
                             originNew = make_shared_object<IPFrame>();
                             if (NULLPTR == originNew) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
                             std::shared_ptr<BufferSegment> packet_payload = make_shared_object<BufferSegment>(buffer, nextFragementOffset);
                             if (NULLPTR == packet_payload) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
@@ -156,6 +162,7 @@ namespace ppp {
                     return true;
                 }
                 else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
             }
@@ -170,6 +177,7 @@ namespace ppp {
 
                 IPFrame* const frame = constantof(packet);
                 if (NULLPTR == frame) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -180,6 +188,7 @@ namespace ppp {
                 ppp::vector<IPFramePtr> subpackages;
                 int subpacketl = IPFrame::Subpackages(subpackages, std::shared_ptr<IPFrame>(frame, [](const IPFrame*) noexcept {}));
                 if (subpacketl <= 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -187,11 +196,13 @@ namespace ppp {
                 for (int i = 0; i < subpacketl; i++) {
                     IPFramePtr frame_ = subpackages[i];
                     if (NULLPTR == frame_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
                     Buffer message_ = frame_->ToArray(allocator);
                     if (NULLPTR == message_ || message_->Length <= 0) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 

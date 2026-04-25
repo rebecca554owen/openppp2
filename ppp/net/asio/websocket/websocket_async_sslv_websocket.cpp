@@ -5,6 +5,7 @@
 
 #include <ppp/net/asio/websocket/websocket_async_sslv_websocket.h>
 #include <ppp/net/asio/websocket/websocket_accept_sslv_websocket.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace net {
@@ -67,6 +68,7 @@ namespace ppp {
             SSL* AsyncSslvWebSocket::GetSslHandle() noexcept {
                 SslvWebSocketPtr& ssl_websocket = GetSslSocket();
                 if (NULLPTR == ssl_websocket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 

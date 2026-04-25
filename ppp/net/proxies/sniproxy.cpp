@@ -80,6 +80,7 @@ namespace ppp {
             bool sniproxy::be_http(const void* p) noexcept {
                 const char* data = static_cast<const char*>(p);
                 if (NULLPTR == data) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
                 
@@ -98,6 +99,7 @@ namespace ppp {
              */
             bool sniproxy::post(const ppp::function<void()>& callback) noexcept {
                 if (NULLPTR == callback) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -118,6 +120,7 @@ namespace ppp {
              */
             bool sniproxy::be_host(ppp::string host, ppp::string domain) noexcept {
                 if (host.empty() || domain.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -139,6 +142,7 @@ namespace ppp {
                         return true;
                     }
                 }
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -326,22 +330,26 @@ namespace ppp {
             bool sniproxy::do_tlsvd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
                 tls_hdr* hdr = reinterpret_cast<tls_hdr*>(local_socket_buf_);
                 if (0x16 != hdr->Content_Type) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false; // Not a handshake record
                 }
 
                 size_t tls_payload = ntohs(hdr->Length);
                 if ((0 == tls_payload) || (tls_payload > (FORWARD_MSS - sizeof(tls_hdr)))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 // Read the TLS payload (Client Hello)
                 if (!ppp::coroutines::asio::async_read(*local_socket_,
                     boost::asio::buffer(local_socket_buf_, tls_payload), y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 // Store the payload for later forwarding
                 if (!messages_.Write(local_socket_buf_, 0, static_cast<int>(tls_payload))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false; // Memory allocation failure
                 }
 
@@ -366,6 +374,7 @@ namespace ppp {
             bool sniproxy::do_httpd_handshake(ppp::coroutines::YieldContext& y, MemoryStream& messages_) noexcept {
                 auto response = std::make_shared<boost::asio::streambuf>();
                 if (NULLPTR == response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -388,22 +397,26 @@ namespace ppp {
                 y.Suspend();
                 
                 if (ec || (0 == length)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 // Store all data read so far (headers + possibly partial body) into messages_
                 boost::asio::const_buffers_1 buf = response->data();
                 if (NULLPTR == buf.data()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (!messages_.Write(buf.data(), 0, static_cast<int>(buf.size()))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false; // Memory allocation failure
                 }
 
                 int port = 0;
                 ppp::string hostname;
                 if (!do_httpd_handshake_host_trim(messages_, hostname, port)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -420,11 +433,13 @@ namespace ppp {
                 port = PPP_HTTP_SYS_PORT; // default HTTP port
                 host = do_httpd_handshake_host(messages_);
                 if (host.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 host = RTrim(LTrim(host));
                 if (host.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -432,6 +447,7 @@ namespace ppp {
                 if ('[' == host.front()) {
                     size_t closing = host.find(']');
                     if (ppp::string::npos == closing) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -440,6 +456,7 @@ namespace ppp {
                         if (!port_str.empty()) {
                             port = atoi(port_str.data());
                             if ((port <= IPEndPoint::MinPort) || (port > IPEndPoint::MaxPort)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
                         }
@@ -461,16 +478,19 @@ namespace ppp {
                 ppp::string hoststr = host.substr(0, idx);
                 ppp::string portstr = host.substr(idx + 1);
                 if (hoststr.empty() || portstr.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 portstr = RTrim(LTrim(portstr));
                 if (portstr.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 port = atoi(portstr.data());
                 if ((port <= IPEndPoint::MinPort) || (port > IPEndPoint::MaxPort)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -578,6 +598,7 @@ namespace ppp {
                 if (hostname_.empty() ||
                     (forward_connect_port <= IPEndPoint::MinPort) ||
                     (forward_connect_port > IPEndPoint::MaxPort)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -588,6 +609,7 @@ namespace ppp {
                 // Check if target is our own WebSocket endpoint (loopback)
                 if (be_host(configuration_->websocket.host, hostname_)) {
                     if ((self_websocket_port <= IPEndPoint::MinPort) || (self_websocket_port > IPEndPoint::MaxPort)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -611,6 +633,7 @@ namespace ppp {
                     }
 
                     if (IPEndPoint::IsInvalid(addr) || addr.is_loopback()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -620,6 +643,7 @@ namespace ppp {
                         boost::asio::ip::address iface = StringToAddress(configuration_->ip.interface_.data(), ignore);
                         boost::asio::ip::address pub = StringToAddress(configuration_->ip.public_.data(), ignore);
                         if ((addr == pub) || (addr == iface)) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false;
                         }
                     }
@@ -635,9 +659,11 @@ namespace ppp {
                     remote_socket_.open(boost::asio::ip::tcp::v6(), ec);
                 }
                 else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -661,17 +687,20 @@ namespace ppp {
 
                 // Connect to remote (async_connect returns false on success)
                 if (ppp::coroutines::asio::async_connect(remote_socket_, remote_ep, y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 // Forward already-read handshake data (TLS Client Hello or HTTP headers)
                 std::shared_ptr<Byte> buf = messages_.GetBuffer();
                 if (NULLPTR == buf) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (!ppp::coroutines::asio::async_write(remote_socket_,
                     boost::asio::buffer(buf.get(), messages_.GetPosition()), y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -682,11 +711,13 @@ namespace ppp {
                 // Start bidirectional forwarding
                 if (!local_to_remote()) {
                     close();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (!remote_to_local()) {
                     close();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -753,6 +784,7 @@ namespace ppp {
              */
             bool sniproxy::local_to_remote() noexcept {
                 if (is_disposed() || !socket_is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -798,6 +830,7 @@ namespace ppp {
              */
             bool sniproxy::remote_to_local() noexcept {
                 if (is_disposed() || !socket_is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -893,11 +926,13 @@ namespace ppp {
                 const int hdr_sz = sizeof(tls_hdr); // 5 bytes
                 if (!ppp::coroutines::asio::async_read(*local_socket_,
                     boost::asio::buffer(local_socket_buf_, hdr_sz), y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 MemoryStream ms;
                 if (!ms.Write(local_socket_buf_, 0, hdr_sz)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -908,20 +943,24 @@ namespace ppp {
                     }
 
                     // TLS handshake failed – do not fall through to HTTP because we already consumed 5 bytes.
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 static constexpr int http_probe_sz = 8;
                 if (!ppp::coroutines::asio::async_read(*local_socket_,
                     boost::asio::buffer(local_socket_buf_ + hdr_sz, http_probe_sz - hdr_sz), y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (!ms.Write(local_socket_buf_ + hdr_sz, 0, http_probe_sz - hdr_sz)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
                 if (!be_http(local_socket_buf_)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -933,6 +972,7 @@ namespace ppp {
              */
             bool sniproxy::handshake() noexcept {
                 if ((NULLPTR == local_socket_) || (NULLPTR == context_)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -944,6 +984,7 @@ namespace ppp {
                         });
                     });
                 if (NULLPTR == timeout_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 

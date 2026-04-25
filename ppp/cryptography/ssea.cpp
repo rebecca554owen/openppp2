@@ -1,4 +1,5 @@
 #include <ppp/cryptography/ssea.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file ssea.cpp
@@ -107,6 +108,7 @@ namespace ppp
         {
             if (NULLPTR == data || data_size < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return 0;
             }
 
@@ -114,6 +116,7 @@ namespace ppp
             output = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, data_size);
             if (NULLPTR == output)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return 0;
             }
 
@@ -160,12 +163,14 @@ namespace ppp
         {
             if (NULLPTR == data || data_size < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return 0;
             }
 
             output = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, data_size);
             if (NULLPTR == output)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return 0;
             }
 
@@ -222,6 +227,7 @@ namespace ppp
 
             if (NULLPTR == data || datalen < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
@@ -303,6 +309,7 @@ namespace ppp
 
             if (NULLPTR == data || datalen < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
@@ -313,12 +320,14 @@ namespace ppp
                 Byte b = bytes[i];
                 if (b < '\x20')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return NULLPTR;   // Character below printable range
                 }
 
                 b -= '\x20';
                 if (b > BASE94_RADIX)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return NULLPTR;   // Character beyond the 94 symbols
                 }
 
@@ -330,17 +339,20 @@ namespace ppp
                         b = bytes[i];
                         if (b < '\x20')
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                             return NULLPTR;
                         }
 
                         b -= '\x20';
                         if (b > BASE93_RADIX)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                             return NULLPTR;
                         }
                     }
                     else
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                         return NULLPTR;   // Unexpected end of string
                     }
 
@@ -363,6 +375,7 @@ namespace ppp
                         int v = (((b - BASE93_RADIX) + 1) * BASE93_RADIX) + (bytes[++i] - '\x20');
                         if (v > 0xff)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                             return NULLPTR;   // Decoded value out of byte range
                         }
 
@@ -418,6 +431,7 @@ namespace ppp
             uint8_t* p = (uint8_t*)data;
             if (NULLPTR == p || datalen < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return 0;
             }
 
@@ -427,12 +441,14 @@ namespace ppp
                 uint8_t b = *p++;
                 if (b < '\x20')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return 0;
                 }
 
                 b -= '\x20';
                 if (b >= BASE94_SYMBOL_COUNT)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return 0;
                 }
 
@@ -574,6 +590,7 @@ namespace ppp
 
             if (length < 0) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 

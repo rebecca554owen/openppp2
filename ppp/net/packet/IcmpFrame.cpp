@@ -1,6 +1,7 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file IcmpFrame.cpp
@@ -27,6 +28,7 @@ namespace ppp {
                 std::shared_ptr<BufferSegment> payload = this->Payload;
                 if (NULLPTR != payload) {
                     if (payload->Length < 0 || (payload->Length > 0 && NULLPTR == payload->Buffer)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return NULLPTR;
                     }
 
@@ -37,6 +39,7 @@ namespace ppp {
                 int packet_size = hdr_bytes_len + payload_size;
                 std::shared_ptr<Byte> packet_data = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_size);
                 if (NULLPTR == packet_data) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
@@ -59,11 +62,13 @@ namespace ppp {
 
                 std::shared_ptr<IPFrame> packet = make_shared_object<IPFrame>();
                 if (NULLPTR == packet) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<BufferSegment> packet_payload = make_shared_object<BufferSegment>(packet_data, packet_size);
                 if (NULLPTR == packet_payload) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
                 
@@ -82,20 +87,24 @@ namespace ppp {
              */
             std::shared_ptr<IcmpFrame> IcmpFrame::Parse(const IPFrame* frame) noexcept {
                 if (NULLPTR == frame || frame->ProtocolType != ip_hdr::IP_PROTO_ICMP) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<BufferSegment> messages = frame->Payload;
                 if (NULLPTR == messages || messages->Length <= 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
                 if (messages->Length < sizeof(struct icmp_hdr)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
                 struct icmp_hdr* icmphdr = (struct icmp_hdr*)messages->Buffer.get();
                 if (NULLPTR == icmphdr) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
@@ -104,6 +113,7 @@ namespace ppp {
                 if (icmphdr->icmp_chksum != 0) {
                     UInt16 cksum = inet_chksum(icmphdr, messages->Length);
                     if (cksum != 0) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return NULLPTR;
                     }
                 }
@@ -112,11 +122,13 @@ namespace ppp {
                 int hdr_bytes_len = sizeof(struct icmp_hdr);
                 int payload_size = messages->Length - hdr_bytes_len;
                 if (payload_size < 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<IcmpFrame> packet = make_shared_object<IcmpFrame>();
                 if (NULLPTR == packet) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
                 
@@ -133,6 +145,7 @@ namespace ppp {
                 std::shared_ptr<BufferSegment> packet_payload = 
                     make_shared_object<BufferSegment>(wrap_shared_pointer(buffer.get() + hdr_bytes_len, buffer), payload_size);
                 if (NULLPTR == packet_payload) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return NULLPTR;
                 }
 

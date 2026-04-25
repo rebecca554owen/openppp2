@@ -214,6 +214,18 @@ public:
     void PrintHelpInformation() noexcept;
 
     /**
+     * @brief Builds detailed runtime environment lines for console/TUI display.
+     *
+     * @details
+     * Produces a high-detail snapshot (runtime identity, listeners, proxies,
+     * NIC details, and traffic counters) that mirrors the legacy
+     * `PrintEnvironmentInformation()` content model.
+     *
+     * @param lines Output vector receiving one formatted line per row.
+     */
+    void GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines) noexcept;
+
+    /**
      * @brief Pulls and applies an IP list from the given command string or URL.
      *
      * @param command Command string specifying the source (URL or file path).

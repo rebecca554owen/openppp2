@@ -3,6 +3,7 @@
  * @brief Implementation of JSON serialization and typed conversion helpers.
  */
 #include <ppp/auxiliary/JsonAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace auxiliary {
@@ -32,20 +33,28 @@ namespace ppp {
          */
         Json::Value JsonAuxiliary::FromString(const char* json_string, int json_size) noexcept {
             if (NULLPTR == json_string) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return Json::Value();
             }
 
             if (json_size < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return Json::Value();
             }
 
             if (*json_string == '\x0') {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                 return Json::Value();
             }
 
             Json::Reader reader;
             Json::Value json;
-            return reader.parse(json_string, json_string + json_size, json) ? json : Json::Value();
+            if (!reader.parse(json_string, json_string + json_size, json)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                return Json::Value();
+            }
+
+            return json;
         }
 
         /**

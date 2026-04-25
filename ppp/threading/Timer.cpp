@@ -1,6 +1,7 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/net/Socket.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file Timer.cpp
@@ -65,10 +66,12 @@ namespace ppp {
          */
         bool Timer::Start() noexcept {
             if (_disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
             if (_interval < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TimerResolutionInvalid);
                 return false;
             }
             else {
@@ -77,7 +80,17 @@ namespace ppp {
 
             _last = 0;
             _deadline_timer = make_shared_object<boost::asio::steady_timer>(*_context);
-            return Next();
+            if (NULLPTR == _deadline_timer) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+                return false;
+            }
+
+            bool ok = Next();
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
+            }
+
+            return ok;
         }
 
         /**
@@ -86,11 +99,13 @@ namespace ppp {
          */
         bool Timer::Next() noexcept {
             if (_disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
             std::shared_ptr<boost::asio::steady_timer> t = _deadline_timer;
             if (NULLPTR == t) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return false;
             }
             else {
@@ -259,10 +274,12 @@ namespace ppp {
          */
         std::shared_ptr<Timer> Timer::Timeout(const std::shared_ptr<boost::asio::io_context>& context, int milliseconds, const TimeoutEventHandler& handler) noexcept {
             if (NULLPTR == handler) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
             if (NULLPTR == context) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return NULLPTR;
             }
 
@@ -272,6 +289,7 @@ namespace ppp {
 
             std::shared_ptr<Timer> t = make_shared_object<Timer>(context);
             if (NULLPTR == t) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return NULLPTR;
             }
 
@@ -286,6 +304,7 @@ namespace ppp {
                 return t;
             }
             else {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
                 t->Dispose();
                 return NULLPTR;
             }
@@ -299,6 +318,7 @@ namespace ppp {
          */
         bool Timer::Timeout(int milliseconds, ppp::coroutines::YieldContext& y) noexcept {
             if (!y) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -308,6 +328,7 @@ namespace ppp {
                 make_shared_object<boost::asio::steady_timer>(y.GetContext());
 
             if (NULLPTR == deadlineTimer) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return false;
             }
             

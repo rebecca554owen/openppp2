@@ -2,6 +2,7 @@
 #include <ppp/Random.h>
 #include <ppp/io/File.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file stdafx.cpp

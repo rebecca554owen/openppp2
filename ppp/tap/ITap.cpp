@@ -11,6 +11,7 @@
 
 #include <ppp/stdafx.h>
 #include <ppp/tap/ITap.h>
+#include <ppp/diagnostics/Error.h>
 
 #if defined(_WIN32)
 #include <windows/ppp/tap/TapWindows.h>
@@ -25,7 +26,6 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Executors.h>
-#include <ppp/diagnostics/Error.h>
 
 typedef ppp::net::IPEndPoint IPEndPoint;
 typedef ppp::net::Ipep       Ipep;
@@ -68,12 +68,14 @@ namespace ppp
         {
             if (handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return NULLPTR;
             }
 
             void* memory = Malloc(sizeof(boost::asio::posix::stream_descriptor));
             if (NULLPTR == memory)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -207,31 +209,31 @@ namespace ppp
         {
             if (NULLPTR == context)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
             }
 
             if (dev.empty())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             IPEndPoint ipEP(ip, IPEndPoint::MinPort);
             if (IPEndPoint::IsInvalid(ipEP))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
             }
 
             IPEndPoint gwEP(gw, IPEndPoint::MinPort);
             if (IPEndPoint::IsInvalid(gwEP))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
             }
 
             UInt32 maskCIDR = IPEndPoint::NetmaskToPrefix(mask);
             UInt32 maskIPPX = IPEndPoint::PrefixToNetmask(maskCIDR);
             if (mask != maskIPPX)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
             }
 
             return true;
@@ -355,17 +357,17 @@ namespace ppp
             bool isReady = IsReady();
             if (!isReady)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
             }
 
             if (_opening)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             }
 
             if (!AsynchronousReadPacketLoops())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelReadFailed);
             }
 
             _opening = true;
@@ -381,13 +383,13 @@ namespace ppp
             std::shared_ptr<boost::asio::posix::stream_descriptor> stream = _stream;
             if (NULLPTR == stream)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             bool opened = stream->is_open();
             if (!opened)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelReadFailed);
             }
 
             std::shared_ptr<ITap> self = shared_from_this();
@@ -450,13 +452,13 @@ namespace ppp
                 std::shared_ptr<boost::asio::posix::stream_descriptor> stream = my->_stream;
                 if (NULLPTR == stream)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
 
                 bool opened = stream->is_open();
                 if (!opened)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
                 }
 
                 std::shared_ptr<ITap> self = my->shared_from_this();
@@ -466,7 +468,7 @@ namespace ppp
                         bool opened = stream->is_open();
                         if (!opened)
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
                         }
 
                         /**
@@ -503,7 +505,7 @@ namespace ppp
             std::shared_ptr<Byte> buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_size);
             if (NULLPTR == buffer)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 
             memcpy(buffer.get(), packet, packet_size);

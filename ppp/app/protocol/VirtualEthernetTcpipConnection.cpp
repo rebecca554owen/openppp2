@@ -2,6 +2,7 @@
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -250,19 +251,23 @@ namespace ppp {
                 typedef VirtualEthernetLinklayer::ERROR_CODES ERROR_CODES;
 
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
                 if (!mux_or_connect) {
                     if (!socket_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         return false;
                     }
                 }
@@ -271,6 +276,7 @@ namespace ppp {
 
                 auto connector = make_shared_object<STATIC_VIRTUAL_ETHERNET_TCPIP_CONNECTOR_NEST>(this, configuration_, context_, id_);
                 if (NULLPTR == connector) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     return false;
                 }
                 else {
@@ -284,6 +290,7 @@ namespace ppp {
                     }
 
                     if (!connector_dook) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                         return false;
                     }
                 }
@@ -291,31 +298,37 @@ namespace ppp {
                 int packet_size = 0;
                 std::shared_ptr<Byte> packet = transmission->Read(y, packet_size);
                 if (NULLPTR == packet || packet_size < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
                 if (!connector->PacketInput(transmission, packet.get(), packet_size, y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
                 if (mux_or_connect) {
                     // For mux mode, reply must be a MUXON echo with exact tuple match.
                     if (!connector->MuxON) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         return false;
                     }
 
                     if (connector->Vlan != vlan || connector->Sequence != seq || connector->Acknowledge != ack) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         return false;
                     }
                 }
                 else {
                     // For connect mode, reply must be CONNECT_OK with success code.
                     if (!connector->ConnectOK) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                         return false;
                     }
 
                     ERROR_CODES err = (ERROR_CODES)connector->ErrorCode;
                     if (err != ERROR_CODES::ERRORS_SUCCESS) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                         return false;
                     }
                 }
@@ -359,6 +372,7 @@ namespace ppp {
                 const AcceptMuxAsynchronousCallback&    ac) noexcept {
 
                 if (NULLPTR == ac) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
@@ -385,18 +399,22 @@ namespace ppp {
                 typedef VirtualEthernetLinklayer::ERROR_CODES ERROR_CODES;
 
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
                 if (!socket_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
@@ -405,15 +423,18 @@ namespace ppp {
                 int packet_size = -1;
                 std::shared_ptr<Byte> packet = transmission->Read(y, packet_size);
                 if (NULLPTR == packet || packet_size < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
                 auto connector = make_shared_object<STATIC_VIRTUAL_ETHERNET_TCPIP_CONNECTOR_NEST>(this, configuration_, context_, id_);
                 if (NULLPTR == connector) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     return false;
                 }
 
                 if (!connector->PacketInput(transmission, packet.get(), packet_size, y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
@@ -421,6 +442,7 @@ namespace ppp {
                 LABEL_MUXON:
                     // Mux mode: mark linked state and hand negotiated tuple to callback.
                     if (!connector->MuxON) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         return false;
                     }
 
@@ -430,6 +452,7 @@ namespace ppp {
 
                     bool ok = accept_mux_ac(connector->Vlan, connector->Sequence, connector->Acknowledge);
                     if (!ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         return false;
                     }
                 }
@@ -447,6 +470,7 @@ namespace ppp {
                     boost::system::error_code ec;
                     socket_->open(destinationEP.protocol(), ec);
                     if (ec) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         return false;
                     }
 
@@ -464,6 +488,7 @@ namespace ppp {
                         auto protector_network = ProtectorNetwork;
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(socket_->native_handle(), y)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                                 return false;
                             }
                         }
@@ -482,17 +507,20 @@ namespace ppp {
 
                     if (disposed_) {
                         connector->DoConnectOK(transmission, connector->ConnectId, ERROR_CODES::ERRORS_CONNECT_CANCEL, y);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
                     if (ok) {
                         ok = connector->DoConnectOK(transmission, connector->ConnectId, ERROR_CODES::ERRORS_SUCCESS, y);
                         if (!ok) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                             return false;
                         }
                     }
                     else {
                         connector->DoConnectOK(transmission, connector->ConnectId, ERROR_CODES::ERRORS_CONNECT_TO_DESTINATION, y);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                         return false;
                     }
 
@@ -574,6 +602,7 @@ namespace ppp {
              */
             bool VirtualEthernetTcpipConnection::Run(YieldContext& y) noexcept {
                 if (!ReceiveTransmissionToSocket()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                     return false;
                 }
 
@@ -591,19 +620,23 @@ namespace ppp {
              */
             bool VirtualEthernetTcpipConnection::SendBufferToPeer(YieldContext& y, const void* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (!connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
@@ -620,19 +653,23 @@ namespace ppp {
              */
             bool VirtualEthernetTcpipConnection::ForwardSocketToTransmission(const std::shared_ptr<Byte>& buffer, int buffer_size, int bytes_transferred) noexcept {
                 if (NULLPTR == buffer || buffer_size < 1 || bytes_transferred < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (!connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
@@ -652,14 +689,17 @@ namespace ppp {
              */
             bool VirtualEthernetTcpipConnection::ReceiveSocketToTransmission(const std::shared_ptr<Byte>& buffer, int buffer_size) noexcept {
                 if (NULLPTR == buffer || buffer_size < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (!connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
@@ -692,16 +732,19 @@ namespace ppp {
              */
             bool VirtualEthernetTcpipConnection::ReceiveTransmissionToSocket() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (!connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
                 auto allocator = configuration_->GetBufferAllocator();
                 auto buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, PPP_BUFFER_SIZE);
                 if (NULLPTR == buffer) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     return false;
                 }
 
@@ -716,10 +759,12 @@ namespace ppp {
              */
             bool VirtualEthernetTcpipConnection::ForwardTransmissionToSocket(YieldContext& y) noexcept {
                 if (!connected_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 

@@ -4,6 +4,7 @@
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
@@ -95,6 +96,7 @@ namespace ppp {
                 // If the connection is interrupted while the coroutine is working, 
                 // Or closed during other asynchronous processes or coroutines, do not perform meaningless processing.
                 if (IsDisposed()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
@@ -115,6 +117,7 @@ namespace ppp {
                     return connection_mux->run();
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 return false;
             }
 
@@ -130,25 +133,30 @@ namespace ppp {
                 do {
                     std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                     if (NULLPTR == exchanger) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         return false;
                     }
 
                     if (IsDisposed()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
                     std::shared_ptr<boost::asio::io_context> context = GetContext();
                     if (NULLPTR == context) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                         return false;
                     }
 
                     std::shared_ptr<AppConfiguration> configuration = exchanger->GetConfiguration();
                     if (NULLPTR == configuration) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                         return false;
                     }
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = GetSocket();
                     if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         return false;
                     }
 
@@ -158,16 +166,23 @@ namespace ppp {
 
                     int rinetd_status = Rinetd(self, exchanger, context, strand, configuration, socket, remoteEP, connection_rinetd_, y);
                     if (rinetd_status < 1) {
+                        if (rinetd_status < 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        }
                         return rinetd_status == 0;
                     }
 
                     int mux_status = Mux(self, exchanger, remoteEP, socket, connection_mux_, y);
                     if (mux_status < 1) {
+                        if (mux_status < 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        }
                         return mux_status == 0;
                     }
 
                     std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger->ConnectTransmission(context, strand, y);
                     if (NULLPTR == transmission) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         return false;
                     }
 
@@ -175,6 +190,7 @@ namespace ppp {
                         make_shared_object<VEthernetTcpipConnection>(self, configuration, context, strand, exchanger->GetId(), socket);
                     if (NULLPTR == connection) {
                         IDisposable::DisposeReferences(transmission);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
 
@@ -188,6 +204,7 @@ namespace ppp {
                     bool ok = connection->Connect(y, transmission, ppp::net::Ipep::ToAddressString<ppp::string>(remoteEP), remoteEP.port());
                     if (!ok) {
                         IDisposable::DisposeReferences(connection, transmission);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                         return false;
                     }
 
@@ -240,25 +257,30 @@ namespace ppp {
              */
             bool VEthernetNetworkTcpipConnection::Spawn(const ppp::function<bool(ppp::coroutines::YieldContext&)>& coroutine) noexcept {
                 if (IsDisposed()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (NULLPTR == coroutine) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = exchanger->GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     return false;
                 }
 
                 ppp::threading::Executors::ContextPtr context = GetContext();
                 if (NULLPTR == context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                     return false;
                 }
 
@@ -282,7 +304,13 @@ namespace ppp {
                         }
                     };
 
-                return ppp::threading::Executors::Post(context, strand, post_work);
+                bool posted = ppp::threading::Executors::Post(context, strand, post_work);
+                if (!posted) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                    return false;
+                }
+
+                return true;
             }
 #if defined(_WIN32)
 #pragma optimize("", on)
@@ -299,16 +327,19 @@ namespace ppp {
              */
             bool VEthernetNetworkTcpipConnection::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
                 if (NULLPTR == socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                     return false;
                 }
 
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = exchanger->GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     return false;
                 }
                 

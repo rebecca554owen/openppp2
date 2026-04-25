@@ -131,7 +131,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadJoinFailed);
                 return false;
             }
         }
@@ -144,11 +144,13 @@ namespace ppp
             SynchronizedObjectScope scope(_syncobj);
             if (State != ThreadState::Stopped)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
             if (Id != 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
@@ -157,6 +159,7 @@ namespace ppp
 
             if (NULLPTR == start)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
 

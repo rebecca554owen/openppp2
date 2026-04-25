@@ -1,9 +1,9 @@
 #include <ppp/ethernet/VNetstack.h>
+#include <ppp/diagnostics/Error.h>
 /**
  * @file VNetstack.cpp
  * @brief Implements virtual TCP NAT mapping, accept bridge, and flow lifecycle.
  */
-#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/native/ip.h>
@@ -251,25 +251,29 @@ namespace ppp {
          */
         static bool SysnatAttachDriver(const std::shared_ptr<ITap>& tap, ppp::string& interface_name) noexcept {
             if (NULLPTR == tap) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
             if (openppp2_sysnat_mount()) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
             }
 
             ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
             if (NULLPTR == linux_tap) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceUnsupported);
             }
 
             int64_t h = reinterpret_cast<int64_t>(linux_tap->GetHandle());
             if (!linux_tap->GetInterfaceName(static_cast<int>(h), interface_name)) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
             }
 
-            return openppp2_sysnat_attach(interface_name.data()) == 0;
+            if (openppp2_sysnat_attach(interface_name.data()) != 0) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
+            }
+
+            return true;
         }
 #endif
 
@@ -889,13 +893,21 @@ namespace ppp {
                 Socket::Closesocket(sockfd);
             }
 
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
         }
 
         /**
          * @brief Handles lwIP accept callback and prepares SYN/ACK packet state.
          */
         int VNetstack::LwIpBeginAccept(boost::asio::ip::tcp::endpoint& dest, boost::asio::ip::tcp::endpoint& src, uint32_t seq, uint32_t ack, uint16_t wnd) noexcept {
+            // Guard against non-IPv4 endpoints: lwIP is inherently IPv4-only and
+            // to_v4() would throw (or cause std::terminate in a noexcept function)
+            // if called on an IPv6 address, e.g. from a dual-stack listener.
+            if (!dest.address().is_v4() || !src.address().is_v4()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
+                return -1;
+            }
+
             const uint32_t dest_ip = *(uint32_t*)dest.address().to_v4().to_bytes().data();
             const uint32_t src_ip = *(uint32_t*)src.address().to_v4().to_bytes().data();
            
@@ -904,6 +916,7 @@ namespace ppp {
 
             std::shared_ptr<TapTcpLink> link = this->LwIpAcceptLink(src_ip, dest_ip, src_port, dest_port);
             if (NULLPTR == link) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
                 return -1;
             }
 
@@ -941,6 +954,7 @@ namespace ppp {
                 }
                 else {
                     this->CloseTcpLink(link);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return -1;
                 }
             }
@@ -964,6 +978,7 @@ namespace ppp {
 
                 link = make_shared_object<TapTcpLink>();
                 if (NULLPTR == link) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
                 
@@ -990,6 +1005,7 @@ namespace ppp {
                  * @brief Keep pending SYN link alive for retransmission-driven retry.
                  */
                 link->Update();
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
                 return NULLPTR;
             }
 
@@ -1008,6 +1024,7 @@ namespace ppp {
             if (!bok) {
                 /** @brief Preserve pending SYN until next retransmission window. */
                 link->Update();
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
                 return NULLPTR;
             }
 
@@ -1049,15 +1066,18 @@ namespace ppp {
          */
         std::shared_ptr<boost::asio::ip::tcp::socket> VNetstack::TapTcpClient::NewAsynchronousSocket(int sockfd, const boost::asio::ip::tcp::endpoint& remoteEP) noexcept {
             if (disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return NULLPTR;
             }
 
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
             if (NULLPTR == socket) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return NULLPTR;
             }
 
             if (socket->is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return NULLPTR;
             }
 
@@ -1068,6 +1088,7 @@ namespace ppp {
             catch (const std::exception&) {}
 
             if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return NULLPTR;
             }
             else {

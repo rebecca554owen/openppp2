@@ -51,6 +51,17 @@ namespace ppp {
         public:
             /** @brief Transport port in host byte order; range [MinPort, MaxPort]. */
             const int                                                           Port;
+            /**
+             * @brief IPv6 scope ID (zone index) for link-local addresses.
+             *
+             * @details Zero for global / unique-local / multicast addresses.
+             *          Set automatically by ToEndPoint(Boost endpoint) and by
+             *          the Socket_ConvertSockaddrToEndpoint helper.
+             *
+             * @note    A non-zero scope_id is only meaningful when _AddressFamily
+             *          is InterNetworkV6.
+             */
+            unsigned long                                                       ScopeId = 0;
 
         public:
             static constexpr int    MinPort          = 0;           ///< Minimum valid port number.
@@ -177,13 +188,18 @@ namespace ppp {
             }
             /**
              * @brief Checks whether address bytes represent the none/broadcast value.
-             * @return  true for IPv4 INADDR_NONE (0xffffffff) or IPv6 all-ff first byte.
+             * @return  true for IPv4 INADDR_NONE (0xffffffff) or IPv6 all-0xff bytes.
              */
             bool                                                                IsNone() noexcept {
                 if (AddressFamily::InterNetwork != this->_AddressFamily) {
                     int len;
-                    Byte* p = this->GetAddressBytes(len);
-                    return *p == 0xff;
+                    const Byte* p = this->GetAddressBytes(len);
+                    // All 128 bits must be 1 for IPv6 "none" sentinel.
+                    static const Byte kNoneV6[16] = {
+                        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+                    };
+                    return 16 == len && 0 == memcmp(p, kNoneV6, 16);
                 }
                 else {
                     return this->GetAddress() == IPEndPoint::NoneAddress;
@@ -567,7 +583,7 @@ namespace ppp {
                 else {
                     int len;
                     const Byte* address = endpoint.GetAddressBytes(len);
-                    return WrapAddressV6<TProtocol>(address, len, endpoint.Port);
+                    return WrapAddressV6<TProtocol>(address, len, endpoint.Port, endpoint.ScopeId);
                 }
             }
         
@@ -584,8 +600,11 @@ namespace ppp {
                     return IPEndPoint(ntohl(address.to_v4().to_uint()), endpoint.port());
                 }
                 elif(address.is_v6()) {
-                    boost::asio::ip::address_v6::bytes_type bytes = address.to_v6().to_bytes();
-                    return IPEndPoint(AddressFamily::InterNetworkV6, bytes.data(), (int)bytes.size(), endpoint.port());
+                    boost::asio::ip::address_v6 v6 = address.to_v6();
+                    boost::asio::ip::address_v6::bytes_type bytes = v6.to_bytes();
+                    IPEndPoint ep(AddressFamily::InterNetworkV6, bytes.data(), (int)bytes.size(), endpoint.port());
+                    ep.ScopeId = v6.scope_id();
+                    return ep;
                 }
                 else {
                     return IPEndPoint(IPEndPoint::AnyAddress, endpoint.port());
@@ -643,21 +662,21 @@ namespace ppp {
              * @param port        Port in host byte order.
              * @return            IPv6 Boost endpoint.
              */
-            static boost::asio::ip::basic_endpoint<TProtocol>                   WrapAddressV6(const void* address, int size, int port) noexcept {
+            static boost::asio::ip::basic_endpoint<TProtocol>                   WrapAddressV6(const void* address, int size, int port, unsigned long scope_id = 0) noexcept {
                 typedef boost::asio::ip::basic_endpoint<TProtocol> protocol_endpoint;
 
-                if (size < 0) {
-                    size = 0;
+                if (NULLPTR == address || size < 1 || port < IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
+                    return protocol_endpoint();
                 }
 
                 boost::asio::ip::address_v6::bytes_type address_bytes;
                 unsigned char* p = address_bytes.data();
-                memcpy(p, address, size);
-                memset(p, 0, address_bytes.size() - size);
+                memcpy(p, address, std::min<int>(size, static_cast<int>(address_bytes.size())));
+                memset(p, 0, address_bytes.size() - std::min<int>(size, static_cast<int>(address_bytes.size())));
 
-                return protocol_endpoint(boost::asio::ip::address_v6(address_bytes), port);
+                return protocol_endpoint(boost::asio::ip::address_v6(address_bytes, scope_id), port);
             }
-        
+
             template <class TProtocol>
             /**
              * @brief Builds IPv4 any-address endpoint for a protocol.

@@ -13,6 +13,7 @@
 
 #include <ppp/stdafx.h>
 #include <ppp/net/native/checksum.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <cstring>      // std::memcpy, std::strlen
 #include <memory>       // std::shared_ptr
@@ -61,6 +62,7 @@ namespace ppp {
                 {
                     // Guard against excessive recursion (malicious compression loops or deep nesting).
                     if (depth > DNS_MAX_RECURSION_DEPTH) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -68,6 +70,7 @@ namespace ppp {
                     if (NULLPTR == szEncodedStr || NULLPTR == pusEncodedStrLen ||
                         NULLPTR == szDotStr || NULLPTR == ppDecodePos ||
                         szEncodedStr < szPacketStartPos || szEncodedStr >= szPacketEndPos) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
@@ -82,6 +85,7 @@ namespace ppp {
                     for (;;) {
                         // Ensure we never read past the packet boundary before accessing the label length.
                         if (pDecodePos >= szPacketEndPos) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false;
                         }
 
@@ -106,6 +110,7 @@ namespace ppp {
                             // RFC 1035: label length must be between 1 and 63 inclusive.
                             // Length 0 is illegal here because the terminator is handled above.
                             if (nLabelDataLen == 0 || nLabelDataLen > DNS_MAX_LABEL_LEN) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
@@ -113,11 +118,13 @@ namespace ppp {
                             // +1 accounts for the dot that will be appended after the label.
                             // Use size_t to avoid unsigned integer overflow.
                             if (plainStrLen + static_cast<size_t>(nLabelDataLen) + 1 > static_cast<size_t>(nDotStrSize)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
                             // Ensure the entire label data is within the packet bounds (exact boundary allowed).
                             if (pDecodePos + 1 + nLabelDataLen > szPacketEndPos) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
@@ -137,11 +144,13 @@ namespace ppp {
                             // the start of the packet to another location where the name continues.
 
                             if (NULLPTR == szPacketStartPos) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
                             // The pointer occupies 2 bytes; verify they are present.
                             if (pDecodePos + 2 > szPacketEndPos) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 
@@ -152,6 +161,7 @@ namespace ppp {
                             // Use uintptr_t to avoid signed overflow in pointer arithmetic.
                             uintptr_t packet_len = static_cast<uintptr_t>(szPacketEndPos - szPacketStartPos);
                             if (static_cast<uintptr_t>(usJumpPos) >= packet_len) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;   // Jump target is outside the packet → malformed.
                             }
 
@@ -167,6 +177,7 @@ namespace ppp {
                                 szPacketEndPos,
                                 &jumpDecodePos,
                                 depth + 1)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                                 return false;
                             }
 

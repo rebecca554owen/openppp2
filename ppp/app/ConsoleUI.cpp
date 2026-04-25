@@ -30,6 +30,7 @@
 #else
 #   include <cerrno>
 #   include <fcntl.h>
+#   include <poll.h>
 #   include <unistd.h>
 #endif
 
@@ -80,6 +81,8 @@ static constexpr const char kColorReset[]  = "\x1b[0m";
 static constexpr const char kColorDim[]    = "\x1b[2;37m";
 /** @brief ANSI reverse-video (used to render the synthetic cursor block). */
 static constexpr const char kColorReverse[] = "\x1b[7m";
+/** @brief ANSI white background (used for the synthetic white-block cursor). */
+static constexpr const char kColorWhiteBg[] = "\x1b[47m";
 /** @brief Enter alternate screen buffer (preserves the user's original console contents). */
 static constexpr const char kAltScreenOn[]  = "\x1b[?1049h";
 /** @brief Leave alternate screen buffer (restores the user's original console contents). */
@@ -156,10 +159,13 @@ ppp::string ConsoleUI::BoxContentRow(const ppp::string& content, int width) noex
     }
 
     int inner = width - 2;
+    // Reserve one column before the right border so the box interior
+    // never appears flush against the │ wall.
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(inner) + 3u + 1u);
     row += kVV;
-    row += FitWidth(content, inner);
+    row += FitWidth(content, inner - 1);
+    row += " ";
     row += kVV;
     row += "\n";
     return row;
@@ -171,14 +177,16 @@ ppp::string ConsoleUI::BoxSplitRow(
     int width,
     int split) noexcept {
 
-    if (3 > width || 1 > split || split >= width - 1) {
+    if (3 > width || 1 > split || split >= width - 2) {
         return BoxContentRow(left + " " + right, width);
     }
 
-    // Left panel: split-1 columns (between left │ and center │)
-    // Right panel: width - split - 1 columns (between center │ and right │)
+    // Left panel:  split-1 columns  (between left │ and center │)
+    // Right panel: width-split-2 columns (between center │ and right │)
+    // The center │ itself occupies 1 column inside the inner area.
+    // Total = 1 + (split-1) + 1 + (width-split-2) + 1 = width
     int left_inner  = split - 1;
-    int right_inner = width - split - 1;
+    int right_inner = width - split - 2;
 
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(left_inner)
@@ -208,18 +216,18 @@ ppp::string ConsoleUI::BoxSepRow(int width) noexcept {
 }
 
 ppp::string ConsoleUI::BoxSplitSepRow(int width, int split) noexcept {
-    if (3 > width || 1 > split || split >= width - 1) {
+    if (3 > width || 1 > split || split >= width - 2) {
         return BoxSepRow(width);
     }
 
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(split - 1) * 3u
-              + 3u + static_cast<std::size_t>(width - split - 1) * 3u
+              + 3u + static_cast<std::size_t>(width - split - 2) * 3u
               + 3u + 1u);
     row += kLT;
     row += RepeatHoriz(split - 1);
     row += kTT;
-    row += RepeatHoriz(width - split - 1);
+    row += RepeatHoriz(width - split - 2);
     row += kRT;
     row += "\n";
     return row;
@@ -240,18 +248,18 @@ ppp::string ConsoleUI::BoxBotRow(int width) noexcept {
 }
 
 ppp::string ConsoleUI::BoxBotSplitRow(int width, int split) noexcept {
-    if (3 > width || 1 > split || split >= width - 1) {
+    if (3 > width || 1 > split || split >= width - 2) {
         return BoxBotRow(width);
     }
 
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(split - 1) * 3u
-              + 3u + static_cast<std::size_t>(width - split - 1) * 3u
+              + 3u + static_cast<std::size_t>(width - split - 2) * 3u
               + 3u + 1u);
     row += kBBL;
     row += RepeatHoriz(split - 1);
     row += kBT;
-    row += RepeatHoriz(width - split - 1);
+    row += RepeatHoriz(width - split - 2);
     row += kBBR;
     row += "\n";
     return row;
@@ -428,11 +436,13 @@ ppp::string ConsoleUI::BuildEditorLine(
             line.append(view.data(), caret);
         }
 
-        // Caret cell rendered as an inverse-video white block.  We prefer
-        // a space character so the underlying text is still readable by
-        // screen-readers and when the block is positioned on a '<' or '>'
-        // overflow marker.
-        line += kColorReverse;
+        // Caret cell rendered as a white-background block.  We use an
+        // explicit white background (\x1b[47m) instead of reverse video
+        // (\x1b[7m) so the block appears as solid white irrespective of
+        // the terminal's default colour scheme (dark vs light background).
+        // The character underneath remains visible in black (the default
+        // foreground colour after \x1b[0m), or is a space on empty input.
+        line += kColorWhiteBg;
         char caret_ch = (caret < view.size()) ? view[caret] : ' ';
         if ('\0' == caret_ch || static_cast<unsigned char>(caret_ch) < 0x20) {
             caret_ch = ' ';
@@ -495,6 +505,7 @@ bool ConsoleUI::Start() noexcept {
     vt_enabled_ = EnableVirtualTerminal();
 
     if (!PrepareInputTerminal()) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         running_.store(false, std::memory_order_release);
         return false;
     }
@@ -537,6 +548,7 @@ bool ConsoleUI::Start() noexcept {
         render_thread_ = std::thread([this]() noexcept { RenderLoop(); });
         input_thread_  = std::thread([this]() noexcept { InputLoop(); });
     } catch (...) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         running_.store(false, std::memory_order_release);
         if (render_thread_.joinable()) {
             render_thread_.join();
@@ -901,8 +913,6 @@ void ConsoleUI::RenderFrame() noexcept {
     int                      cmd_scroll;
     ppp::string              input_snap;
     std::size_t              cursor_snap;
-    ppp::string              vpn_state_snap;
-    ppp::string              speed_snap;
 
     {
         std::lock_guard<std::mutex> scope(lock_);
@@ -912,8 +922,6 @@ void ConsoleUI::RenderFrame() noexcept {
         cmd_scroll    = cmd_scroll_;
         input_snap    = input_buffer_;
         cursor_snap   = input_cursor_;
-        vpn_state_snap = vpn_state_text_;
-        speed_snap    = speed_text_;
     }
 
     // -----------------------------------------------------------------------
@@ -1057,17 +1065,32 @@ void ConsoleUI::RenderFrame() noexcept {
         frame += kVV;
 
         if (input_snap.empty()) {
-            // Placeholder text (dim/gray)
-            static constexpr const char kPlaceholder[] =
-                " > Exec openppp command or system commands.";
+            // Placeholder mode: show the white-block cursor at column 2 (after "> ")
+            // followed by the dim placeholder tip text.
+            static constexpr const char kPrompt[]       = "> ";
+            static constexpr const char kPlaceholder[]  = "Exec openppp command or system commands.";
+            static constexpr int        kPromptLen      = 2;            // "> "
+            static constexpr int        kCursorLen      = 1;            // white block
+            int                         remaining      = inner - kPromptLen - kCursorLen;
+
             if (vt_enabled_) {
+                frame += kPrompt;
+                frame += kColorWhiteBg;
+                frame += " ";
+                frame += kColorReset;
                 frame += kColorDim;
-                frame += FitWidth(kPlaceholder, inner);
+                if (0 < remaining) {
+                    frame += FitWidth(kPlaceholder, remaining);
+                }
                 frame += kColorReset;
             } else {
-                frame += FitWidth(kPlaceholder, inner);
+                frame += kPrompt;
+                frame += " ";
+                if (0 < remaining) {
+                    frame += FitWidth(kPlaceholder, remaining);
+                }
             }
-            cursor_col = 2;  // after "> "
+            cursor_col = 2;
         } else {
             ppp::string editor_content =
                 BuildEditorLine("> ", input_snap, cursor_snap, inner, vt_enabled_, cursor_col);
@@ -1078,14 +1101,12 @@ void ConsoleUI::RenderFrame() noexcept {
         frame += "\n";
     }
 
-    // --- Status separator (split at width/2) ---
-    int split = width / 2;
-    frame += BoxSplitSepRow(width, split);
+    // --- Status separator ---
+    frame += BoxSepRow(width);
 
-    // --- Status bar ---
+    // --- Status bar (error only) ---
     {
-        // Left panel: error from diagnostics subsystem
-        ppp::string left_text;
+        ppp::string status_text;
         {
             ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCodeSnapshot();
             const char* err_str = ppp::diagnostics::FormatErrorString(code);
@@ -1093,28 +1114,21 @@ void ConsoleUI::RenderFrame() noexcept {
             uint64_t now_ms     = ppp::threading::Executors::GetTickCount();
 
             if (ppp::diagnostics::ErrorCode::Success == code) {
-                left_text = " No errors";
+                status_text = " No errors";
             } else {
-                left_text  = " Error: ";
-                left_text += (NULLPTR == err_str) ? "Unknown" : err_str;
+                status_text  = " Error: ";
+                status_text += (NULLPTR == err_str) ? "Unknown" : err_str;
                 if (0u < err_ts) {
-                    left_text += " (" + FormatAge(now_ms, err_ts) + ")";
+                    status_text += " (" + FormatAge(now_ms, err_ts) + ")";
                 }
             }
         }
 
-        // Right panel: VPN state + speeds
-        ppp::string right_text = " VPN: ";
-        right_text += vpn_state_snap.empty() ? ppp::string("Unknown") : vpn_state_snap;
-        if (!speed_snap.empty()) {
-            right_text += "  " + speed_snap;
-        }
-
-        frame += BoxSplitRow(left_text, right_text, width, split);
+        frame += BoxContentRow(status_text, width);
     }
 
     // --- Bottom border ---
-    frame += BoxBotSplitRow(width, split);
+    frame += BoxBotRow(width);
 
     // The real cursor stays hidden; no trailing cursor-position or
     // show-cursor escape is needed — the synthetic reverse-video block
@@ -1123,7 +1137,16 @@ void ConsoleUI::RenderFrame() noexcept {
 
     // -----------------------------------------------------------------------
     // 6.  Write frame to stdout in one atomic write
+    //
+    // Important: do NOT end the last row with '\n'.  The frame already fills
+    // the whole terminal height; emitting one extra newline after the bottom
+    // border would scroll the terminal by one row and visually drop the top
+    // border (the "roof").
     // -----------------------------------------------------------------------
+    if (!frame.empty() && '\n' == frame.back()) {
+        frame.pop_back();
+    }
+
     std::fwrite(frame.data(), 1u, frame.size(), stdout);
     std::fflush(stdout);
 }
@@ -1403,24 +1426,14 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
         }
     }
 
-    // Legacy bare commands (backwards compatibility)
-    if (openppp2_sub.empty()) {
-        if ("help"    == lower) { openppp2_sub = "help";    }
-        elif ("restart" == lower) { openppp2_sub = "restart"; }
-        elif ("exit"    == lower) { openppp2_sub = "exit";    }
-        elif ("clear"   == lower) { openppp2_sub = "clear";   }
-        elif ("status"  == lower) { openppp2_sub = "info";    }
-        elif ("reload"  == lower) { openppp2_sub = "reload";  }
-    }
-
     if (!openppp2_sub.empty()) {
         if ("help" == openppp2_sub) {
-            AppendLine("Available commands:");
+            AppendLine("Available openppp2 commands:");
             AppendLine("  openppp2 help    - Show this help information");
             AppendLine("  openppp2 restart - Restart the application");
             AppendLine("  openppp2 reload  - Reload configuration (restart)");
             AppendLine("  openppp2 exit    - Exit the application");
-            AppendLine("  openppp2 info    - Print VPN info snapshot to cmd output");
+            AppendLine("  openppp2 info    - Print full runtime environment snapshot");
             AppendLine("  openppp2 clear   - Clear command output section");
             AppendLine("  <shell command>  - Execute a system shell command");
             return;
@@ -1450,12 +1463,17 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
 
         if ("info" == openppp2_sub) {
             ppp::vector<ppp::string> info_copy;
+
+            // Use the latest periodic snapshot generated by OnTick().  This keeps
+            // command execution on the input thread read-only with respect to the
+            // application runtime graph.
             {
                 std::lock_guard<std::mutex> scope(lock_);
                 info_copy = info_lines_;
             }
+
             if (info_copy.empty()) {
-                AppendLine("[No VPN info available yet]");
+                AppendLine("[No environment info available yet]");
             } else {
                 for (const ppp::string& line : info_copy) {
                     AppendLine(line);
@@ -1476,8 +1494,6 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
 }
 
 void ConsoleUI::ExecuteSystemCommand(const ppp::string& cmd) noexcept {
-    AppendLine("[Executing: " + cmd + "]");
-
     // Capture a raw pointer — the singleton outlives any detached thread.
     ConsoleUI* self = this;
     ppp::string cmd_copy = cmd;
@@ -1517,7 +1533,6 @@ void ConsoleUI::ExecuteSystemCommand(const ppp::string& cmd) noexcept {
 #else
             ::pclose(fp);
 #endif
-            self->AppendLine("[Command finished]");
         } catch (...) {
             self->AppendLine("[Error: exception during system command]");
         }
@@ -1592,19 +1607,31 @@ void ConsoleUI::InputLoop() noexcept {
 #else  // POSIX
 
     while (running_.load(std::memory_order_acquire)) {
-        char ch = '\0';
-        ssize_t n = ::read(STDIN_FILENO, &ch, 1u);
-        if (0 >= n) {
-            int err = errno;
-            if (EAGAIN == err || EWOULDBLOCK == err || EINTR == err) {
-                // Transient: no data available yet — yield and retry.
-                ppp::Sleep(15);
+        // Use poll() with a 100 ms timeout instead of O_NONBLOCK + busy-wait.
+        // This avoids PTY-specific issues on WSL, tmux, and screen where
+        // O_NONBLOCK can spuriously produce EIO or EAGAIN.
+        struct pollfd pfd;
+        pfd.fd     = STDIN_FILENO;
+        pfd.events = POLLIN;
+
+        int pr = ::poll(&pfd, 1, 100);
+        if (0 > pr) {
+            if (EINTR == errno) {
                 continue;
             }
+            break;  // Hard error
+        }
+        if (0 == pr) {
+            continue;  // Timeout — loop back and check running_
+        }
+        if (0 == (pfd.revents & POLLIN)) {
+            continue;
+        }
 
-            // Hard error (EIO, EBADF, …): stdin is broken.  Exit cleanly
-            // instead of spinning at 100 % CPU indefinitely.
-            break;
+        char ch = '\0';
+        ssize_t n = ::read(STDIN_FILENO, &ch, 1u);
+        if (1 != n) {
+            continue;  // Transient: spurious wake or EIO — retry.
         }
 
         // Ctrl+A / Ctrl+E
@@ -1680,16 +1707,19 @@ bool ConsoleUI::EnableVirtualTerminal() noexcept {
 #if defined(_WIN32)
     HANDLE h = ::GetStdHandle(STD_OUTPUT_HANDLE);
     if (NULLPTR == h || INVALID_HANDLE_VALUE == h) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
     DWORD mode = 0;
     if (!::GetConsoleMode(h, &mode)) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
     if (0u == (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
         if (!::SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             return false;
         }
     }
@@ -1725,27 +1755,26 @@ bool ConsoleUI::PrepareInputTerminal() noexcept {
     }
 
     if (0 != ::tcgetattr(STDIN_FILENO, &terminal_original_)) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
     struct termios raw = terminal_original_;
     raw.c_iflag &= static_cast<tcflag_t>(~(IXON | ICRNL));
     raw.c_lflag &= static_cast<tcflag_t>(~(ECHO | ICANON));
-    raw.c_cc[VMIN]  = 0;
-    raw.c_cc[VTIME] = 0;
+    raw.c_cc[VMIN]  = 1;   // Wait for at least one byte
+    raw.c_cc[VTIME] = 0;   // No inter-byte timeout
 
     if (0 != ::tcsetattr(STDIN_FILENO, TCSANOW, &raw)) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
         return false;
     }
 
-    terminal_flags_ = ::fcntl(STDIN_FILENO, F_GETFL, 0);
-    if (0 <= terminal_flags_) {
-        if (0 != ::fcntl(STDIN_FILENO, F_SETFL, terminal_flags_ | O_NONBLOCK)) {
-            ::tcsetattr(STDIN_FILENO, TCSANOW, &terminal_original_);
-            terminal_flags_ = -1;
-            return false;
-        }
-    }
+    // Non-blocking is NOT set on stdin.  Instead the input loop uses
+    // poll() with a timeout, which avoids PTY-specific issues that
+    // O_NONBLOCK can trigger on some terminal emulators (WSL, tmux,
+    // screen) where read() spuriously returns EIO or EAGAIN even
+    // when data is available.
 
     terminal_ready_ = true;
     return true;

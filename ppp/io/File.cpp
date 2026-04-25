@@ -49,6 +49,7 @@ namespace ppp {
          */
         bool File::Exists(const char* path) noexcept {
             if (NULLPTR == path) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return false;
             }
 
@@ -57,7 +58,17 @@ namespace ppp {
                 return false;
             }
 
-            return access(path, F_OK) == 0;
+            if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
+                return false;
+            }
+
+            if (access(path, F_OK) == 0) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
+            return false;
         }
 
         /**
@@ -82,10 +93,17 @@ namespace ppp {
             }
 
             if (length > 0) {
-                fwrite((char*)data, length, 1, f);
+                if (fwrite((char*)data, length, 1, f) != 1) {
+                    fclose(f);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                }
             }
 
-            fflush(f);
+            if (fflush(f) != 0) {
+                fclose(f);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileFlushFailed);
+            }
+
             fclose(f);
             return true;
         }
@@ -116,6 +134,10 @@ namespace ppp {
             }
             return access(path, flags) == 0;
 #else
+            if (NULLPTR == path) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
+            }
+
             int flags = 0;
             if ((access_ & FileAccess::ReadWrite) == FileAccess::ReadWrite) {
                 flags |= O_RDWR;
@@ -131,6 +153,7 @@ namespace ppp {
 
             int fd = open(path, flags);
             if (fd == -1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileOpenFailed);
                 return false;
             }
             else {
@@ -226,6 +249,11 @@ namespace ppp {
             for (;;) {
                 size_t count_ = fread(buff_, 1, sizeof(buff_), file_);
                 if (count_ == 0) {
+                    if (ferror(file_)) {
+                        fclose(file_);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileReadFailed, std::shared_ptr<Byte>());
+                    }
+
                     break;
                 }
 

@@ -2,6 +2,7 @@
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/win32/network/NetworkInterface.h>
 #include <windows/ppp/tap/tap-windows.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/io/File.h>
 #include <ppp/net/Ipep.h>
@@ -162,11 +163,13 @@ namespace ppp
                     ppp::text::Encoding::ascii_to_wstring(stl::transform<std::string>(nic)), L"PPP PRIVATE NETWORK 2", NULL_GUID, WintunAdapter::MAX_RING_BUFFER_SIZE);
                 if (NULL == wintun)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
 
                 if (!wintun->Open())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunCreateFailed);
                     wintun->Stop();
                     return NULLPTR;
                 }
@@ -174,18 +177,21 @@ namespace ppp
                 int interface_index = TapWindows::GetNetworkInterfaceIndex(nic);
                 if (interface_index < -1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                     wintun->Stop();
                     return NULLPTR;
                 }
 
                 if (!SetAdapterInterface(interface_index, ip, gw, mask, hosted_network, dns_addresses))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
                     wintun->Stop();
                     return NULLPTR;
                 }
 
                 if (!wintun->Start())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunSessionStartFailed);
                     wintun->Stop();
                     return NULLPTR;
                 }
@@ -193,6 +199,7 @@ namespace ppp
                 std::shared_ptr<TapWindows> tap = make_shared_object<TapWindows>(context, nic, wintun.get(), ip, gw, mask, hosted_network);
                 if (NULL == tap)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     wintun->Stop();
                     return NULLPTR;
                 }
@@ -207,29 +214,34 @@ namespace ppp
         {
             if (NULLPTR == context)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return NULLPTR;
             }
 
             if (componentId.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return NULLPTR;
             }
 
             IPEndPoint ipEP(ip, 0);
             if (IPEndPoint::IsInvalid(ipEP))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return NULLPTR;
             }
 
             IPEndPoint gwEP(ip, 0);
             if (IPEndPoint::IsInvalid(gwEP))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                 return NULLPTR;
             }
 
             IPEndPoint maskEP(ip, 0);
             if (IPEndPoint::IsInvalid(maskEP))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                 return NULLPTR;
             }
 
@@ -246,12 +258,14 @@ namespace ppp
             int interface_index = GetNetworkInterfaceIndex(componentId);
             if (interface_index < -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return NULLPTR;
             }
 
             void* tun = OpenDriver(componentId.data());
             if (NULLPTR == tun || tun == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 return NULLPTR;
             }
 
@@ -263,6 +277,7 @@ namespace ppp
 
             if (!ok)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
                 CloseHandle(tun);
                 return NULLPTR;
             }
@@ -270,6 +285,7 @@ namespace ppp
             std::shared_ptr<TapWindows> tap = make_shared_object<TapWindows>(context, componentId, tun, ip, gw, mask, hosted_network);
             if (NULLPTR == tap)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 CloseHandle(tun);
                 return NULLPTR;
             }
@@ -285,6 +301,7 @@ namespace ppp
             }
 
             tap->Dispose();
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
             return NULLPTR;
         }
 
@@ -293,6 +310,7 @@ namespace ppp
             char szDeviceName[MAX_PATH];
             if (snprintf(szDeviceName, sizeof(szDeviceName), "\\\\.\\Global\\%s.tap", componentId.data()) < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return NULLPTR;
             }
 
@@ -356,6 +374,7 @@ namespace ppp
                 WintunAdapter* wintun = static_cast<WintunAdapter*>(GetHandle());
                 if (!wintun->IsOpen())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                     return false;
                 }
 
@@ -377,6 +396,7 @@ namespace ppp
                 WintunAdapter* wintun = static_cast<WintunAdapter*>(GetHandle());
                 if (!wintun->IsOpen())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                     return false;
                 }
 
@@ -393,12 +413,14 @@ namespace ppp
                 WintunAdapter* wintun = static_cast<WintunAdapter*>(GetHandle());
                 if (!wintun->IsOpen())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                     return false;
                 }
 
                 auto packet_input = make_shared_object<WintunAdapter::PacketHandler>();
                 if (NULLPTR == packet_input)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
@@ -424,6 +446,7 @@ namespace ppp
         {
             if (NULLPTR == handle || handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 return false;
             }
 
@@ -440,6 +463,7 @@ namespace ppp
         {
             if (NULLPTR == handle || handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 return false;
             }
 
@@ -477,6 +501,7 @@ namespace ppp
         {
             if (NULLPTR == handle || handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 return false;
             }
 
@@ -493,6 +518,7 @@ namespace ppp
         {
             if (NULLPTR == handle || handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 return false;
             }
 
@@ -658,12 +684,14 @@ namespace ppp
         {
             if (path.empty() || declareTapName.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             ppp::string installPath = ppp::io::File::RewritePath((path + "tapinstall.exe").data());
             if (!PathFileExistsA(installPath.data()))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -676,11 +704,13 @@ namespace ppp
             int dwExitCode = INFINITE;
             if (!ppp::win32::Win32Native::Execute(false, installPath.data(), argumentsText.data(), &dwExitCode))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsServiceStartFailed);
                 return false;
             }
 
             if (dwExitCode != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsServiceStartFailed);
                 return false;
             }
 
@@ -699,6 +729,7 @@ namespace ppp
 
             if (news.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
@@ -707,6 +738,7 @@ namespace ppp
 
             if (NULLPTR == network_interface)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
@@ -717,18 +749,21 @@ namespace ppp
         {
             if (path.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             ppp::string installPath = ppp::io::File::RewritePath((path + "tapinstall.exe").data());
             if (!PathFileExistsA(installPath.data()))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
             int dwExitCode = INFINITE;
             if (!ppp::win32::Win32Native::Execute(false, installPath.data(), "remove tap0901", &dwExitCode))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsServiceStopFailed);
                 return false;
             }
 
@@ -740,6 +775,7 @@ namespace ppp
             int interface_index = GetInterfaceIndex();
             if (interface_index == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 

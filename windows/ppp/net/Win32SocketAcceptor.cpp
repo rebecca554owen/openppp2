@@ -2,6 +2,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/net/Win32SocketAcceptor.h>
@@ -69,31 +70,37 @@ namespace ppp
         {
             if (localPort < IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 return false;
             }
 
             if (NULLPTR == localIP || *localIP == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return false;
             }
 
             if (listenfd_ != INVALID_SOCKET)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             if (NULLPTR != hEvent_)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             if (NULLPTR != afo_)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             if (NULLPTR == context_)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return false;
             }
 
@@ -101,6 +108,7 @@ namespace ppp
             boost::asio::ip::address bindIP = StringToAddress(localIP, ec);
             if (ec)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return false;
             }
 
@@ -119,29 +127,34 @@ namespace ppp
                 in6.sin6_port = htons(localPort);
                 if (inet_pton(AF_INET6, localIP, &in6.sin6_addr) < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 listenfd_ = WSASocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP, NULLPTR, 0, WSA_FLAG_OVERLAPPED);
                 if (listenfd_ == INVALID_SOCKET)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                     return false;
                 }
 
                 Adjust(listenfd_);
                 if (!Socket::ReuseSocketAddress(listenfd_, true))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
 
                 BOOL bEnable = FALSE;
                 if (setsockopt(listenfd_, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<char*>(&bEnable), sizeof(bEnable)) < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
 
                 if (bind(listenfd_, reinterpret_cast<sockaddr*>(&in6), sizeof(in6)) < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     return false;
                 }
             }
@@ -154,44 +167,52 @@ namespace ppp
                 in4.sin_port = htons(localPort);
                 if (inet_pton(AF_INET, localIP, &in4.sin_addr) < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 listenfd_ = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULLPTR, 0, WSA_FLAG_OVERLAPPED);
                 if (listenfd_ == INVALID_SOCKET)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                     return false;
                 }
 
                 Adjust(listenfd_);
                 if (!Socket::ReuseSocketAddress(listenfd_, true))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
 
                 if (bind(listenfd_, reinterpret_cast<sockaddr*>(&in4), sizeof(in4)) < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     return false;
                 }
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                 return false;
             }
 
             if (listen(listenfd_, backlog) < 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketListenFailed);
                 return false;
             }
 
             hEvent_ = WSACreateEvent();
             if (hEvent_ == WSA_INVALID_EVENT)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
             if (WSAEventSelect(listenfd_, hEvent_, FD_ACCEPT | FD_CLOSE) != NOERROR)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -230,18 +251,21 @@ namespace ppp
             boost::asio::windows::object_handle* afo = reinterpret_cast<boost::asio::windows::object_handle*>(afo_.get());
             if (NULLPTR == afo)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             int listenfd = listenfd_;
             if (listenfd == INVALID_SOCKET)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             void* hEvent = hEvent_;
             if (NULLPTR == hEvent)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 

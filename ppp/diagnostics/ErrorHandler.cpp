@@ -1,10 +1,18 @@
 #include <ppp/diagnostics/ErrorHandler.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace diagnostics {
-        thread_local ErrorCode ErrorHandler::tls_last_error_code_ = ErrorCode::Success;
-        thread_local uint64_t ErrorHandler::tls_last_error_timestamp_ = 0;
+        ErrorCode& ErrorHandler::ThreadLastErrorCode() noexcept {
+            static thread_local ErrorCode tls_last_error_code = ErrorCode::Success;
+            return tls_last_error_code;
+        }
+
+        uint64_t& ErrorHandler::ThreadLastErrorTimestamp() noexcept {
+            static thread_local uint64_t tls_last_error_timestamp = 0;
+            return tls_last_error_timestamp;
+        }
 
         ErrorHandler& ErrorHandler::GetDefault() noexcept {
             static ErrorHandler default_error_handler;
@@ -13,7 +21,7 @@ namespace ppp {
         }
 
         ErrorCode ErrorHandler::GetLastErrorCode() noexcept {
-            return tls_last_error_code_;
+            return ThreadLastErrorCode();
         }
 
         ErrorCode ErrorHandler::GetLastErrorCodeSnapshot() noexcept {
@@ -25,25 +33,44 @@ namespace ppp {
         }
 
         ErrorCode ErrorHandler::SetLastErrorCode(ErrorCode code) noexcept {
-            tls_last_error_code_ = code;
-            tls_last_error_timestamp_ = ppp::threading::Executors::GetTickCount();
-            last_error_code_snapshot_.store(static_cast<uint32_t>(code), std::memory_order_relaxed);
-            last_error_timestamp_snapshot_.store(tls_last_error_timestamp_, std::memory_order_relaxed);
+            ErrorCode& tls_last_error_code = ThreadLastErrorCode();
+            uint64_t&  tls_last_error_timestamp = ThreadLastErrorTimestamp();
 
-            ppp::unordered_map<ppp::string, ppp::function<void(int err)>> error_handlers;
-            {
-                std::lock_guard<std::mutex> scope(error_handlers_sync_);
-                error_handlers = error_handlers_;
+            tls_last_error_code = code;
+            tls_last_error_timestamp = ppp::threading::Executors::GetTickCount();
+            last_error_code_snapshot_.store(static_cast<uint32_t>(code), std::memory_order_relaxed);
+            last_error_timestamp_snapshot_.store(tls_last_error_timestamp, std::memory_order_relaxed);
+
+            // Prevent recursive callback re-entry from repeatedly redispatching
+            // handlers when a handler path calls SetLastErrorCode() again.
+            static thread_local bool tls_error_handler_invoking = false;
+            if (true == tls_error_handler_invoking) {
+                return code;
             }
 
+            struct RecursiveDispatchGuard {
+                explicit RecursiveDispatchGuard(bool& flag_ref) noexcept : flag(flag_ref) {
+                    flag = true;
+                }
+
+                ~RecursiveDispatchGuard() noexcept {
+                    flag = false;
+                }
+
+                bool& flag;
+            } recursive_dispatch_guard(tls_error_handler_invoking);
+
+            // Registration is initialization-only; iterate handlers in-place to
+            // avoid lock/copy overhead on hot SetLastErrorCode() paths.
+
             int error_value = static_cast<int>(code);
-            for (auto&& error_handler : error_handlers) {
-                if (NULLPTR == error_handler.second) {
+            for (const ErrorHandlerEntry& error_handler : error_handlers_) {
+                if (NULLPTR == error_handler.handler) {
                     continue;
                 }
 
                 try {
-                    error_handler.second(error_value);
+                    error_handler.handler(error_value);
                 } catch (...) {
                 }
             }
@@ -120,14 +147,27 @@ namespace ppp {
         }
 
         void ErrorHandler::RegisterErrorHandler(const ppp::string& key, const ppp::function<void(int err)>& handler) noexcept {
-            std::lock_guard<std::mutex> scope(error_handlers_sync_);
+            for (auto it = error_handlers_.begin(); error_handlers_.end() != it; ++it) {
+                if (it->key != key) {
+                    continue;
+                }
 
-            if (NULLPTR == handler) {
-                error_handlers_.erase(key);
+                if (NULLPTR == handler) {
+                    error_handlers_.erase(it);
+                } else {
+                    it->handler = handler;
+                }
                 return;
             }
 
-            error_handlers_[key] = handler;
+            if (NULLPTR == handler) {
+                return;
+            }
+
+            ErrorHandlerEntry entry;
+            entry.key = key;
+            entry.handler = handler;
+            error_handlers_.push_back(std::move(entry));
         }
     }
 }

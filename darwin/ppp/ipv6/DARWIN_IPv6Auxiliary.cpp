@@ -1,7 +1,7 @@
 #include <darwin/ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <common/unix/UnixAfx.h>
-#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace darwin {
@@ -199,6 +199,7 @@ namespace ppp {
 
                 bool SetRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
                     if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                         return false;
                     }
 
@@ -216,7 +217,12 @@ namespace ppp {
                             return true;
                         }
 
-                        return IsCurrentDefaultRoute(ifrName, gw);
+                        if (IsCurrentDefaultRoute(ifrName, gw)) {
+                            return true;
+                        }
+
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+                        return false;
                     }
 
                     else if (gw.empty()) {
@@ -232,11 +238,17 @@ namespace ppp {
                         return true;
                     }
 
-                    return system(change_cmd) == 0;
+                    if (system(change_cmd) == 0) {
+                        return true;
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteReplaceFailed);
+                    return false;
                 }
 
                 bool DeleteRoute(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
                     if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                         return false;
                     }
 
@@ -255,7 +267,12 @@ namespace ppp {
                     else {
                         snprintf(cmd, sizeof(cmd), "route -n delete -inet6 %s/%d %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), gw.data());
                     }
-                    return system(cmd) == 0;
+                    if (system(cmd) == 0) {
+                        return true;
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+                    return false;
                 }
 
                 void CaptureClientOriginalState(const ::ppp::ipv6::auxiliary::ClientContext& context, bool nat_mode, ::ppp::ipv6::auxiliary::ClientState& state) noexcept {

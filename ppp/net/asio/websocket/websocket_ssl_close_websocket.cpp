@@ -1,5 +1,6 @@
 #include <ppp/net/asio/websocket/websocket_async_sslv_websocket.h>
 #include <ppp/net/asio/websocket/websocket_accept_sslv_websocket.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
@@ -51,6 +52,7 @@ namespace ppp {
             bool sslwebsocket::ShiftToScheduler() noexcept {
                 std::shared_ptr<SslvWebSocket> ssl_websocket = ssl_websocket_;
                 if (NULLPTR == ssl_websocket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 

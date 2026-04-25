@@ -1,5 +1,6 @@
 #include <ppp/net/asio/websocket/websocket_async_sslv_websocket.h>
 #include <ppp/net/asio/websocket/websocket_accept_sslv_websocket.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file websocket_async_sslv_websocket_perform_ssl_handshake.cpp
@@ -27,6 +28,7 @@ namespace ppp {
                 const std::shared_ptr<Reference> reference = GetReference();
                 const SslvWebSocketPtr& ssl_websocket = GetSslSocket();
                 if (NULLPTR == ssl_websocket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 
@@ -48,6 +50,7 @@ namespace ppp {
                  */
                 y.Suspend();
                 if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 

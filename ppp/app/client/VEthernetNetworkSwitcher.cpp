@@ -1,4 +1,4 @@
-﻿#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
+#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -6,6 +6,7 @@
 #include <ppp/IDisposable.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/io/File.h>
 #include <ppp/threading/Timer.h>
@@ -28,7 +29,6 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
-#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VEthernetNetworkSwitcher.cpp

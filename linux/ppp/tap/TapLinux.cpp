@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <ppp/diagnostics/Error.h>
 
 #if defined(_ANDROID) 
 #include <linux/if.h>
@@ -46,7 +47,6 @@
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/SpinLock.h>
-#include <ppp/diagnostics/Error.h>
 
 // ip tuntap add mode tun dev tun0
 // ip addr add 10.0.0.1/24 dev tun0
@@ -138,6 +138,7 @@ namespace ppp {
             if (tun == -1) {
                 tun = open("/dev/net/tun", __open_flags);
                 if (tun == -1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                     return -1;
                 }
             }
@@ -173,6 +174,7 @@ namespace ppp {
 
             if (fails) {
                 ::close(tun);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
                 return -1;
             }
             else {
@@ -190,6 +192,7 @@ namespace ppp {
 
         bool TapLinux::SetIPAddress(const ppp::string& ifrName, const ppp::string& addressIP, const ppp::string& mask) noexcept {
             if (ifrName.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                 return false;
             }
 
@@ -222,7 +225,12 @@ namespace ppp {
             maskAddr.sin_addr.s_addr = inet_addr(mask.data());
 
             memcpy(&ifr.ifr_netmask, &maskAddr, sizeof(ifr.ifr_netmask));
-            return ioctl(ifc_ctl_sock.sock_v4, SIOCSIFNETMASK, &ifr) == 0;
+            if (ioctl(ifc_ctl_sock.sock_v4, SIOCSIFNETMASK, &ifr)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+                return false;
+            }
+
+            return true;
         }
 
         // NOTE: ExecuteIpCommand() calls system() which performs a blocking fork()+exec().
@@ -236,11 +244,17 @@ namespace ppp {
         // a dedicated non-IO thread (e.g. startup/shutdown paths) are safe without restriction.
         static bool ExecuteIpCommand(const ppp::string& command) noexcept {
             if (command.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             int status = system(command.data());
-            return status == 0;
+            if (status != 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                return false;
+            }
+
+            return true;
         }
 
         bool TapLinux::SetIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
@@ -344,6 +358,7 @@ namespace ppp {
             // has not changed).
             enabled = false;
             if (!IsSafeShellToken(ifrName)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
                 return false;
             }
 
@@ -352,6 +367,7 @@ namespace ppp {
 
             FILE* pipe = popen(command, "r");
             if (NULLPTR == pipe) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
                 return false;
             }
 
@@ -370,6 +386,7 @@ namespace ppp {
 
             int status = pclose(pipe);
             if (status != 0 || value.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
                 return false;
             }
 
@@ -410,7 +427,11 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 neigh del proxy %s dev %s > /dev/null 2>&1", addressIP.data(), ifrName.data());
-            return ExecuteIpCommand(command);
+            bool ok = ExecuteIpCommand(command);
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            }
+            return ok;
         }
 
         ppp::string TapLinux::GetIPAddress(const ppp::string& ifrName) noexcept {

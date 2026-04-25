@@ -1,4 +1,5 @@
 #include <ppp/diagnostics/PreventReturn.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/io/File.h>
 #include <ppp/cryptography/EVP.h>
 
@@ -32,12 +33,14 @@ namespace ppp
         {
             if (NULLPTR == name || *name == '\x0')
             {
+                SetLastErrorCode(ErrorCode::GenericInvalidArgument);
                 return ppp::string();
             }
 
             ppp::string result = ppp::cryptography::ComputeMD5(name, false);
             if (result.empty()) 
             {
+                SetLastErrorCode(ErrorCode::GenericOperationFailed);
                 return ppp::string();
             }
 
@@ -82,6 +85,7 @@ namespace ppp
             ppp::string name_string = NameTransform(name);
             if (name_string.empty())
             {
+                SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
                 return false;
             }
 
@@ -92,6 +96,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
                 return false;
             }
         }
@@ -118,6 +123,7 @@ namespace ppp
         {
             if (NULLPTR == name || *name == '\x0')
             {
+                SetLastErrorCode(ErrorCode::GenericInvalidArgument);
                 return { -1, "", false };
             }
 
@@ -133,6 +139,7 @@ namespace ppp
             int pid_file = open(path.data(), O_CREAT | O_RDWR, 0666);
             if (pid_file == -1)
             {
+                SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
                 return { -1, path, false };
             }
 
@@ -142,6 +149,7 @@ namespace ppp
             if (flock(pid_file, LOCK_EX | LOCK_NB) < 0)
             {
                 close(pid_file);
+                SetLastErrorCode(ErrorCode::AppAlreadyRunning);
                 return { -1, path, true };
             }
 
@@ -179,6 +187,10 @@ namespace ppp
                 pid_file_ = -1;
                 pid_path_.clear();
             }
+            elif (-1 != pid_file_)
+            {
+                SetLastErrorCode(ErrorCode::AppLockReleaseFailed);
+            }
         }
 
         /**
@@ -213,12 +225,14 @@ namespace ppp
             ppp::string name_string = NameTransform(name);
             if (name_string.empty())
             {
+                SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
                 return false;
             }
 
             FLOCK f = FLOCK_OPEN(name_string.data());
             if (f.fd == -1)
             {
+                SetLastErrorCode(true == f.open ? ErrorCode::AppAlreadyRunning : ErrorCode::AppLockAcquireFailed);
                 return false;
             }
 

@@ -1,4 +1,5 @@
 #include <ppp/cryptography/Ciphertext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file Ciphertext.cpp
@@ -42,6 +43,7 @@ namespace ppp {
                 return rc4_->Encrypt(allocator, data, datalen, outlen);
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
             return NULLPTR;
         }
 
@@ -64,6 +66,7 @@ namespace ppp {
                 return rc4_->Decrypt(allocator, data, datalen, outlen);
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
             return NULLPTR;
         }
 
@@ -74,6 +77,7 @@ namespace ppp {
          */
         bool Ciphertext::Support(const ppp::string& method) noexcept {
             if (method.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 

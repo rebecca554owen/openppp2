@@ -16,6 +16,9 @@ int main(int argc, char** argv) {
     auto& app = ppp::app::PppApplication::GetInstance();
     int result = app.Run(argc, argv);
     if (result != 0) {
+        if (ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        }
         fprintf(stderr, "%s\n", ppp::diagnostics::FormatErrorString(ppp::diagnostics::GetLastErrorCode()));
     }
     return result;

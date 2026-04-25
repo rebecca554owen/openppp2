@@ -4,6 +4,7 @@
  */
 
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp::app {
 

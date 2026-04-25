@@ -26,7 +26,7 @@ namespace ppp {
             return ppp::linux::ipv6::auxiliary::PrepareServerEnvironment(configuration, preferred_nic, transit_ifname);
 #else
             if (NULLPTR == configuration) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
             }
 
             auto mode = configuration->server.ipv6.mode;

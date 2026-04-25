@@ -3,10 +3,10 @@
 #include <ppp/app/server/VirtualEthernetExchanger.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
 #include <ppp/threading/Executors.h>
-#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetNetworkTcpipConnection.cpp
@@ -138,22 +138,26 @@ namespace ppp {
                 };
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return NULLPTR;
                 }
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return NULLPTR;
                 }
 
                 AppConfigurationPtr configuration = configuration_;
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLoadFailed);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = strand_ ?
                     make_shared_object<boost::asio::ip::tcp::socket>(*strand_) : make_shared_object<boost::asio::ip::tcp::socket>(*context_);
                 if (NULLPTR == socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
                 
@@ -161,6 +165,7 @@ namespace ppp {
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection =
                     make_shared_object<VirtualEthernetTcpipConnection>(self, configuration, context_, strand_, id_, socket);
                 if (NULLPTR == connection) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionCreateFailed);
                     return NULLPTR;
                 }
 
@@ -175,6 +180,7 @@ namespace ppp {
                         });
                 if (!ok) {
                     connection->Dispose();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                     return NULLPTR;
                 }
 
