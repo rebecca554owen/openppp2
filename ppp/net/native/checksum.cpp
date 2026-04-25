@@ -64,34 +64,34 @@ namespace ppp
                 struct ip_hdr* iphdr = (struct ip_hdr*)packet;
                 if (NULLPTR == iphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
                 int iphdr_ver = IPH_V(iphdr);
                 if (iphdr_ver != ip_hdr::IP_VER)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 int iphdr_hlen = IPH_HL(iphdr) << 2;
                 if (iphdr_hlen > len)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 if (iphdr_hlen < IP_HLEN)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 int ttl = IPH_TTL(iphdr);
                 if (ttl < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
@@ -112,14 +112,14 @@ namespace ppp
                 /* All ones (broadcast) or all zeroes (old skool broadcast). */
                 if (iphdr->dest == IP_ADDR_ANY_VALUE)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
                 /* ~iphdr->dest == IP_ADDR_ANY_VALUE */ 
                 if (iphdr->src == IP_ADDR_ANY_VALUE || iphdr->src == IP_ADDR_BROADCAST_VALUE) 
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
@@ -134,14 +134,20 @@ namespace ppp
                     int checksum = inet_chksum(iphdr, iphdr_hlen);
                     if (checksum != 0)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                         return NULLPTR;
                     }
                 }
 #endif
 
                 int proto = IPH_PROTO(iphdr);
-                return proto == IP_PROTO_UDP || proto == IP_PROTO_TCP || proto == IP_PROTO_ICMP ? iphdr : NULLPTR;
+                if (proto == IP_PROTO_UDP || proto == IP_PROTO_TCP || proto == IP_PROTO_ICMP)
+                {
+                    return iphdr;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
+                return NULLPTR;
             }
 
             /**
@@ -155,28 +161,28 @@ namespace ppp
             {
                 if (NULLPTR == iphdr || size < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
                 struct tcp_hdr* tcphdr = (struct tcp_hdr*)packet;
                 if (NULLPTR == tcphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
                 int hdrlen_bytes = TCPH_HDRLEN_BYTES(tcphdr);
                 if (hdrlen_bytes < TCP_HLEN || hdrlen_bytes > size) // 错误的数据报
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 int len = size - hdrlen_bytes;
                 if (len < 0)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
@@ -190,7 +196,7 @@ namespace ppp
                         iphdr->dest);
                     if (pseudo_checksum != 0)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                         return NULLPTR;
                     }
                 }
@@ -208,20 +214,20 @@ namespace ppp
             struct udp_hdr* udp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept {
                 if (NULLPTR == iphdr || size < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
                 struct udp_hdr* udphdr = (struct udp_hdr*)packet;
                 if (NULLPTR == udphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
                 if (size != ntohs(udphdr->len)) // 错误的数据报
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
@@ -229,7 +235,7 @@ namespace ppp
                 int len = size - hdrlen_bytes;
                 if (len < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
@@ -243,7 +249,7 @@ namespace ppp
                         iphdr->dest);
                     if (pseudo_checksum != 0)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                         return NULLPTR;
                     }
                 }
@@ -262,14 +268,14 @@ namespace ppp
             {
                 if (NULLPTR == iphdr || size < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
                 struct icmp_hdr* icmphdr = (struct icmp_hdr*)packet;
                 if (NULLPTR == icmphdr)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return NULLPTR;
                 }
 
@@ -279,7 +285,7 @@ namespace ppp
                     unsigned short cksum = inet_chksum(icmphdr, size);
                     if (cksum != 0)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                         return NULLPTR;
                     }
                 }
@@ -288,7 +294,7 @@ namespace ppp
                 int len = size - sizeof(struct icmp_hdr);
                 if (len < 0)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
                 return icmphdr;
@@ -325,7 +331,7 @@ namespace ppp
             {
                 if (NULLPTR == mac_string || *mac_string == '\x0')
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
@@ -350,7 +356,7 @@ namespace ppp
                         
                     if (count != 6) 
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                         return false;
                     }
                 }
@@ -499,13 +505,13 @@ namespace ppp
             {
                 if (path.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                     return false;
                 }
 
                 if (!ppp::io::File::Exists(path.data()))
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                     return false;
                 }
 
@@ -523,14 +529,14 @@ namespace ppp
             {
                 if (cidrs.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return false;
                 }
 
                 ppp::vector<ppp::string> routes;
                 if (Tokenize<ppp::string>(cidrs, routes, "\r\n") < 1)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return false;
                 }
 
@@ -547,7 +553,7 @@ namespace ppp
             {
                 if (cidr.empty())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return false;
                 }
 
@@ -564,7 +570,7 @@ namespace ppp
                 {
                     if (i == 0)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                         return false;
                     }
 
@@ -577,7 +583,7 @@ namespace ppp
                 boost::asio::ip::address ip = StringToAddress(host, ec);
                 if (ec)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
@@ -589,13 +595,13 @@ namespace ppp
                     }
                     elif(prefix < 0 || prefix > 32)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                         return false;
                     }
                 }
                 else
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                     return false;
                 }
 
@@ -608,26 +614,26 @@ namespace ppp
             {
                 if (prefix < MIN_PREFIX_VALUE || prefix > MAX_PREFIX_VALUE)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                     return false;
                 }
 
                 if (IPEndPoint::NoneAddress == ip)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 if (IPEndPoint::AnyAddress == gw || IPEndPoint::NoneAddress == gw)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                     return false;
                 }
 
                 uint32_t mask = IPEndPoint::PrefixToNetmask(prefix);
                 if ((ip & mask) != ip)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
@@ -659,7 +665,7 @@ namespace ppp
                 auto endl = routes.end();
                 if (tail == endl)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -674,7 +680,7 @@ namespace ppp
                 auto endl = routes.end();
                 if (tail == endl)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -693,7 +699,13 @@ namespace ppp
                     DeleteRoute(ip, prefix, gw);
                 }
             
-                return prefixes.size() > 0;
+                if (0 < prefixes.size())
+                {
+                    return true;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+                return false;
             }
 
             /** @brief Deletes one route entry matching destination/prefix/gateway. */
@@ -703,7 +715,7 @@ namespace ppp
                 auto endl = routes.end();
                 if (tail == endl)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -716,7 +728,7 @@ namespace ppp
 
                 if (entry_tail == entries.end())
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 

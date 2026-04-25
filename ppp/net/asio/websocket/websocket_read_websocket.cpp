@@ -25,16 +25,25 @@ namespace ppp {
              */
             bool websocket::Read(const void* buffer, int offset, int length, YieldContext& y) noexcept {
                 if (NULLPTR == buffer || offset < 0 || length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
-                if (IsDisposed() || !websocket_.is_open()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                if (IsDisposed()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
-                return ppp::coroutines::asio::async_read(websocket_, boost::asio::buffer((Byte*)buffer + offset, length), y);
+                if (!websocket_.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    return false;
+                }
+
+                bool ok = ppp::coroutines::asio::async_read(websocket_, boost::asio::buffer((Byte*)buffer + offset, length), y);
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketReadFailed);
+                }
+                return ok;
             }
         }
     }

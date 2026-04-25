@@ -1,5 +1,6 @@
 #include <ppp/threading/SpinLock.h>
 #include <ppp/threading/Thread.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file SpinLock.cpp
@@ -149,7 +150,13 @@ namespace ppp
          */
         bool SpinLock::TryEnter(int loop, int timeout) noexcept
         {
-            return Lock_TryEnter(*this, loop, timeout);
+            bool lockTaken = Lock_TryEnter(*this, loop, timeout);
+            if (!lockTaken)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ThreadSyncConditionWaitFailed);
+            }
+
+            return lockTaken;
         }
 
         /**
@@ -199,7 +206,13 @@ namespace ppp
          */
         bool RecursiveSpinLock::TryEnter(int loop, int timeout) noexcept
         {
-            return RecursiveLock_TryEnter(*this, lockobj_, &tid_, reentries_, loop, timeout);
+            bool lockTaken = RecursiveLock_TryEnter(*this, lockobj_, &tid_, reentries_, loop, timeout);
+            if (!lockTaken)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ThreadSyncConditionWaitFailed);
+            }
+
+            return lockTaken;
         }
 
         /**

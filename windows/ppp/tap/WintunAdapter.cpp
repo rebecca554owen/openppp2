@@ -73,7 +73,7 @@ struct ReadyWintunAdapter
         
 #define GET_PROC(name) \
     name = (decltype(name))GetProcAddress(DLL_HANDLE, #name); \
-    if (!name) { FreeLibrary(DLL_HANDLE); DLL_HANDLE = NULL; return false; }
+    if (!name) { ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunCreateFailed); FreeLibrary(DLL_HANDLE); DLL_HANDLE = NULL; return false; }
 
         GET_PROC(WintunCreateAdapter);
         GET_PROC(WintunOpenAdapter);
@@ -140,7 +140,7 @@ bool WintunAdapter::Open() noexcept {
     // Create an event that can be used to wake the receive thread
     quit_event_ = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!quit_event_) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
         WintunEndSession(session_handle_);
         session_handle_ = NULL;
 

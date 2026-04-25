@@ -1354,7 +1354,9 @@ namespace ppp {
                 bool mux = false;
                 Int128 session_id = transmission->HandshakeClient(y, mux);
                 if (session_id == 0) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                    }
                     return STATUS_ERROR;
                 }
 
@@ -1430,9 +1432,12 @@ namespace ppp {
                             int status = Run(context, transmission, y);
                             if (status != STATUS_RUNNING_SWAP) {
                                 if (status < STATUS_RUNNING_SWAP) {
-                                    FlowerArrangement(
-                                        transmission, 
-                                        y);
+                                    ppp::diagnostics::ErrorCode error_code = ppp::diagnostics::GetLastErrorCode();
+                                    if (ppp::diagnostics::ErrorCode::SocketDisconnected != error_code) {
+                                        FlowerArrangement(
+                                            transmission,
+                                            y);
+                                    }
                                 }
 
                                 transmission->Dispose();

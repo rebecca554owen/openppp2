@@ -188,7 +188,7 @@ namespace ppp
             struct utsname __nm;
             if (uname(&__nm) < 0) /* errno */
             {
-                SetLastErrorCode(ErrorCode::GenericOperationFailed);
+                SetLastErrorCode(ErrorCode::RuntimeEnvironmentInvalid);
                 return false; /* EXIT_FAILURE */
             }
 

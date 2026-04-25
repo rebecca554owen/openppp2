@@ -576,12 +576,16 @@ namespace ppp {
                  */
                 bool ApplyDefaultRouteCommand(const ppp::string& route) noexcept {
                     if (route.empty() || !IsSafeShellRoute(route)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteReplaceFailed);
                     }
 
                     char command[1600];
                     snprintf(command, sizeof(command), "ip -6 route replace %s > /dev/null 2>&1", route.data());
-                    return system(command) == 0;
+                    if (system(command) == 0) {
+                        return true;
+                    }
+
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteReplaceFailed);
                 }
 
                 /**
@@ -593,7 +597,7 @@ namespace ppp {
                  */
                 bool PrepareServerEnvironment(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const ppp::string& preferred_nic, const ppp::string& transit_ifname) noexcept {
                     if (NULLPTR == configuration) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ServerPrepareFailed);
                     }
 
                     const auto& ipv6 = configuration->server.ipv6;

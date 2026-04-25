@@ -289,6 +289,16 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            if (_password.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
+                return NULLPTR;
+            }
+
+            if (NULLPTR == _sbox) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                return NULLPTR;
+            }
+
             std::shared_ptr<Byte> plaintext = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, datalen);
             if (NULLPTR == plaintext) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
@@ -300,7 +310,9 @@ namespace ppp {
             // Uses the variant with (low + keylen) % sboxlen – another intentional modification.
             if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
                 (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
+                }
                 return NULLPTR;
             }
 

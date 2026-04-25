@@ -770,7 +770,7 @@ namespace ppp {
                 
                 std::shared_ptr<boost::asio::io_context> context = mux->get_context();
                 if (NULLPTR == context) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 }
 
                 auto self = shared_from_this();
@@ -790,7 +790,7 @@ namespace ppp {
                         const uint32_t& rx_ack = mux->get_rx_ack();
                         if (!mux->ftt(vmux::vmux_net::ftt_random_aid(1, INT32_MAX), vmux::vmux_net::ftt_random_aid(1, INT32_MAX))) {
                             mux->close_exec();
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         }
 
                         auto context = mux->get_context();
@@ -816,11 +816,15 @@ namespace ppp {
                                 make_shared_object<VirtualEthernetTcpipConnection>(
                                     mux->AppConfiguration, context, strand, GetId(), default_socket);
                             if (NULLPTR == connection) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 break;
                             }
 
                             // In this lightweight and simple vmux circuit switch, seq and ack are delivered by the client, and the server and client are opposite.
                             if (!connection->ConnectMux(y, transmission, mux->Vlan, rx_ack, tx_seq)) {
+                                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
+                                }
                                 break;
                             }
 
@@ -832,6 +836,9 @@ namespace ppp {
                                 });
 
                             if (!bok) {
+                                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
+                                }
                                 break;
                             }
 
@@ -843,6 +850,9 @@ namespace ppp {
                         }
 
                         mux->close_exec();
+                        if (!disposed_ && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
+                        }
                         return false;
                     });
             }
@@ -872,7 +882,7 @@ namespace ppp {
             bool VEthernetExchanger::NewDeadlineTimer(const ContextPtr& context, int64_t timeout, const ppp::function<void(bool)>& event) noexcept {
                 std::shared_ptr<boost::asio::steady_timer> t = make_shared_object<boost::asio::steady_timer>(*context);
                 if (NULLPTR == t) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 }
 
                 SynchronizedObjectScope scope(syncobj_);
@@ -899,7 +909,7 @@ namespace ppp {
                 }
 
                 Socket::Cancel(*t);
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
             }
 
             /** @brief Transitions state to established and initializes keepalive schedule. */
@@ -929,7 +939,7 @@ namespace ppp {
             /** @brief Registers all configured FRP mapping ports. */
             bool VEthernetExchanger::RegisterAllMappingPorts() noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 AppConfigurationPtr configuration = GetConfiguration();
@@ -997,12 +1007,12 @@ namespace ppp {
             bool VEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 if (NULLPTR == context) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 }
 
                 auto ei = make_shared_object<VirtualEthernetInformation>(information.Base);
                 if (NULLPTR == ei) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
                 
                 auto self = shared_from_this();
@@ -1247,7 +1257,12 @@ namespace ppp {
                 datagram = NewDatagramPort(transmission, sourceEP);
 
                 if (NULLPTR == datagram) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
+                    ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCode();
+                    if (ppp::diagnostics::ErrorCode::Success == code) {
+                        code = ppp::diagnostics::ErrorCode::MemoryAllocationFailed;
+                    }
+
+                    return ppp::diagnostics::SetLastError(code, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
                 else {
                     SynchronizedObjectScope scope(syncobj_);
@@ -1257,7 +1272,7 @@ namespace ppp {
 
                 if (!ok) {
                     datagram->Dispose();
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
                 }
 
                 return datagram;
@@ -1352,7 +1367,12 @@ namespace ppp {
 
                 mapping_port = NewMappingPort(in, protocol_tcp_or_udp, mapping.remote_port);
                 if (NULLPTR == mapping_port) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingCreateFailed);
+                    ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCode();
+                    if (ppp::diagnostics::ErrorCode::Success == code) {
+                        code = ppp::diagnostics::ErrorCode::MemoryAllocationFailed;
+                    }
+
+                    return ppp::diagnostics::SetLastError(code);
                 }
 
                 bool ok = mapping_port->OpenFrpClient(local_ip, mapping.local_port);
@@ -1362,7 +1382,9 @@ namespace ppp {
                 }
 
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingOpenFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingOpenFailed);
+                    }
                     mapping_port->Dispose();
                 }
 
@@ -1409,7 +1431,7 @@ namespace ppp {
 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetExchanger::VirtualEthernetMappingPortPtr(NULLPTR));
                 }
 
                 auto self = shared_from_this();
@@ -1933,7 +1955,7 @@ namespace ppp {
 
                 std::shared_ptr<atomic_int> status = ppp::make_shared_object<atomic_int>(-1);
                 if (NULLPTR == status) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 auto self = shared_from_this();

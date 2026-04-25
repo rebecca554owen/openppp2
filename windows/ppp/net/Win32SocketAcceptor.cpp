@@ -206,13 +206,13 @@ namespace ppp
             hEvent_ = WSACreateEvent();
             if (hEvent_ == WSA_INVALID_EVENT)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
 
             if (WSAEventSelect(listenfd_, hEvent_, FD_ACCEPT | FD_CLOSE) != NOERROR)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
 
@@ -294,6 +294,14 @@ namespace ppp
                                     AcceptSocketEventArgs e = { Adjust(sockfd) };
                                     OnAcceptSocket(e);
                                 }
+                                else
+                                {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
+                                }
+                            }
+                            else
+                            {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                             }
                         }
                         elif(events.lNetworkEvents & FD_CLOSE)
@@ -302,7 +310,13 @@ namespace ppp
                             {
                                 return;
                             }
+
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                         }
+                    }
+                    else
+                    {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                     }
 
                     Next();

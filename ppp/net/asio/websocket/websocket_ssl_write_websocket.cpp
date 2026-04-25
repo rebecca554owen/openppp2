@@ -22,24 +22,24 @@ namespace ppp {
              * @return true if the operation is posted to the executor; otherwise false.
              */
             bool sslwebsocket::Write(const void* buffer, int offset, int length, const AsynchronousWriteCallback& cb) noexcept {
-                if (NULLPTR == buffer || offset < 0 || length < 1) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                if (NULLPTR == buffer || 0 > offset || 1 > length) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (NULLPTR == cb) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 if (IsDisposed()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 const std::shared_ptr<SslvWebSocket> ssl_websocket = ssl_websocket_;
                 if (NULLPTR == ssl_websocket || !ssl_websocket->is_open()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     return false;
                 }
 
@@ -54,13 +54,25 @@ namespace ppp {
                     ssl_websocket->async_write(boost::asio::buffer((Byte*)buffer + offset, length),
                         [self, this, cb](const boost::system::error_code& ec, size_t sz) noexcept {
                             bool ok = ec == boost::system::errc::success;
-                            if (cb) {
+                            if (false == ok &&
+                                boost::asio::error::operation_aborted != ec &&
+                                boost::beast::websocket::error::closed != ec)
+                            {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteFailed);
+                            }
+
+                            if (NULLPTR != cb) {
                                 cb(ok); /* b is boost::system::errc::success. */
                             }
                         });
                 };
 
-                return ppp::threading::Executors::Post(context, strand, complete_do_async_write_callback);
+                bool ok = ppp::threading::Executors::Post(context, strand, complete_do_async_write_callback);
+                if (false == ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                }
+
+                return ok;
             }
         }
     }

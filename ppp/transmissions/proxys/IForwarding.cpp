@@ -96,11 +96,13 @@ namespace ppp {
                 /** @brief Starts full-duplex forwarding between two connected sockets. */
                 bool                                                        Forward(const std::shared_ptr<boost::asio::ip::tcp::socket>& inx, const std::shared_ptr<boost::asio::ip::tcp::socket>& iny) noexcept {
                     if (disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
                     for (std::shared_ptr<boost::asio::ip::tcp::socket>& socket : sockets_) {
                         if (NULLPTR != socket) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                             return false;
                         }
                     }
@@ -109,6 +111,7 @@ namespace ppp {
                     for (std::shared_ptr<Byte>& buff : buffers_) {
                         buff = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, PPP_BUFFER_SIZE);
                         if (NULLPTR == buff) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return false;
                         }
                     }
@@ -345,11 +348,13 @@ namespace ppp {
             static bool IFORWARDING_HTTP_VERIFY_HANDSHAKE_RESPONSE_PACKET(MemoryStream& protocol_array) noexcept {
                 ppp::vector<ppp::string> headers;
                 if (!VEthernetHttpProxyConnection::ProtocolReadHeaders(protocol_array, headers, NULLPTR)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpResponseInvalid);
                     return false;
                 }
 
                 int header_count = headers.size(); /* HTTP/1.1 200 Connection established */
                 if (header_count < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpResponseInvalid);
                     return false;
                 }
 
@@ -358,11 +363,13 @@ namespace ppp {
 
                 int segment_count = segments.size();
                 if (segment_count != 4) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
                 int status_code = atoi(segments[1].data());
                 if (status_code < 200 || status_code >= 300) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpConnectTunnelFailed);
                     return false;
                 }
 
@@ -370,22 +377,26 @@ namespace ppp {
                 segments[3] = ToLower<ppp::string>(segments[3]);
 
                 if (segments[2] != "connection" || segments[3] != "established") {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
                 ppp::string& s = segments[0];
                 std::size_t i = s.find('/');
                 if (i == std::string::npos) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
                 int v = atoi(s.substr(i + 1).data());
                 if (v < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
                 ppp::string proto = ToLower(s.substr(0, i));
                 if (proto != "http") {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
@@ -395,28 +406,33 @@ namespace ppp {
             /** @brief Reads and validates HTTP CONNECT response headers and captures post-header overflow bytes. */
             static bool IFORWARDING_HTTP_VERIFY_HANDSHAKE_RESPONSE_PACKET(IForwarding_HttpOverflowByteArray& ov, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, YieldContext& y) noexcept {
                 if (NULLPTR == socket || !socket->is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                     return false;
                 }
 
                 MemoryStream protocol_array;
                 bool ok = VEthernetHttpProxyConnection::ProtocolReadAllHeaders(protocol_array, y, *socket);
                 if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                     return false;
                 }
 
                 std::shared_ptr<Byte> protocol_array_ptr = protocol_array.GetBuffer();
                 if (NULLPTR == protocol_array_ptr) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
                 int protocol_array_size = protocol_array.GetPosition();
                 if (protocol_array_size < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpResponseInvalid);
                     return false;
                 }
 
                 int next[4];
                 int index = FindIndexOf(next, (char*)protocol_array_ptr.get(), protocol_array_size, (char*)("\r\n\r\n"), 4); // KMP
                 if (index < 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpHeaderInvalid);
                     return false;
                 }
 
@@ -427,6 +443,7 @@ namespace ppp {
                 int headers_endoffset = index + 4;
                 int pushfd_array_size = protocol_array_size - headers_endoffset;
                 if (pushfd_array_size < 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInsufficientBuffer);
                     return false;
                 }
 
@@ -460,7 +477,9 @@ namespace ppp {
                     overflow_offset = 0;
                     overflow_length = 0;
                     overflow_buffer = NULLPTR;
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpResponseInvalid);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpResponseInvalid);
+                    }
                     return false;
                 }
             }
@@ -710,7 +729,9 @@ namespace ppp {
                 }
                 
                 ResetSS();
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                if (status > 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
+                }
                 return false;
             }
         
@@ -750,7 +771,10 @@ namespace ppp {
                 }
 
                 timer->Dispose();
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(
+                    disposed_
+                        ? ppp::diagnostics::ErrorCode::SessionDisposed
+                        : ppp::diagnostics::ErrorCode::MappingCreateFailed);
                 return NULLPTR;
             }
 
@@ -876,14 +900,18 @@ namespace ppp {
                     return false;
                 }
 
-                if (proxy_connection->Forward(local_socket, proxy_socket)) {
-                    if (TryAdd(proxy_connection)) {
-                        return true;
-                    }
+                if (!proxy_connection->Forward(local_socket, proxy_socket)) {
+                    proxy_connection->Dispose();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                    return false;
+                }
+
+                if (TryAdd(proxy_connection)) {
+                    return true;
                 }
 
                 proxy_connection->Dispose();
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingCreateFailed);
                 return false;
             }
 
@@ -937,7 +965,7 @@ namespace ppp {
                 }
 
                 TryRemove(proxy_timeout_key, true);
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                 return spawned;
             }
 

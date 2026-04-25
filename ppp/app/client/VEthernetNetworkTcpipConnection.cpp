@@ -167,7 +167,9 @@ namespace ppp {
                     int rinetd_status = Rinetd(self, exchanger, context, strand, configuration, socket, remoteEP, connection_rinetd_, y);
                     if (rinetd_status < 1) {
                         if (rinetd_status < 0) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
+                            }
                         }
                         return rinetd_status == 0;
                     }
@@ -175,7 +177,9 @@ namespace ppp {
                     int mux_status = Mux(self, exchanger, remoteEP, socket, connection_mux_, y);
                     if (mux_status < 1) {
                         if (mux_status < 0) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
+                            }
                         }
                         return mux_status == 0;
                     }

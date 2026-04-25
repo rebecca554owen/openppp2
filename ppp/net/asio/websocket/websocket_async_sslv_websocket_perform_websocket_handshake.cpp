@@ -23,7 +23,7 @@ namespace ppp {
             bool AsyncSslvWebSocket::PerformWebSocketHandshake(bool handshaked_client, YieldContext& y) noexcept {
                 SslvWebSocketPtr& ssl_websocket = GetSslSocket();
                 if (NULLPTR == ssl_websocket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -32,11 +32,18 @@ namespace ppp {
                  */
                 std::shared_ptr<AcceptSslvWebSocket> accept = make_shared_object<AcceptSslvWebSocket>(reference_, *ssl_websocket, binary_, host_, path_);
                 if (NULLPTR == accept) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                     return false;
                 }
 
-                return accept->Run(handshaked_client, y);
+                bool ok = accept->Run(handshaked_client, y);
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(
+                        handshaked_client
+                            ? ppp::diagnostics::ErrorCode::HttpResponseInvalid
+                            : ppp::diagnostics::ErrorCode::HttpRequestFailed);
+                }
+                return ok;
             }
         }
     }

@@ -209,6 +209,10 @@ namespace ppp {
                     for (;;) {
                         int bytes_transferred = ppp::coroutines::asio::async_read_some(socket, boost::asio::buffer(buffers, sizeof(buffers)), y);
                         if (bytes_transferred < 1) {
+                            if (0 >= protocol_array.GetPosition()) {
+                                return false;
+                            }
+
                             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketReadFailed);
                         }
 
@@ -247,7 +251,8 @@ namespace ppp {
                     ppp::string response_headers = response_protocol + "/" + response_version + " " + stl::to_string<ppp::string>(status_code) + " ";
                     response_headers += status_text;
                     response_headers += "\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-                    return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(response_headers.data(), response_headers.size()), y);
+                    bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(response_headers.data(), response_headers.size()), y);
+                    return ok ? true : ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                 }
 
                 /**
@@ -283,7 +288,6 @@ namespace ppp {
                     Update();
 
                     if (!ProtocolReadHttpHeaders(protocol_array, y, *socket_)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpHeaderInvalid);
                         return false;
                     }
 

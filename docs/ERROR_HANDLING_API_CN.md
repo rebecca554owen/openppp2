@@ -272,6 +272,24 @@ sequenceDiagram
 - 所有展示层（Console UI、日志、JNI）读取快照。
 - 桥接层（Android JNI）保持语义映射，避免引入并行错误体系。
 
+### C 子系统桥接（SYSNAT）
+
+对返回整型错误码的 C 模块（例如 `linux/ppp/tap/openppp2_sysnat.c`），应在 C/C++ 边界做显式桥接映射：
+
+- 将每个 C 侧 `ERR_*` 映射到一个 `ppp::diagnostics::ErrorCode`
+- 仅在失败分支发布诊断
+- C 返回码继续用于局部流程控制，`ErrorCode` 统一用于全局诊断展示面
+
+示例（`linux/ppp/tap/openppp2_sysnat.h` + `ppp/ethernet/VNetstack.cpp`）：
+
+```cpp
+int status = openppp2_sysnat_attach(interface_name.data());
+if (0 != status) {
+    openppp2_sysnat_publish_error(status);
+    return false;
+}
+```
+
 ---
 
 ## Android JNI 集成
@@ -410,6 +428,10 @@ void ShutdownDiagnostics() {
 - [ ] 如果没有合适的码，在 `ppp/diagnostics/Error.h` 中添加，并加上清晰注释。
 - [ ] 验证新码在 `FormatErrorString` 中有有意义的消息。
 - [ ] 如果新增了错误码，同步更新 `ERROR_CODES.md` 和 `ERROR_CODES_CN.md`。
+
+入口兜底约束：
+
+- [ ] 在 `main.cpp` 中，当 `Run()` 失败且线程本地错误仍为 `Success` 时，先设置一个非成功兜底码（`GenericUnknown`）再打印。
 
 ---
 

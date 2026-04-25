@@ -12,6 +12,7 @@
 #include "PaperAirplaneRoot.h"
 #include "PaperAirplaneLspY.h"
 #include "PaperAirplaneLspX.h"
+#include <ppp/diagnostics/Error.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Iphlpapi.lib")
@@ -46,12 +47,25 @@ namespace ppp
                         {
                             if (nError != WSAENOBUFS)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                                 return NULLPTR;
                             }
                         }
 
                         pProtoInfo = (LPWSAPROTOCOL_INFOW)::GlobalAlloc(GPTR, dwSize);
+                        if (NULLPTR == pProtoInfo)
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                            return NULLPTR;
+                        }
+
                         *lpnTotalProtocols = ::WSCEnumProtocols(NULLPTR, pProtoInfo, &dwSize, &nError);
+                        if (SOCKET_ERROR == *lpnTotalProtocols)
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
+                            ::GlobalFree(pProtoInfo);
+                            return NULLPTR;
+                        }
 
                         return std::shared_ptr<WSAPROTOCOL_INFOW>(pProtoInfo,
                             [](WSAPROTOCOL_INFOW* p) noexcept
@@ -101,6 +115,7 @@ namespace ppp
                         WSAPROTOCOL_INFOW LayeredProtocolInfo;
                         if (nArrayCount < 1)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
                             return FALSE;
                         }
                         else
@@ -118,6 +133,7 @@ namespace ppp
                         if (::WSCInstallProvider(&ProviderGuid,
                             pwszPathName, &LayeredProtocolInfo, 1, &nError) == SOCKET_ERROR)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                             return FALSE;
                         }
 
@@ -166,11 +182,13 @@ namespace ppp
                             if (::WSCInstallProvider(&ProviderChainGuid,
                                 pwszPathName, OriginalProtocolInfo, nArrayCount, &nError) == SOCKET_ERROR)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                 return FALSE;
                             }
                         }
                         else
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                             return FALSE;
                         }
 
@@ -202,6 +220,7 @@ namespace ppp
                         // Reorder Winsock catalog
                         if ((nError = ::WSCWriteProviderOrder(dwIds, nIndex)) != ERROR_SUCCESS)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                             return FALSE;
                         }
 
@@ -315,12 +334,14 @@ namespace ppp
                         char* ptr;
                         if (argc != 2)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
                             Setup_Usage(argv[0]);
                             return -1;
                         }
 
                         if (WSAStartup(MAKEWORD(2, 2), &wsd) != 0)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                             printf("WSAStartup() failed: %d\r\n", GetLastError());
                             return -1;
                         }

@@ -5,6 +5,7 @@
  */
 
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <cstring>
 
@@ -56,11 +57,13 @@ namespace ppp {
             /** @brief Builds an information object from a JSON value object. */
             std::shared_ptr<VirtualEthernetInformation> VirtualEthernetInformation::FromJson(const Json::Value& json) noexcept {
                 if (!json.isObject()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return NULLPTR;
                 }
 
                 std::shared_ptr<VirtualEthernetInformation> infomartion = make_shared_object<VirtualEthernetInformation>();
                 if (NULLPTR == infomartion) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionCreateFailed);
                     return NULLPTR;
                 }
 
@@ -74,6 +77,7 @@ namespace ppp {
             /** @brief Builds an information object from JSON text. */
             std::shared_ptr<VirtualEthernetInformation> VirtualEthernetInformation::FromJson(const ppp::string& json) noexcept {
                 if (json.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return NULLPTR;
                 }
 
@@ -175,6 +179,7 @@ namespace ppp {
             bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const ppp::string& json) noexcept {
                 if (json.empty()) {
                     value.Clear();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     return false;
                 }
 
@@ -185,6 +190,7 @@ namespace ppp {
             bool VirtualEthernetInformationExtensions::FromJson(VirtualEthernetInformationExtensions& value, const Json::Value& json) noexcept {
                 value.Clear();
                 if (!json.isObject()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 

@@ -1,6 +1,7 @@
 #include <ppp/configurations/Ini.h>
 #include <ppp/io/File.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 using ppp::collections::Dictionary;
 
@@ -393,14 +394,14 @@ namespace ppp {
         /** @brief Loads INI content from a file path. */
         std::shared_ptr<Ini> Ini::LoadFile(const ppp::string& path) noexcept {
             if (path.empty()) {
-                return make_shared_object<Ini>();
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid, make_shared_object<Ini>());
             }
 
             int length = path.size();
             std::shared_ptr<Byte> config = ppp::io::File::ReadAllBytes(path.data(), length);
 
             if (NULLPTR == config || length < 1) {
-                return make_shared_object<Ini>();
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileReadFailed, make_shared_object<Ini>());
             }
 
             return make_shared_object<Ini>((char*)config.get(), length);
@@ -409,7 +410,7 @@ namespace ppp {
         /** @brief Loads INI content from raw text. */
         std::shared_ptr<Ini> Ini::LoadFrom(const ppp::string& config) noexcept {
             if (config.empty()) {
-                return make_shared_object<Ini>();
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed, make_shared_object<Ini>());
             }
 
             return make_shared_object<Ini>(config);

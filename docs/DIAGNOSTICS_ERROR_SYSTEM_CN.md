@@ -721,3 +721,29 @@ graph TB
 | `Generic<条件>` | `GenericTimeout` |
 | `App<阶段>Failed` | `AppStartupFailed` |
 | `Config<字段/阶段>Invalid` | `ConfigFieldInvalid` |
+
+---
+
+## 17. C 模块错误桥接（SYSNAT）
+
+部分 Linux 底层组件使用 C 实现，并返回负值 `ERR_*` 整数而不是直接返回 `ErrorCode`（例如 `linux/ppp/tap/openppp2_sysnat.c`）。
+
+为保持诊断体系统一，openppp2 在 `linux/ppp/tap/openppp2_sysnat.h` 提供了 C/C++ 桥接：
+
+```mermaid
+flowchart LR
+    A[openppp2_sysnat_attach/detach/add_rule] --> B[ERR_* 整数]
+    B --> C[openppp2_sysnat_to_error_code]
+    C --> D[ErrorCode]
+    D --> E[openppp2_sysnat_publish_error]
+    E --> F[SetLastErrorCode]
+```
+
+桥接规则：
+
+1. C 返回码保持不变，继续用于局部流程控制。
+2. 仅在边界层把失败映射到 `ErrorCode`。
+3. 仅在返回非零时发布诊断。
+4. 除非调用方显式接受，否则不要把“already attached”/“not attached”当作成功。
+
+`VNetstack.cpp` 的 SYSNAT attach/detach/rule 安装路径已按该模式处理。

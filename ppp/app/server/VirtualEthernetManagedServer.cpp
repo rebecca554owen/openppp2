@@ -78,10 +78,14 @@ namespace ppp {
                 auto self = shared_from_this();
                 auto context = context_;
 
-                return YieldContext::Spawn(allocator_.get(), *context,
+                bool ok = YieldContext::Spawn(allocator_.get(), *context,
                     [self, this, url, context](YieldContext& y) noexcept {
                         RunInner(url, y);
                     });
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
+                }
+                return ok;
             }
 
             /** @brief Returns currently verified managed-server URI. */
@@ -303,12 +307,16 @@ namespace ppp {
                 
                 memcpy(packet.get(), length_hex, length_dec);
                 memcpy(packet.get() + length_dec, json_string.data(), json_string.size());
-                return websocket->Write(packet.get(), 0, packet_length, 
+                bool ok = websocket->Write(packet.get(), 0, packet_length,
                     [websocket, packet](bool ok) noexcept {
                         if (!ok) {
                             websocket->Dispose();
                         }
                     });
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteFailed);
+                }
+                return ok;
             }
 
             template <typename TWebSocketPtr>
@@ -407,7 +415,7 @@ namespace ppp {
                 auto self = shared_from_this();
                 auto context = context_;
                 
-                return YieldContext::Spawn(allocator_.get(), *context,
+                bool ok = YieldContext::Spawn(allocator_.get(), *context,
                     [self, this, ac, url, context](YieldContext& y) noexcept {
                         ppp::string host;
                         ppp::string path;
@@ -425,6 +433,10 @@ namespace ppp {
                                 ac(verify_ok);
                             });
                     });
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
+                }
+                return ok;
             }
 
             /** @brief Parses managed-server URI and resolves transport endpoint details. */
@@ -432,10 +444,12 @@ namespace ppp {
                 using ProtocolType = UriAuxiliary::ProtocolType;
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return "";
                 }
 
                 if (url.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return "";
                 }
 
@@ -446,18 +460,22 @@ namespace ppp {
 
                 ppp::string url_new = UriAuxiliary::Parse(url, host, address, path, port, protocol_type, y);
                 if (url_new.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
                     return "";
                 }
 
                 if (host.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return "";
                 }
 
                 if (address.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
                     return "";
                 }
 
                 if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return "";
                 }
 
@@ -470,15 +488,18 @@ namespace ppp {
                     ssl = true;
                 }
                 else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
                     return "";
                 }
 
                 IPEndPoint ipep(address.data(), port);
                 if (IPEndPoint::IsInvalid(ipep)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                     return "";
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return "";
                 }
 
@@ -527,6 +548,7 @@ namespace ppp {
 
                     int node_var = JsonAuxiliary::AsValue<int>(json["Node"]);
                     if (node_var != node) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                         break;
                     }
 
@@ -541,6 +563,7 @@ namespace ppp {
                         AckAllUploadTrafficToManagedServer(json, y);
                     }
                     else {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                         break;
                     }
                 }
@@ -550,11 +573,13 @@ namespace ppp {
             bool VirtualEthernetManagedServer::AckAllUploadTrafficToManagedServer(Json::Value& json, YieldContext& y) noexcept {
                 Json::Value json_array = JsonAuxiliary::FromString(JsonAuxiliary::AsString(json["Data"]));
                 if (!json_array.isObject()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
                 json_array = json_array["List"];
                 if (!json_array.isArray()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
@@ -587,12 +612,14 @@ namespace ppp {
             bool VirtualEthernetManagedServer::AckAuthenticationToManagedServer(Json::Value& json, YieldContext& y) noexcept {
                 ppp::string guid = JsonAuxiliary::AsString(json["Guid"]);
                 if (guid.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return false;
                 }
 
                 Int128 session_id = StringAuxiliary::GuidStringToInt128(guid);
                 AuthenticationToManagedServerAsyncCallback f = DeleteAuthenticationToManagedServer(session_id);
                 if (!f) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
@@ -669,7 +696,9 @@ namespace ppp {
             VirtualEthernetManagedServer::IWebScoketPtr VirtualEthernetManagedServer::NewWebSocketConnectToManagedServer2(const ppp::string& url, YieldContext& y) noexcept {
                 IWebScoketPtr websocket = NewWebSocketConnectToManagedServer(url, y);
                 if (NULLPTR == websocket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
                     return NULLPTR;
                 }
 

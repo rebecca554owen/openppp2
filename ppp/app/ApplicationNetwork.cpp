@@ -83,9 +83,11 @@ int NetworkInterface::BypassLoadList(const ppp::string& s) noexcept {
  * @return True when asynchronous task is successfully scheduled.
  */
 bool PppApplication::PullIPList(const ppp::string& url, const ppp::function<void(int, const ppp::set<ppp::string>&)>& cb) noexcept {
-    if (NULLPTR == cb || url.empty()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
-        return false;
+    if (NULLPTR == cb) {
+        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+    }
+    elif (url.empty()) {
+        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
     }
 
     auto self = shared_from_this();
@@ -113,8 +115,7 @@ int PppApplication::PullIPList(const ppp::string& url, ppp::set<ppp::string>& ip
     bool https = false;
 
     if (!HttpClient::VerifyUri(url, ppp::addressof(host), &port, ppp::addressof(path), &https)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
-        return -1;
+        return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
     }
 
     HttpClient http_client((https ? "https://" : "http://") + host, chnroutes2_cacertpath_default());
@@ -122,8 +123,7 @@ int PppApplication::PullIPList(const ppp::string& url, ppp::set<ppp::string>& ip
     int http_status_code = -1;
     std::string http_response_body = http_client.Get(path, http_status_code);
     if (http_status_code < 200 || http_status_code >= 300) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
-        return -1;
+        return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::HttpRequestFailed);
     }
 
     return chnroutes2_getiplist(ips, ppp::string(), stl::transform<ppp::string>(http_response_body));

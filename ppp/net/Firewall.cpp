@@ -50,12 +50,14 @@ namespace ppp
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 return false;
             }
 
             SynchronizedObjectScope scope(syncobj_);
-            return ports_.emplace(port).second;
+            bool inserted = ports_.emplace(port).second;
+            ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+            return inserted;
         }
 
         /**
@@ -68,19 +70,22 @@ namespace ppp
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 return false;
             }
 
             SynchronizedObjectScope scope(syncobj_);
+            bool inserted = false;
             if (tcp_or_udp)
             {
-                return ports_tcp_.emplace(port).second;
+                inserted = ports_tcp_.emplace(port).second;
             }
             else
             {
-                return ports_udp_.emplace(port).second;
+                inserted = ports_udp_.emplace(port).second;
             }
+            ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+            return inserted;
         }
 
         /**
@@ -113,7 +118,7 @@ namespace ppp
                         }
                         else
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericAlreadyExists);
                             return false;
                         }
                     }
@@ -152,7 +157,7 @@ namespace ppp
             }
             else
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return false;
             }
         }
@@ -166,20 +171,22 @@ namespace ppp
         {
             if (host.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                 return false;
             }
 
             ppp::string host_lower = LTrim(RTrim(ToLower(host)));
             if (host_lower.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                 return false;
             }
             else
             {
                 SynchronizedObjectScope scope(syncobj_);
-                return network_domains_.emplace(host_lower).second;
+                bool inserted = network_domains_.emplace(host_lower).second;
+                ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::GenericAlreadyExists);
+                return inserted;
             }
         }
 
@@ -204,7 +211,7 @@ namespace ppp
         {
             if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 return false;
             }
 
@@ -220,10 +227,11 @@ namespace ppp
                 auto endl = list->end();
                 if (tail != endl)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
                     return true;
                 }
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
             return false;
         }
 
@@ -242,7 +250,6 @@ namespace ppp
             static constexpr int MIN_PREFIX_VALUE = ppp::net::native::MIN_PREFIX_VALUE;
             if (network_segments.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -263,7 +270,6 @@ namespace ppp
                     return true;
                 }
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
             return false;
         }
 
@@ -279,7 +285,9 @@ namespace ppp
                 UInt32 __ip = ip.to_v4().to_uint();
                 {
                     SharedSynchronizedObjectScope scope(syncobj_);
-                    return Firewall_IsDropNetworkSegment<UInt32>(ip, __ip, 32, network_segments_);
+                    bool blocked = Firewall_IsDropNetworkSegment<UInt32>(ip, __ip, 32, network_segments_);
+                    ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+                    return blocked;
                 }
             }
             elif(ip.is_v6())
@@ -291,13 +299,15 @@ namespace ppp
                     Int128 __ip = Ipep::NetworkToHostOrder(network_ip);
                     {
                         SharedSynchronizedObjectScope scope(syncobj_);
-                        return Firewall_IsDropNetworkSegment<Int128>(ip, __ip, 128, network_segments_);
+                        bool blocked = Firewall_IsDropNetworkSegment<Int128>(ip, __ip, 128, network_segments_);
+                        ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+                        return blocked;
                     }
                 }
             }
             else
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return false;
             }
         }
@@ -318,14 +328,14 @@ namespace ppp
         {
             if (host.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                 return false;
             }
 
             ppp::string host_lower = LTrim(RTrim(ToLower(host)));
             if (host_lower.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                 return false;
             }
 
@@ -347,7 +357,7 @@ namespace ppp
                 }
                 catch (const std::bad_alloc&)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     return false; // Cannot snapshot; fail-safe
                 }
             }
@@ -358,7 +368,9 @@ namespace ppp
                     auto endl = domains_snapshot.end();
                     return tail != endl;
                 };
-            return IsSameNetworkDomains(host_lower, contains);
+            bool blocked = IsSameNetworkDomains(host_lower, contains);
+            ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+            return blocked;
         }
 
         /**
@@ -371,7 +383,7 @@ namespace ppp
         {
             if (host.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                 return false;
             }
             
@@ -452,7 +464,7 @@ namespace ppp
                 }
                 else
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
             }
@@ -460,7 +472,7 @@ namespace ppp
             std::size_t slash_index = line.find('/');
             if (slash_index == ppp::string::npos)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                 return false;
             }
 
@@ -469,14 +481,14 @@ namespace ppp
             host = LTrim<ppp::string>(RTrim<ppp::string>(host));
             if (host.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                 return false;
             }
 
             ip = StringToAddress(host.data(), ec);
             if (ec)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return false;
             }
 
@@ -506,7 +518,7 @@ namespace ppp
             }
             else
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return false;
             }
 
@@ -592,12 +604,13 @@ namespace ppp
             ppp::vector<ppp::string> lines;
             if (ppp::Tokenize<ppp::string>(rules, lines, "\r\n") < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                 return false;
             }
 
             if (lines.empty())
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
                 return false;
             }
 

@@ -1278,18 +1278,18 @@ namespace ppp {
             bool VEthernetNetworkSwitcher::PreparedAggregator() noexcept {
                 std::shared_ptr<boost::asio::io_context> context = ppp::threading::Executors::GetDefault();
                 if (NULLPTR == context) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 }
 
                 std::shared_ptr<Byte> buffer = ppp::threading::Executors::GetCachedBuffer(context);
                 if (NULLPTR == buffer) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                 }
 
                 std::shared_ptr<aggligator::aggligator> aggligator = 
                     make_shared_object<aggligator::aggligator>(*context, buffer, PPP_BUFFER_SIZE, PPP_AGGLIGATOR_CONGESTIONS);
                 if (NULLPTR == aggligator) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 aggligator_ = aggligator;
@@ -1319,7 +1319,7 @@ namespace ppp {
                     }
                 }
                 else {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 // Compatibility by all means try to check and fix the gateway route of the physical network card once, 
@@ -1329,7 +1329,7 @@ namespace ppp {
                 // Construction of VEtherent virtual Ethernet switcher processing framework.
                 /** @brief Creates base VEthernet framework before higher-level services. */
                 if (!VEthernet::Open(tap)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
@@ -1343,7 +1343,7 @@ namespace ppp {
 
                 // The vEthernet network switcher cannot be opened when the virtual network adapter device interface for the VPN startup link cannot be found!
                 if (NULLPTR == tun_ni_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
 #endif
 
@@ -1353,7 +1353,7 @@ namespace ppp {
                 // Instantiate the local QoS throughput speed control module!
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = NewQoS();
                 if (NULLPTR == qos) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 }
 
 #if defined(_LINUX)
@@ -1363,7 +1363,7 @@ namespace ppp {
 #if defined(_ANDROID)
                 protector_network = NewProtectorNetwork();
                 if (NULLPTR == protector_network) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                 }
 #else
                 if (protect_mode_) {
@@ -1378,7 +1378,7 @@ namespace ppp {
                 }
                 elif(!exchanger->Open()) {
                     IDisposable::DisposeReferences(qos, exchanger);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }
 
                 // Enable the local HTTP PROXY server middleware to provide proxy services directly by the VPN.
@@ -1434,7 +1434,7 @@ namespace ppp {
 
                     // Add VPN remote server to IPList bypass route table iplist.
                     if (!AddRemoteEndPointToIPList(underlying_ni->GatewayServer)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteAddFailed);
                     }
                 }
 #endif
@@ -1728,22 +1728,22 @@ namespace ppp {
                 using File = ppp::io::File;
 
                 if (path.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 ppp::string fullpath = File::RewritePath(path.data());
                 if (fullpath.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 fullpath = File::GetFullPath(path.data());
                 if (fullpath.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 bool vbgp_url = ppp::net::http::HttpClient::VerifyUri(url, NULLPTR, NULLPTR, NULLPTR, NULLPTR);
                 if (!vbgp_url && !File::Exists(fullpath.data())) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
                 }
                 
                 uint32_t ngw = IPEndPoint::AnyAddress;
@@ -1762,7 +1762,7 @@ namespace ppp {
                 }
 
                 if (NULLPTR == ribs) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
                 else {
                     auto tail = std::find_if(ribs->begin(), ribs->end(),
@@ -2333,7 +2333,7 @@ namespace ppp {
             /** @brief Loads DNS redirect rules from file or inline content. */
             bool VEthernetNetworkSwitcher::LoadAllDnsRules(const ppp::string& rules, bool load_file_or_string) noexcept {
                 if (rules.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 int events = 0;
@@ -2344,7 +2344,11 @@ namespace ppp {
                     events = ppp::app::client::dns::Rule::Load(rules, dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
                 }
 
-                return events > 0;
+                if (1 > events) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
+                }
+
+                return true;
             }
 
             /** @brief Adds remote endpoints and static servers to route/bypass tables. */
@@ -2538,7 +2542,7 @@ namespace ppp {
 
                 bool opened = ppp::coroutines::asio::async_open(y, *socket, serverEP.protocol());
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 int handle = socket->native_handle();
@@ -2556,7 +2560,7 @@ namespace ppp {
                         auto protector_network = GetProtectorNetwork(); 
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(handle, y)) {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                             }
                         }
                     }
@@ -2566,7 +2570,7 @@ namespace ppp {
                 socket->send_to(boost::asio::buffer(messages->Buffer.get(), messages->Length), serverEP,
                     boost::asio::socket_base::message_end_of_record, ec);
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
                 }
 
                 const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
@@ -2581,16 +2585,16 @@ namespace ppp {
                         }
                     });
                 if (NULLPTR == cb) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 const auto timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
                 if (NULLPTR == timeout) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 }
 
                 if (!EmplaceTimeout(socket.get(), cb)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
 
                 const auto max_buffer_size = PPP_BUFFER_SIZE;
@@ -2599,7 +2603,7 @@ namespace ppp {
                 
                 const auto serverEPPtr = make_shared_object<boost::asio::ip::udp::endpoint>();
                 if (NULLPTR == serverEPPtr) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,

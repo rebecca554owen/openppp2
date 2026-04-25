@@ -724,3 +724,29 @@ To add a new error code:
 | `Generic<Condition>` | `GenericTimeout` |
 | `App<Stage>Failed` | `AppStartupFailed` |
 | `Config<Field/Stage>Invalid` | `ConfigFieldInvalid` |
+
+---
+
+## 17. C Module Error Bridge (SYSNAT)
+
+Some low-level Linux components are implemented in C and expose negative `ERR_*` integers rather than `ErrorCode` directly (for example `linux/ppp/tap/openppp2_sysnat.c`).
+
+To keep diagnostics unified, openppp2 uses a C/C++ bridge in `linux/ppp/tap/openppp2_sysnat.h`:
+
+```mermaid
+flowchart LR
+    A[openppp2_sysnat_attach/detach/add_rule] --> B[ERR_* int]
+    B --> C[openppp2_sysnat_to_error_code]
+    C --> D[ErrorCode]
+    D --> E[openppp2_sysnat_publish_error]
+    E --> F[SetLastErrorCode]
+```
+
+Bridge rules:
+
+1. Keep C return codes unchanged for local flow control.
+2. Translate failures to `ErrorCode` only at the boundary.
+3. Publish diagnostics only when return value is non-zero.
+4. Do not treat "already attached" / "not attached" as success unless the caller explicitly accepts that state.
+
+`VNetstack.cpp` now follows this pattern for SYSNAT attach/detach/rule installation paths.

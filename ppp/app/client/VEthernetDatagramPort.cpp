@@ -161,6 +161,10 @@ namespace ppp {
                             if (ec == boost::system::errc::success) {
                                 ok = true;
                             }
+                            else {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
+                                fin = true;
+                            }
                         }
                         else {
                             // If you are not currently opening a physical network socket, try to open the socket.
@@ -277,6 +281,7 @@ namespace ppp {
                 // Suspend and wait for the udp socket to open.
                 y.Suspend();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
                 else {
@@ -287,6 +292,7 @@ namespace ppp {
                 auto protector_network = ProtectorNetwork; 
                 if (NULLPTR != protector_network) {
                     if (!protector_network->Protect(socket_.native_handle(), y)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
                 }
@@ -307,7 +313,12 @@ namespace ppp {
                     SendTo(message.packet.get(), message.packet_length, message.destinationEP);
                 }
 
-                return Loopback();
+                bool ok = Loopback();
+                if (!ok && !disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
+                }
+
+                return ok;
             }
 
             /**
@@ -326,6 +337,7 @@ namespace ppp {
                     }
 
                     if (!socket_.is_open()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                         return false;
                     }
 
@@ -345,6 +357,10 @@ namespace ppp {
                             }
                         }
                         elif(ec == boost::system::errc::operation_canceled) {
+                            disposing = true;
+                        }
+                        else {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
                             disposing = true;
                         }
 

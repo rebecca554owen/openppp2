@@ -125,7 +125,7 @@ namespace ppp {
             }
 
             if (!ok) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable);
             }
 
             return ok;
@@ -206,6 +206,15 @@ namespace ppp {
                             }
                         }
                         else {
+                            bool disconnected = boost::asio::error::eof == ec ||
+                                boost::asio::error::operation_aborted == ec ||
+                                boost::asio::error::connection_reset == ec ||
+                                boost::asio::error::broken_pipe == ec ||
+                                boost::asio::error::not_connected == ec;
+                            if (!disconnected) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                            }
+
                             Dispose();
                         }
 
@@ -217,7 +226,7 @@ namespace ppp {
 
             bool posted = ppp::threading::Executors::Post(context, strand, complete_do_write_bytes_async_callback);
             if (!posted) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
             }
 
             return posted;

@@ -84,6 +84,28 @@ namespace ppp {
                  */
                 static constexpr int SOCKS_CMD_UDP              = 3;
 
+                static int PublishSocketReadFailure(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+                    elif(socket->is_open()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
+                    }
+
+                    return SOCKS_ERR_ER;
+                }
+
+                static bool PublishSocketWriteFailure(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+                    elif(socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                    }
+
+                    return false;
+                }
+
                 /**
                  * @brief Constructs a SOCKS proxy connection instance.
                  * @param proxy Parent SOCKS switcher that owns this connection.
@@ -111,7 +133,11 @@ namespace ppp {
                  * @note The address in the reply is derived from the socket local endpoint.
                  */
                 static bool SendSocksRequestReply(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, Byte rep, ppp::coroutines::YieldContext& y) noexcept {
-                    if (NULLPTR == socket || !socket->is_open()) {
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (!socket->is_open()) {
                         return false;
                     }
 
@@ -153,7 +179,8 @@ namespace ppp {
                     data[packet_length++] = (Byte)(local_port >> 8);
                     data[packet_length++] = (Byte)(local_port);
 
-                    return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                    bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                    return ok ? true : PublishSocketWriteFailure(socket);
                 }
 
                 /**
@@ -165,31 +192,25 @@ namespace ppp {
                     int method = SOCKS_METHOD_NONE;
                     int status = SelectMethod(y, method); 
                     if (status <= SOCKS_ERR_ER) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                         return false;
                     }
                     elif(status >= SOCKS_ERR_NO) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthChallengeFailed);
                         Replay(y, SOCKS_VER, SOCKS_METHOD_RSVD);
                         return false;
                     }
                     elif(!Replay(y, SOCKS_VER, method)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                         return false;
                     }
                     elif(method == SOCKS_METHOD_AUTH) {
                         status = Authentication(y);
                         if (status <= SOCKS_ERR_ER) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                             return false;
                         }
                         elif(status >= SOCKS_ERR_NO) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialInvalid);
                             Replay(y, SOCKS_PROTO_AUTH, SOCKS_ERR_FF);
                             return false;
                         }
                         elif(!Replay(y, SOCKS_PROTO_AUTH, SOCKS_ERR_OK)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                             return false;
                         }
                     }
@@ -200,9 +221,16 @@ namespace ppp {
 
                     int command_status = Requirement(y, host, port, address_type);
                     if (command_status != SOCKS_ERR_OK) {
-                        ppp::diagnostics::SetLastErrorCode(command_status == SOCKS_ERR_ATYPE ?
-                            ppp::diagnostics::ErrorCode::NetworkAddressInvalid :
-                            ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                        if (command_status == SOCKS_ERR_ATYPE) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                        }
+                        elif(command_status == SOCKS_ERR_CMD) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                        }
+                        elif(command_status > SOCKS_ERR_OK) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                        }
+
                         SendSocksRequestReply(GetSocket(), (Byte)command_status, y);
                         return false;
                     }
@@ -233,8 +261,12 @@ namespace ppp {
                  */
                 int VEthernetSocksProxyConnection::Authentication(YieldContext& y) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
-                    if (NULLPTR == socket || !socket->is_open()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return SOCKS_ERR_ER;
+                    }
+
+                    if (!socket->is_open()) {
                         return SOCKS_ERR_ER;
                     }
 
@@ -244,12 +276,16 @@ namespace ppp {
                     }
 
                     AppConfigurationPtr& configuration = GetConfiguration();
+                    if (NULLPTR == configuration) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                        return SOCKS_ERR_ER;
+                    }
+
                     auto& socks_proxy = configuration->client.socks_proxy;
 
                     Byte data[256];
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                        return SOCKS_ERR_ER;
+                        return PublishSocketReadFailure(socket);
                     }
 
                     if (data[0] != SOCKS_PROTO_AUTH) {
@@ -260,15 +296,13 @@ namespace ppp {
                     ppp::string strings[2];
                     for (int i = 0; i < arraysizeof(strings); i++) {
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                            return SOCKS_ERR_ER;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         int string_size = data[0];
                         if (string_size > 0) {
                             if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, string_size), y)) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                                return SOCKS_ERR_ER;
+                                return PublishSocketReadFailure(socket);
                             }
 
                             data[string_size] = '\x0';
@@ -293,8 +327,12 @@ namespace ppp {
                  */
                 bool VEthernetSocksProxyConnection::Replay(YieldContext& y, int k, int v) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
-                    if (NULLPTR == socket || !socket->is_open()) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (!socket->is_open()) {
+                        return false;
                     }
 
                     if (IsDisposed()) {
@@ -302,7 +340,8 @@ namespace ppp {
                     }
 
                     Byte data[2] = { (Byte)k, (Byte)v };
-                    return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, sizeof(data)), y);
+                    bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, sizeof(data)), y);
+                    return ok ? true : PublishSocketWriteFailure(socket);
                 }
 
                 /**
@@ -315,8 +354,12 @@ namespace ppp {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
                     method = SOCKS_METHOD_NONE;
 
-                    if (NULLPTR == socket || !socket->is_open()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return SOCKS_ERR_ER;
+                    }
+
+                    if (!socket->is_open()) {
                         return SOCKS_ERR_ER;
                     }
 
@@ -327,18 +370,22 @@ namespace ppp {
 
                     Byte data[256];
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 2), y)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                        return SOCKS_ERR_ER;
+                        return PublishSocketReadFailure(socket);
                     }
 
                     int nver = data[0];
                     if (nver != SOCKS_VER) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthChallengeFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                         return SOCKS_ERR_NO;
                     }
 
                     int nmethod = data[1];
                     AppConfigurationPtr& configuration = GetConfiguration();
+                    if (NULLPTR == configuration) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                        return SOCKS_ERR_ER;
+                    }
+
                     auto& socks_proxy = configuration->client.socks_proxy;
                     bool no_auth = socks_proxy.username.empty() && socks_proxy.password.empty();
 
@@ -349,13 +396,12 @@ namespace ppp {
                         return no_auth ? SOCKS_ERR_OK : SOCKS_ERR_NO;
                     }
                     elif(nmethod < SOCKS_METHOD_NONE) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthChallengeFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                         return SOCKS_ERR_NO;
                     }
 
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, nmethod), y)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                        return SOCKS_ERR_ER;
+                        return PublishSocketReadFailure(socket);
                     }
 
                     for (int i = 0; i < nmethod; i++) {
@@ -377,7 +423,12 @@ namespace ppp {
                         }
                     }
 
-                    return no_auth ? SOCKS_ERR_OK : SOCKS_ERR_NO;
+                    if (!no_auth) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialMissing);
+                        return SOCKS_ERR_NO;
+                    }
+
+                    return SOCKS_ERR_OK;
                 }
             
                 /**
@@ -396,8 +447,12 @@ namespace ppp {
                     port = ppp::net::IPEndPoint::MinPort;
                     address_type = ppp::app::protocol::AddressType::Domain;
 
-                    if (NULLPTR == socket || !socket->is_open()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return SOCKS_ERR_ER;
+                    }
+
+                    if (!socket->is_open()) {
                         return SOCKS_ERR_ER;
                     }
 
@@ -414,17 +469,16 @@ namespace ppp {
                      */
                     for (;;) {
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 4), y)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                            return SOCKS_ERR_ER;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         if (data[0] != SOCKS_VER) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                             return SOCKS_ERR_CMD;
                         }
 
                         if (data[1] != SOCKS_CMD_CONNECT) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                             return SOCKS_ERR_CMD;
                         }
 
@@ -440,8 +494,7 @@ namespace ppp {
                         }
                         elif(address_type == SOCKS_ATYPE_DOMAIN) {
                             if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                                return SOCKS_ERR_ER;
+                                return PublishSocketReadFailure(socket);
                             }
 
                             address_length = data[0];
@@ -459,8 +512,7 @@ namespace ppp {
                         }
 
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, address_length), y)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                            return SOCKS_ERR_ER;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         switch (address_type) {
@@ -488,8 +540,7 @@ namespace ppp {
                         };
 
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 2), y)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
-                            return SOCKS_ERR_ER;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         cmd = SOCKS_ERR_OK;
@@ -546,7 +597,7 @@ namespace ppp {
 
                         bool writed = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
                         if (!writed) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                            PublishSocketWriteFailure(socket);
                             return SOCKS_ERR_ER;
                         }
 

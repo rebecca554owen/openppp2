@@ -104,13 +104,13 @@ namespace ppp {
                     bool b = NamespaceLinkedList_.AddLast(node);
                     if (!b) {
                         Dictionary::TryRemove(NamespaceHashTable_, key);
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                     }
 
                     return b;
                 }
 
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                 return false;
             }
 
@@ -134,6 +134,7 @@ namespace ppp {
                         }
 
                         if (!Dictionary::TryRemove(NamespaceHashTable_, record.queries_key)) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                             break;
                         }
 
@@ -177,6 +178,11 @@ namespace ppp {
                     NamespaceRecord& record = node->Value;
                     response                = record.response;
                     response_length         = record.response_length;
+                }
+
+                if (NULLPTR == response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
+                    return false;
                 }
 
                 if (response_length < sizeof(dns_hdr)) {

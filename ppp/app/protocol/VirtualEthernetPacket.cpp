@@ -5,6 +5,7 @@
 #include <ppp/net/native/ip.h>
 #include <ppp/net/native/checksum.h>
 #include <ppp/cryptography/ssea.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file VirtualEthernetPacket.cpp
@@ -100,6 +101,7 @@ namespace ppp
             {
                 // Session ID must be non-zero.
                 if (session_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return false;
                 }
 
@@ -111,6 +113,7 @@ namespace ppp
                 h->checksum = x_checksum;
                 
                 if (x_checksum != y_checksum) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -120,12 +123,14 @@ namespace ppp
                 if (NULLPTR != transport) {
                     payload = transport->Decrypt(allocator, (ppp::Byte*)(h + 1), payload_length, payload_length);
                     if (NULLPTR == payload) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                         return false;
                     }
                 } else {
                     // No encryption: copy payload as-is.
                     payload = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, payload_length);
                     if (NULLPTR == payload) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
 
@@ -149,18 +154,22 @@ namespace ppp
 
                 // UDP specific validation: destination and source must be valid.
                 if (out.DestinationIP == IPEndPoint::NoneAddress || out.DestinationIP == IPEndPoint::AnyAddress) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (out.DestinationPort <= IPEndPoint::MinPort || out.DestinationPort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (out.SourceIP == IPEndPoint::NoneAddress || out.SourceIP == IPEndPoint::AnyAddress) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (out.SourcePort <= IPEndPoint::MinPort || out.SourcePort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
@@ -190,6 +199,7 @@ namespace ppp
             {
                 // Basic length validation.
                 if (NULLPTR == packet || packet_length <= sizeof(PACKET_HEADER)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return false;
                 }
 
@@ -198,6 +208,7 @@ namespace ppp
                 packet_length = ppp::cryptography::ssea::delta_decode(allocator, packet, packet_length,
                                                                       configuration->key.kf, output);
                 if (NULLPTR == output || packet_length <= sizeof(PACKET_HEADER)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
@@ -207,6 +218,7 @@ namespace ppp
                 ppp::Byte* p = (ppp::Byte*)packet;
                 PACKET_HEADER* h = (PACKET_HEADER*)p;
                 if (h->mask_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -216,6 +228,7 @@ namespace ppp
                 // Derive actual header length from stored obfuscated value.
                 int header_length = (ppp::Byte)STATIC_header_length(configuration, h->header_length, kf);
                 if (header_length < sizeof(PACKET_HEADER)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -247,6 +260,7 @@ namespace ppp
                     std::shared_ptr<Byte> header_body = protocol_ciphertext->Decrypt(allocator,
                                         reinterpret_cast<ppp::Byte*>(&h->checksum), header_length_raw, header_length_new);
                     if (NULLPTR == header_body) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                         return false;
                     }
 
@@ -310,6 +324,7 @@ namespace ppp
 
                 // Defensive check: modulus should not be zero.
                 if (VEP_HEADER_MSS_MOD == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     out = 0;
                     return NULLPTR;
                 }
@@ -337,6 +352,7 @@ namespace ppp
                     std::shared_ptr<Byte> header_body = protocol->Encrypt(allocator,
                                         reinterpret_cast<ppp::Byte*>(&h->checksum), header_length_raw, header_length_new);
                     if (NULLPTR == header_body) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         out = 0;
                         return NULLPTR;
                     }
@@ -371,6 +387,11 @@ namespace ppp
 
                 // Final delta encoding before transmission.
                 out = ppp::cryptography::ssea::delta_encode(allocator, h, message_length, configuration->key.kf, output);
+                if (NULLPTR == output || out <= 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                    out = 0;
+                    return NULLPTR;
+                }
                 return output;
             }
 
@@ -410,6 +431,7 @@ namespace ppp
                 out = 0;
                 // Validate inputs.
                 if (NULLPTR == payload || payload_length < 1 || origin_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return NULLPTR;
                 }
 
@@ -426,6 +448,7 @@ namespace ppp
                 if (NULLPTR != transport_ciphertext) {
                     payload_managed = transport_ciphertext->Encrypt(allocator, (ppp::Byte*)payload, payload_length, payload_length);
                     if (NULLPTR == payload_managed) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         return NULLPTR;
                     }
                     payload = payload_managed.get();
@@ -435,6 +458,7 @@ namespace ppp
                 int message_length = sizeof(PACKET_HEADER) + payload_length;
                 std::shared_ptr<ppp::Byte> messages = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, message_length);
                 if (NULLPTR == messages) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
 
@@ -603,19 +627,23 @@ namespace ppp
             {
                 // Session ID must be positive for UDP.
                 if (session_id < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return NULLPTR;
                 }
 
                 // Validate destination.
                 if (destination_ip == IPEndPoint::NoneAddress || destination_ip == IPEndPoint::AnyAddress) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
                 if (destination_port <= IPEndPoint::MinPort || destination_port > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
                 if (source_port <= IPEndPoint::MinPort || source_port > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
                 
@@ -646,6 +674,7 @@ namespace ppp
                 int&                                                            out) noexcept
             {
                 if (NULLPTR == packet || session_id < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return NULLPTR;
                 }
 
@@ -653,12 +682,14 @@ namespace ppp
                 if (packet->ProtocolType != ppp::net::native::ip_hdr::IP_PROTO_ICMP &&
                     packet->ProtocolType != ppp::net::native::ip_hdr::IP_PROTO_UDP &&
                     packet->ProtocolType != ppp::net::native::ip_hdr::IP_PROTO_TCP) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 // Convert IP frame to raw buffer.
                 std::shared_ptr<ppp::net::packet::BufferSegment> packet_buffers = constantof(packet)->ToArray(allocator);
                 if (NULLPTR == packet_buffers) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
 

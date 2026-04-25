@@ -121,7 +121,7 @@ namespace ppp {
                         return connection->run();
                     }
                     else {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
                 }
 
@@ -130,7 +130,7 @@ namespace ppp {
                  */
                 bool VEthernetLocalProxyConnection::SendBufferToPeer(YieldContext& y, const void* messages, int messages_size) noexcept {
                     if (NULLPTR == messages || messages_size < 1) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     if (disposed_) {
@@ -146,10 +146,16 @@ namespace ppp {
                     if (NULLPTR != R) {
                         std::shared_ptr<boost::asio::ip::tcp::socket> socket = R->GetRemoteSocket(); 
                         if (NULLPTR == socket) {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                         }
 
-                        return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(messages, messages_size), y);
+                        bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(messages, messages_size), y);
+                        if (!ok) {
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                            }
+                        }
+                        return ok;
                     }
                     
                     std::shared_ptr<vmux::vmux_skt> K = this->connection_mux_;
@@ -157,7 +163,7 @@ namespace ppp {
                         return K->send_to_peer_yield(messages, messages_size, y);
                     }
 
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
  
                 /**
@@ -206,6 +212,11 @@ namespace ppp {
                                 connection_rinetd_,
                                 y);
                             if (rinetd_status < 1) {
+                                if (rinetd_status < 0) {
+                                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
+                                    }
+                                }
                                 return rinetd_status == 0;
                             }
 
@@ -219,6 +230,11 @@ namespace ppp {
                      */
                     int mux_status = VEthernetNetworkTcpipConnection::Mux(self, exchanger_, destinationEP->Host, destinationEP->Port, socket, connection_mux_, y);
                     if (mux_status < 1) {
+                        if (mux_status < 0) {
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxyApplyFailed);
+                            }
+                        }
                         return mux_status == 0;
                     }
 

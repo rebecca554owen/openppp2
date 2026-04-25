@@ -107,7 +107,7 @@ bool PppApplication::OnShutdownApplication() noexcept {
 bool PppApplication::ShutdownApplication(bool restart) noexcept {
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     if (NULLPTR == context) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
         return false;
     }
 
@@ -115,7 +115,7 @@ bool PppApplication::ShutdownApplication(bool restart) noexcept {
     boost::asio::post(*context, [restart, context]() noexcept {
         std::shared_ptr<PppApplication> app = std::move(DEFAULT_);
         if (NULLPTR == app) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
             return false;
         }
 
@@ -131,29 +131,33 @@ bool PppApplication::ShutdownApplication(bool restart) noexcept {
 
 bool PppApplication::AddShutdownApplicationEventHandler() noexcept {
 #if defined(_WIN32)
-    return ppp::win32::Win32Native::AddShutdownApplicationEventHandler(PppApplication::OnShutdownApplication);
+    bool registered = ppp::win32::Win32Native::AddShutdownApplicationEventHandler(PppApplication::OnShutdownApplication);
 #else
-    return ppp::unix__::UnixAfx::AddShutdownApplicationEventHandler(PppApplication::OnShutdownApplication);
+    bool registered = ppp::unix__::UnixAfx::AddShutdownApplicationEventHandler(PppApplication::OnShutdownApplication);
 #endif
+    if (!registered) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+    }
+    return registered;
 }
 
 bool PppApplication::NextTickAlwaysTimeout(bool next) noexcept {
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     if (NULLPTR == context) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
         return false;
     }
 
     std::shared_ptr<PppApplication> app = DEFAULT_;
     if (NULLPTR == app) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
         return false;
     }
 
     std::shared_ptr<VirtualEthernetSwitcher> server = app->server_;
     std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
     if (NULLPTR == server && NULLPTR == client) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
         return false;
     }
 

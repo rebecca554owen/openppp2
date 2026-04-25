@@ -188,17 +188,20 @@ namespace ppp {
                     acceptor->AcceptSocket = 
                         [self, this](ppp::net::SocketAcceptor*, ppp::net::SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
                             int sockfd = e.Socket;
+                            ppp::diagnostics::ErrorCode error_code = ppp::diagnostics::ErrorCode::SessionDisposed;
                             /**
                              * @brief Accept callback validates network readiness before scheduling per-socket work.
                              */
                             while (!disposed_) {
                                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                                 if (NULLPTR == exchanger) {
+                                    error_code = ppp::diagnostics::ErrorCode::AppContextUnavailable;
                                     break;
                                 }
 
                                 NetworkState network_state = exchanger->GetNetworkState();
                                 if (network_state != NetworkState::NetworkState_Established) {
+                                    error_code = ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable;
                                     break;
                                 }
 
@@ -207,15 +210,21 @@ namespace ppp {
                                 context = ppp::threading::Executors::SelectScheduler(strand);
                                 
                                 if (NULLPTR == context) {
+                                    error_code = ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable;
                                     break;
                                 }
 
-                                return ppp::threading::Executors::Post(context, strand, 
+                                bool posted = ppp::threading::Executors::Post(context, strand,
                                     std::bind(&VEthernetLocalProxySwitcher::ProcessAcceptSocket, self, context, strand, sockfd));
+                                if (!posted) {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                                }
+
+                                return posted;
                             }
 
                             ppp::net::Socket::Closesocket(sockfd);
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(error_code);
                             return false;
                         };
 

@@ -83,6 +83,7 @@ The set is intentionally code-first. Each page is written from actual implementa
 | Diagnostics | [`ERROR_CODES.md`](ERROR_CODES.md) | [`ERROR_CODES_CN.md`](ERROR_CODES_CN.md) |
 | Diagnostics | [`ERROR_HANDLING_API.md`](ERROR_HANDLING_API.md) | [`ERROR_HANDLING_API_CN.md`](ERROR_HANDLING_API_CN.md) |
 | Diagnostics | [`DIAGNOSTICS_ERROR_SYSTEM.md`](DIAGNOSTICS_ERROR_SYSTEM.md) | [`DIAGNOSTICS_ERROR_SYSTEM_CN.md`](DIAGNOSTICS_ERROR_SYSTEM_CN.md) |
+| Diagnostics | `linux/ppp/tap/openppp2_sysnat.h` (C bridge helpers) | `linux/ppp/tap/openppp2_sysnat.h`（C 桥接辅助） |
 | Protocol | [`TUNNEL_DESIGN.md`](TUNNEL_DESIGN.md) | [`TUNNEL_DESIGN_CN.md`](TUNNEL_DESIGN_CN.md) |
 | IPv6 | [`IPV6_LEASE_MANAGEMENT.md`](IPV6_LEASE_MANAGEMENT.md) | [`IPV6_LEASE_MANAGEMENT_CN.md`](IPV6_LEASE_MANAGEMENT_CN.md) |
 | IPv6 | [`IPV6_TRANSIT_PLANE.md`](IPV6_TRANSIT_PLANE.md) | [`IPV6_TRANSIT_PLANE_CN.md`](IPV6_TRANSIT_PLANE_CN.md) |

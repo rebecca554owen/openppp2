@@ -34,6 +34,7 @@
  */
 
 #include <ppp/stdafx.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/native/udp.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/packet/IPFrame.h>
@@ -107,6 +108,7 @@ namespace ppp {
                  */
                 static std::shared_ptr<IPFrame>                 ToIp(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const UdpFrame* frame) {
                     if (NULLPTR == frame) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                         return NULLPTR;
                     }
 

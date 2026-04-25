@@ -52,7 +52,7 @@ namespace ppp
             QOS_VERSION ver = { 1, 0 };
             if (!QOSCreateHandle(&ver, &qos->h_))
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 return NULLPTR;
             }
 

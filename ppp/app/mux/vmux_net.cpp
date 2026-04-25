@@ -175,7 +175,7 @@ namespace vmux {
                     });
             };
 
-        return vmux_post_exec(context, strand,
+        bool posted = vmux_post_exec(context, strand,
             [self, transmission, context, strand, packet, packet_length, on_completely]() noexcept {
                 bool forwarding = 
                     transmission->Write(packet.get(), packet_length,
@@ -187,6 +187,12 @@ namespace vmux {
                     on_completely(false);
                 }
             });
+
+        if (!posted) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        }
+
+        return posted;
     }
     
     /**
@@ -252,7 +258,7 @@ namespace vmux {
         }
 
         std::shared_ptr<vmux_net> self = shared_from_this();
-        return vmux_post_exec(context_, strand_,
+        bool posted = vmux_post_exec(context_, strand_,
             [self, this]() noexcept {
                 list<vmux_skt_ptr> release_skts;
 
@@ -302,6 +308,12 @@ namespace vmux {
                     skt->close();
                 }
             });
+
+        if (!posted) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        }
+
+        return posted;
     }
 
     /** @brief Selects the next randomized heartbeat timeout window. */
@@ -389,7 +401,12 @@ namespace vmux {
             rx_packet packet = { buf, length };
             memcpy(buf.get(), h, length);
 
-            return rx_queue_.emplace(std::make_pair(seq, packet)).second;
+            bool inserted = rx_queue_.emplace(std::make_pair(seq, packet)).second;
+            if (!inserted) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
+            }
+
+            return inserted;
         }
         else {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
@@ -716,14 +733,14 @@ namespace vmux {
         bool unlimited = rx_links_.size() < status_.max_connections;
         if (unlimited) {
             if (NULLPTR != cb && !cb()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
 
             return true;
         }
         elif(NULLPTR != cb && !cb()) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
             return false;
         }
 
@@ -883,21 +900,24 @@ namespace vmux {
             }
 
             if (!linklayer_socket->IsLinked()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 break;
             }
 
             std::shared_ptr<Byte> buffer_memory = linklayer_transmission->Read(y, buffer_size);
             if (NULLPTR == buffer_memory || buffer_size < sizeof(vmux_hdr)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                 break;
             }
 
             vmux_hdr* h = (vmux_hdr*)buffer_memory.get();
             Byte cmd = h->cmd;
             if (cmd <= cmd_none || cmd >= cmd_max) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 break;
             }
 
-            any |= vmux_post_exec(context_, strand_,
+            bool posted = vmux_post_exec(context_, strand_,
                 [self, this, linklayer, buffer_memory, h, buffer_size]() noexcept {
                     uint64_t now = now_tick();
                     if (packet_input_unorder(linklayer, h, buffer_size, now)) {
@@ -908,6 +928,12 @@ namespace vmux {
                         return false;
                     }
                 });
+
+            if (!posted) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+            }
+
+            any |= posted;
         }
         
         return any;

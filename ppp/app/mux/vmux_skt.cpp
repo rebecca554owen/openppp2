@@ -159,6 +159,8 @@ namespace vmux {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                     return false;
                 }
+
+                return true;
             }
             else {
                 if (NULLPTR != tx_strand_) {
@@ -438,7 +440,7 @@ namespace vmux {
             }
 
             if (!rx_congestions(payload_size)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                 return false;
             }
         }
@@ -721,7 +723,7 @@ namespace vmux {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                 break;
             default:
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                 break;
             }
         }

@@ -53,7 +53,6 @@ namespace ppp {
                     return true;
                 }
 
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -87,7 +86,7 @@ namespace ppp {
              */
             bool websocket::Run(HandshakeType type, const ppp::string& host, const ppp::string& path, YieldContext& y) noexcept {
                 if (host.empty() || path.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                     return false;
                 }
 
@@ -96,11 +95,18 @@ namespace ppp {
 
                 std::shared_ptr<AcceptWebSocket> accept = make_shared_object<AcceptWebSocket>(self, websocket_, binary, host, path);
                 if (NULLPTR == accept) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                     return false;
                 }
 
-                return accept->Run(type == HandshakeType::HandshakeType_Client, y);
+                if (!accept->Run(type == HandshakeType::HandshakeType_Client, y)) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
+                    return false;
+                }
+
+                return true;
             }
 
             namespace templates {
@@ -120,7 +126,7 @@ namespace ppp {
                         if (sw.size()) {
                             path_ = ToLower(LTrim(RTrim(ppp::string(sw.data(), sw.size()))));
                             if (path_.empty()) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
                                 return false;
                             }
                         }
@@ -135,7 +141,7 @@ namespace ppp {
                         }
 
                         if (path_.size() < root.size()) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
                             return false;
                         }
 
@@ -145,12 +151,17 @@ namespace ppp {
                         }
 
                         if (path_.size() == lroot_.size()) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
                             return false;
                         }
 
                         int ch = path_[lroot_.size()];
-                        return ch == '/';
+                        if (ch != '/') {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpRequestFailed);
+                            return false;
+                        }
+
+                        return true;
                     }
 
                     /**

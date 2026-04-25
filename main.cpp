@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
     int result = app.Run(argc, argv);
     if (result != 0) {
         if (ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericUnknown);
         }
         fprintf(stderr, "%s\n", ppp::diagnostics::FormatErrorString(ppp::diagnostics::GetLastErrorCode()));
     }

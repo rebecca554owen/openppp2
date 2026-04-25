@@ -1001,7 +1001,7 @@ namespace ppp {
      */
     static bool MoveConsoleCursorPositionToPreviousNextLine(bool previous, int line) noexcept {
         if (line < 0) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
         }
 
         if (line == 0) {
@@ -1012,20 +1012,26 @@ namespace ppp {
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         if (NULLPTR == hConsole) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
 
         if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
 
         COORD pos{};
         pos.X = csbi.dwCursorPosition.X;
         pos.Y = previous ? csbi.dwCursorPosition.Y - 1 : csbi.dwCursorPosition.Y + 1;
 
-        return SetConsoleCursorPosition(hConsole, pos);
+        if (!SetConsoleCursorPosition(hConsole, pos)) {
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        }
+        return true;
 #else
-        return ::fprintf(stdout, previous ? "\033[%dA" : "\033[%dB", line) > 0;
+        if (::fprintf(stdout, previous ? "\033[%dA" : "\033[%dB", line) <= 0) {
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileWriteFailed);
+        }
+        return true;
 #endif
     }
 
@@ -1044,13 +1050,19 @@ namespace ppp {
 #if defined(_WIN32)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         if (NULLPTR == hConsole) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
 
         COORD coord = { (SHORT)x, (SHORT)y };
-        return ::SetConsoleCursorPosition(hConsole, coord);
+        if (!::SetConsoleCursorPosition(hConsole, coord)) {
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        }
+        return true;
 #else
-        return ::fprintf(stdout, "\033[%d;%dH", x, y) > 0;
+        if (::fprintf(stdout, "\033[%d;%dH", x, y) <= 0) {
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileWriteFailed);
+        }
+        return true;
 #endif
     }
 
@@ -1062,12 +1074,12 @@ namespace ppp {
 #if defined(_WIN32)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         if (NULLPTR == hConsole) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
 
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         if (!::GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
 
         y = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
@@ -1077,7 +1089,7 @@ namespace ppp {
         memset(&w, 0, sizeof(w));
 
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) < 0) {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
 
         x = w.ws_col;
@@ -1104,9 +1116,15 @@ namespace ppp {
                 }
             }
         }
-        return system("cls") == 0;
+        if (0 != system("cls")) {
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        }
+        return true;
 #else
-        return system("clear") == 0;
+        if (0 != system("clear")) {
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        }
+        return true;
 #endif
     }
 
@@ -1123,7 +1141,7 @@ namespace ppp {
                 }
             }
         }
-        return false;
+        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
 #else
         if (value) {
             fprintf(stdout, "\033[?25l");
@@ -1227,7 +1245,7 @@ namespace ppp {
     /** @brief Assigns a human-readable name to current thread. */
     bool SetThreadName(const char* name) noexcept {
         if (NULLPTR == name || *name == '\x0') {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
         }
 
 #if defined(_WIN32)
@@ -1249,7 +1267,7 @@ namespace ppp {
     boost::asio::ip::address StringToAddress(const char* s, boost::system::error_code& ec) noexcept {
         ec = boost::asio::error::invalid_argument;
         if (NULLPTR == s || *s == '\x0') {
-            return boost::asio::ip::address_v4::any();
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, boost::asio::ip::address_v4::any());
         }
 
         struct in_addr addr4;
@@ -1266,7 +1284,7 @@ namespace ppp {
             return boost::asio::ip::address_v4(htonl(addr4.s_addr));
         }
         else {
-            return boost::asio::ip::address_v4::any(); 
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, boost::asio::ip::address_v4::any()); 
         }
     }
 }

@@ -38,6 +38,50 @@ namespace ppp {
 
             namespace checksum = ppp::net::native;
             namespace global {
+                /** @brief Sets a diagnostic error code and returns false. */
+                static bool PACKET_Fail(ppp::diagnostics::ErrorCode code) noexcept {
+                    ppp::diagnostics::SetLastErrorCode(code);
+                    return false;
+                }
+
+                /** @brief Applies a fallback diagnostic code when operation failed without one. */
+                static bool PACKET_Result(bool ok, ppp::diagnostics::ErrorCode code) noexcept {
+                    if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(code);
+                    }
+                    return ok;
+                }
+
+                /** @brief Returns whether packet action is a defined protocol opcode. */
+                static bool PACKET_IsKnownAction(PacketAction packet_action) noexcept {
+                    switch (packet_action) {
+                        case VirtualEthernetLinklayer::PacketAction_INFO:
+                        case VirtualEthernetLinklayer::PacketAction_KEEPALIVED:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_ENTRY:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_CONNECT:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_CONNECTOK:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_PUSH:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_DISCONNECT:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_SENDTO:
+                        case VirtualEthernetLinklayer::PacketAction_LAN:
+                        case VirtualEthernetLinklayer::PacketAction_NAT:
+                        case VirtualEthernetLinklayer::PacketAction_SYN:
+                        case VirtualEthernetLinklayer::PacketAction_SYNOK:
+                        case VirtualEthernetLinklayer::PacketAction_PSH:
+                        case VirtualEthernetLinklayer::PacketAction_FIN:
+                        case VirtualEthernetLinklayer::PacketAction_SENDTO:
+                        case VirtualEthernetLinklayer::PacketAction_ECHO:
+                        case VirtualEthernetLinklayer::PacketAction_ECHOACK:
+                        case VirtualEthernetLinklayer::PacketAction_STATIC:
+                        case VirtualEthernetLinklayer::PacketAction_STATICACK:
+                        case VirtualEthernetLinklayer::PacketAction_MUX:
+                        case VirtualEthernetLinklayer::PacketAction_MUXON:
+                            return true;
+                        default:
+                            return false;
+                    }
+                }
+
                 /**
                  * @brief Parses endpoint fields from packet stream and resolves hostnames.
                  * @tparam TProtocol `boost::asio::ip::tcp` or `boost::asio::ip::udp`.
@@ -233,7 +277,7 @@ namespace ppp {
                                              int connection_id, Byte* packet, int packet_length) noexcept 
                 {
                     if (packet_length < 0 || (NULLPTR == packet && packet_length != 0)) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     }
 
                     Byte packet_header[4] = {
@@ -248,7 +292,7 @@ namespace ppp {
                         ok = stream.Write(packet, 0, packet_length);
                     }
 
-                    return ok;
+                    return PACKET_Result(ok, ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                 }
 
                 // -----------------------------------------------------------------
@@ -259,16 +303,16 @@ namespace ppp {
                                         int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept 
                 {
                     if (NULLPTR == transmission) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     MemoryStream ms;
                     if (!PACKET_ConnectId(ms, packet_action, connection_id, packet, packet_length)) {
-                        return false;
+                        return PACKET_Result(false, ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     }
 
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return transmission->Write(y, buffer.get(), ms.GetPosition());
+                    return PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::SocketWriteFailed);
                 }
 
                 // -----------------------------------------------------------------
@@ -366,18 +410,22 @@ namespace ppp {
                 static bool PACKET_DoConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint* destinationEP, const ppp::string& hostname, int port, YieldContext& y) noexcept 
                 {
                     typedef VirtualEthernetLinklayer PacketAction;   // bring enum into scope
-                    if (NULLPTR == transmission || connection_id == 0) {
-                        return false;
+                    if (NULLPTR == transmission) {
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (connection_id == 0) {
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     }
 
                     MemoryStream ms;
                     if (NULLPTR != destinationEP) {
                         if (!PACKET_IPEndPoint(ms, *destinationEP)) {
-                            return false;
+                            return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         }
                     } else {
                         if (!PACKET_IPEndPoint(ms, hostname, port)) {
-                            return false;
+                            return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         }
                     }
 
@@ -393,22 +441,22 @@ namespace ppp {
                 static bool PACKET_Push(PacketAction packet_action, const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept 
                 {
                     if (NULLPTR == packet || packet_length < 1) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     }
 
                     if (NULLPTR == transmission) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     MemoryStream ms;
                     if (ms.WriteByte(static_cast<Byte>(packet_action))) {
                         if (ms.Write(packet, 0, packet_length)) {
                             std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                            return transmission->Write(y, buffer.get(), ms.GetPosition());
+                            return PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::SocketWriteFailed);
                         }
                     }
 
-                    return false;
+                    return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                 }
             } // namespace global
 
@@ -457,7 +505,7 @@ namespace ppp {
             /** @brief Runs receive loop and dispatches inbound packets. */
             bool VirtualEthernetLinklayer::Run(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (NULLPTR == transmission) {
-                    return false;
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 bool ok = false;
@@ -472,6 +520,9 @@ namespace ppp {
                     }
 
                     if (!PacketInput(transmission, packet.get(), packet_length, y)) {
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                        }
                         break;                              // packet processing failed -> exit
                     } else {
                         ok = true;
@@ -518,6 +569,10 @@ namespace ppp {
              */
             bool VirtualEthernetLinklayer::PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept 
             {
+                if (NULLPTR == p || packet_length < 1) {
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                }
+
                 // extract action byte and advance
                 PacketAction packet_action = static_cast<PacketAction>(*p);
                 ++p;
@@ -760,8 +815,8 @@ namespace ppp {
 
                     if (packet_length >= MUX_IL_REFT) {
                         VirtualEthernetLinklayer_MUX_IL* pil = reinterpret_cast<VirtualEthernetLinklayer_MUX_IL*>(p - 1);
-                        return OnMux(transmission, ntohs(pil->vlan), ntohs(pil->max_connections), 
-                                     pil->acceleration != 0, y);
+                        return global::PACKET_Result(OnMux(transmission, ntohs(pil->vlan), ntohs(pil->max_connections), 
+                                     pil->acceleration != 0, y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
                         return packet_length == 0;
                     }
@@ -771,7 +826,7 @@ namespace ppp {
 
                     if (packet_length >= MUXON_IL_REF) {
                         VirtualEthernetLinklayer_MUXON_IL* pil = reinterpret_cast<VirtualEthernetLinklayer_MUXON_IL*>(p - 1);
-                        return OnMuxON(transmission, ntohs(pil->vlan), ntohl(pil->seq), ntohl(pil->ack), y);
+                        return global::PACKET_Result(OnMuxON(transmission, ntohs(pil->vlan), ntohl(pil->seq), ntohl(pil->ack), y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
                         return packet_length == 0;
                     }
@@ -781,7 +836,11 @@ namespace ppp {
                     return true;
                 }
 
-                return false;   // unknown action or malformed packet
+                if (global::PACKET_IsKnownAction(packet_action)) {
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                }
+
+                return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
             }
 
             // ---------------------------------------------------------------------
@@ -1061,10 +1120,10 @@ namespace ppp {
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return transmission->Write(y, buffer.get(), ms.GetPosition());
+                    return global::PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 
-                return false;
+                return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
             }
 
             // ---------------------------------------------------------------------
@@ -1082,10 +1141,10 @@ namespace ppp {
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return transmission->Write(y, buffer.get(), ms.GetPosition());
+                    return global::PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 
-                return false;
+                return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
             }
 
             // ---------------------------------------------------------------------

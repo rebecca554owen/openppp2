@@ -63,14 +63,12 @@ namespace ppp {
                 template <typename TStringA, typename TStringB>
                 static bool CaseInsensitiveEqual(const TStringA& a, const TStringB& b) noexcept {
                     if (a.size() != b.size()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
                     for (size_t i = 0; i < a.size(); ++i) {
                         if (std::tolower(static_cast<unsigned char>(a[i])) !=
                             std::tolower(static_cast<unsigned char>(b[i]))) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false;
                         }
                     }
@@ -108,32 +106,31 @@ namespace ppp {
 
                     ack = 0;
                     if (NULLPTR == packet || packet_size < 1) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
                     ::dns::Message m;
                     if (::dns::BufferResult::NoError != m.decode(packet, packet_size)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
                     // Verify the question section matches the expected hostname (if provided)
                     if (NULLPTR != expected_hostname) {
                         if (m.questions.empty()) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResponseInvalid);
                             return false; // No question section to match
                         }
 
                         const ::dns::QuestionSection& q = m.questions[0];
                         if (IsReverseQuery(q.mName.data())) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResponseInvalid);
                             return false;
                         }
 
                         // Case-insensitive comparison per DNS specification
                         if (!CaseInsensitiveEqual(q.mName, ppp::string(expected_hostname))) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                             return false; // Domain mismatch – ignore this response
                         }
 
@@ -238,7 +235,7 @@ namespace ppp {
                             return addresses.emplace(ip).second;
                         }
                         catch (const std::bad_alloc&) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return false;
                         }
                     }
@@ -584,12 +581,14 @@ namespace ppp {
                      */
                     bool send_requests(const ppp::vector<boost::asio::ip::udp::endpoint>& destinations, int timeout_ms) noexcept {
                         if (NULLPTR == socket) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                             return false;
                         }
 
                         internal& c = internal::c();
                         bool any_sent = false;
+                        bool any_encode_failed = false;
+                        bool any_send_failed = false;
 
                         // Two queries: A (IPv4) and AAAA (IPv6)
                         struct QueryInfo {
@@ -621,6 +620,7 @@ namespace ppp {
 
                             size_t msg_len = 0;
                             if (::dns::BufferResult::NoError != msg.encode(packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE, msg_len)) {
+                                any_encode_failed = true;
                                 continue;
                             }
 
@@ -634,11 +634,22 @@ namespace ppp {
                                 if (!ec) {
                                     any_sent = true;
                                 }
+                                else {
+                                    any_send_failed = true;
+                                }
                             }
                         }
 
                         if (!any_sent) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            if (any_send_failed) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
+                            }
+                            elif (any_encode_failed) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                            }
+                            else {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
+                            }
                             return false;
                         }
 
@@ -726,19 +737,19 @@ namespace ppp {
                     ppp::string&                                out_hostname,
                     NamespaceRecordNodePtr&                     out_node) noexcept {
                     if (NULLPTR == hostname || '\x0' == *hostname) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                         return false;
                     }
 
                     size_t len = strnlen(hostname, PPP_MAX_HOSTNAME_SIZE_LIMIT + 1);
                     if (len >= PPP_MAX_HOSTNAME_SIZE_LIMIT) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                         return false;
                     }
 
                     out_hostname = ATrim(ppp::string(hostname, len));
                     if (out_hostname.empty()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                         return false;
                     }
 
@@ -952,8 +963,11 @@ namespace ppp {
                 bool QueryCache(const char* hostname, boost::asio::ip::address& address) noexcept {
                     ppp::string hostname_str;
                     NamespaceRecordNodePtr node;
-                    if (!DNS_ResolveFromCache(hostname, hostname_str, node) || NULLPTR == node) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    if (!DNS_ResolveFromCache(hostname, hostname_str, node)) {
+                        return false;
+                    }
+
+                    if (NULLPTR == node) {
                         return false;
                     }
 
@@ -965,7 +979,12 @@ namespace ppp {
                             address = ip; 
                         },
                         NULLPTR);
-                    return !IPEndPoint::IsInvalid(address);
+                    if (IPEndPoint::IsInvalid(address)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
+                        return false;
+                    }
+
+                    return true;
                 }
 
                 // -----------------------------------------------------------------------------
@@ -1091,7 +1110,7 @@ namespace ppp {
                  */
                 bool AddCache(const Byte* packet, int packet_size) noexcept {
                     if (NULLPTR == packet || packet_size < 1) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
@@ -1103,12 +1122,11 @@ namespace ppp {
                     // No expected hostname verification for manual cache addition – trust the packet.
                     if (!DNS_ProcessAResponseAddresses(const_cast<Byte*>(packet), packet_size,
                         addresses, ack, NULLPTR, &hostname, &ipv4_or_ipv6)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                         return false;
                     }
 
                     if (hostname.empty() || IsReverseQuery(hostname.data())) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResponseInvalid);
                         return false;
                     }
 
@@ -1155,7 +1173,7 @@ namespace ppp {
                         // Create a new entry.
                         node = make_shared_object<NamespaceRecordNode>();
                         if (NULLPTR == node) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return false;
                         }
 
@@ -1165,7 +1183,7 @@ namespace ppp {
                             nr.addresses = std::move(addresses);
                         }
                         catch (const std::bad_alloc&) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return false;
                         }
 
@@ -1173,7 +1191,7 @@ namespace ppp {
                         nr.ipv4 = ipv4_or_ipv6;
                         nr.ipv6 = !ipv4_or_ipv6;
                         if (!Dictionary::TryAdd(c.nr_hmap, hostname, node)) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                             return false;
                         }
 
@@ -1194,13 +1212,13 @@ namespace ppp {
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV6[] = ".ip6.arpa";
                     static constexpr char PPP_DNS_ARPA_QEURY_IPV4[] = ".in-addr.arpa";
                     if (NULLPTR == hostname || '\x0' == *hostname) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                         return false;
                     }
 
                     size_t len = strnlen(hostname, PPP_MAX_HOSTNAME_SIZE_LIMIT + 1);
                     if (len >= PPP_MAX_HOSTNAME_SIZE_LIMIT) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                         return false;
                     }
 
@@ -1218,7 +1236,6 @@ namespace ppp {
                         }
                     }
 
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                     return false;
                 }
 

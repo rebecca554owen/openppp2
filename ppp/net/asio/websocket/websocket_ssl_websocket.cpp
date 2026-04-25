@@ -53,7 +53,6 @@ namespace ppp {
                     return true;
                 }
 
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
                 return false;
             }
 
@@ -117,13 +116,13 @@ namespace ppp {
                 std::string                                                         ciphersuites,
                 YieldContext&                                                       y) noexcept {
                 if (host.empty() || path.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     return false;
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_native_;
                 if (NULLPTR == socket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
@@ -151,11 +150,15 @@ namespace ppp {
                  * @brief The handshake helper encapsulates TLS and websocket upgrade sequencing.
                  */
                 if (NULLPTR == accept) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
-                
-                return accept->Run(type == HandshakeType::HandshakeType_Client, y);
+
+                bool ok = accept->Run(type == HandshakeType::HandshakeType_Client, y);
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                }
+                return ok;
             }
         }
     }

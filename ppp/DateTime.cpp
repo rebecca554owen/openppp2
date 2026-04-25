@@ -1,4 +1,5 @@
 #include <ppp/DateTime.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <stdio.h>
 #include <time.h>
@@ -103,12 +104,12 @@ namespace ppp
         out = MinValue();
         if (s == NULLPTR && len != 0) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
         }
 
         if (s != NULLPTR && len == 0) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
         }
 
         if (len < 0) 
@@ -118,7 +119,7 @@ namespace ppp
 
         if (len < 1) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
         }
 
         static constexpr int max_segments_length = 7;
@@ -167,7 +168,7 @@ namespace ppp
 
         if (0 == length) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
         }
         else 
         {

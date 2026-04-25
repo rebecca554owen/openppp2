@@ -255,7 +255,7 @@ namespace ppp {
             }
 
             VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
-            if (openppp2_sysnat_mount()) {
+            if (0 != openppp2_sysnat_mount()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
             }
 
@@ -269,8 +269,10 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
             }
 
-            if (openppp2_sysnat_attach(interface_name.data()) != 0) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
+            int attach_status = openppp2_sysnat_attach(interface_name.data());
+            if (0 != attach_status) {
+                openppp2_sysnat_publish_error(attach_status);
+                return false;
             }
 
             return true;
@@ -375,7 +377,10 @@ namespace ppp {
             if (!sysnat_interface_name_.empty()) {
                 VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
 
-                openppp2_sysnat_detach(sysnat_interface_name_.data());
+                int detach_status = openppp2_sysnat_detach(sysnat_interface_name_.data());
+                if (0 != detach_status && ERR_NOT_ATTACHED != detach_status) {
+                    openppp2_sysnat_publish_error(detach_status);
+                }
                 sysnat_interface_name_.clear();
             }
 #endif
@@ -827,6 +832,7 @@ namespace ppp {
             do {
                 tap = this->Tap;
                 if (NULLPTR == tap) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                     break;
                 }
 
@@ -893,7 +899,7 @@ namespace ppp {
                 Socket::Closesocket(sockfd);
             }
 
-            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
+            return false;
         }
 
         /**
@@ -1235,6 +1241,7 @@ namespace ppp {
          */
         bool VNetstack::TapTcpClient::AckAccept() noexcept {
             if (disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }
 
@@ -1243,21 +1250,25 @@ namespace ppp {
 
             int packet_length = this->sync_ack_bytes_size_.load(std::memory_order_acquire);
             if (packet_length < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             Byte sync_ack_state = VNETSTACK_SYNC_ACK_STATE_SYN_SENT;
             if (!this->sync_ack_state_.compare_exchange_strong(sync_ack_state, VNETSTACK_SYNC_ACK_STATE_SYN_RECVD)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 return false;
             }
 
             if (NULLPTR == tap) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return false;
             }
 
             if (lwip_) {
                 std::shared_ptr<TapTcpLink> link = this->link_;
                 if (NULLPTR == link) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
                     return false;
                 }
 
@@ -1274,6 +1285,7 @@ namespace ppp {
             }
 
             if (NULLPTR == packet) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                 return false;
             }
 
@@ -1326,8 +1338,10 @@ namespace ppp {
                 backward_val.redirect_ifindex = 0;
 
                 SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
-                if (openppp2_sysnat_add_rule(&forward_key_, &forward_val) == 0) {
-                    if (openppp2_sysnat_add_rule(&backward_key_, &backward_val) != 0) {
+                int forward_add_status = openppp2_sysnat_add_rule(&forward_key_, &forward_val);
+                if (0 == forward_add_status) {
+                    int backward_add_status = openppp2_sysnat_add_rule(&backward_key_, &backward_val);
+                    if (0 != backward_add_status) {
                         /**
                          * @brief Roll back forward SYSNAT rule when backward install fails.
                          */
@@ -1335,7 +1349,13 @@ namespace ppp {
 
                         _ = 1;
                         sysnat_status_.compare_exchange_strong(_, -1);
+                        openppp2_sysnat_publish_error(backward_add_status);
                     }
+                }
+                else {
+                    _ = 1;
+                    sysnat_status_.compare_exchange_strong(_, -1);
+                    openppp2_sysnat_publish_error(forward_add_status);
                 }
 
                 break;

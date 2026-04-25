@@ -34,9 +34,24 @@ namespace ppp {
                         if (NULLPTR != ssl_websocket) {
                             ssl_websocket->async_close(boost::beast::websocket::close_code::normal,
                                 [self, this, ssl_websocket](const boost::system::error_code& ec_) noexcept {
+                                    if (ec_ &&
+                                        boost::asio::error::operation_aborted != ec_ &&
+                                        boost::beast::websocket::error::closed != ec_)
+                                    {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketWriteFailed);
+                                    }
+
                                     sslwebsocket::SslvTcpSocket& ssl_socket = ssl_websocket->next_layer();
                                     ssl_socket.async_shutdown(
                                         [self, this, ssl_websocket, &ssl_socket](const boost::system::error_code& ec_) noexcept {
+                                            if (ec_ &&
+                                                boost::asio::error::operation_aborted != ec_ &&
+                                                boost::asio::error::eof != ec_ &&
+                                                boost::asio::ssl::error::stream_truncated != ec_)
+                                            {
+                                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
+                                            }
+
                                             Socket::Closesocket(ssl_socket.next_layer());
                                         });
                                     return true;
@@ -52,7 +67,7 @@ namespace ppp {
             bool sslwebsocket::ShiftToScheduler() noexcept {
                 std::shared_ptr<SslvWebSocket> ssl_websocket = ssl_websocket_;
                 if (NULLPTR == ssl_websocket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     return false;
                 }
 
@@ -66,6 +81,9 @@ namespace ppp {
                     socket = std::move(*socket_new);
                     strand_ = strand;
                     context_ = scheduler;
+                }
+                elif (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 }
 
                 return ok;

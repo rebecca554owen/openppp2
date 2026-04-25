@@ -62,7 +62,7 @@ namespace ppp {
                 {
                     // Guard against excessive recursion (malicious compression loops or deep nesting).
                     if (depth > DNS_MAX_RECURSION_DEPTH) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
@@ -70,7 +70,7 @@ namespace ppp {
                     if (NULLPTR == szEncodedStr || NULLPTR == pusEncodedStrLen ||
                         NULLPTR == szDotStr || NULLPTR == ppDecodePos ||
                         szEncodedStr < szPacketStartPos || szEncodedStr >= szPacketEndPos) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
@@ -85,7 +85,7 @@ namespace ppp {
                     for (;;) {
                         // Ensure we never read past the packet boundary before accessing the label length.
                         if (pDecodePos >= szPacketEndPos) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                             return false;
                         }
 
@@ -110,7 +110,7 @@ namespace ppp {
                             // RFC 1035: label length must be between 1 and 63 inclusive.
                             // Length 0 is illegal here because the terminator is handled above.
                             if (nLabelDataLen == 0 || nLabelDataLen > DNS_MAX_LABEL_LEN) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -118,13 +118,13 @@ namespace ppp {
                             // +1 accounts for the dot that will be appended after the label.
                             // Use size_t to avoid unsigned integer overflow.
                             if (plainStrLen + static_cast<size_t>(nLabelDataLen) + 1 > static_cast<size_t>(nDotStrSize)) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
                             // Ensure the entire label data is within the packet bounds (exact boundary allowed).
                             if (pDecodePos + 1 + nLabelDataLen > szPacketEndPos) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -144,13 +144,13 @@ namespace ppp {
                             // the start of the packet to another location where the name continues.
 
                             if (NULLPTR == szPacketStartPos) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
                             // The pointer occupies 2 bytes; verify they are present.
                             if (pDecodePos + 2 > szPacketEndPos) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -161,7 +161,7 @@ namespace ppp {
                             // Use uintptr_t to avoid signed overflow in pointer arithmetic.
                             uintptr_t packet_len = static_cast<uintptr_t>(szPacketEndPos - szPacketStartPos);
                             if (static_cast<uintptr_t>(usJumpPos) >= packet_len) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;   // Jump target is outside the packet → malformed.
                             }
 
@@ -177,7 +177,7 @@ namespace ppp {
                                 szPacketEndPos,
                                 &jumpDecodePos,
                                 depth + 1)) {
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -232,12 +232,14 @@ namespace ppp {
                     const ppp::function<bool(dns_hdr*, ppp::string&, uint16_t, uint16_t)>&  fPredicateE) noexcept
                 {
                     // Validate that predicates are callable.
-                    if (!fPredicateB || !fPredicateE) {
+                    if (false == static_cast<bool>(fPredicateB) || false == static_cast<bool>(fPredicateE)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                         return ppp::string();
                     }
 
                     // Basic integrity: the packet must contain at least a DNS header.
-                    if (NULLPTR == szPacketStartPos || nPacketLength < static_cast<int>(sizeof(dns_hdr))) {
+                    if (NULLPTR == szPacketStartPos || static_cast<int>(sizeof(dns_hdr)) > nPacketLength) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return ppp::string();
                     }
 
@@ -259,9 +261,11 @@ namespace ppp {
                     try {
                         pioBuffers = make_shared_alloc<Byte>(MAX_DOMAINNAME_LEN_STR);
                         if (NULLPTR == pioBuffers) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return ppp::string();   // Allocation failure.
                         }
                     } catch (const std::bad_alloc&) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return ppp::string();       // Exception safety: return empty on allocation failure.
                     }
 
@@ -292,6 +296,7 @@ namespace ppp {
                     // After the name, the question section contains QTYPE (2 bytes) and QCLASS (2 bytes).
                     // Ensure we have at least 4 bytes remaining.
                     if (pDecodePos + 4 > packetEnd) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return ppp::string();   // Packet truncated before the type/class fields.
                     }
 

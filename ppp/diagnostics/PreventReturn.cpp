@@ -40,7 +40,7 @@ namespace ppp
             ppp::string result = ppp::cryptography::ComputeMD5(name, false);
             if (result.empty()) 
             {
-                SetLastErrorCode(ErrorCode::GenericOperationFailed);
+                SetLastErrorCode(ErrorCode::CryptoAlgorithmUnsupported);
                 return ppp::string();
             }
 

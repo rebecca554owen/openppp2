@@ -3,6 +3,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/threading/BufferswapAllocator.h>
 
 /**
@@ -292,6 +293,7 @@ namespace ppp {
 
                     std::shared_ptr<atomic_int> status = ppp::make_shared_object<atomic_int>(-1);
                     if (NULLPTR == status) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                         return false;
                     }
 
@@ -315,7 +317,8 @@ namespace ppp {
                             }
                         });
 
-                    if (!posted) {
+                    if (false == posted) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                         return false;
                     }
 

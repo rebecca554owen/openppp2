@@ -362,7 +362,7 @@ namespace ppp
 
             if (_opening)
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
             }
 
             if (!AsynchronousReadPacketLoops())

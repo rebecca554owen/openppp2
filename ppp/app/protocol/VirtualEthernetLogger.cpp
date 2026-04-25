@@ -7,6 +7,7 @@
 
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/DateTime.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/io/File.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/ip.h>
@@ -331,17 +332,17 @@ namespace ppp {
             /** @brief Opens active log file and initializes size/day metadata. */
             bool VirtualEthernetLogger::OpenLogFile() noexcept {
                 if (log_path_.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 FILE* f = fopen(log_path_.data(), "ab+");
                 if (NULLPTR == f) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileOpenFailed);
                 }
 
                 if (fseek(f, 0, SEEK_END) != 0) {
                     fclose(f);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileStatFailed);
                 }
 
                 long size = ftell(f);
@@ -491,7 +492,7 @@ namespace ppp {
             /** @brief Adds a line to pending queue with bound on memory growth. */
             bool VirtualEthernetLogger::EnqueueLine(ppp::string line) noexcept {
                 if (line.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 if (line.size() > 8192) {
@@ -538,6 +539,7 @@ namespace ppp {
             /** @brief Copies caller buffer and dispatches asynchronous write. */
             bool VirtualEthernetLogger::Write(const void* s, int length, const ppp::function<void(bool)>& cb) noexcept {
                 if (NULLPTR == s || length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     if (cb) {
                         cb(false);
                     }
@@ -547,6 +549,7 @@ namespace ppp {
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = BufferAllocator;
                 std::shared_ptr<Byte> buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, length);
                 if (NULLPTR == buffer) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     if (cb) {
                         cb(false);
                     }
@@ -560,6 +563,7 @@ namespace ppp {
             /** @brief Enqueues owned line and flushes in logger strand/context. */
             bool VirtualEthernetLogger::Write(const std::shared_ptr<Byte>& s, int length, const ppp::function<void(bool)>& cb) noexcept {
                 if (NULLPTR == s || length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     if (cb) {
                         cb(false);
                     }
@@ -570,6 +574,7 @@ namespace ppp {
                 std::shared_ptr<VirtualEthernetLogger> self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = log_context_;
                 if (NULLPTR == context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                     if (cb) {
                         cb(false);
                     }
@@ -605,7 +610,7 @@ namespace ppp {
              */
             bool VirtualEthernetLogger::Packet(Int128 guid, const void* packet, int packet_length, PacketDirection direction) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 ppp::DateTime now = ppp::threading::Executors::Now();
@@ -781,7 +786,7 @@ namespace ppp {
             /** @brief Logs connect event including NAT endpoint and destination endpoint. */
             bool VirtualEthernetLogger::Connect(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const boost::asio::ip::tcp::endpoint& natEP, const boost::asio::ip::tcp::endpoint& dstEP, const ppp::string& hostDomain) noexcept {
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 ppp::DateTime now = ppp::threading::Executors::Now();
@@ -801,7 +806,7 @@ namespace ppp {
             /** @brief Logs VPN session establishment event. */
             bool VirtualEthernetLogger::Vpn(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 ppp::DateTime now = ppp::threading::Executors::Now();

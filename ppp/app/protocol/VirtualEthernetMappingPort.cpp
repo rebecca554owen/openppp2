@@ -18,6 +18,7 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/configurations/AppConfiguration.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace app {
@@ -126,7 +127,7 @@ namespace ppp {
 #define VIRTUALETHERNETMAPPINGPORT_SOCKET_OPENNETWORKSOCKET(SERVER_OBJ, PROTOCOL, SOCKET_OBJECT)           \
                 auto& socket = SOCKET_OBJECT;                                                              \
                 if (socket.is_open()) {                                                                    \
-                    return false;                                                                          \
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState); \
                 }                                                                                          \
                                                                                                            \
                 boost::system::error_code ec;                                                              \
@@ -141,7 +142,7 @@ namespace ppp {
                 }                                                                                          \
                                                                                                            \
                 if (ec) {                                                                                  \
-                    return false;                                                                          \
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed); \
                 }                                                                                          \
                                                                                                            \
                 int handle = socket.native_handle();                                                       \
@@ -154,7 +155,7 @@ namespace ppp {
                                                                                                            \
                 socket.set_option(PROTOCOL::socket::reuse_address(true), ec);                              \
                 if (ec) {                                                                                  \
-                    return false;                                                                          \
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed); \
                 }                                                                                          \
                                                                                                            \
                 socket.set_option(boost::asio::ip::tcp::no_delay(configuration_->tcp.turbo), ec);          \
@@ -163,12 +164,12 @@ namespace ppp {
                                                                                                            \
                 socket.bind(PROTOCOL::endpoint(address, remote_port_), ec);                                \
                 if (ec) {                                                                                  \
-                    return false;                                                                          \
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed); \
                 }                                                                                          \
                                                                                                            \
                 auto local_ep = socket.local_endpoint(ec);                                                 \
                 if (local_ep.port() != remote_port_) {                                                     \
-                    return false;                                                                          \
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid); \
                 }                                                                                          \
                                                                                                            \
                 SERVER_OBJ->socket_endpoint_ =                                                             \
@@ -179,7 +180,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::OpenNetworkSocketDatagram() noexcept {
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {                     // Server must exist
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 // Use the macro to open UDP socket
@@ -191,7 +192,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::OpenNetworkSocketStream() noexcept {
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {                     // Server must exist
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 // Use the macro to open TCP socket
@@ -205,30 +206,30 @@ namespace ppp {
             bool VirtualEthernetMappingPort::OpenFrpServer(const VirtualEthernetLoggerPtr& logger) noexcept {
                 // Validate remote port range
                 if (remote_port_ <= ppp::net::IPEndPoint::MinPort || remote_port_ > ppp::net::IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 if (disposed_) {                             // Already disposed
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 if (client_) {                               // Cannot be both client and server
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
 
                 if (server_) {                               // Already a server
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
                 
                 // Create a new server instance
                 std::shared_ptr<Server> server = make_shared_object<Server>(this);
-                if (!server) {
-                    return false;
+                if (NULLPTR == server) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
                 
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {               // Need a valid transmission
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 server_ = server;                       // Publish only for the open/listen sequence
@@ -237,7 +238,7 @@ namespace ppp {
                 for (;;) {
                     if (tcp_) {                                  // TCP (stream) mode
                         bool opened = OpenNetworkSocketStream(); // Open TCP acceptor
-                        if (!opened) {
+                        if (false == opened) {
                             break;
                         }
 
@@ -246,6 +247,7 @@ namespace ppp {
                         acceptor.listen(configuration_->tcp.backlog, ec);   // Start listening
 
                         if (ec) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketListenFailed);
                             break;
                         }
 
@@ -258,6 +260,8 @@ namespace ppp {
                         if (accepted) {
                             return true;
                         }
+
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                     }
                     else {                                         // UDP (datagram) mode
                         bool opened = OpenNetworkSocketDatagram(); // Open UDP socket
@@ -298,17 +302,17 @@ namespace ppp {
             /** @brief Starts/continues UDP receive loop in server mode. */
             bool VirtualEthernetMappingPort::LoopbackFrpServer() noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 bool opened = server->socket_udp_.is_open();
-                if (!opened) {
-                    return false;
+                if (false == opened) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 // Asynchronously receive UDP datagrams
@@ -386,17 +390,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server::Connection::ConnectToFrpClient() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 0) {               // Must be in initial state
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 ITransmissionPtr transmission = mapping_port_->GetTransmission();
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 // Ask linklayer to establish FRP connection to the client
@@ -408,7 +412,7 @@ namespace ppp {
 
                 if (!ok) {
                     transmission->Dispose();               // Clean up transmission on failure
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 connection_stated_.exchange(1);            // State 1 = connecting
@@ -418,22 +422,22 @@ namespace ppp {
             /** @brief Sends stream payload to FRP peer. */
             bool VirtualEthernetMappingPort::Server::Connection::SendToFrpClient(const void* packet, int packet_size) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {               // Must be in active state (3)
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 ITransmissionPtr transmission = mapping_port_->GetTransmission();
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 // Push data to FRP client via linklayer
@@ -450,6 +454,7 @@ namespace ppp {
                 }
                 else {
                     transmission->Dispose();               // Clean up on failure
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 
                 return ok;
@@ -459,13 +464,13 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server::Connection::SendToFrpUser(const void* packet, int packet_size) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {               // Must be active
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 // Copy packet data to a shared buffer
                 std::shared_ptr<Byte> messages = Copy(mapping_port_->buffer_allocator_, packet, packet_size);
                 if (NULLPTR == messages) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
 
                 auto self = shared_from_this();
@@ -485,17 +490,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server::Connection::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {               // Must be active
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
                 if (NULLPTR == socket) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 bool opened = socket->is_open();
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 // Perform async write on the TCP socket
@@ -548,21 +553,21 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server::Connection::OnConnectOK(Byte error_code) noexcept {
                 int except = 1;                              // Expected state: connecting (1)
                 if (!connection_stated_.compare_exchange_strong(except, 2)) {   // Transition to state 2 (connected)
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
                 if (error_code != 0) {                       // Connection failed
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                 }
 
                 except = 2;
                 if (!connection_stated_.compare_exchange_strong(except, 3)) {   // Transition to state 3 (active)
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 Update();                                    // Set timeout for active state
@@ -570,7 +575,7 @@ namespace ppp {
                 buffer_chunked_ = ppp::threading::BufferswapAllocator::MakeByteArray(mapping_port_->buffer_allocator_, PPP_TCP_BUFFER_SIZE);
 
                 if (NULLPTR == buffer_chunked_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
 
                 // Start forwarding data from FRP user to FRP client
@@ -581,17 +586,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server::Connection::ForwardFrpUserToFrpClient() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
                 if (NULLPTR == socket) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 bool opened = socket->is_open();
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 auto self = shared_from_this();
@@ -637,11 +642,16 @@ namespace ppp {
             /** @brief Adds mapping instance into keyed dictionary. */
             bool VirtualEthernetMappingPort::AddMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port, const Ptr& mapping_port) noexcept {
                 if (NULLPTR == mapping_port) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 uint32_t key = GetHashCode(in, tcp, remote_port);
-                return ppp::collections::Dictionary::TryAdd(mappings, key, mapping_port);
+                bool ok = ppp::collections::Dictionary::TryAdd(mappings, key, mapping_port);
+                if (!ok) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
+                }
+
+                return true;
             }
 
             /** @brief Retrieves connection by ID from role table with disposal checks. */
@@ -719,7 +729,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server_OnFrpConnectOK(int connection_id, Byte error_code) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
                 bool ok = connection->OnConnectOK(error_code);
@@ -745,7 +755,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
                 bool ok = connection->SendToFrpUser(packet, packet_length);
@@ -759,22 +769,22 @@ namespace ppp {
             /** @brief Sends UDP payload from server role to local remote endpoint. */
             bool VirtualEthernetMappingPort::Server_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 bool opened = server->socket_udp_.is_open();
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 boost::system::error_code ec;
@@ -789,7 +799,7 @@ namespace ppp {
                 }
 
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
                 }
 
                 return true;
@@ -803,11 +813,11 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server_AcceptFrpUserSocket(const std::shared_ptr<Server>& server, const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioTcpSocket& socket) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
                 // FIXED: restored 'elif' per project convention
                 elif (!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 }
                 else {
                     // Set TCP window sizes
@@ -815,8 +825,8 @@ namespace ppp {
                 }
 
                 ITransmissionPtr transmission = transmission_;
-                if (!transmission) {
-                    return false;
+                if (NULLPTR == transmission) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 auto self = shared_from_this();
@@ -831,7 +841,7 @@ namespace ppp {
                     // Create a new connection object
                     auto connection = make_shared_object<Server::Connection>(self, server, connection_id, socket);
                     if (NULLPTR == connection) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     }
 
                     bool ok = connection->ConnectToFrpClient();   // Initiate FRP connection
@@ -847,12 +857,14 @@ namespace ppp {
                             boost::system::error_code ec;
                             boost::asio::ip::tcp::endpoint localEP = socket->local_endpoint(ec);
                             if (ec) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                                 ok = false;
                                 break;
                             }
 
                             boost::asio::ip::tcp::endpoint remoteEP = socket->remote_endpoint(ec);
                             if (ec) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                                 ok = false;
                                 break;
                             }
@@ -869,23 +881,23 @@ namespace ppp {
                     return ok;
                 }
 
-                return false;   // No free connection ID found
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionQuotaExceeded);   // No free connection ID found
             }
 
             /** @brief Sends UDP payload from server role to FRP peer via link layer. */
             bool VirtualEthernetMappingPort::Server_SendToFrpClient(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 std::shared_ptr<VirtualEthernetLinklayer> linklayer = linklayer_;
                 if (NULLPTR == linklayer) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 ITransmissionPtr transmission = transmission_;
-                if (!transmission) {
-                    return false;
+                if (NULLPTR == transmission) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 // Ask linklayer to send UDP datagram to FRP client
@@ -902,50 +914,50 @@ namespace ppp {
                 }
 
                 transmission->Dispose();
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpRelayFailed);
             }
 
             /** @brief Starts FRP client mode and registers mapping entry. */
             bool VirtualEthernetMappingPort::OpenFrpClient(const boost::asio::ip::address& local_ip, int local_port) noexcept {
                 // Validate ports
                 if (remote_port_ <= ppp::net::IPEndPoint::MinPort || remote_port_ > ppp::net::IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 if (local_port <= ppp::net::IPEndPoint::MinPort || local_port > ppp::net::IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 if (server_) {          // Cannot be both server and client
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
 
                 if (client_) {          // Already a client
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
 
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 if (local_ip.is_multicast()) {   // Multicast not allowed
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 if (ppp::net::IPEndPoint::IsInvalid(local_ip)) {   // Invalid IP
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 ITransmissionPtr transmission = transmission_;
-                if (!transmission) {
-                    return false;
+                if (NULLPTR == transmission) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 // Create client object
                 std::shared_ptr<Client> client = make_shared_object<Client>();
-                if (!client) {
-                    return false;
+                if (NULLPTR == client) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
 
                 client->local_in_ = local_ip.is_v4();   // Store IP version
@@ -964,7 +976,7 @@ namespace ppp {
                 }
 
                 transmission->Dispose();
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
             }
 
             /** @brief Constructs client-side stream connection state. */
@@ -990,27 +1002,27 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::Connection::ConnectToDestinationServer() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 0) {               // Must be initial
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 if (socket_) {                             // Socket already exists
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 ITransmissionPtr transmission = mapping_port_->GetTransmission();
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 std::shared_ptr<Client> client = client_;
                 if (NULLPTR == client) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
                 // Create a new TCP socket
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = make_shared_object<boost::asio::ip::tcp::socket>(*mapping_port_->context_);
                 if (NULLPTR == socket) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
 
                 boost::system::error_code ec;
@@ -1024,7 +1036,7 @@ namespace ppp {
                 }
 
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 }
 
                 int handle = socket->native_handle();
@@ -1037,7 +1049,7 @@ namespace ppp {
 
                 socket->set_option(boost::asio::ip::tcp::socket::reuse_address(true), ec);
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 }
 
                 socket->set_option(boost::asio::ip::tcp::no_delay(configuration_->tcp.turbo), ec);
@@ -1097,12 +1109,12 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::Connection::OnConnectedOK(bool ok) noexcept {
                 int except = 1;                                  // Expected state: connecting
                 if (!connection_stated_.compare_exchange_strong(except, 2)) {   // Transition to state 2 (connected)
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<Client> client = client_;
                 if (NULLPTR == client) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
                 else {
                     ITransmissionPtr transmission = transmission_;
@@ -1118,18 +1130,18 @@ namespace ppp {
 
                         if (!ok) {
                             transmission->Dispose();
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                         }
                     }
                 }
 
                 except = 2;
                 if (!connection_stated_.compare_exchange_strong(except, 3)) {   // Transition to state 3 (active)
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 if (!ok) {                                      // Connection failed
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                 }
 
                 Update();                                       // Set active timeout
@@ -1137,7 +1149,7 @@ namespace ppp {
                 buffer_chunked_ = ppp::threading::BufferswapAllocator::MakeByteArray(mapping_port_->buffer_allocator_, PPP_TCP_BUFFER_SIZE);
 
                 if (NULLPTR == buffer_chunked_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
 
                 // Start reading from destination server socket
@@ -1148,17 +1160,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::Connection::Loopback() noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
                 if (NULLPTR == socket) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 bool opened = socket->is_open();
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 auto self = shared_from_this();
@@ -1202,13 +1214,13 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::Connection::SendToDestinationServer(const void* packet, int packet_size) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {                    // Must be active
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 // Copy packet to shared buffer
                 std::shared_ptr<Byte> messages = Copy(mapping_port_->buffer_allocator_, packet, packet_size);
                 if (NULLPTR == messages) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                 }
 
                 auto self = shared_from_this();
@@ -1228,17 +1240,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::Connection::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
                 if (NULLPTR == socket) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 bool opened = socket->is_open();
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                 }
 
                 std::shared_ptr<IAsynchronousWriteIoQueue> self = shared_from_this();
@@ -1256,25 +1268,28 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client_OnFrpConnect(int connection_id) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR != connection) {
-                    return false;                            // Already exists
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);                            // Already exists
                 }
 
                 std::shared_ptr<Client> client = client_;
                 if (NULLPTR == client) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
                 else {
                     auto self = shared_from_this();
                     // Create a new client connection object
                     connection = make_shared_object<Client::Connection>(self, client, connection_id);
                     if (NULLPTR == connection) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     }
                 }
 
                 bool ok = connection->ConnectToDestinationServer();   // Connect to local destination
                 if (ok) {
                     ok = ppp::collections::Dictionary::TryAdd(client->socket_connections_, connection_id, connection);
+                    if (!ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
+                    }
                 }
 
                 if (!ok) {
@@ -1298,7 +1313,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR == connection) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
                 bool ok = connection->SendToDestinationServer(packet, packet_length);
@@ -1316,17 +1331,17 @@ namespace ppp {
              */
             bool VirtualEthernetMappingPort::Client_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 std::shared_ptr<Client> client = client_;
                 if (NULLPTR == client) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 // Try to get an existing datagram port for this NAT endpoint
@@ -1339,14 +1354,14 @@ namespace ppp {
                     // Create a new datagram port
                     datagram_port = make_shared_object<Client::DatagramPort>(self, client, sourceEP);
                     if (NULLPTR == datagram_port) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     }
                 }
 
                 bool ok = datagram_port->Open();             // Open UDP socket and start loopback
                 if (!ok) {
                     datagram_port->Dispose();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 ok = ppp::collections::Dictionary::TryAdd(client->socket_datagram_ports_, sourceEP, datagram_port);
@@ -1358,7 +1373,7 @@ namespace ppp {
                 }
 
                 datagram_port->Dispose();
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpRelayFailed);
             }
 
             /** @brief Constructs client role state with default address-family marker. */
@@ -1404,17 +1419,17 @@ namespace ppp {
             /** @brief Sends UDP payload from local datagram socket to FRP peer. */
             bool VirtualEthernetMappingPort::Client::DatagramPort::SendToDestinationServer(const void* packet, int packet_length) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
                 
                 ITransmissionPtr transmission = mapping_port_->GetTransmission();
                 if (NULLPTR == transmission) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 // Ask linklayer to send UDP datagram to FRP server
@@ -1428,6 +1443,7 @@ namespace ppp {
 
                 if (!ok) {
                     transmission->Dispose();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
                 }
 
                 return ok;
@@ -1441,7 +1457,7 @@ namespace ppp {
                 }
 
                 bool opened = socket_.is_open();
-                if (!opened) {
+                if (false == opened) {
                     return false;
                 }
 
@@ -1472,17 +1488,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::DatagramPort::Open() noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 bool opened = socket_.is_open();
                 if (opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                 }
 
                 std::shared_ptr<Client> client = client_;
                 if (NULLPTR == client) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 boost::asio::ip::address local_ip = client->local_ep_.address();
@@ -1502,6 +1518,9 @@ namespace ppp {
                         configuration_->udp.rwnd);
                     opened = Loopback();   // Start receive loop
                 }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
+                }
                 
                 return opened;
             }
@@ -1510,17 +1529,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::DatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 bool opened = socket_.is_open();
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 std::shared_ptr<Client> client = client_;
                 if (NULLPTR == client) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                 }
 
                 boost::system::error_code ec;
@@ -1535,7 +1554,7 @@ namespace ppp {
                 }
 
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
                 }
 
                 Update();    // Refresh timeout on success

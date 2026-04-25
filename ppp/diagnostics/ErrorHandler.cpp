@@ -44,7 +44,7 @@ namespace ppp {
             // Prevent recursive callback re-entry from repeatedly redispatching
             // handlers when a handler path calls SetLastErrorCode() again.
             static thread_local bool tls_error_handler_invoking = false;
-            if (true == tls_error_handler_invoking) {
+            if (tls_error_handler_invoking) {
                 return code;
             }
 

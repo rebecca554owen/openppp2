@@ -820,10 +820,14 @@ namespace ppp {
 
             Json::Value json = JsonAuxiliary::FromString(json_string);
             if (!json.isObject()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileMalformed);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
             }
             else {
-                return Load(json);
+                bool loaded = Load(json);
+                if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigLoadFailed);
+                }
+                return loaded;
             }
         }
 
@@ -1201,7 +1205,11 @@ namespace ppp {
             AssignIfPresent(config.virr.update_interval, json["virr"]["update-interval"]);
             AssignIfPresent(config.virr.retry_interval, json["virr"]["retry-interval"]);
             AssignIfPresent(config.vbgp.update_interval, json["vbgp"]["update-interval"]);
-            return Loaded();
+            bool loaded = Loaded();
+            if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
+            }
+            return loaded;
         }
 
         /**

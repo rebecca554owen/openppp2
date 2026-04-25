@@ -17,6 +17,10 @@
 #include <netinet/in.h>
 
 #ifdef __cplusplus
+#include <ppp/diagnostics/Error.h>
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -131,6 +135,64 @@ extern "C" {
     int openppp2_sysnat_del_rule(const struct openppp2_sysnat_key* key);
 
 #ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+/**
+ * @brief Converts SYSNAT C error code to diagnostics ErrorCode.
+ * @param sysnat_err Negative ERR_* value returned by SYSNAT APIs.
+ * @return Matching diagnostics ErrorCode for consistent failure publishing.
+ * @note Returns ErrorCode::Success when sysnat_err is zero.
+ */
+static inline ppp::diagnostics::ErrorCode openppp2_sysnat_to_error_code(int sysnat_err) noexcept {
+    switch (sysnat_err) {
+        case 0:
+            return ppp::diagnostics::ErrorCode::Success;
+        case ERR_IFINDEX:
+            return ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable;
+        case ERR_BPF_OPEN:
+            return ppp::diagnostics::ErrorCode::TunnelOpenFailed;
+        case ERR_BPF_PROG:
+            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+        case ERR_BPF_LOAD:
+            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+        case ERR_MAP_PIN:
+            return ppp::diagnostics::ErrorCode::MappingOpenFailed;
+        case ERR_TC_CREATE:
+            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+        case ERR_TC_ATTACH:
+            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+        case ERR_TC_DETACH:
+            return ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed;
+        case ERR_MAP_OPEN:
+            return ppp::diagnostics::ErrorCode::MappingOpenFailed;
+        case ERR_MAP_UPDATE:
+            return ppp::diagnostics::ErrorCode::MappingCreateFailed;
+        case ERR_MAP_DELETE:
+            return ppp::diagnostics::ErrorCode::MappingCreateFailed;
+        case ERR_ALREADY_ATTACHED:
+            return ppp::diagnostics::ErrorCode::GenericAlreadyExists;
+        case ERR_NOT_ATTACHED:
+            return ppp::diagnostics::ErrorCode::GenericInvalidState;
+        default:
+            return ppp::diagnostics::ErrorCode::GenericUnknown;
+    }
+}
+
+/**
+ * @brief Publishes mapped diagnostics ErrorCode from SYSNAT C return code.
+ * @param sysnat_err SYSNAT C API return value.
+ * @return true when sysnat_err == 0; false otherwise.
+ * @note The mapped diagnostics code is only published on failure.
+ */
+static inline bool openppp2_sysnat_publish_error(int sysnat_err) noexcept {
+    if (0 == sysnat_err) {
+        return true;
+    }
+
+    ppp::diagnostics::SetLastErrorCode(openppp2_sysnat_to_error_code(sysnat_err));
+    return false;
 }
 #endif
 

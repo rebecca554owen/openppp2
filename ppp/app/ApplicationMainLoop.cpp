@@ -533,37 +533,46 @@ bool Windows_NoLsp(int argc, const char* argv[]) noexcept {
     }
 
     bool ok = false;
+    ppp::diagnostics::ErrorCode error_code = ppp::diagnostics::ErrorCode::Success;
     do {
         ppp::string line = ppp::GetCommandArgument(argc, argv);
         if (line.empty()) {
+            error_code = ppp::diagnostics::ErrorCode::AppInvalidCommandLine;
             break;
         }
 
         std::size_t index = line.find(key);
         if (index == ppp::string::npos) {
+            error_code = ppp::diagnostics::ErrorCode::AppInvalidCommandLine;
             break;
         }
 
         line = line.substr(index + sizeof(key) - 1);
         if (line.empty()) {
+            error_code = ppp::diagnostics::ErrorCode::AppInvalidCommandLine;
             break;
         }
 
         int ch = line[0];
         if (ch != '=' && ch != ' ') {
+            error_code = ppp::diagnostics::ErrorCode::AppInvalidCommandLine;
             break;
         }
 
         line = ppp::RTrim(ppp::LTrim(line.substr(1)));
         if (line.empty()) {
+            error_code = ppp::diagnostics::ErrorCode::AppInvalidCommandLine;
             break;
         }
 
         ok = ppp::app::client::lsp::PaperAirplaneController::NoLsp(line);
+        if (!ok) {
+            error_code = ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid;
+        }
     } while (false);
 
     if (!ok) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(error_code);
     }
 
     return true;

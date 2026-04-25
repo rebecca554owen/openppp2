@@ -3,6 +3,7 @@
  * @brief Implementation of string, GUID, and key-value helper routines.
  */
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 
 namespace ppp 
@@ -16,11 +17,20 @@ namespace ppp
         {
             if (guid_string.empty()) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return 0;
             }
 
-            boost::uuids::uuid guid = StringToGuid(guid_string);
-            return StringAuxiliary::GuidStringToInt128(guid);
+            boost::uuids::string_generator generator;
+            try
+            {
+                return StringAuxiliary::GuidStringToInt128(generator(guid_string));
+            }
+            catch (const std::exception&)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericParseFailed);
+                return 0;
+            }
         }
 
         /**

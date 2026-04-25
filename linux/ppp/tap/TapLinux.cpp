@@ -242,7 +242,7 @@ namespace ppp {
         // accepted as a known limitation of the current Linux network-management model;
         // no restructuring of the async workflow is performed here.  Callers that run on
         // a dedicated non-IO thread (e.g. startup/shutdown paths) are safe without restriction.
-        static bool ExecuteIpCommand(const ppp::string& command) noexcept {
+        static bool ExecuteIpCommand(const ppp::string& command, ppp::diagnostics::ErrorCode failure_code) noexcept {
             if (command.empty()) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
@@ -250,7 +250,7 @@ namespace ppp {
 
             int status = system(command.data());
             if (status != 0) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                ppp::diagnostics::SetLastErrorCode(failure_code);
                 return false;
             }
 
@@ -259,16 +259,18 @@ namespace ppp {
 
         bool TapLinux::SetIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 addr replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::TunnelAddressConfigureFailed);
         }
 
         bool TapLinux::SetMtu(const ppp::string& ifrName, int mtu) noexcept {
             if (!IsSafeShellToken(ifrName)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -276,21 +278,23 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "ip link set dev %s mtu %d > /dev/null 2>&1", ifrName.data(), mtu);
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::TunnelMtuConfigureFailed);
         }
 
         bool TapLinux::DeleteIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 addr del %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::TunnelAddressConfigureFailed);
         }
 
         bool TapLinux::AddRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -311,11 +315,12 @@ namespace ppp {
                     snprintf(command, sizeof(command), "ip -6 route replace %s/%d via %s dev %s onlink > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), gw.data(), ifrName.data());
                 }
             }
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::RouteReplaceFailed);
         }
 
         bool TapLinux::DeleteRoute6(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length, const ppp::string& gw) noexcept {
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP) || (!gw.empty() && !IsSafeShellToken(gw))) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -336,17 +341,18 @@ namespace ppp {
                     snprintf(command, sizeof(command), "ip -6 route del %s/%d via %s dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), gw.data(), ifrName.data());
                 }
             }
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::RouteDeleteFailed);
         }
 
         bool TapLinux::EnableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
             if (!IsSafeShellToken(ifrName)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             char command[1200];
             snprintf(command, sizeof(command), "sysctl -w net.ipv6.conf.%s.proxy_ndp=1 > /dev/null 2>&1", ifrName.data());
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
         }
 
         bool TapLinux::QueryIPv6NeighborProxy(const ppp::string& ifrName, bool& enabled) noexcept {
@@ -396,12 +402,13 @@ namespace ppp {
 
         bool TapLinux::DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
             if (!IsSafeShellToken(ifrName)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             char command[1200];
             snprintf(command, sizeof(command), "sysctl -w net.ipv6.conf.%s.proxy_ndp=0 > /dev/null 2>&1", ifrName.data());
-            return ExecuteIpCommand(command);
+            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
         }
 
         bool TapLinux::AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
@@ -412,7 +419,7 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 neigh replace proxy %s dev %s > /dev/null 2>&1", addressIP.data(), ifrName.data());
-            bool ok = ExecuteIpCommand(command);
+            bool ok = ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
             if (!ok) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
             }
@@ -427,7 +434,7 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 neigh del proxy %s dev %s > /dev/null 2>&1", addressIP.data(), ifrName.data());
-            bool ok = ExecuteIpCommand(command);
+            bool ok = ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
             if (!ok) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
             }
@@ -612,12 +619,20 @@ namespace ppp {
             }
 
             if (len < 1) {
+                ppp::diagnostics::SetLastErrorCode(action_add_or_delete
+                    ? ppp::diagnostics::ErrorCode::RouteAddFailed
+                    : ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                 return false;
             }
 
             if (action_add_or_delete) {
                 int status = system(cmd);
-                return status == 0;
+                if (0 == status) {
+                    return true;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+                return false;
             }
 
             bool any = false;
@@ -635,7 +650,11 @@ namespace ppp {
         }
 
         bool TapLinux::AddRoute2(UInt32 address, int prefix, UInt32 gw) noexcept {
-            return SetRouteToLinux(address, prefix, gw, true);
+            bool ok = SetRouteToLinux(address, prefix, gw, true);
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+            }
+            return ok;
         }
 
         bool TapLinux::DeleteRoute2(UInt32 address, int prefix, UInt32 gw) noexcept {
@@ -644,7 +663,11 @@ namespace ppp {
 
         bool TapLinux::AddRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept {
             if (ifc_ctl_sock_compatible_route) {
-                return SetRouteToLinux(address, prefix, gw, true);
+                bool ok = SetRouteToLinux(address, prefix, gw, true);
+                if (!ok) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+                }
+                return ok;
             }
 
             if (prefix < 0 || prefix > 32) {
@@ -657,7 +680,13 @@ namespace ppp {
             in_dst.s_addr = address;
             in_gw.s_addr = gw;
 
-            return TapLinux::SetRoute(SIOCADDRT, ifrName, in_dst, prefix, in_gw) == 0;
+            int err = TapLinux::SetRoute(SIOCADDRT, ifrName, in_dst, prefix, in_gw);
+            if (0 == err) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+            return false;
         }
 
         bool TapLinux::DeleteRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept {
@@ -676,15 +705,21 @@ namespace ppp {
             in_gw.s_addr = gw;
 
             bool any = false;
+            int last_err = 0;
             for (;;) {
                 int err = TapLinux::SetRoute(SIOCDELRT, ifrName, in_dst, prefix, in_gw);
                 if (err != 0) {
+                    last_err = err;
                     break;
                 }
                 else {
                     any = true;
                     continue;
                 }
+            }
+
+            if (!any && ENOENT != last_err && ESRCH != last_err) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
             }
 
             return any;
@@ -895,11 +930,13 @@ namespace ppp {
 
         bool TapLinux::SetNextHop(const ppp::string& ip) noexcept {
             if (ip.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                 return false;
             }
 
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return false;
             }
 
@@ -911,6 +948,7 @@ namespace ppp {
             gateAddr->sin_port = 0;
 
             if (!inet_aton(ip.data(), &gateAddr->sin_addr)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                 return false;
             }
 
@@ -922,7 +960,11 @@ namespace ppp {
 
             rt.rt_flags = RTF_GATEWAY | RTF_UP;
             rt.rt_metric = 0;
-            return ioctl(ifc_ctl_sock.sock_v4, SIOCADDRT, &rt) == 0;
+            bool ok = ioctl(ifc_ctl_sock.sock_v4, SIOCADDRT, &rt) == 0;
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+            }
+            return ok;
         }
 
         bool TapLinux::GetLocalNetworkInterface(ppp::string& interface_, UInt32& address, UInt32& gw, UInt32& mask) noexcept {
@@ -954,6 +996,7 @@ namespace ppp {
 
         bool TapLinux::SetInterfaceName(int dev_handle, const ppp::string& ifrName) noexcept {
             if (ifrName.size() >= IF_NAMESIZE) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
@@ -962,6 +1005,7 @@ namespace ppp {
 
             ppp::string oldName;
             if (!TapLinux::GetInterfaceName(dev_handle, oldName)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
@@ -971,7 +1015,11 @@ namespace ppp {
             memcpy(ifr.ifr_newname, ifrName.data(), ifrName.size());
             ifr.ifr_name[ifrName.size() + 1] = '\x0';
 
-            return ioctl(dev_handle, SIOCSIFNAME, &ifr) == 0;
+            bool ok = ioctl(dev_handle, SIOCSIFNAME, &ifr) == 0;
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+            }
+            return ok;
         }
 
         bool TapLinux::AddRoute(UInt32 address, int prefix, UInt32 gw) noexcept {
@@ -1173,6 +1221,9 @@ namespace ppp {
                 });
 
             if (!ok) {
+                if (up) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+                }
                 return false;
             }
 
@@ -1182,7 +1233,7 @@ namespace ppp {
         bool TapLinux::SetInterfaceMtu(int mtu) noexcept {
             mtu = ppp::net::native::ip_hdr::Mtu(mtu, true);
 
-            return TUNGETIFFF(GetStream(),
+            bool ok = TUNGETIFFF(GetStream(),
                 [mtu](ifreq& ifr, int control_fd) noexcept {
                     ifr.ifr_mtu = mtu;
                     if (ioctl(control_fd, SIOCSIFMTU, &ifr) < 0) {
@@ -1191,6 +1242,11 @@ namespace ppp {
 
                     return true;
                 });
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelMtuConfigureFailed);
+            }
+
+            return ok;
         }
 
         std::shared_ptr<TapLinux> TapLinux::CreateInternal(const std::shared_ptr<boost::asio::io_context>& context, uint32_t ip, uint32_t gw, uint32_t mask, bool promisc, bool hosted_network, int tun, ppp::string interface_name, const ppp::vector<boost::asio::ip::address>& dns_addresses) noexcept {
@@ -1206,6 +1262,7 @@ namespace ppp {
 
                 if (fails) {
                     ::close(tun);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                     return NULLPTR;
                 }
             }
@@ -1221,6 +1278,7 @@ namespace ppp {
             std::shared_ptr<TapLinux> tap = make_shared_object<TapLinux>(context, interface_name, reinterpret_cast<void*>(tun), ip, gw, mask, hosted_network);
             if (NULLPTR == tap) {
                 ::close(tun);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -1243,25 +1301,30 @@ namespace ppp {
 
         std::shared_ptr<TapLinux> TapLinux::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, uint32_t ip, uint32_t gw, uint32_t mask, bool promisc, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept {
             if (NULLPTR == context) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return NULLPTR;
             }
 
             if (dev.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return NULLPTR;
             }
 
             IPEndPoint ipEP(ip, 0);
             if (IPEndPoint::IsInvalid(ipEP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return NULLPTR;
             }
 
-            IPEndPoint gwEP(ip, 0);
+            IPEndPoint gwEP(gw, 0);
             if (IPEndPoint::IsInvalid(gwEP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                 return NULLPTR;
             }
 
-            IPEndPoint maskEP(ip, 0);
+            IPEndPoint maskEP(mask, 0);
             if (IPEndPoint::IsInvalid(maskEP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                 return NULLPTR;
             }
 

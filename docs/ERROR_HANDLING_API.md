@@ -272,6 +272,24 @@ Diagnostics flow is single-source:
 - All presentation layers (Console UI, log, JNI) read snapshots.
 - Bridge layers (Android JNI) preserve semantic mapping instead of introducing parallel enums.
 
+### C Subsystem Bridge (SYSNAT)
+
+For C modules that return non-enum integer error codes (for example `linux/ppp/tap/openppp2_sysnat.c`), use an explicit bridge mapping at the C/C++ boundary:
+
+- map each C `ERR_*` value to one `ppp::diagnostics::ErrorCode`
+- publish diagnostics only on failure branches
+- keep C return codes for local control flow, and use `ErrorCode` for global diagnostics surfaces
+
+Example (`linux/ppp/tap/openppp2_sysnat.h` + `ppp/ethernet/VNetstack.cpp`):
+
+```cpp
+int status = openppp2_sysnat_attach(interface_name.data());
+if (0 != status) {
+    openppp2_sysnat_publish_error(status);
+    return false;
+}
+```
+
 ---
 
 ## Android JNI Integration
@@ -411,6 +429,10 @@ When adding a new failure branch:
 - [ ] If no specific code exists, add one to `ppp/diagnostics/Error.h` with a clear comment.
 - [ ] Verify the new code appears in `FormatErrorString` with a meaningful message.
 - [ ] Update `ERROR_CODES.md` and `ERROR_CODES_CN.md` if a new code is added.
+
+Entry-point guardrail:
+
+- [ ] In `main.cpp`, if `Run()` fails but thread-local diagnostics is still `Success`, set a non-success fallback (`GenericUnknown`) before printing.
 
 ---
 

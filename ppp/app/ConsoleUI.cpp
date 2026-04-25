@@ -505,7 +505,7 @@ bool ConsoleUI::Start() noexcept {
     vt_enabled_ = EnableVirtualTerminal();
 
     if (!PrepareInputTerminal()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         running_.store(false, std::memory_order_release);
         return false;
     }
@@ -548,7 +548,7 @@ bool ConsoleUI::Start() noexcept {
         render_thread_ = std::thread([this]() noexcept { RenderLoop(); });
         input_thread_  = std::thread([this]() noexcept { InputLoop(); });
     } catch (...) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
         running_.store(false, std::memory_order_release);
         if (render_thread_.joinable()) {
             render_thread_.join();
@@ -1707,19 +1707,19 @@ bool ConsoleUI::EnableVirtualTerminal() noexcept {
 #if defined(_WIN32)
     HANDLE h = ::GetStdHandle(STD_OUTPUT_HANDLE);
     if (NULLPTR == h || INVALID_HANDLE_VALUE == h) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         return false;
     }
 
     DWORD mode = 0;
     if (!::GetConsoleMode(h, &mode)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         return false;
     }
 
     if (0u == (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
         if (!::SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
             return false;
         }
     }
@@ -1755,7 +1755,7 @@ bool ConsoleUI::PrepareInputTerminal() noexcept {
     }
 
     if (0 != ::tcgetattr(STDIN_FILENO, &terminal_original_)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         return false;
     }
 
@@ -1766,7 +1766,7 @@ bool ConsoleUI::PrepareInputTerminal() noexcept {
     raw.c_cc[VTIME] = 0;   // No inter-byte timeout
 
     if (0 != ::tcsetattr(STDIN_FILENO, TCSANOW, &raw)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         return false;
     }
 

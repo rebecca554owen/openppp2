@@ -1,6 +1,7 @@
 #include <windows/ppp/net/proxies/HttpProxy.h>
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/win32/Win32RegistryKey.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <wininet.h>
 #include <tchar.h>
@@ -53,6 +54,10 @@ namespace ppp
                     InternetSetOption(NULLPTR, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, NULLPTR, 0) &&
                     InternetSetOption(NULLPTR, INTERNET_OPTION_SETTINGS_CHANGED, &ipi, sizeof(INTERNET_PROXY_INFO)) &&
                     InternetSetOption(NULLPTR, INTERNET_OPTION_REFRESH, NULLPTR, 0);
+                if (!b)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxyApplyFailed);
+                }
                 return b;
             }
 
@@ -69,6 +74,10 @@ namespace ppp
                 ipi.lpszProxyBypass = bypass_bstr;
 
                 bool b = InternetSetOption(NULLPTR, INTERNET_OPTION_PROXY, &ipi, sizeof(INTERNET_PROXY_INFO));
+                if (!b)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxyApplyFailed);
+                }
                 return b;
             }
 
@@ -118,6 +127,7 @@ namespace ppp
                 ULONG dwBuildNumber;
                 if (!Win32Native::RtlGetNtVersionNumbers(&dwMajor, &dwMinor, &dwBuildNumber))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
                     return false;
                 }
 
@@ -134,7 +144,12 @@ namespace ppp
             bool HttpProxy::OpenControlWindow() noexcept
             {
                 // control.exe inetcpl.cpl
-                return ShellExecute(NULLPTR, TEXT("open"), TEXT("rundll32"), TEXT("shell32.dll,Control_RunDLL inetcpl.cpl"), NULLPTR, SW_SHOWNORMAL);
+                bool b = 0 != reinterpret_cast<INT_PTR>(ShellExecute(NULLPTR, TEXT("open"), TEXT("rundll32"), TEXT("shell32.dll,Control_RunDLL inetcpl.cpl"), NULLPTR, SW_SHOWNORMAL));
+                if (!b)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                }
+                return b;
             }
 
             bool HttpProxy::OpenControlWindow(int TabIndex) noexcept
@@ -151,7 +166,12 @@ namespace ppp
                 }
 
                 // control.exe inetcpl.cpl
-                return ShellExecuteA(NULLPTR, "open", "rundll32", cmd.data(), NULLPTR, SW_SHOWNORMAL);
+                bool b = 0 != reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "open", "rundll32", cmd.data(), NULLPTR, SW_SHOWNORMAL));
+                if (!b)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                }
+                return b;
             }
 
             bool HttpProxy::IsSupportExperimentalQuicProtocol() noexcept
@@ -171,7 +191,12 @@ namespace ppp
             bool HttpProxy::PreferredNetwork(bool in4or6) noexcept
             {
                 DWORD dwFlags = in4or6 ? 0x20 : 0x00;
-                return ppp::win32::SetRegistryValueDword(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters", L"DisabledComponents", dwFlags);
+                bool b = ppp::win32::SetRegistryValueDword(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters", L"DisabledComponents", dwFlags);
+                if (!b)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+                }
+                return b;
             }
         }
     }

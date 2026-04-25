@@ -28,18 +28,20 @@ namespace ppp {
                 const std::shared_ptr<Reference> reference = GetReference();
                 const SslvWebSocketPtr& ssl_websocket = GetSslSocket();
                 if (NULLPTR == ssl_websocket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     return false;
                 }
 
                 bool ok = false;
+                boost::system::error_code ec;
                 auto& ssl_socket = ssl_websocket->next_layer();
                 /**
                  * Start asynchronous SSL negotiation and resume the coroutine from
                  * the completion handler by signaling the yield context.
                  */
                 ssl_socket.async_handshake(handshaked_client ? boost::asio::ssl::stream_base::client : boost::asio::ssl::stream_base::server,
-                    [reference, this, handshaked_client, &ok, &y](const boost::system::error_code& ec) noexcept {
+                    [reference, this, handshaked_client, &ok, &ec, &y](const boost::system::error_code& ec_) noexcept {
+                        ec = ec_;
                         ok = ec == boost::system::errc::success;
                         y.R();
                     });
@@ -50,7 +52,28 @@ namespace ppp {
                  */
                 y.Suspend();
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
+                    if (boost::asio::error::operation_aborted != ec &&
+                        boost::asio::error::eof != ec &&
+                        boost::asio::ssl::error::stream_truncated != ec)
+                    {
+                        if (boost::asio::error::timed_out == ec) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
+                        }
+                        elif (boost::asio::error::connection_reset == ec ||
+                              boost::asio::error::connection_aborted == ec ||
+                              boost::asio::error::not_connected == ec)
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                        }
+                        elif (boost::asio::ssl::error::get_stream_category() == ec.category() ||
+                              boost::asio::error::get_ssl_category() == ec.category())
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
+                        }
+                        else {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
+                        }
+                    }
                     return false;
                 }
 

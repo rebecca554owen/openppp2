@@ -11,6 +11,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/text/Encoding.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 using ppp::io::File;
 using ppp::net::Socket;
@@ -76,7 +77,7 @@ namespace ppp
                     AppConfigurationPtr configuration = GetConfiguration();
                     if (NULLPTR == configuration)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     }
 
                     for (int i = 0; i < arraysizeof(acceptors_); i++)
@@ -84,7 +85,7 @@ namespace ppp
                         boost::asio::ip::tcp::acceptor& acceptor = acceptors_[i];
                         if (acceptor.is_open())
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                         }
                     }
 
@@ -95,7 +96,7 @@ namespace ppp
                         if (!Socket::OpenAcceptor(acceptor, bind_addresses[i],
                             IPEndPoint::MinPort, configuration->tcp.backlog, configuration->tcp.fast_open, configuration->tcp.turbo))
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         }
 
                         Socket::SetWindowSizeIfNotZero(acceptor.native_handle(), configuration->tcp.cwnd, configuration->tcp.rwnd);
@@ -105,7 +106,7 @@ namespace ppp
                     boost::asio::ip::tcp::endpoint localEP = acceptors_[1].local_endpoint(ec);
                     if (ec)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                     }
 
                     forward_port_ = localEP.port();
@@ -117,26 +118,26 @@ namespace ppp
                     std::shared_ptr<PaperAirplaneControlBlockPort> block_port = make_shared_object<PaperAirplaneControlBlockPort>();
                     if (NULLPTR == block_port)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     }
 
                     bool available = block_port->IsAvailable();
                     if (!available)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                     }
 
                     boost::system::error_code ec;
                     boost::asio::ip::tcp::endpoint localEP = acceptors_[0].local_endpoint(ec);
                     if (ec)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                     }
 
                     bool ok = block_port->Set(interface_index, localEP.port(), ip, mask);
                     if (!ok)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                     }
 
                     block_port_ = std::move(block_port);
@@ -147,7 +148,7 @@ namespace ppp
                 {
                     if (disposed_)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                     }
 
                     return OpenAllAcceptors() &&
@@ -189,12 +190,12 @@ namespace ppp
                 {
                     if (disposed_)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                     }
 
                     if (NULLPTR == handler)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     if (milliseconds < 0)
@@ -237,7 +238,7 @@ namespace ppp
                     std::shared_ptr<TimeoutHandler> h = make_shared_object<TimeoutHandler>();
                     if (NULLPTR == h)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     }
                     
                     h->k = NULLPTR;
@@ -247,7 +248,7 @@ namespace ppp
                     std::shared_ptr<Timer> timeout = Timer::Timeout(milliseconds, std::bind(&TimeoutHandler::Call, h, std::placeholders::_1));
                     if (NULLPTR == timeout)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     }
                     else
                     {
@@ -258,9 +259,10 @@ namespace ppp
                     if (!ok)
                     {
                         timeout->Dispose();
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericConflict);
                     }
 
-                    return ok;
+                    return true;
                 }
 
                 bool PaperAirplaneController::UpdateAllForwardEntries(UInt64 now) noexcept
@@ -312,7 +314,7 @@ namespace ppp
                                     entry.destinationEP = remote;
 
                                     bool ok = entries_.emplace(local, entry).second;
-                                    return ok ? forward_port_ : 0;
+                                    return ok ? forward_port_ : ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict, 0);
                                 });
                         });
                 }
@@ -332,7 +334,7 @@ namespace ppp
                             boost::asio::ip::tcp::endpoint natEP = socket->remote_endpoint(ec);
                             if (ec)
                             {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                             }
                             else
                             {
@@ -344,12 +346,12 @@ namespace ppp
                             auto endl = entries_.end();
                             if (tail == endl)
                             {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                             }
 
                             if (!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo))
                             {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                             }
                             else 
                             {
@@ -370,33 +372,32 @@ namespace ppp
                     std::shared_ptr<VEthernetExchanger> exchanger = GetExchanger();
                     if (NULLPTR == exchanger)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     NetworkState network_state = exchanger->GetNetworkState();
                     if (network_state != NetworkState::NetworkState_Established) 
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidState);
                     }
 
                     AppConfigurationPtr configuration = exchanger->GetConfiguration();
                     if (NULLPTR == configuration)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     }
 
                     std::shared_ptr<PaperAirplaneConnection> connection = NewConnection(context, strand, socket);
                     if (NULLPTR == connection)
                     {
-                        connection->Dispose();
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                     }
 
                     auto kv = connections_.emplace(connection.get(), connection);
                     if (!kv.second)
                     {
                         connection->Dispose();
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                     }
 
                     auto self = shared_from_this();
@@ -421,16 +422,17 @@ namespace ppp
                     {
                         connection->Dispose();
                         connections_.erase(kv.first);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                     }
 
-                    return bok;
+                    return true;
                 }
 
                 bool PaperAirplaneController::ReleaseConnection(PaperAirplaneConnection* connection) noexcept
                 {
                     if (NULLPTR == connection)
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     auto self = shared_from_this();
@@ -735,7 +737,7 @@ namespace ppp
                 {
                     if (path.empty())
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                     }
 
                     ppp::string fullpath = File::GetFullPath(File::RewritePath(path.data()).data());
@@ -747,7 +749,7 @@ namespace ppp
                     std::wstring fullpath_wstr = ppp::text::Encoding::ascii_to_wstring(std::string(fullpath.data(), fullpath.size()));
                     if (fullpath_wstr.empty())
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericParseFailed);
                     }
 
                     return paper_airplane::NoLsp(fullpath_wstr.data());
@@ -758,7 +760,7 @@ namespace ppp
                     PaperAirplaneControlBlockPort block_port;
                     if (!block_port.IsAvailable())
                     {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                     }
 
                     return block_port.Set(-1, IPEndPoint::MinPort, IPEndPoint::AnyAddress, IPEndPoint::AnyAddress);

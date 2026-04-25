@@ -68,8 +68,7 @@ namespace ppp {
             SSL* AsyncSslvWebSocket::GetSslHandle() noexcept {
                 SslvWebSocketPtr& ssl_websocket = GetSslSocket();
                 if (NULLPTR == ssl_websocket) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOperationFailed);
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError<SSL*>(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 }
 
                 SslvTcpSocket& ssl_socket = ssl_websocket->next_layer();

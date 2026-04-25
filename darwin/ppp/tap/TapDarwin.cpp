@@ -510,12 +510,14 @@ namespace ppp
         {
             if (ifrName.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return -1;
             }
 
             int interface_index = (int)if_nametoindex(ifrName.data());
             if (interface_index == 0 || interface_index == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return -1;
             }
 
@@ -527,6 +529,7 @@ namespace ppp
             ifrName.clear();
             if (interface_index == 0 || interface_index == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
@@ -536,6 +539,7 @@ namespace ppp
                 char ch = *buf;
                 if (ch == '\x0')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                     return false;
                 }
 
@@ -544,6 +548,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
         }
@@ -677,6 +682,7 @@ namespace ppp
             // Can reduce a memory allocation and replication, improve throughput efficiency.
             if (NULLPTR == packet || packet_size < 1 || NULLPTR == stream)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelPacketInjectFailed);
                 return false;
             }
 
@@ -694,6 +700,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                 return false;
             }
 
@@ -702,6 +709,7 @@ namespace ppp
             int tun = (int)reinterpret_cast<std::intptr_t>(my->GetHandle());
             if (packet_size > ITap::Mtu)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketTooLarge);
                 return false;
             }
             else
@@ -713,7 +721,13 @@ namespace ppp
                 memcpy(chunk + sizeof(uint32_t), packet, packet_size);
 
                 ssize_t bytes_transferred = ::write(tun, chunk, chunk_size);
-                return bytes_transferred > -1;
+                if (bytes_transferred > -1)
+                {
+                    return true;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                return false;
             }
         }
 
@@ -749,6 +763,7 @@ namespace ppp
         {
             if (NULLPTR == rib)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableUnavailable);
                 return false;
             }
 

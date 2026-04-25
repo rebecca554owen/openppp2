@@ -15,6 +15,8 @@
 #include <vector>
 #include <string>
 
+#include <ppp/diagnostics/Error.h>
+
 #include "PaperAirplaneRoot.h"
 #include "PaperAirplaneLspX.h"
 
@@ -101,6 +103,7 @@ namespace ppp
                                 if (error != WSAENOBUFS)
                                 {
                                     Debugger::Write(L"First WSCEnumProtocols Error!");
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                     return FALSE;
                                 }
                             }
@@ -108,12 +111,14 @@ namespace ppp
                             if ((ProtoInfo = (LPWSAPROTOCOL_INFOW)GlobalAlloc(GPTR, ProtoInfoSize)) == NULLPTR)
                             {
                                 Debugger::Write(L"GlobalAlloc Error!");
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericOutOfMemory);
                                 return FALSE;
                             }
 
                             if ((TotalProtos = WSCEnumProtocols(NULLPTR, ProtoInfo, &ProtoInfoSize, &error)) == SOCKET_ERROR)
                             {
                                 Debugger::Write(L"Second WSCEnumProtocols Error!");
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                 return FALSE;
                             }
                             return TRUE;
@@ -162,6 +167,7 @@ namespace ppp
                                 if (lpProtoInfo->ProtocolChain.ChainLen <= 1)
                                 {
                                     Debugger::Write(L"ChainLen<=1");
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                                     return FALSE;
                                 }
 
@@ -193,6 +199,7 @@ namespace ppp
                                         if (WSCGetProviderPath(&ProtoInfo[i].ProviderId, filterpath, &filterpathlen, &errorcode) == SOCKET_ERROR)
                                         {
                                             Debugger::Write(L"WSCGetProviderPath Error!");
+                                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                             return WSAEPROVIDERFAILEDINIT;
                                         }
                                         break;
@@ -203,12 +210,14 @@ namespace ppp
                                 if (dwExpandEnvironmentStr == 0)
                                 {
                                     Debugger::Write(L"ExpandEnvironmentStrings Error!");
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
                                     return WSAEPROVIDERFAILEDINIT;
                                 }
 
                                 if ((hfilter = LoadLibraryW(filterpath)) == NULLPTR)
                                 {
                                     Debugger::Write(L"LoadLibrary Error!");
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                     return WSAEPROVIDERFAILEDINIT;
                                 }
 
@@ -216,6 +225,7 @@ namespace ppp
                                 if (NULLPTR == wspstartupfunc)
                                 {
                                     Debugger::Write(L"GetProcessAddress Error!");
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                     return WSAEPROVIDERFAILEDINIT;
                                 }
 
@@ -223,6 +233,7 @@ namespace ppp
                                 if (errorcode != ERROR_SUCCESS)
                                 {
                                     Debugger::Write(L"wspstartupfunc Error!");
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                     return errorcode;
                                 }
 
@@ -241,6 +252,7 @@ namespace ppp
                     {
                         if (NULLPTR == clasid || s == INVALID_SOCKET)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                             return NULLPTR;
                         }
 
@@ -255,6 +267,7 @@ namespace ppp
                         if (LayeredServiceProvider_Current.NextProcTable.lpWSPIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, clasid,
                             sizeof(GUID), &pFunc, sizeof(VOID*), &dwSize, NULLPTR, NULLPTR, &stThreadId, &iErr) == SOCKET_ERROR)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                             return NULLPTR;
                         }
                         else
@@ -274,6 +287,7 @@ namespace ppp
                         SOCKET s = LayeredServiceProvider_Current.NextProcTable.lpWSPSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULLPTR, 0, WSA_FLAG_OVERLAPPED, &error);
                         if (s == INVALID_SOCKET)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                             return NULLPTR;
                         }
 
@@ -358,6 +372,7 @@ namespace ppp
                             PFN_ConnectEx = (LPFN_CONNECTEX)GetExtensionFunction(s, metid);
                             if (NULLPTR == PFN_ConnectEx) 
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                                 return FALSE;
                             }
                         }
@@ -565,6 +580,7 @@ namespace ppp
                     {
                         if (NULLPTR == pBlock)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                             return false;
                         }
 
@@ -591,6 +607,7 @@ namespace ppp
                         HANDLE hMap = OpenFileMapping(FILE_MAP_READ, FALSE, _T(PAPERAIRPLANE_CONFIGURATION_NM));
                         if (NULLPTR == hMap)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingOpenFailed);
                             return { 0, -1, 0, 0, 0 };
                         }
 
@@ -615,12 +632,17 @@ namespace ppp
 
                             UnmapViewOfFile(pBlock);
                         }
+                        else
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryMapFailed);
+                        }
 
                         HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, nProcessId);
                         CloseHandle(hMap);
 
                         if (NULLPTR == hProcess)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                             return { 0, -1, 0, 0, 0 };
                         }
 
@@ -632,6 +654,7 @@ namespace ppp
                     {
                         if (NULL == s || s == (SOCKET)INVALID_HANDLE_VALUE)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                             return 0;
                         }
 
@@ -651,6 +674,7 @@ namespace ppp
                             // If the SOCKET does not have a binding address, bind an IPV4 address to ANY. In this way, the SOCKET supports 127.0.0.1 and normal access to the external network.
                             if (bind(s, (struct sockaddr*)&bindEP, sizeof(bindEP)) < 0)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                                 return 0;
                             }
                             else
@@ -661,6 +685,7 @@ namespace ppp
                             sockaddr_len = sizeof(localEP);
                             if (getsockname(s, (struct sockaddr*)&localEP, &sockaddr_len) < 0)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                                 return 0;
                             }
                         }
@@ -668,6 +693,7 @@ namespace ppp
                         // If it is not IN4, it is not considered as a proxy. PPP is an IN4 virtual ethernet route.
                         if (localEP.sin_family != AF_INET)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                             return 0;
                         }
 
@@ -675,6 +701,7 @@ namespace ppp
                         bind_address = localEP.sin_addr.s_addr;
                         if (bind_address == htonl(INADDR_BROADCAST))
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                             return 0;
                         }
 
@@ -720,6 +747,7 @@ namespace ppp
                     {
                         if (NULLPTR == name || namelen < (int)sizeof(struct sockaddr))
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                             return { 0, 0 };
                         }
 
@@ -732,6 +760,7 @@ namespace ppp
                         IPAddr ipDestinationName = ((struct sockaddr_in*)name)->sin_addr.s_addr;
                         if (GetBestInterface(ipDestinationName, &dwBestIfIndex) != NO_ERROR)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteQueryFailed);
                             return { 0, 0 };
                         }
 
@@ -758,6 +787,7 @@ namespace ppp
                             SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
                             if (clientSocket == INVALID_SOCKET)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                                 return { 0, 0 };
                             }
                             else
@@ -777,6 +807,7 @@ namespace ppp
                                 if (setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&nNetTimeout, sizeof(nNetTimeout)) < 0 ||
                                     setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, (const char*)&nNetTimeout, sizeof(nNetTimeout)) < 0)
                                 {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                                     closesocket(clientSocket);
                                     return { 0, 0 };
                                 }
@@ -789,6 +820,7 @@ namespace ppp
 
                                     if (connect(clientSocket, (sockaddr*)&in, sizeof(in)) < 0)
                                     {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                                         closesocket(clientSocket);
                                         return { 0, 0 };
                                     }
@@ -803,6 +835,7 @@ namespace ppp
 
                                         if (send(clientSocket, (char*)&protocol, sizeof(protocol), 0) < 0)
                                         {
+                                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                                             shutdown(clientSocket, SD_BOTH);
                                             closesocket(clientSocket);
                                             return { 0, 0 };
@@ -818,6 +851,7 @@ namespace ppp
                                 int32_t iTransferredSize = recv(clientSocket, ((char*)&iForwardPort) + iReceivedOffset, sizeof(iForwardPort) - iReceivedOffset, 0);
                                 if (iTransferredSize < 1)
                                 {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                                     shutdown(clientSocket, SD_BOTH);
                                     closesocket(clientSocket);
                                     return { 0, 0 };
@@ -839,11 +873,13 @@ namespace ppp
                         bool opened = socket.is_open();
                         if (!opened)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                             return false;
                         }
 
                         if (NULLPTR == add_port_forward_handling)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                             return false;
                         }
 

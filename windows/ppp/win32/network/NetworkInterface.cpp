@@ -13,6 +13,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/ip.h>
 #include <ppp/net/native/eth.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <Windows.h>
 #include <netcfgx.h>
@@ -923,7 +924,7 @@ namespace ppp
             {
                 if (adapter_name.empty())
                 {
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 DWORD dwSize = 0;
@@ -935,14 +936,14 @@ namespace ppp
                 if (dwRetVal != ERROR_BUFFER_OVERFLOW)
                 {
                     printf("GetAdaptersAddresses (first) failed with error: %d\n", dwRetVal);
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(dwSize);
                 if (pAddresses == NULL)
                 {
                     printf("Memory allocation failed\n");
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, pAddresses, &dwSize);
@@ -950,7 +951,7 @@ namespace ppp
                 {
                     printf("GetAdaptersAddresses (second) failed with error: %d\n", dwRetVal);
                     free(pAddresses);
-                    return -1;
+                    return ppp::diagnostics::SetLastError<int>(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 DWORD ifIndex = -1;
@@ -1215,7 +1216,7 @@ namespace ppp
             {
                 if (interface_name.empty() || ip.empty() || mask.empty())
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 PROCESS_INFORMATION pi;
@@ -1231,7 +1232,7 @@ namespace ppp
                 if (!CreateProcessA(NULLPTR, command,
                     NULLPTR, NULLPTR, FALSE, CREATE_NO_WINDOW, NULLPTR, NULLPTR, &si, &pi))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                 }
 
                 DWORD dwExitCode = INFINITE;
@@ -1242,15 +1243,26 @@ namespace ppp
                         dwExitCode = INFINITE;
                     }
                 }
+                else
+                {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+                }
 
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
-                return dwExitCode == ERROR_SUCCESS;
+                if (dwExitCode != ERROR_SUCCESS)
+                {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+                }
+
+                return true;
             }
 
-            static bool ExecuteNetshCommand(const ppp::string& command_line) noexcept {
+            static bool ExecuteNetshCommand(const ppp::string& command_line, ppp::diagnostics::ErrorCode error_code, bool publish_error) noexcept {
                 if (command_line.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 }
 
                 PROCESS_INFORMATION pi;
@@ -1265,6 +1277,9 @@ namespace ppp
                 command[sizeof(command) - 1] = '\0';
 
                 if (!CreateProcessA(NULLPTR, command, NULLPTR, NULLPTR, FALSE, CREATE_NO_WINDOW, NULLPTR, NULLPTR, &si, &pi)) {
+                    if (publish_error) {
+                        return ppp::diagnostics::SetLastError(error_code);
+                    }
                     return false;
                 }
 
@@ -1274,10 +1289,29 @@ namespace ppp
                         dwExitCode = INFINITE;
                     }
                 }
+                else {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    if (publish_error) {
+                        return ppp::diagnostics::SetLastError(error_code);
+                    }
+                    return false;
+                }
 
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
-                return dwExitCode == ERROR_SUCCESS;
+                if (dwExitCode != ERROR_SUCCESS) {
+                    if (publish_error) {
+                        return ppp::diagnostics::SetLastError(error_code);
+                    }
+                    return false;
+                }
+
+                return true;
+            }
+
+            static bool ExecuteNetshCommand(const ppp::string& command_line) noexcept {
+                return ExecuteNetshCommand(command_line, ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed, true);
             }
 
             static bool IsSafeNetshInterfaceName(const ppp::string& value) noexcept {
@@ -1320,65 +1354,81 @@ namespace ppp
 
             bool SetIPv6Address(int interface_index, const ppp::string& ip, int prefix_length) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(ip)) {
-                    return false;
+                if (!IsSafeNetshInterfaceName(interface_name)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                }
+
+                if (!IsSafeNetshToken(ip)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                 }
 
                 char command[1200];
                 snprintf(command, sizeof(command), "netsh interface ipv6 set address interface=\"%s\" address=%s/%d store=active", interface_name.data(), ip.data(), prefix_length);
-                return ExecuteNetshCommand(command);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientAddressApplyFailed, true);
             }
 
             bool DeleteIPv6Address(int interface_index, const ppp::string& ip) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(ip)) {
-                    return false;
+                if (!IsSafeNetshInterfaceName(interface_name)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                }
+
+                if (!IsSafeNetshToken(ip)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                 }
 
                 char command[1200];
                 snprintf(command, sizeof(command), "netsh interface ipv6 delete address interface=\"%s\" address=%s", interface_name.data(), ip.data());
-                return ExecuteNetshCommand(command);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientAddressApplyFailed, true);
             }
 
             bool SetIPv6DefaultRoute(int interface_index, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
                 if (!IsSafeNetshInterfaceName(interface_name)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 char command[1200];
                 snprintf(command, sizeof(command), "netsh interface ipv6 add route ::/0 interface=\"%s\" metric=%d store=active", interface_name.data(), std::max<int>(1, metric));
-                if (ExecuteNetshCommand(command)) {
+                if (ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, false)) {
                     return true;
                 }
 
-                DeleteIPv6DefaultGateway(interface_index, ppp::string());
-                return ExecuteNetshCommand(command);
+                char cleanup_command[1200];
+                snprintf(cleanup_command, sizeof(cleanup_command), "netsh interface ipv6 delete route prefix=::/0 interface=\"%s\" store=active", interface_name.data());
+                ExecuteNetshCommand(cleanup_command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, false);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, true);
             }
 
             bool SetIPv6DefaultGateway(int interface_index, const ppp::string& gateway, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(gateway)) {
-                    return false;
+                if (!IsSafeNetshInterfaceName(interface_name)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                }
+
+                if (!IsSafeNetshToken(gateway)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayInvalid);
                 }
 
                 char command[1200];
                 snprintf(command, sizeof(command), "netsh interface ipv6 add route ::/0 interface=\"%s\" nexthop=%s metric=%d store=active", interface_name.data(), gateway.data(), std::max<int>(1, metric));
-                if (ExecuteNetshCommand(command)) {
+                if (ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, false)) {
                     return true;
                 }
 
-                DeleteIPv6DefaultGateway(interface_index, gateway);
-                return ExecuteNetshCommand(command);
+                char cleanup_command[1200];
+                snprintf(cleanup_command, sizeof(cleanup_command), "netsh interface ipv6 delete route prefix=::/0 interface=\"%s\" nexthop=%s store=active", interface_name.data(), gateway.data());
+                ExecuteNetshCommand(cleanup_command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, false);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, true);
             }
 
             bool DeleteIPv6DefaultGateway(int interface_index, const ppp::string& gateway) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
                 if (!IsSafeNetshInterfaceName(interface_name)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
                 if (!gateway.empty() && !IsSafeNetshToken(gateway)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayInvalid);
                 }
 
                 char command[1200];
@@ -1388,16 +1438,19 @@ namespace ppp
                 else {
                     snprintf(command, sizeof(command), "netsh interface ipv6 delete route prefix=::/0 interface=\"%s\" nexthop=%s store=active", interface_name.data(), gateway.data());
                 }
-                return ExecuteNetshCommand(command);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, true);
             }
 
             bool AddIPv6Route(int interface_index, const ppp::string& prefix, int prefix_length, const ppp::string& gateway, int metric) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(prefix)) {
-                    return false;
+                if (!IsSafeNetshInterfaceName(interface_name)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                }
+                if (!IsSafeNetshToken(prefix)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
                 }
                 if (!gateway.empty() && !IsSafeNetshToken(gateway)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayInvalid);
                 }
 
                 prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
@@ -1409,21 +1462,32 @@ namespace ppp
                     snprintf(command, sizeof(command), "netsh interface ipv6 add route %s/%d interface=\"%s\" nexthop=%s metric=%d store=active", prefix.data(), prefix_length, interface_name.data(), gateway.data(), std::max<int>(1, metric));
                 }
 
-                if (ExecuteNetshCommand(command)) {
+                if (ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, false)) {
                     return true;
                 }
 
-                DeleteIPv6Route(interface_index, prefix, prefix_length, gateway);
-                return ExecuteNetshCommand(command);
+                char cleanup_command[1200];
+                if (gateway.empty()) {
+                    snprintf(cleanup_command, sizeof(cleanup_command), "netsh interface ipv6 delete route prefix=%s/%d interface=\"%s\" store=active", prefix.data(), prefix_length, interface_name.data());
+                }
+                else {
+                    snprintf(cleanup_command, sizeof(cleanup_command), "netsh interface ipv6 delete route prefix=%s/%d interface=\"%s\" nexthop=%s store=active", prefix.data(), prefix_length, interface_name.data(), gateway.data());
+                }
+
+                ExecuteNetshCommand(cleanup_command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, false);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, true);
             }
 
             bool DeleteIPv6Route(int interface_index, const ppp::string& prefix, int prefix_length, const ppp::string& gateway) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
-                if (!IsSafeNetshInterfaceName(interface_name) || !IsSafeNetshToken(prefix)) {
-                    return false;
+                if (!IsSafeNetshInterfaceName(interface_name)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                }
+                if (!IsSafeNetshToken(prefix)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
                 }
                 if (!gateway.empty() && !IsSafeNetshToken(gateway)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayInvalid);
                 }
 
                 prefix_length = std::max<int>(0, std::min<int>(128, prefix_length));
@@ -1434,19 +1498,19 @@ namespace ppp
                 else {
                     snprintf(command, sizeof(command), "netsh interface ipv6 delete route prefix=%s/%d interface=\"%s\" nexthop=%s store=active", prefix.data(), prefix_length, interface_name.data(), gateway.data());
                 }
-                return ExecuteNetshCommand(command);
+                return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed, true);
             }
 
             bool SetDnsAddressesV6(int interface_index, const ppp::vector<ppp::string>& servers) noexcept {
                 ppp::string interface_name = GetInterfaceName(interface_index);
                 if (!IsSafeNetshInterfaceName(interface_name)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 if (servers.empty()) {
                     char command[1200];
                     snprintf(command, sizeof(command), "netsh interface ipv6 delete dnsservers name=\"%s\" all validate=no", interface_name.data());
-                    return ExecuteNetshCommand(command);
+                    return ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed, false);
                 }
 
                 bool any = false;
@@ -1457,7 +1521,7 @@ namespace ppp
                         continue;
                     }
                     if (!IsSafeNetshToken(server)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                     }
 
                     char command[1200];
@@ -1468,13 +1532,17 @@ namespace ppp
                         snprintf(command, sizeof(command), "netsh interface ipv6 add dnsservers name=\"%s\" %s index=%d validate=no", interface_name.data(), server.data(), index);
                     }
 
-                    bool ok = ExecuteNetshCommand(command);
+                    bool ok = ExecuteNetshCommand(command, ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed, false);
                     any |= ok;
                     all &= ok;
                     index++;
                 }
 
-                return any && all;
+                if (!(any && all)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientDnsApplyFailed);
+                }
+
+                return true;
             }
 
             static bool FixGatewayServerAddress(const ppp::win32::network::AdapterInterfacePtr& ai) noexcept
@@ -1930,7 +1998,7 @@ namespace ppp
                 auto mib = ppp::win32::network::Router::GetIpForwardTable();
                 if (NULLPTR == mib)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteTableUnavailable);
                 }
 
                 uint32_t mid = inet_addr("128.0.0.0");
@@ -2073,14 +2141,14 @@ namespace ppp
 
                 if (ulBufLen == 0)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 char* szBuf = (char*)Malloc(ulBufLen);
                 pAddresses = (IP_ADAPTER_ADDRESSES*)szBuf;
                 if (NULLPTR == pAddresses)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 DWORD dwErr = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST, NULLPTR, pAddresses, &ulBufLen); /* NETIOAPI_API */
@@ -2107,7 +2175,12 @@ namespace ppp
                 }
 
                 Mfree(szBuf);
-                return dwErr == NO_ERROR;
+                if (dwErr != NO_ERROR)
+                {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelMtuConfigureFailed);
+                }
+
+                return true;
             }
 
             bool SetInterfaceMtu(int interface_index, int mtu) noexcept
@@ -2118,7 +2191,7 @@ namespace ppp
                 std::shared_ptr<MIB_IFROW> ifRow = GetIfEntry(interface_index);
                 if (NULLPTR == ifRow)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 mtu = ppp::net::native::ip_hdr::Mtu(mtu, true);
@@ -2140,7 +2213,12 @@ namespace ppp
                     }
                 }
 
-                return SetInterfaceMtuIpInterfaceEntry(interface_index, mtu);
+                if (!SetInterfaceMtuIpInterfaceEntry(interface_index, mtu))
+                {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelMtuConfigureFailed);
+                }
+
+                return true;
             }
 
             bool SetInterfaceMtuIpSubInterface(int interface_index, int mtu) noexcept
@@ -2148,7 +2226,7 @@ namespace ppp
                 std::shared_ptr<MIB_IFROW> ifRow = GetIfEntry(interface_index);
                 if (NULLPTR == ifRow)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
                 else
                 {
@@ -2159,7 +2237,12 @@ namespace ppp
                 snprintf(command, sizeof(command), "netsh interface ipv4 set subinterface %d mtu=%d store=persistent", interface_index, mtu);
 
                 ppp::string result = Win32Native::EchoTrim(command);
-                return result.size() > 0;
+                if (result.size() < 1)
+                {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelMtuConfigureFailed);
+                }
+
+                return true;
             }
 
             bool ResetNetworkEnvironment() noexcept

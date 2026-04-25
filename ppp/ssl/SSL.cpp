@@ -1,5 +1,6 @@
 #include <ppp/ssl/root_certificates.hpp>
 #include <ppp/ssl/SSL.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/io/File.h>
 #include <common/chnroutes2/chnroutes2.h>
 
@@ -80,18 +81,21 @@ namespace ppp {
             if (certificate_file.empty() ||
                 certificate_key_file.empty() ||
                 certificate_chain_file.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::GenericInvalidArgument);
                 return false;
             }
 
             if (!File::CanAccess(certificate_file.data(), FileAccess::Read) ||
                 !File::CanAccess(certificate_key_file.data(), FileAccess::Read) ||
                 !File::CanAccess(certificate_chain_file.data(), FileAccess::Read)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                 return false;
             }
 
             std::shared_ptr<boost::asio::ssl::context> ssl_context = make_shared_object<boost::asio::ssl::context>(
                 ppp::ssl::SSL::SSL_S_METHOD(ppp::ssl::SSL::SSL_METHOD::ssl));
             if (!ssl_context) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 return false;
             }
 
@@ -103,16 +107,22 @@ namespace ppp {
             /** @brief Load the chain, leaf certificate, and private key in sequence. */
             ssl_context->use_certificate_chain_file(certificate_chain_file, ec);
             if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                 return false;
             }
 
             ssl_context->use_certificate_file(certificate_file, boost::asio::ssl::context::file_format::pem, ec);
             if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                 return false;
             }
 
             ssl_context->use_private_key_file(certificate_key_file, boost::asio::ssl::context::file_format::pem, ec);
-            return ec ? false : true;
+            if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
+                return false;
+            }
+            return true;
         }
 
         /**
@@ -136,6 +146,7 @@ namespace ppp {
             std::shared_ptr<boost::asio::ssl::context> ssl_context = make_shared_object<boost::asio::ssl::context>(
                 ppp::ssl::SSL::SSL_S_METHOD(method));
             if (!ssl_context) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 return NULLPTR;
             }
 
@@ -185,6 +196,7 @@ namespace ppp {
             std::shared_ptr<boost::asio::ssl::context> ssl_context = make_shared_object<boost::asio::ssl::context>(
                 ppp::ssl::SSL::SSL_C_METHOD(ppp::ssl::SSL::SSL_METHOD::tlsv13));
             if (!ssl_context) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 return NULLPTR;
             }
 
