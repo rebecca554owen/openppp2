@@ -1124,6 +1124,7 @@ namespace ppp {
 
             acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
             if (ec) {
+                Closesocket(acceptor_);  // Clean up opened acceptor
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             }
 
@@ -1135,6 +1136,7 @@ namespace ppp {
                 if (listenPort != IPEndPoint::MinPort) {
                     acceptor_.bind(boost::asio::ip::tcp::endpoint(address_, IPEndPoint::MinPort), ec);
                     if (ec) {
+                        Closesocket(acceptor_);  // Clean up opened acceptor
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     }
                 }
@@ -1146,6 +1148,7 @@ namespace ppp {
 
             acceptor_.listen(backlog, ec);
             if (ec) {
+                Closesocket(acceptor_);  // Clean up opened acceptor
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketListenFailed);
             }
 
@@ -1201,6 +1204,7 @@ namespace ppp {
 
             socket_.set_option(boost::asio::ip::udp::socket::reuse_address(true), ec);
             if (ec) {
+                Closesocket(socket_);  // Clean up opened socket
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             }
 
@@ -1209,6 +1213,7 @@ namespace ppp {
                 if (listenPort != IPEndPoint::MinPort) {
                     socket_.bind(boost::asio::ip::udp::endpoint(address_, IPEndPoint::MinPort), ec);
                     if (ec) {
+                        Closesocket(socket_);  // Clean up opened socket
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     }
                 }

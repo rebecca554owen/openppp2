@@ -429,6 +429,7 @@ namespace ppp
                 int&                                                            out) noexcept
             {
                 out = 0;
+                
                 // Validate inputs.
                 if (NULLPTR == payload || payload_length < 1 || origin_id == 0) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);

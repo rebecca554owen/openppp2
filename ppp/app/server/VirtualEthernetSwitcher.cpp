@@ -2125,7 +2125,7 @@ namespace ppp {
                     logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::UplinkToServer);
                 }
 
-                app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, 80));
+                app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, app::protocol::kVEthernetTunnelOverhead));
 
                 if (!SendIPv6PacketToClient(transmission, exchanger->GetId(), packet, packet_length)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);

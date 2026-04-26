@@ -254,6 +254,7 @@ X(VmuxSocketRunNotConnected, "Vmux socket run requested while socket is not conn
 X(VmuxSocketAddressParseInputEmpty, "Vmux socket address parse input is empty", ErrorSeverity::kError)
 X(VmuxSocketAddressParseBracketMismatch, "Vmux socket address parse failed because bracket form is malformed", ErrorSeverity::kError)
 X(VmuxSocketAddressParseMissingPortSeparator, "Vmux socket address parse failed because host and port separator is missing", ErrorSeverity::kError)
+X(VmuxSocketAddressParseInvalidPort, "Vmux socket address parse failed because port number is invalid", ErrorSeverity::kError)
 X(VmuxSocketAddressParseHostEmpty, "Vmux socket address parse produced an empty host", ErrorSeverity::kError)
 X(VmuxSocketConnectNullCallbackOrContext, "Vmux socket connect received null callback or null context", ErrorSeverity::kError)
 X(VmuxSocketConnectHostEmpty, "Vmux socket connect host is empty", ErrorSeverity::kError)
@@ -373,6 +374,7 @@ X(RouteTableAddAllRoutesInputEmpty, "Route table add-all-routes input is empty",
 X(RouteTableAddAllRoutesTokenizeFailed, "Route table add-all-routes tokenization failed", ErrorSeverity::kError)
 X(RouteTableAddRouteInputEmpty, "Route table add-route input CIDR string is empty", ErrorSeverity::kError)
 X(RouteTableAddRouteMissingHostBeforeSlash, "Route table add-route CIDR is missing host before slash", ErrorSeverity::kError)
+X(RouteTableAddRouteInvalidPrefix, "Route table add-route prefix part is invalid or non-numeric", ErrorSeverity::kError)
 
 X(IpFrameSerializeBufferAllocFailed, "IP frame serialization failed to allocate output buffer", ErrorSeverity::kError)
 X(IpFrameParseFrameAllocFailed, "IP frame parse failed to allocate frame object", ErrorSeverity::kError)

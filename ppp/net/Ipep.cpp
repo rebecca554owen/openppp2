@@ -102,7 +102,19 @@ namespace ppp {
                 else {
                     ppp::string portStr = address.substr(portPos + 1);
                     destinationAddress = std::move(host);
-                    destinationPort = atoi(portStr.c_str()); 
+                    
+                    /**
+                     * @brief Validate port number using strtol.
+                     * @note Port must be in range [1, 65535].
+                     */
+                    char* endptr = NULLPTR;
+                    long parsed_port = strtol(portStr.c_str(), &endptr, 10);
+                    if (NULLPTR == endptr || endptr == portStr.c_str() || *endptr != '\x0' || parsed_port <= ppp::net::IPEndPoint::MinPort || parsed_port > ppp::net::IPEndPoint::MaxPort) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                        return false;
+                    }
+
+                    destinationPort = static_cast<int>(parsed_port);
                 }
             }
             else {
@@ -122,7 +134,19 @@ namespace ppp {
 
                     if (IsDomainAddress(host)) {
                         destinationAddress = std::move(host);
-                        destinationPort = atoi(portStr.c_str());
+                        
+                        /**
+                         * @brief Validate port number using strtol.
+                         * @note Port must be in range [1, 65535].
+                         */
+                        char* endptr = NULLPTR;
+                        long parsed_port = strtol(portStr.c_str(), &endptr, 10);
+                        if (NULLPTR == endptr || endptr == portStr.c_str() || *endptr != '\x0' || parsed_port <= ppp::net::IPEndPoint::MinPort || parsed_port > ppp::net::IPEndPoint::MaxPort) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                            return false;
+                        }
+
+                        destinationPort = static_cast<int>(parsed_port);
                     }
                     elif (address.find(':') != colonPos) {
                         // 2) Host portion was invalid but there are multiple colons:
@@ -637,7 +661,19 @@ namespace ppp {
             }
 
             if (ppp::auxiliary::StringAuxiliary::WhoisIntegerValueString(cidr_number_string)) {
-                return atoi(cidr_number_string.data());
+                /**
+                 * @brief Validate numeric prefix using strtol.
+                 * @note Valid IPv4 prefix range: [0, 32], IPv6: [0, 128].
+                 *       Use strtol to detect conversion errors (unlike atoi).
+                 */
+                char* endptr = NULLPTR;
+                long parsed = strtol(cidr_number_string.data(), &endptr, 10);
+                if (NULLPTR == endptr || endptr == cidr_number_string.data() || *endptr != '\x0' || parsed < 0 || parsed > 128) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
+                    return ERR_PREFIX_VALUE;
+                }
+                
+                return static_cast<int>(parsed);
             }
 
             boost::system::error_code ec;

@@ -95,7 +95,8 @@ boost::asio::ip::address PppApplication::GetNetworkAddress(const char* name, int
         int prefix = atoll(address_string.data());
         if (prefix < 1 || prefix > MAX_PREFIX_ADDRESS) {
             prefix = MAX_PREFIX_ADDRESS;
-        } elif (MIN_PREFIX_ADDRESS > 0 && prefix < MIN_PREFIX_ADDRESS) {
+        } 
+        elif (MIN_PREFIX_ADDRESS > 0 && prefix < MIN_PREFIX_ADDRESS) {
             prefix = MIN_PREFIX_ADDRESS;
         }
 
@@ -212,8 +213,18 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         ni->DNSRules = ppp::GetCommandArgument("--dns-rules", argc, argv, "./dns-rules.txt");
         ni->FirewallRules = ppp::GetCommandArgument("--firewall-rules", argc, argv, "./firewall-rules.txt");
 
-        ni->Mux = (uint16_t)std::max<int>(0, atoi(ppp::GetCommandArgument("--tun-mux", argc, argv).data()));
-        ni->MuxAcceleration = (uint8_t)std::max<int>(0, atoi(ppp::GetCommandArgument("--tun-mux-acceleration", argc, argv).data()));
+        {
+            ppp::string tun_mux_arg = ppp::GetCommandArgument("--tun-mux", argc, argv);
+            char* endptr = NULLPTR;
+            long tun_mux_val = strtol(tun_mux_arg.data(), &endptr, 10);
+            ni->Mux = (NULLPTR != endptr && endptr != tun_mux_arg.data() && *endptr == '\x0') ? static_cast<uint16_t>(std::max<long>(0, tun_mux_val)) : 0;
+        }
+        {
+            ppp::string tun_mux_accel_arg = ppp::GetCommandArgument("--tun-mux-acceleration", argc, argv);
+            char* endptr = NULLPTR;
+            long tun_mux_accel_val = strtol(tun_mux_accel_arg.data(), &endptr, 10);
+            ni->MuxAcceleration = (NULLPTR != endptr && endptr != tun_mux_accel_arg.data() && *endptr == '\x0') ? static_cast<uint8_t>(std::max<long>(0, tun_mux_accel_val)) : 0;
+        }
         if (ni->MuxAcceleration > PPP_MUX_ACCELERATION_MAX) {
             ni->MuxAcceleration = 0;
         }
@@ -242,10 +253,15 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
                     break;
                 }
             }
-            ni->Ssmt = std::max<int>(0, atoi(ssmt.data()));
+            ni->Ssmt = std::max<int>(0, static_cast<int>(strtol(ssmt.data(), NULLPTR, 10)));
         }
 #elif defined(_MACOS)
-        ni->Ssmt = std::max<int>(0, atoi(ppp::GetCommandArgument("--tun-ssmt", argc, argv).data()));
+        {
+            ppp::string ssmt_arg = ppp::GetCommandArgument("--tun-ssmt", argc, argv);
+            char* endptr = NULLPTR;
+            long ssmt_val = strtol(ssmt_arg.data(), &endptr, 10);
+            ni->Ssmt = (NULLPTR != endptr && endptr != ssmt_arg.data() && *endptr == '\x0') ? static_cast<int>(std::max<long>(0, ssmt_val)) : 0;
+        }
 #endif
 
 #if defined(_MACOS) || defined(_LINUX)

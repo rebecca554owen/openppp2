@@ -458,7 +458,18 @@ namespace ppp {
                     if ((closing + 1) < host.size() && (':' == host[closing + 1])) {
                         ppp::string port_str = host.substr(closing + 2);
                         if (!port_str.empty()) {
-                            port = atoi(port_str.data());
+                            /**
+                             * @brief Validate port number using strtol.
+                             * @note Port must be in valid range.
+                             */
+                            char* endptr = NULLPTR;
+                            long parsed_port = strtol(port_str.data(), &endptr, 10);
+                            if (NULLPTR == endptr || endptr == port_str.data() || *endptr != '\x0') {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                                return false;
+                            }
+
+                            port = static_cast<int>(parsed_port);
                             if ((port <= IPEndPoint::MinPort) || (port > IPEndPoint::MaxPort)) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                                 return false;
@@ -492,7 +503,18 @@ namespace ppp {
                     return false;
                 }
 
-                port = atoi(portstr.data());
+                /**
+                 * @brief Validate port number using strtol.
+                 * @note Port must be in valid range.
+                 */
+                char* endptr = NULLPTR;
+                long parsed_port = strtol(portstr.data(), &endptr, 10);
+                if (NULLPTR == endptr || endptr == portstr.data() || *endptr != '\x0') {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                    return false;
+                }
+                
+                port = static_cast<int>(parsed_port);
                 if ((port <= IPEndPoint::MinPort) || (port > IPEndPoint::MaxPort)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return false;

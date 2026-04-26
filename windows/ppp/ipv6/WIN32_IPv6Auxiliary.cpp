@@ -314,10 +314,30 @@ namespace ppp {
                                 ppp::string key = segment.substr(0, pos);
                                 ppp::string value = segment.substr(pos + 1);
                                 if (key == "if") {
-                                    route.InterfaceIndex = atoi(value.c_str());
+                                    /**
+                                     * @brief Validate interface index using strtol.
+                                     * @note Interface index must be non-negative.
+                                     */
+                                    char* endptr = NULLPTR;
+                                    long parsed = strtol(value.c_str(), &endptr, 10);
+                                    if (NULLPTR == endptr || endptr == value.c_str() || *endptr != '\x0' || parsed < 0) {
+                                        continue;
+                                    }
+
+                                    route.InterfaceIndex = static_cast<int>(parsed);
                                 }
                                 else if (key == "metric") {
-                                    route.Metric = atoi(value.c_str());
+                                    /**
+                                     * @brief Validate metric using strtol.
+                                     * @note Metric is typically non-negative.
+                                     */
+                                    char* endptr = NULLPTR;
+                                    long parsed = strtol(value.c_str(), &endptr, 10);
+                                    if (NULLPTR == endptr || endptr == value.c_str() || *endptr != '\x0' || parsed < 0) {
+                                        continue;
+                                    }
+                                    
+                                    route.Metric = static_cast<int>(parsed);
                                 }
                                 else if (key == "gw") {
                                     route.Gateway = value;

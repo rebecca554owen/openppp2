@@ -119,11 +119,11 @@ namespace ppp {
 #if defined(VIRTUALETHERNETMAPPINGPORT_SOCKET_OPENNETWORKSOCKET)
 #error "Compiler macro "OPENNETWORKSOCKET" definition conflict found, please check the project C/C++ code implementation for problems."
 #else
-/**
- * @brief Opens and configures server network socket for UDP/TCP role.
- * @details The macro centralizes endpoint family selection, socket options,
- * bind validation, and endpoint publication for both stream and datagram paths.
- */
+            /**
+             * @brief Opens and configures server network socket for UDP/TCP role.
+             * @details The macro centralizes endpoint family selection, socket options,
+             * bind validation, and endpoint publication for both stream and datagram paths.
+             */
 #define VIRTUALETHERNETMAPPINGPORT_SOCKET_OPENNETWORKSOCKET(SERVER_OBJ, PROTOCOL, SOCKET_OBJECT)           \
                 auto& socket = SOCKET_OBJECT;                                                              \
                 if (socket.is_open()) {                                                                    \
@@ -176,7 +176,7 @@ namespace ppp {
                     ppp::net::IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(                                \
                             ppp::net::IPEndPoint::ToEndPoint(local_ep));
 
-            /** @brief Opens server UDP socket for datagram mapping mode. */
+             /** @brief Opens server UDP socket for datagram mapping mode. */
             bool VirtualEthernetMappingPort::OpenNetworkSocketDatagram() noexcept {
                 std::shared_ptr<Server> server = server_;
                 if (NULLPTR == server) {                     // Server must exist
@@ -220,13 +220,13 @@ namespace ppp {
                 if (server_) {                               // Already a server
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
-                
+
                 // Create a new server instance
                 std::shared_ptr<Server> server = make_shared_object<Server>(this);
                 if (NULLPTR == server) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingPortServerInstanceAllocFailed);
                 }
-                
+
                 ITransmissionPtr transmission = transmission_;
                 if (NULLPTR == transmission) {               // Need a valid transmission
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
@@ -336,16 +336,17 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Update(UInt64 now) noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;                            // Already disposed
                 }
 
-                std::shared_ptr<Server> server = server_; 
+                std::shared_ptr<Server> server = server_;
                 if (NULLPTR != server) {
                     // Update all server-side connections
                     ppp::collections::Dictionary::UpdateAllObjects(server->socket_connections_, now);
                 }
 
-                std::shared_ptr<Client> client = client_; 
+                std::shared_ptr<Client> client = client_;
                 if (NULLPTR != client) {
                     // Update all client-side connections and datagram ports
                     ppp::collections::Dictionary::UpdateAllObjects(client->socket_connections_, now);
@@ -405,8 +406,8 @@ namespace ppp {
 
                 // Ask linklayer to establish FRP connection to the client
                 bool ok = linklayer_->DoFrpConnect(transmission,
-                    connection_id_, 
-                    mapping_port_->in_, 
+                    connection_id_,
+                    mapping_port_->in_,
                     mapping_port_->remote_port_,
                     nullof<YieldContext>());
 
@@ -441,12 +442,12 @@ namespace ppp {
                 }
 
                 // Push data to FRP client via linklayer
-                bool ok = linklayer_->DoFrpPush(transmission, 
-                    connection_id_, 
+                bool ok = linklayer_->DoFrpPush(transmission,
+                    connection_id_,
                     mapping_port_->in_,
                     mapping_port_->remote_port_,
-                    packet, 
-                    packet_size, 
+                    packet,
+                    packet_size,
                     nullof<YieldContext>());
 
                 if (ok) {
@@ -475,7 +476,7 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 // Queue asynchronous write to the TCP socket
-                return WriteBytes(messages, packet_size, 
+                return WriteBytes(messages, packet_size,
                     [self, this](bool ok) noexcept {
                         if (ok) {
                             Update();                      // Refresh timeout on success
@@ -523,9 +524,9 @@ namespace ppp {
                         ITransmissionPtr transmission = mapping_port_->GetTransmission();
                         if (NULLPTR != transmission) {
                             // Notify FRP client that we are disconnecting
-                            bool ok = linklayer_->DoFrpDisconnect(transmission, 
-                                connection_id_, 
-                                mapping_port_->in_, 
+                            bool ok = linklayer_->DoFrpDisconnect(transmission,
+                                connection_id_,
+                                mapping_port_->in_,
                                 mapping_port_->remote_port_,
                                 nullof<YieldContext>());
 
@@ -707,7 +708,7 @@ namespace ppp {
                 if (!ppp::collections::Dictionary::TryGetValue(client->socket_datagram_ports_, nat_key, datagram_port)) {
                     return NULLPTR;
                 }
-                
+
                 if (NULLPTR != datagram_port) {
                     return datagram_port;
                 }
@@ -744,6 +745,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Server_OnFrpDisconnect(int connection_id) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
@@ -816,7 +818,7 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
                 // FIXED: restored 'elif' per project convention
-                elif (!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
+                elif(!ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 }
                 else {
@@ -1073,16 +1075,16 @@ namespace ppp {
             /** @brief Finalizes client connection and optionally notifies peer disconnect. */
             void VirtualEthernetMappingPort::Client::Connection::Finalize(bool disconnect) noexcept {
                 std::shared_ptr<ITransmission> transmission = std::move(transmission_);
-     
+
                 int connection_state = connection_stated_.exchange(4);   // Set state to dead
                 if (connection_state != 4) {
                     if (!disconnect && connection_state == 3) {   // If active and not forced disconnect
                         if (NULLPTR != transmission) {
                             // Notify FRP server of disconnect
-                            bool ok = linklayer_->DoFrpDisconnect(transmission, 
-                                connection_id_, 
-                                mapping_port_->in_, 
-                                mapping_port_->remote_port_, 
+                            bool ok = linklayer_->DoFrpDisconnect(transmission,
+                                connection_id_,
+                                mapping_port_->in_,
+                                mapping_port_->remote_port_,
                                 nullof<YieldContext>());
 
                             if (!ok) {
@@ -1093,7 +1095,7 @@ namespace ppp {
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
                     std::shared_ptr<Client> client = std::move(client_);
-     
+
                     if (NULLPTR != socket) {
                         ppp::net::Socket::Closesocket(socket);   // Close TCP socket
                     }
@@ -1225,7 +1227,7 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 // Queue asynchronous write
-                return WriteBytes(messages, packet_size, 
+                return WriteBytes(messages, packet_size,
                     [self, this](bool ok) noexcept {
                         if (ok) {
                             Update();
@@ -1302,6 +1304,7 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client_OnFrpDisconnect(int connection_id) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR == connection) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
@@ -1406,7 +1409,7 @@ namespace ppp {
             void VirtualEthernetMappingPort::Client::DatagramPort::Dispose() noexcept {
                 int disposed = disposed_.exchange(TRUE);
                 if (disposed != TRUE) {
-                    std::shared_ptr<Client> client = std::move(client_); 
+                    std::shared_ptr<Client> client = std::move(client_);
                     if (NULLPTR != client) {
                         // Remove from client's dictionary
                         ppp::collections::Dictionary::TryRemove(client->socket_datagram_ports_, nat_ep_);
@@ -1426,7 +1429,7 @@ namespace ppp {
                 if (disposed != FALSE) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
-                
+
                 ITransmissionPtr transmission = mapping_port_->GetTransmission();
                 if (NULLPTR == transmission) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
@@ -1453,11 +1456,13 @@ namespace ppp {
             bool VirtualEthernetMappingPort::Client::DatagramPort::Loopback() noexcept {
                 int disposed = disposed_.load();
                 if (disposed != FALSE) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (false == opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
@@ -1513,15 +1518,15 @@ namespace ppp {
                 if (opened) {
                     // Set UDP window sizes
                     ppp::net::Socket::SetWindowSizeIfNotZero(
-                        socket_.native_handle(), 
-                        configuration_->udp.cwnd, 
+                        socket_.native_handle(),
+                        configuration_->udp.cwnd,
                         configuration_->udp.rwnd);
                     opened = Loopback();   // Start receive loop
                 }
                 else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
-                
+
                 return opened;
             }
 

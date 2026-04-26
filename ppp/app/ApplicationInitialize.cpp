@@ -396,8 +396,18 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
         GLOBAL_VBGP.store(ppp::ToBoolean(ppp::GetCommandArgument("--vbgp", argc, argv, "y").data()), std::memory_order_relaxed);
     }
 
-    GLOBAL_.auto_restart = std::max<int>(0, atoi(ppp::GetCommandArgument("--auto-restart", argc, argv).data()));
-    GLOBAL_.link_restart = (uint8_t)std::max<int>(0, atoi(ppp::GetCommandArgument("--link-restart", argc, argv).data()));
+    {
+        ppp::string auto_restart_arg = ppp::GetCommandArgument("--auto-restart", argc, argv);
+        char* endptr = NULLPTR;
+        long auto_restart_val = strtol(auto_restart_arg.data(), &endptr, 10);
+        GLOBAL_.auto_restart = (NULLPTR != endptr && endptr != auto_restart_arg.data() && *endptr == '\x0') ? static_cast<int>(std::max<long>(0, auto_restart_val)) : 0;
+    }
+    {
+        ppp::string link_restart_arg = ppp::GetCommandArgument("--link-restart", argc, argv);
+        char* endptr = NULLPTR;
+        long link_restart_val = strtol(link_restart_arg.data(), &endptr, 10);
+        GLOBAL_.link_restart = (NULLPTR != endptr && endptr != link_restart_arg.data() && *endptr == '\x0') ? static_cast<uint8_t>(std::max<long>(0, link_restart_val)) : 0;
+    }
 
     if (!NextTickAlwaysTimeout(false)) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);

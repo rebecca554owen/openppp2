@@ -182,13 +182,20 @@ namespace ppp
                 else 
                 {
                     ppp::string& sx = segments[i - 1];
-                    if (sx.empty()) 
+                    if (sx.empty())
                     {
                         t[i - 1] = 0;
                     }
                     else
                     {
-                        t[i - 1] = atoi(sx.c_str());
+                        char* endptr = NULLPTR;
+                        long val = strtol(sx.c_str(), &endptr, 10);
+                        if (NULLPTR == endptr || endptr == sx.c_str() || *endptr != '\x0') {
+                            t[i - 1] = 0;
+                        } 
+                        else {
+                            t[i - 1] = static_cast<int>(val);
+                        }
                     }
                 }
             }

@@ -393,6 +393,11 @@ namespace ppp {
 
             /** @brief Handles client NAT packet and forwards via IPv4 or IPv6 routing path. */
             bool VirtualEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                if (NULLPTR == switcher_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                    return false;
+                }
+
                 VirtualEthernetLoggerPtr logger = switcher_->GetLogger();
                 if (NULLPTR != logger) {
                     logger->Packet(GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ClientToServer);
@@ -746,9 +751,10 @@ namespace ppp {
                 ppp::net::Socket::SetSignalPipeline(handle, false);
                 ppp::net::Socket::ReuseSocketAddress(handle, true);
 
-                socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP, 
+socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP, 
                     boost::asio::socket_base::message_end_of_record, ec);
                 if (ec) {
+                    Socket::Closesocket(socket);  // Clean up socket on send failure
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false;
                 }
@@ -763,17 +769,25 @@ namespace ppp {
                         }
                     });
                 if (NULLPTR == cb) {
+                    Socket::Closesocket(socket);  // Clean up socket on callback alloc failure
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
-                const auto timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
+                std::shared_ptr<ppp::threading::Timer> timeout;  // Non-const to allow disposal
+                {
+                    std::shared_ptr<ppp::threading::Timer> created_timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
+                    timeout = created_timeout;
+                }
                 if (NULLPTR == timeout) {
+                    Socket::Closesocket(socket);  // Clean up socket on timeout alloc failure
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     return false;
                 }
                 
                 if (!timeouts_.emplace(socket.get(), cb).second) {
+                    timeout->Dispose();  // Clean up timeout on insert failure
+                    Socket::Closesocket(socket);  // Clean up socket on timeout entry conflict
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetExchangerTimeoutEntryConflict);
                     return false;
                 }
@@ -792,12 +806,16 @@ namespace ppp {
                 const std::shared_ptr<ppp::threading::BufferswapAllocator> recv_allocator = transmission->BufferAllocator;
                 const std::shared_ptr<Byte> recv_buffer = ppp::threading::BufferswapAllocator::MakeByteArray(recv_allocator, max_buffer_size);
                 if (NULLPTR == recv_buffer) {
+                    DeleteTimeout(socket.get());  // Clean up timeout entry
+                    Socket::Closesocket(socket);  // Clean up socket on buffer alloc failure
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
                 const auto responseEP = make_shared_object<boost::asio::ip::udp::endpoint>();
                 if (NULLPTR == responseEP) {
+                    DeleteTimeout(socket.get());  // Clean up timeout entry
+                    Socket::Closesocket(socket);  // Clean up socket on endpoint alloc failure
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }

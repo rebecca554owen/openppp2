@@ -191,6 +191,7 @@ namespace {
      */
     static bool LoadSysctlSnapshot(ppp::unordered_map<ppp::string, ppp::string>& snapshot) noexcept {
         snapshot.clear();
+        
         ppp::string path = GetIPv6SysctlSnapshotPath();
         if (!ppp::io::File::Exists(path.data())) {
             return false;
@@ -431,7 +432,20 @@ namespace {
         }
 
         prefix = cidr.substr(0, slash);
-        prefix_length = atoi(cidr.substr(slash + 1).c_str());
+        
+        /**
+         * @brief Validate prefix length using strtol for proper error detection.
+         * @note atoi is unsafe as it cannot distinguish between 0 and error.
+         */
+        const ppp::string plen_str = cidr.substr(slash + 1);
+        char* endptr = NULLPTR;
+        long parsed = strtol(plen_str.c_str(), &endptr, 10);
+        if (NULLPTR == endptr || endptr == plen_str.c_str() || *endptr != '\x0' || parsed < 0 || parsed > 128) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
+            return false;
+        }
+        
+        prefix_length = static_cast<int>(parsed);
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
         return !prefix.empty();
     }

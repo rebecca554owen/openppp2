@@ -78,6 +78,7 @@ namespace ppp {
                         case VirtualEthernetLinklayer::PacketAction_MUXON:
                             return true;
                         default:
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                             return false;
                     }
                 }
@@ -142,7 +143,17 @@ namespace ppp {
 
                     // invalid port -> treat as zero / invalid
                     if (!port_str.empty()) {
-                        port = atoi(ppp::string(port_str).c_str());
+                        /**
+                         * @brief Validate port number using strtol.
+                         * @note Port must be in valid range [1, 65535].
+                         */
+                        ppp::string port_std_str(port_str);
+                        char* endptr = NULLPTR;
+                        long parsed_port = strtol(port_std_str.c_str(), &endptr, 10);
+                        if (NULLPTR != endptr && endptr != port_std_str.c_str() && *endptr == '\x0' && parsed_port > IPEndPoint::MinPort && parsed_port <= IPEndPoint::MaxPort) {
+                            port = static_cast<int>(parsed_port);
+                        }
+                        
                         if (port < IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
                             port = IPEndPoint::MinPort;
                         }

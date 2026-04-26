@@ -111,8 +111,21 @@ namespace {
         }
 
         prefix = cidr.substr(0, slash);
-        prefix_length = atoi(cidr.substr(slash + 1).c_str());
-        prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+        
+        /**
+         * @brief Validate prefix length using strtol for proper error detection.
+         * @note Reject invalid numeric strings and out-of-range values.
+         */
+        const ppp::string plen_str = cidr.substr(slash + 1);
+        char* endptr = NULLPTR;
+        long parsed = strtol(plen_str.c_str(), &endptr, 10);
+        if (NULLPTR == endptr || endptr == plen_str.c_str() || *endptr != '\x0' || parsed < ppp::ipv6::IPv6_MIN_PREFIX_LENGTH || parsed > ppp::ipv6::IPv6_MAX_PREFIX_LENGTH)
+        {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
+            return false;
+        }
+        
+        prefix_length = static_cast<int>(parsed);
         return !prefix.empty();
     }
 

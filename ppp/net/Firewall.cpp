@@ -498,7 +498,19 @@ namespace ppp
             int prefix = -1;
             if (cidr.size() > 0)
             {
-                prefix = atoi(cidr.data());
+                /**
+                 * @brief Use strtol to properly validate numeric conversion.
+                 * @note atoi cannot distinguish between 0 and conversion error.
+                 */
+                char* endptr = NULLPTR;
+                long parsed = strtol(cidr.data(), &endptr, 10);
+                if (NULLPTR == endptr || endptr == cidr.data() || *endptr != '\x0' || parsed < 0 || parsed > 128)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
+                    return false;
+                }
+                
+                prefix = static_cast<int>(parsed);
             }
 
             /** @brief Clamp prefix to the legal range for the detected address family. */
@@ -533,7 +545,20 @@ namespace ppp
          */
         static bool LoadWithRulesDropPort(Firewall* fw, ppp::string& line) noexcept
         {
-            int32_t network_port = atoi(line.data());
+            /**
+             * @brief Validate port number using strtol.
+             * @note Port must be in range [1, 65535].
+             */
+            char* endptr = NULLPTR;
+            long parsed_port = strtol(line.data(), &endptr, 10);
+            if (NULLPTR == endptr || endptr == line.data() || *endptr != '\x0' || parsed_port <= ppp::net::IPEndPoint::MinPort || parsed_port > ppp::net::IPEndPoint::MaxPort)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                return false;
+            }
+            
+            int32_t network_port = static_cast<int32_t>(parsed_port);
+
             std::size_t slash_index = line.find('/');
             if (slash_index != ppp::string::npos)
             {
@@ -551,6 +576,7 @@ namespace ppp
                     }
                 }
             }
+            
             return fw->DropNetworkPort(network_port);
         }
 

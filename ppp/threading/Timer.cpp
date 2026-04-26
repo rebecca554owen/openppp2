@@ -87,6 +87,7 @@ namespace ppp {
 
             bool ok = Next();
             if (!ok) {
+                _deadline_timer.reset();  // Clean up timer on failure
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
             }
 

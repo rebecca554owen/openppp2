@@ -475,7 +475,13 @@ namespace ppp {
                                         host = literal;
                                         std::size_t colon = host.find(':', end + 1);
                                         if (colon != ppp::string::npos) {
-                                            port = atoi(host.substr(colon + 1).c_str());
+                                            ppp::string port_str = host.substr(colon + 1);
+                                            char* endptr = NULLPTR;
+                                            long parsed_port = strtol(port_str.c_str(), &endptr, 10);
+                                            if (NULLPTR != endptr && endptr != port_str.c_str() && *endptr == '\x0' && parsed_port > ppp::net::IPEndPoint::MinPort && parsed_port <= ppp::net::IPEndPoint::MaxPort) {
+                                                port = static_cast<int>(parsed_port);
+                                            }
+
                                             if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
                                                 port = PPP_HTTP_SYS_PORT;
                                             }
@@ -486,7 +492,12 @@ namespace ppp {
                         }
                         // Handle common host:port format (IPv4/domain).
                         elif (char* p = (char*)::strchr(host.data(), ':'); NULLPTR != p) {
-                            port = atoi(p + 1);
+                            ppp::string port_str(p + 1);
+                            char* endptr = NULLPTR;
+                            long parsed_port = strtol(port_str.c_str(), &endptr, 10);
+                            if (NULLPTR != endptr && endptr != port_str.c_str() && *endptr == '\x0' && parsed_port > ppp::net::IPEndPoint::MinPort && parsed_port <= ppp::net::IPEndPoint::MaxPort) {
+                                port = static_cast<int>(parsed_port);
+                            }
                             if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
                                 port = PPP_HTTP_SYS_PORT;
                             }

@@ -6,6 +6,7 @@
  */
 
 #include <ppp/transmissions/ITransmission.h>
+#include <atomic>
 
 #if defined(_WIN32)
 #include <windows/ppp/net/QoSS.h>
@@ -78,8 +79,8 @@ namespace ppp {
             /** @brief Optional Windows QoS wrapper for socket traffic classification. */
             std::shared_ptr<ppp::net::QoSS>                                                     qoss_;
 #endif
-            /** @brief Indicates whether this transmission has been disposed. */
-            bool                                                                                disposed_ = false;
+            /** @brief Atomic disposed flag to prevent data races per C++17. Uses exchange pattern for thread-safe state transitions. */
+            std::atomic<int>                                                                    disposed_ = FALSE;
             /** @brief Owned connected TCP socket. */
             std::shared_ptr<boost::asio::ip::tcp::socket>                                       socket_;
             /** @brief Cached peer endpoint captured at construction. */

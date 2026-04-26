@@ -284,6 +284,8 @@ namespace vmux {
 
         template_string host;
         int port = 0;
+        char* endptr = NULLPTR;
+        long parsed_port = 0;
 
         const char* sdata = host_and_port.data();
         size_t slen = host_and_port.size();
@@ -295,7 +297,18 @@ namespace vmux {
             }
 
             host = host_and_port.substr(1, right - (sdata + 1));
-            port = atoi(right + 2);
+            
+            /**
+             * @brief Validate port number using strtol.
+             * @note Port must be in valid range.
+             */
+            endptr = NULLPTR;
+            parsed_port = strtol(right + 2, &endptr, 10);
+            if (NULLPTR == endptr || endptr == (right + 2) || *endptr != '\x0') {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAddressParseInvalidPort);
+                return false;
+            }
+            port = static_cast<int>(parsed_port);
         }
         else {
             const char* colon = strrchr(sdata, ':');
@@ -305,7 +318,18 @@ namespace vmux {
             }
 
             host = host_and_port.substr(0, colon - sdata);
-            port = atoi(colon + 1);
+            
+            /**
+             * @brief Validate port number using strtol.
+             * @note Port must be in valid range.
+             */
+            endptr = NULLPTR;
+            parsed_port = strtol(colon + 1, &endptr, 10);
+            if (NULLPTR == endptr || endptr == (colon + 1) || *endptr != '\x0') {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketAddressParseInvalidPort);
+                return false;
+            }
+            port = static_cast<int>(parsed_port);
         }
 
         if (host.empty()) {

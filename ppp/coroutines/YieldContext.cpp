@@ -252,7 +252,10 @@ namespace ppp
         }
 
         /**
-         * @brief Posts a resume request and retries until resume succeeds.
+         * @brief Posts a resume request to the strand.
+         * @note Removed infinite retry loop - if Resume() fails, it indicates the coroutine
+         *       is not in SUSPEND state (already completed or corrupted), retrying will not help.
+         *       Caller must handle failure cases appropriately.
          */
         bool YieldContext::R() noexcept
         {
@@ -263,7 +266,7 @@ namespace ppp
                     bool resumed = y->Resume();
                     if (!resumed)
                     {
-                        y->R();
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                     }
                 };
 

@@ -103,7 +103,7 @@ namespace ppp {
                  *
                  * Supports `key=value` and `key:value` syntax.
                  */
-                if (sectionKey.size()) { 
+if (sectionKey.size()) { 
                     index = line.find('=');
                     if (index == ppp::string::npos) {
                         index = line.find(':');
@@ -113,6 +113,11 @@ namespace ppp {
                     }
 
                     if (index == 0) {
+                        continue;
+                    }
+
+                    if (NULLPTR == sectionPtr) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldMissing);
                         continue;
                     }
 

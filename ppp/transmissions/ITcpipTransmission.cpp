@@ -27,7 +27,7 @@ namespace ppp {
             const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket, 
             const AppConfigurationPtr&                              configuration) noexcept 
             : ITransmission(context, strand, configuration)
-            , disposed_(false)
+            , disposed_(FALSE)
             , socket_(socket) {
             boost::system::error_code ec;
             remoteEP_ = ppp::net::Ipep::V6ToV4(socket->remote_endpoint(ec));
@@ -45,10 +45,15 @@ namespace ppp {
  
         /**
          * @brief Finalizes the transmission by closing the socket and releasing QoS state.
+         * @note Uses atomic exchange to prevent data races - returns previous value to detect double-dispose.
          */
         void ITcpipTransmission::Finalize() noexcept {
+            int disposed = disposed_.exchange(TRUE);  // Atomic swap: set true, get previous value
+            if (disposed == TRUE) {
+                return;  // Already disposed, avoid double cleanup
+            }
+
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
-            disposed_ = true;
 
             if (socket) {
                 Socket::Closesocket(socket);
@@ -89,7 +94,7 @@ namespace ppp {
          * @return Read buffer on success; null on failure.
          */
         std::shared_ptr<Byte> ITcpipTransmission::DoReadBytes(YieldContext& y, int length) noexcept {
-            if (disposed_) {
+            if (disposed_.load() != FALSE) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
             }
 
@@ -108,7 +113,7 @@ namespace ppp {
                 return false;
             }
 
-            if (disposed_) {
+            if (disposed_.load() != FALSE) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }
@@ -143,7 +148,7 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed, NULLPTR);
             }
 
-            if (disposed_) {
+            if (disposed_.load() != FALSE) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
             }
 
@@ -186,7 +191,7 @@ namespace ppp {
                 return false;
             }
 
-            if (disposed_) {
+            if (disposed_.load() != FALSE) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }

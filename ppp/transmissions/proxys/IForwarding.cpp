@@ -367,7 +367,21 @@ namespace ppp {
                     return false;
                 }
 
-                int status_code = atoi(segments[1].data());
+                /**
+                 * @brief Validate HTTP status code using strtol.
+                 * @note Status code must be in range [100, 599].
+                 */
+                char* endptr = NULLPTR;
+                long parsed_code = 0;
+                long parsed_port = 0;
+                
+                parsed_code = strtol(segments[1].data(), &endptr, 10);
+                if (NULLPTR == endptr || endptr == segments[1].data() || *endptr != '\x0') {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                    return false;
+                }
+
+                int status_code = static_cast<int>(parsed_code);
                 if (status_code < 200 || status_code >= 300) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpConnectTunnelFailed);
                     return false;
@@ -388,7 +402,19 @@ namespace ppp {
                     return false;
                 }
 
-                int v = atoi(s.substr(i + 1).data());
+                /**
+                 * @brief Validate port number using strtol.
+                 * @note Port must be in range [1, 65535].
+                 */
+                ppp::string port_str = s.substr(i + 1);
+                endptr = NULLPTR;
+                parsed_port = strtol(port_str.data(), &endptr, 10);
+                if (NULLPTR == endptr || endptr == port_str.data() || *endptr != '\x0' || parsed_port <= IPEndPoint::MinPort|| parsed_port > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                    return false;
+                }
+
+                int v = static_cast<int>(parsed_port);
                 if (v < 1) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;

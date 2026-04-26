@@ -225,7 +225,19 @@ namespace ppp
                     return NULLPTR;
                 }
 
-                if (size != ntohs(udphdr->len)) // 错误的数据报
+                /**
+                 * @brief Validate UDP length field before using it.
+                 * @note udphdr->len is network byte order; convert with ntohs.
+                 *       Minimum valid UDP length is sizeof(struct udp_hdr) = 8 bytes.
+                 */
+                int udp_total_len = ntohs(udphdr->len);
+                if (udp_total_len < static_cast<int>(sizeof(struct udp_hdr)))
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    return NULLPTR;
+                }
+
+                if (size != udp_total_len) // Invalid datagram: size mismatch
                 {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
@@ -233,7 +245,7 @@ namespace ppp
 
                 int hdrlen_bytes = sizeof(struct udp_hdr);
                 int len = size - hdrlen_bytes;
-                if (len < 1)
+                if (len < 0)
                 {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
@@ -576,7 +588,15 @@ namespace ppp
 
                     host = cidr.substr(0, i);
                     prefix_f = true;
-                    prefix = atoi(cidr.data() + (i + 1));
+                    
+                    char* endptr = NULLPTR;
+                    long parsed_prefix = strtol(cidr.data() + (i + 1), &endptr, 10);
+                    if (NULLPTR == endptr || endptr == (cidr.data() + (i + 1)) || *endptr != '\x0') {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddRouteInvalidPrefix);
+                        return false;
+                    }
+
+                    prefix = static_cast<int>(parsed_prefix);
                 }
 
                 boost::system::error_code ec;
