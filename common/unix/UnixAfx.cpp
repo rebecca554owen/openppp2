@@ -387,6 +387,7 @@ namespace ppp {
 
         bool UnixAfx::AddShutdownApplicationEventHandler(ShutdownApplicationEventHandler e) noexcept {
             static ShutdownApplicationEventHandler eeh = NULLPTR;
+            static std::atomic<bool> shutdown_requested = false;
 
             auto SIG_EEH = 
                 [](int signo) noexcept {
@@ -396,10 +397,11 @@ namespace ppp {
                         return;
                     }
 
-                    ShutdownApplicationEventHandler e = std::move(eeh);
-                    if (NULLPTR != e) {
-                        eeh = NULLPTR;
-                        e();
+                    shutdown_requested.store(true, std::memory_order_release);
+
+                    ShutdownApplicationEventHandler handler = eeh;
+                    if (NULLPTR != handler) {
+                        handler();
                     }
                     else {
                         signal(signo, SIG_DFL);

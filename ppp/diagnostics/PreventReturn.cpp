@@ -148,9 +148,19 @@ namespace ppp
              */
             if (flock(pid_file, LOCK_EX | LOCK_NB) < 0)
             {
+                int err = errno;
                 close(pid_file);
-                SetLastErrorCode(ErrorCode::AppAlreadyRunning);
-                return { -1, path, true };
+
+                if (EWOULDBLOCK == err || EAGAIN == err)
+                {
+                    SetLastErrorCode(ErrorCode::AppAlreadyRunning);
+                }
+                else
+                {
+                    SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
+                }
+                // The lock was not acquired, so .open must be false.
+                return { -1, path, false };
             }
 
             return { pid_file, path, true };
@@ -177,7 +187,8 @@ namespace ppp
             flock(pid_file, LOCK_UN);
             close(pid_file);
 
-            return unlink(path) > -1;
+            // unlink() returns 0 on success, -1 on error.
+            return unlink(path) == 0;
         }
 
         void PreventReturn::Close() noexcept
@@ -187,9 +198,13 @@ namespace ppp
                 pid_file_ = -1;
                 pid_path_.clear();
             }
-            elif (-1 != pid_file_)
+            else if (-1 != pid_file_)
             {
+                // Even if unlink failed, the file descriptor is already closed.
+                // Reset the internal state to avoid leaking a stale fd.
                 SetLastErrorCode(ErrorCode::AppLockReleaseFailed);
+                pid_file_ = -1;
+                pid_path_.clear();
             }
         }
 
@@ -209,10 +224,23 @@ namespace ppp
             FLOCK f = FLOCK_OPEN(name_string.data());
             if (f.fd == -1)
             {
-                return f.open;
+                // The lock could not be acquired. Check why.
+                ErrorCode ec = GetLastErrorCode();
+                if (ec == ErrorCode::AppAlreadyRunning)
+                {
+                    // Another instance holds the lock.
+                    return true;
+                }
+                
+                // Any other error (EINVAL, ENOLCK, etc.) means the lock was not taken
+                // and there is no evidence of another running instance.
+                return false;
             }
 
-            return !FLOCK_CLOSE(f.path.data(), f.fd);
+            // We successfully got the lock, meaning no other instance was running.
+            // Release it immediately and return false.
+            FLOCK_CLOSE(f.path.data(), f.fd);
+            return false;
         }
 
         /**
@@ -232,7 +260,14 @@ namespace ppp
             FLOCK f = FLOCK_OPEN(name_string.data());
             if (f.fd == -1)
             {
-                SetLastErrorCode(true == f.open ? ErrorCode::AppAlreadyRunning : ErrorCode::AppLockAcquireFailed);
+                if (GetLastErrorCode() == ErrorCode::AppAlreadyRunning)
+                {
+                    SetLastErrorCode(ErrorCode::AppAlreadyRunning);
+                }
+                else
+                {
+                    SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
+                }
                 return false;
             }
 

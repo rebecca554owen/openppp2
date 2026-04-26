@@ -815,12 +815,6 @@ namespace ppp
             {
                 PHANDLER_ROUTINE f = [](_In_ DWORD fdwCtrlType) -> BOOL
                 {
-                    const ShutdownApplicationEventHandler e = SHUTDOWN_APPLICATION_EVENT;
-                    if (NULLPTR == e)
-                    {
-                        return FALSE;
-                    }
-
                     const DWORD fdw_shutdown_ctrl_types[] =
                     {
                         CTRL_C_EVENT,
@@ -835,10 +829,15 @@ namespace ppp
                     {
                         if (*tmp_fdw_shutdown_ctrl_types++ == fdwCtrlType)
                         {
-                            return e() ? TRUE : FALSE;
+                            const ShutdownApplicationEventHandler e = SHUTDOWN_APPLICATION_EVENT;
+                            if (NULLPTR != e)
+                            {
+                                e();
+                            }
+                            return TRUE;
                         }
                     }
-                    return FALSE;
+                    return TRUE;
                 };
                 bOK = SetConsoleCtrlHandler(f, TRUE);
             }
