@@ -59,11 +59,11 @@ namespace ppp
             
         public:         
             /** @brief Unique numeric thread identifier assigned at construction (0 until started). */
-            const int64_t                                                   Id       = 0;
+            int64_t                                                         Id       = 0;
             /** @brief Current runtime state of the managed thread. */
-            const ThreadState                                               State    = ThreadState::Stopped;
+            ThreadState                                                     State    = ThreadState::Stopped;
             /** @brief Scheduling priority to apply when the thread is started. */
-            const ThreadPriority                                            Priority = ThreadPriority::Normal;
+            ThreadPriority                                                  Priority = ThreadPriority::Normal;
 
         public:                     
             /**

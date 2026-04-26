@@ -856,6 +856,7 @@ namespace ppp {
 
                 if (disposed_) {
                     websocket->Dispose();
+                    
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return NULLPTR;
                 }

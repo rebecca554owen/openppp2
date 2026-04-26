@@ -31,6 +31,17 @@ namespace ppp
 
     namespace threading
     {
+        namespace detail
+        {
+            constexpr int kTickThreadSleepMilliseconds = 10;
+            constexpr int kSecondsPerTickUnit = 1000;
+            constexpr int kMinThreadCount = 1;
+        }
+
+        using detail::kTickThreadSleepMilliseconds;
+        using detail::kSecondsPerTickUnit;
+        using detail::kMinThreadCount;
+
         /** @brief Shared byte-buffer pointer alias for cached context buffers. */
         typedef std::shared_ptr<Byte>                                           BufferArray;
         /** @brief Mutex type used to guard executor global state. */
@@ -58,7 +69,7 @@ namespace ppp
         public:
             std::atomic<int64_t>                                                DefaultThreadId = 0;
             std::atomic<uint64_t>                                               TickCount = 0;
-            DateTime                                                            Now;
+            DateTime                                                           Now;
             ExecutorContextPtr                                                  Default;
             ExecutorContextPtr                                                  Scheduler;
             SynchronizedObject                                                  Lock;
@@ -92,10 +103,10 @@ namespace ppp
                     []() noexcept 
                     {
                         SetThreadName("tick");
-                        for (std::shared_ptr<ExecutorsInternal> i = Internal; NULLPTR != i; Sleep(10))
+                        for (std::shared_ptr<ExecutorsInternal> i = Internal; NULLPTR != i; Sleep(kTickThreadSleepMilliseconds))
                         {
                             UInt64 now = ppp::GetTickCount();
-                            bool past = (now / 1000) != (i->TickCount / 1000);
+                            bool past = (now / kSecondsPerTickUnit) != (i->TickCount / kSecondsPerTickUnit);
 
                             i->TickCount = now;
                             i->Now = DateTime::Now();
@@ -617,9 +628,9 @@ namespace ppp
          */
         void Executors::SetMaxThreads(const std::shared_ptr<BufferswapAllocator>& allocator, int completionPortThreads) noexcept
         {
-            if (completionPortThreads < 1)
+            if (1 > completionPortThreads)
             {
-                completionPortThreads = 1;
+                completionPortThreads = kMinThreadCount;
             }
 
             ppp::vector<ExecutorContextPtr> releases;
@@ -797,9 +808,9 @@ namespace ppp
          */
         bool Executors::SetMaxSchedulers(int completionPortThreads) noexcept
         {
-            if (completionPortThreads < 1)
+            if (1 > completionPortThreads)
             {
-                completionPortThreads = 1;
+                completionPortThreads = kMinThreadCount;
             }
 
             SynchronizedObjectScope scope(Internal->Lock);

@@ -401,6 +401,7 @@ namespace ppp {
 
                     ShutdownApplicationEventHandler handler = eeh;
                     if (NULLPTR != handler) {
+                        eeh = NULLPTR;
                         handler();
                     }
                     else {

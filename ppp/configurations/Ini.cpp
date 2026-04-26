@@ -275,28 +275,56 @@ if (sectionKey.size()) {
         template <>
         int32_t Ini::Section::GetValue(const ppp::string& key) noexcept {
             ppp::string value = GetValue(key);
-            return strtol(value.data(), NULLPTR, 10);
+
+            char* endptr = NULLPTR;
+            long val = strtol(value.data(), &endptr, 10);
+            if (NULLPTR == endptr || endptr == value.data() || *endptr != '\x0') {
+                return 0;
+            }
+
+            return static_cast<int32_t>(val);
         }
 
-        /** @brief Gets a `uint32_t` value by key (template specialization). */
+        /** @brief Gets an `uint32_t` value by key (template specialization). */
         template <>
         uint32_t Ini::Section::GetValue(const ppp::string& key) noexcept {
             ppp::string value = GetValue(key);
-            return strtoul(value.data(), NULLPTR, 10);
+
+            char* endptr = NULLPTR;
+            unsigned long val = strtoul(value.data(), &endptr, 10);
+            if (NULLPTR == endptr || endptr == value.data() || *endptr != '\x0') {
+                return 0;
+            }
+
+            return static_cast<uint32_t>(val);
         }
 
         /** @brief Gets an `int64_t` value by key (template specialization). */
         template <>
         int64_t Ini::Section::GetValue(const ppp::string& key) noexcept {
             ppp::string value = GetValue(key);
-            return strtoll(value.data(), NULLPTR, 10);
+
+            char* endptr = NULLPTR;
+            long long val = strtoll(value.data(), &endptr, 10);
+            if (NULLPTR == endptr || endptr == value.data() || *endptr != '\x0') {
+                return 0;
+            }
+
+            return val;
         }
 
-        /** @brief Gets a `uint64_t` value by key (template specialization). */
+        /** @brief Gets an `uint64_t` value by key (template specialization). */
         template <>
         uint64_t Ini::Section::GetValue(const ppp::string& key) noexcept {
             ppp::string value = GetValue(key);
-            return strtoull(value.data(), NULLPTR, 10);
+
+            char* endptr = NULLPTR;
+            unsigned long long val = strtoull(value.data(), &endptr, 10);
+            if (NULLPTR == endptr || endptr == value.data() || *endptr != '\x0') {
+                return 0;
+            }
+
+            return val;
         }
 
         /** @brief Gets a `float` value by key (template specialization). */

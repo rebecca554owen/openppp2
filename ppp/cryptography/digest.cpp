@@ -132,7 +132,7 @@ namespace ppp {
                 const char* hex_fmt = toupper ? "%02X" : "%02x";
                 for (size_t i = 0; i < digest_sz_len; i++) {
                     int ch = digest_sz[i];
-                    sprintf(hex_sz + (i * 2), hex_fmt, ch);
+                    snprintf(hex_sz + (i * 2), 3, hex_fmt, ch);
                 }
 
                 digest = ppp::string(hex_sz, digest_sz_len * 2);

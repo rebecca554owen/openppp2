@@ -108,7 +108,6 @@ namespace ppp {
                         auto tail = allocateds_.find(identification);
                         auto endl = allocateds_.end();
                         if (tail == endl) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolDeallocateUnknownIdentification);
                             return false;
                         }
 
@@ -147,8 +146,7 @@ namespace ppp {
                     auto tail = allocateds_map_.begin();
                     auto endl = allocateds_map_.end();
                     if (tail == endl) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolSweepStateEmpty);
-                        return false;
+                        return true;
                     }
 
                     UInt64 now = ppp::threading::Executors::GetTickCount();

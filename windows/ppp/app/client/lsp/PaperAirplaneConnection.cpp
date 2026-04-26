@@ -132,6 +132,7 @@ namespace ppp
 
                     if (disposed_) 
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 

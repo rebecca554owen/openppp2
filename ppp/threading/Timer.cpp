@@ -46,6 +46,8 @@ namespace ppp {
         void Timer::Finalize() noexcept {
             _disposed_ = true;
             Stop();
+
+            tick_event_guard_.store(false, std::memory_order_release);
             TickEvent = NULLPTR;
         }
 
@@ -54,6 +56,10 @@ namespace ppp {
          * @param e Tick event payload containing elapsed time.
          */
         void Timer::OnTick(TickEventArgs& e) noexcept {
+            if (!tick_event_guard_.load(std::memory_order_acquire)) {
+                return;
+            }
+
             TickEventHandler eh = TickEvent;
             if (eh) {
                 eh(this, e);
@@ -70,7 +76,7 @@ namespace ppp {
                 return false;
             }
 
-            if (_interval < 1) {
+            if (1 > _interval) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TimerResolutionInvalid);
                 return false;
             }
@@ -172,11 +178,11 @@ namespace ppp {
          * @return Non-zero when the resulting interval is enabled; otherwise zero.
          */
         bool Timer::SetInterval(int milliseconds) noexcept {
-            if (milliseconds < 1) {
+            if (1 > milliseconds) {
                 milliseconds = 0;
             }
 
-            if (milliseconds < 1) {
+            if (1 > milliseconds) {
                 Stop();
             }
 
@@ -284,8 +290,8 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            if (milliseconds < 1) {
-                milliseconds = 1;
+            if (1 > milliseconds) {
+                milliseconds = kMinimumInterval;
             }
 
             std::shared_ptr<Timer> t = make_shared_object<Timer>(context);
@@ -334,7 +340,7 @@ namespace ppp {
             }
             
             bool ok = false;
-            if (milliseconds < 1) {
+            if (1 > milliseconds) {
                 boost::asio::post(deadlineTimer->get_executor(),
                     [&y, &ok]() noexcept {
                         ok = true;

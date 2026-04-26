@@ -431,8 +431,12 @@ namespace ppp
                 out = 0;
                 
                 // Validate inputs.
-                if (NULLPTR == payload || payload_length < 1 || origin_id == 0) {
+                if (origin_id == 0) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
+                    return NULLPTR;
+                }
+
+                if (NULLPTR == payload || payload_length < 1) {
                     return NULLPTR;
                 }
 
@@ -674,7 +678,12 @@ namespace ppp
                 const ppp::net::packet::IPFrame*                                packet,
                 int&                                                            out) noexcept
             {
-                if (NULLPTR == packet || session_id < 1) {
+                // Validate inputs.
+                if (NULLPTR == packet) {
+                    return NULLPTR;
+                }
+
+                if (session_id < 1) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return NULLPTR;
                 }

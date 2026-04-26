@@ -35,32 +35,34 @@ namespace ppp {
 
             public:
                 /** @brief Elapsed milliseconds since the previous tick. */
-                const UInt64                                                                                ElapsedMilliseconds = 0;
+                const UInt64                                                            ElapsedMilliseconds = 0;
             };
             /** @brief Tick callback signature. */
-            typedef ppp::function<void(Timer* sender, TickEventArgs& e)>                                    TickEventHandler;
+            typedef ppp::function<void(Timer* sender, TickEventArgs& e)>                  TickEventHandler;
             /** @brief One-shot timeout callback signature. */
-            typedef ppp::function<void(Timer*)>                                                             TimeoutEventHandler;
+            typedef ppp::function<void(Timer*)>                                         TimeoutEventHandler;
             /** @brief Shared timeout callback type. */
-            typedef std::shared_ptr<TimeoutEventHandler>                                                    TimeoutEventHandlerPtr;
+            typedef std::shared_ptr<TimeoutEventHandler>                                  TimeoutEventHandlerPtr;
             /** @brief Timeout callback table keyed by user token pointer. */
-            typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>                                       TimeoutEventHandlerTable;
+            typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>                     TimeoutEventHandlerTable;
             /** @brief Supported interval units for timer duration creation. */
             enum DurationType {
-                kHours,                                                                                     ///< Duration expressed in hours.
-                kMinutes,                                                                                   ///< Duration expressed in minutes.
-                kSeconds,                                                                                   ///< Duration expressed in seconds.
-                kMilliseconds,                                                                              ///< Duration expressed in milliseconds.
+                kHours,                                                                 ///< Duration expressed in hours.
+                kMinutes,                                                               ///< Duration expressed in minutes.
+                kSeconds,                                                               ///< Duration expressed in seconds.
+                kMilliseconds,                                                        ///< Duration expressed in milliseconds.
             };
             /** @brief Default duration unit used by DurationTime overloads. */
-            static constexpr DurationType                                                                   kDefaultDurationType = static_cast<DurationType>(3);
+            static constexpr DurationType                                               kDefaultDurationType = static_cast<DurationType>(3);
+            /** @brief Minimum valid interval in milliseconds. */
+            static constexpr int                                                   kMinimumInterval = 1;
             /**
              * @brief Converts an interval and unit into a Boost deadline duration.
              * @param interval Duration value.
              * @param durationType Unit of @p interval.
              * @return Boost.Asio deadline timer duration.
              */
-            static boost::asio::steady_timer::duration                                                      DurationTime(long long int interval, DurationType durationType = kDefaultDurationType) noexcept;
+            static boost::asio::steady_timer::duration                                 DurationTime(long long int interval, DurationType durationType = kDefaultDurationType) noexcept;
 
         public:
             /** @brief Creates a timer without binding an external io_context. */
@@ -75,65 +77,65 @@ namespace ppp {
 
         public:
             /** @brief Tick event handler invoked when the timer interval elapses. */
-            TickEventHandler                                                                                TickEvent;
+            TickEventHandler                                                          TickEvent;
 
         protected:
             /**
              * @brief Raises the tick event callback.
              * @param e Tick event arguments.
              */
-            void                                                                                            OnTick(TickEventArgs& e) noexcept;
+            void                                                                    OnTick(TickEventArgs& e) noexcept;
 
         public:
             /** @brief Disposes and stops the timer. */
-            void                                                                                            Dispose() noexcept;
+            void                                                                    Dispose() noexcept;
             /**
              * @brief Sets the timer interval in milliseconds.
              * @param milliseconds Interval value.
              * @return true if interval is accepted; otherwise false.
              */
-            bool                                                                                            SetInterval(int milliseconds) noexcept;
-        
-        public:     
+            bool                                                                    SetInterval(int milliseconds) noexcept;
+
+        public:
             /** @brief Starts timer scheduling. */
-            bool                                                                                            Start() noexcept;
+            bool                                                                    Start() noexcept;
             /** @brief Stops timer scheduling. */
-            bool                                                                                            Stop() noexcept;
+            bool                                                                    Stop() noexcept;
 
         public:
             /** @brief Gets a shared reference to this timer instance. */
-            std::shared_ptr<Timer>                                                                          GetReference() noexcept;
+            std::shared_ptr<Timer>                                                  GetReference() noexcept;
             /** @brief Checks whether timer scheduling is active. */
-            bool                                                                                            IsEnabled() noexcept;
+            bool                                                                    IsEnabled() noexcept;
             /**
              * @brief Enables or disables timer scheduling.
-             * @param value true to enable; false to disable.
+             * @param value true to enable; false to stop.
              * @return true if state changed successfully.
              */
-            bool                                                                                            SetEnabled(bool value) noexcept;
+            bool                                                                    SetEnabled(bool value) noexcept;
             /** @brief Gets the configured interval in milliseconds. */
-            int                                                                                             GetInterval() noexcept;
-            
+            int                                                                     GetInterval() noexcept;
+
         public:
             /**
              * @brief Releases and clears all timeout handlers in a table.
              * @param timeouts Timeout table to clear.
              */
-            static void                                                                                     ReleaseAllTimeouts(TimeoutEventHandlerTable& timeouts) noexcept;
+            static void                                                             ReleaseAllTimeouts(TimeoutEventHandlerTable& timeouts) noexcept;
             /**
              * @brief Coroutine-friendly sleep helper.
              * @param milliseconds Timeout value.
              * @param y Yield context used to suspend/resume.
              * @return true if wait completes successfully.
              */
-            static bool                                                                                     Timeout(int milliseconds, ppp::coroutines::YieldContext& y) noexcept;
+            static bool                                                             Timeout(int milliseconds, ppp::coroutines::YieldContext& y) noexcept;
             /**
              * @brief Creates a one-shot timer and invokes a callback on expiration.
              * @param milliseconds Timeout value.
              * @param handler Callback to invoke on expiration.
              * @return Created timer instance, or null on failure.
              */
-            static std::shared_ptr<Timer>                                                                   Timeout(int milliseconds, const TimeoutEventHandler& handler) noexcept;
+            static std::shared_ptr<Timer>                                           Timeout(int milliseconds, const TimeoutEventHandler& handler) noexcept;
             /**
              * @brief Creates a one-shot timer on the specified context.
              * @param context Shared io_context used for scheduling.
@@ -141,25 +143,27 @@ namespace ppp {
              * @param handler Callback to invoke on expiration.
              * @return Created timer instance, or null on failure.
              */
-            static std::shared_ptr<Timer>                                                                   Timeout(const std::shared_ptr<boost::asio::io_context>& context, int milliseconds, const TimeoutEventHandler& handler) noexcept;
+            static std::shared_ptr<Timer>                                           Timeout(const std::shared_ptr<boost::asio::io_context>& context, int milliseconds, const TimeoutEventHandler& handler) noexcept;
 
         private:
             /** @brief Schedules the next interval tick. */
-            bool                                                                                            Next() noexcept;
+            bool                                                                    Next() noexcept;
             /** @brief Finalizes timer internals and releases resources. */
-            void                                                                                            Finalize() noexcept;
+            void                                                                    Finalize() noexcept;
 
         private:
             /** @brief Indicates whether Dispose/Finalize has been called. */
-            bool                                                                                            _disposed_ = false;
+            bool                                                                    _disposed_ = false;
+            /** @brief Synchronization flag for TickEvent access (false when Finalize in progress). */
+            std::atomic<bool>                                                       tick_event_guard_ = { true };
             /** @brief Stores the previous tick timestamp in milliseconds. */
-            UInt64                                                                                          _last      = 0;
+            UInt64                                                                  _last      = 0;
             /** @brief Timer interval in milliseconds. */
-            int                                                                                             _interval  = 0;
+            int                                                                     _interval  = 0;
             /** @brief Execution context used by the timer. */
-            std::shared_ptr<boost::asio::io_context>                                                        _context;
+            std::shared_ptr<boost::asio::io_context>                                  _context;
             /** @brief Underlying Boost.Asio steady (monotonic) timer instance. */
-            std::shared_ptr<boost::asio::steady_timer>                                                      _deadline_timer;                                                                 
+            std::shared_ptr<boost::asio::steady_timer>                                _deadline_timer;
         };
     }
 }

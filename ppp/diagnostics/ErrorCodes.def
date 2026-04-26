@@ -428,8 +428,6 @@ X(PaperAirplaneControllerReleaseNullConnection, "PaperAirplane controller releas
 X(PaperAirplaneControllerNoLspPathEmpty, "PaperAirplane controller NoLsp received empty path", ErrorSeverity::kError)
 X(PaperAirplaneControllerNoLspPathConvertFailed, "PaperAirplane controller NoLsp failed to convert path to wide string", ErrorSeverity::kError)
 
-X(IcmpProtocolDeallocateUnknownIdentification, "ICMP protocol deallocation received unknown identification", ErrorSeverity::kError)
-X(IcmpProtocolSweepStateEmpty, "ICMP protocol sweep found no allocated identification state", ErrorSeverity::kError)
 X(IcmpProtocolEchoDisposed, "ICMP protocol echo rejected because protocol is disposed", ErrorSeverity::kError)
 X(IcmpProtocolEchoContextAllocFailed, "ICMP protocol echo failed to allocate asynchronous context", ErrorSeverity::kError)
 X(IcmpProtocolEchoTimeoutCallbackAllocFailed, "ICMP protocol echo failed to allocate timeout callback", ErrorSeverity::kError)

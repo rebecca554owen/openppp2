@@ -189,6 +189,7 @@ namespace ppp {
                         [self, this](ppp::net::SocketAcceptor*, ppp::net::SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
                             int sockfd = e.Socket;
                             ppp::diagnostics::ErrorCode error_code = ppp::diagnostics::ErrorCode::SessionDisposed;
+                            
                             /**
                              * @brief Accept callback validates network readiness before scheduling per-socket work.
                              */
