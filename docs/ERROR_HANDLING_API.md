@@ -447,9 +447,11 @@ When adding a new failure branch:
 
 - [ ] Call `SetLastErrorCode(...)` or `SetLastError(...)` before returning failure.
 - [ ] Choose the most specific `ErrorCode` available; do not default to broad generic codes.
-- [ ] If no specific code exists, add one to `ppp/diagnostics/Error.h` with a clear comment.
+- [ ] If no specific code exists, append one line to `ppp/diagnostics/ErrorCodes.def` with a clear message and severity.
 - [ ] Verify the new code appears in `FormatErrorString` with a meaningful message.
 - [ ] Update `ERROR_CODES.md` and `ERROR_CODES_CN.md` if a new code is added.
+- [ ] Wrapper layers must preserve a specific lower-layer diagnostic when one is already set; only publish a fallback code when the current code is still `Success`.
+- [ ] Append new entries to the tail of `ppp/diagnostics/ErrorCodes.def` unless renumbering all later numeric IDs is explicitly acceptable.
 
 Entry-point guardrail:
 

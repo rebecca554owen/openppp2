@@ -500,7 +500,7 @@ namespace {
                     LinuxExecuteCommand(command);
                 }
             }
-            else if (uplink_name.empty()) {
+            elif (uplink_name.empty()) {
                 snprintf(command, sizeof(command),
                     "%s; "
                     "ip6tables -t nat -D POSTROUTING -s %s/%d -j MASQUERADE >/dev/null 2>&1",
@@ -518,7 +518,7 @@ namespace {
             }
             LinuxExecuteCommand(command);
         }
-        else if (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
+        elif (mode == ppp::configurations::AppConfiguration::IPv6Mode_Gua) {
             if (!forward_cleanup.empty()) {
                 LinuxExecuteCommand(forward_cleanup);
             }
@@ -627,7 +627,7 @@ namespace ppp {
                         prefix = ppp::ipv6::IPV6_DEFAULT_PREFIX;
                         prefix_length = ppp::ipv6::IPv6_DEFAULT_PREFIX_LENGTH;
                     }
-                    else if (!normalized) {
+                    elif (!normalized) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
                         return false;
                     }
@@ -822,7 +822,7 @@ namespace ppp {
                     if (gateway.is_v6()) {
                         gateway_string = gateway.to_string();
                     }
-                    else if (!nat_mode) {
+                    elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
@@ -850,7 +850,7 @@ namespace ppp {
                     if (gateway.is_v6()) {
                         gateway_string = gateway.to_string();
                     }
-                    else if (!nat_mode) {
+                    elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
@@ -911,7 +911,7 @@ namespace ppp {
                     if (state.DefaultRouteApplied && nat_mode && state.DefaultRouteGateway.empty()) {
                         ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, ppp::string());
                     }
-                    else if (state.DefaultRouteApplied) {
+                    elif (state.DefaultRouteApplied) {
                         ppp::tap::TapLinux::DeleteRoute6(context.InterfaceName, "::", 0, state.DefaultRouteGateway);
                     }
 

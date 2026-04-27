@@ -246,7 +246,7 @@ On any failure, `ppp::ipv6::auxiliary::FinalizeServerEnvironment()` is called to
 After `PreparedLoopbackEnvironment()` succeeds:
 
 1. **TUI detection**: `ConsoleUI::ShouldEnable()` calls `isatty(STDOUT_FILENO)`. If stdout is a pipe or redirected, the full-screen TUI is suppressed and a plain-text startup banner is printed instead.
-2. **TUI start**: `ConsoleUI::Start()` spawns two dedicated threads (render + input) that operate outside the Boost.Asio event loop.
+2. **TUI start**: `ConsoleUI::Start()` attempts to spawn two dedicated threads (render + input) outside the Boost.Asio event loop. If optional UI startup fails after tty detection, the process falls back to plain-text mode and publishes `RuntimeOptionalUiStartFailed`.
 3. **Statistics reset**: `stopwatch_.Restart()` and `transmission_statistics_.Clear()` mark the start of the measurement window. Statistics are accumulated from this point for display in the TUI status panels.
 4. **Windows QUIC toggle** (client only): `HttpProxy::SetSupportExperimentalQuicProtocol()` enables or disables QUIC based on configuration.
 5. **VIRR / VBGP flags**: Written into process-global atomics used by the routing subsystem.

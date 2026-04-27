@@ -1743,7 +1743,15 @@ namespace ppp {
 
                 bool vbgp_url = ppp::net::http::HttpClient::VerifyUri(url, NULLPTR, NULLPTR, NULLPTR, NULLPTR);
                 if (!vbgp_url && !File::Exists(fullpath.data())) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                    if (ppp::diagnostics::ErrorCode::FileNotFound == ppp::diagnostics::GetLastErrorCode()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteListFileNotFound);
+                    }
+
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                    }
+
+                    return false;
                 }
                 
                 uint32_t ngw = IPEndPoint::AnyAddress;
@@ -1770,7 +1778,7 @@ namespace ppp {
                             return i.first == fullpath;
                         });
                     if (tail != ribs->end()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteListRegistrationDuplicate);
                     }
                 }
 
@@ -1779,7 +1787,7 @@ namespace ppp {
                     if (NULLPTR == vbgp)  {
                         vbgp = make_shared_object<RouteIPListTable>();
                         if (NULLPTR == vbgp) {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VbgpRouteTableAllocFailed);
                         }
 
                         vbgp_ = vbgp;

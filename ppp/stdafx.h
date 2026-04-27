@@ -886,7 +886,7 @@ extern "C" {
 #if defined(_ANDROID)
 #include <android/log.h>
 
-// 定义日志输出函数
+// Define log output functions
 #define LOG_TAG (BOOST_BEAST_VERSION_STRING)
 #define LOG_INFO(...)               __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOG_ERROR(...)              __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)

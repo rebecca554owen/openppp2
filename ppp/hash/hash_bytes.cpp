@@ -34,7 +34,7 @@
 #include <cstdint>
 #include <cstring>
 
-#ifdef _WIN32
+#if defined(_WIN32)
 #include <intrin.h>
 #endif
 

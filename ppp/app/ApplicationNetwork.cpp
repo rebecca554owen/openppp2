@@ -170,7 +170,7 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
                 ppp::set<ppp::string> ips;
                 if (chnroutes2_getiplist(ips, nation, response_text) < 1) {
                     if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteListParseFailed);
                     }
 
                     return -1;
@@ -226,13 +226,13 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
         }
         else {
             if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteListParseFailed);
             }
         }
     }
 
     if (!virr && !ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteListParseFailed);
     }
 }
 

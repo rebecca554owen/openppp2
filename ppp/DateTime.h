@@ -10,8 +10,8 @@
 namespace ppp 
 {
     //////////////////////////////////////////////////////////////////////////
-    /*
-     * 时间计量单位为：千万分之一秒，即一个周期100纳秒时。
+    /**
+     * @brief Time unit is 100-nanosecond intervals (10-millionths of a second per tick).
      */
     /**
      * @brief Day-of-week enumeration.

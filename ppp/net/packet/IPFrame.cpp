@@ -103,7 +103,9 @@ namespace ppp {
             std::shared_ptr<IPFrame> IPFrame::Parse(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* packet, int size) noexcept {
                 struct ip_hdr* iphdr = ip_hdr::Parse(packet, size);
                 if (NULLPTR == iphdr) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
+                    }
                     return NULLPTR;
                 }
 

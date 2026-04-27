@@ -72,7 +72,7 @@ namespace ppp {
          */
         bool Timer::Start() noexcept {
             if (_disposed_) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeObjectDisposed);
                 return false;
             }
 
@@ -87,7 +87,7 @@ namespace ppp {
             _last = 0;
             _deadline_timer = make_shared_object<boost::asio::steady_timer>(*_context);
             if (NULLPTR == _deadline_timer) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
@@ -106,13 +106,13 @@ namespace ppp {
          */
         bool Timer::Next() noexcept {
             if (_disposed_) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeObjectDisposed);
                 return false;
             }
 
             std::shared_ptr<boost::asio::steady_timer> t = _deadline_timer;
             if (NULLPTR == t) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeObjectDisposed);
                 return false;
             }
             else {
@@ -286,7 +286,7 @@ namespace ppp {
             }
 
             if (NULLPTR == context) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TimerContextMissing);
                 return NULLPTR;
             }
 
@@ -296,7 +296,7 @@ namespace ppp {
 
             std::shared_ptr<Timer> t = make_shared_object<Timer>(context);
             if (NULLPTR == t) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -335,7 +335,7 @@ namespace ppp {
                 make_shared_object<boost::asio::steady_timer>(y.GetContext());
 
             if (NULLPTR == deadlineTimer) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
             

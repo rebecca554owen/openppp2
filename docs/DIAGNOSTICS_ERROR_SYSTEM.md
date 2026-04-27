@@ -2,7 +2,7 @@
 
 > **Subsystem:** `ppp::diagnostics`  
 > **Files:**  
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (542 live entries)  
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (595 live entries)  
 > - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum  
 > - `ppp/diagnostics/Error.cpp` — Free function delegations  
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration  
@@ -42,7 +42,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 | **Zero allocation on hot path** | Error codes are `uint32_t`-backed enums; `SetLastErrorCode` stores to `thread_local` and an atomic. No heap. |
 | **Thread isolation** | Each thread maintains its own `tls_last_error_code_`. No locking on read or write of per-thread state. |
 | **Process-wide observability** | `last_error_code_snapshot_` is a `std::atomic<uint32_t>` visible to all threads. |
-| **Single source of truth** | All 542 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
+| **Single source of truth** | All 595 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
 | **No exceptions for error reporting** | `SetLastErrorCode` is `noexcept`. Error conditions are communicated via return values. |
 | **Observer pattern** | Named handlers registered via `RegisterErrorHandler` are called synchronously on error. |
 | **Severity awareness** | Each error code carries a `kTrace`/`kDebug`/`kInfo`/`kWarn`/`kError`/`kFatal` classification. |
@@ -54,7 +54,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 ```mermaid
 graph TB
     subgraph ppp/diagnostics
-        Def[ErrorCodes.def\nX-macro definitions\n542 error codes]
+        Def[ErrorCodes.def\nX-macro definitions\n595 error codes]
         Eh[Error.h\nErrorSeverity enum\nErrorCode enum\nfree functions]
         Ec[Error.cpp\ndelegates to ErrorHandler::GetDefault()]
         Ehh[ErrorHandler.h\nErrorHandler class\nsingleton]
@@ -157,12 +157,10 @@ before converting into `ErrorCode`.
 ### Expansion 4: `FormatErrorTriplet` (`ErrorHandler.cpp`)
 
 ```cpp
-switch (code) {
-#define X(name, text, severity) case ErrorCode::name: \
-    code_name = #name; code_message = text; break;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-}
+const ErrorDescriptor& descriptor = ResolveErrorDescriptor(code);
+result += descriptor.name;
+result += ": ";
+result += descriptor.text;
 ```
 
 ### Why X-Macros?
@@ -172,6 +170,7 @@ X-macros provide a single authoritative source for all error metadata. The alter
 - Adding a new error code requires exactly **one line** in `ErrorCodes.def`.
 - All four generated structures update automatically at compile time.
 - No runtime initialization is required; all switch tables are compile-time constants.
+- New entries should be appended to the tail of `ErrorCodes.def` when ordinal stability matters for persisted or external numeric IDs.
 
 ```mermaid
 graph LR
@@ -214,10 +213,10 @@ enum class ErrorSeverity : uint8_t {
 
 ```mermaid
 pie title ErrorCode Severity Distribution
-    "kInfo (1)" : 1
-    "kWarning (7)" : 7
-    "kError (506)" : 506
-    "kFatal (28)" : 28
+    "kInfo (8)" : 8
+    "kWarning (25)" : 25
+    "kError (539)" : 539
+    "kFatal (23)" : 23
 ```
 
 ---
@@ -234,7 +233,7 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` is a strongly-typed `uint32_t` enum with 542 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`, and `kErrorCodeMax` is the exclusive upper bound for raw integer validation.
+`ErrorCode` is a strongly-typed `uint32_t` enum with 595 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`, and `kErrorCodeMax` is the exclusive upper bound for raw integer validation.
 
 ### Category Structure of `ErrorCodes.def`
 
@@ -663,12 +662,19 @@ graph TD
 | Code | Message | Required Action |
 |---|---|---|
 | `RuntimeInitializationFailed` | Runtime initialization failed | Check startup sequence and dependent subsystems. |
-| `AppAlreadyRunning` | Application already running | Remove stale PID file. |
-| `AppInvalidCommandLine` | Invalid command-line arguments | Correct the launch command. |
 | `AppConfigurationMissing` | Configuration missing | Create `appsettings.json`. |
 | `IPv6Unsupported` | IPv6 unsupported on this platform | Switch to NAT66 or disable IPv6. |
 | `PlatformNotSupportGUAMode` | GUA mode not supported | Use NAT66 on non-Linux. |
 | `GenericNotSupported` | Operation not supported | Check platform compatibility. |
+
+### Warning-Level Control Outcomes
+
+| Code | Message | Typical Meaning |
+|---|---|---|
+| `AppAlreadyRunning` | Application already running | Another process already owns the same config-scoped lock. |
+| `AppInvalidCommandLine` | Invalid command-line arguments | The requested command line is rejected without implying runtime corruption. |
+| `RuntimeOptionalUiStartFailed` | Optional UI start failed | The process downgraded to plain-text mode and kept running. |
+| `NetworkFirewallBlocked` | Network blocked by firewall | Policy denied traffic without implying process failure. |
 
 ---
 

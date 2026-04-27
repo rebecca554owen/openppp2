@@ -55,7 +55,7 @@ namespace ppp {
                  * GetTickCount() carries no fixed relationship to Unix time
                  * and must not be used here.
                  */
-                bool                                                Valid() noexcept                                          { return Valid((UInt32)time(nullptr)); }
+                 bool                                                Valid() noexcept                                          { return Valid((UInt32)time(NULLPTR)); }
                 /** @brief Checks validity against a provided timestamp. */
                 bool                                                Valid(UInt32 now) noexcept                                { return Valid(this, now); }
                 /** @brief Validates quotas and expiration values for a data instance. */

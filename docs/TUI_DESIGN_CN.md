@@ -271,6 +271,10 @@ sequenceDiagram
 
 这确保了 `./ppp > log.txt` 或管道输出能正常工作，不受干扰。
 
+如果 `ShouldEnable()` 返回 `true`，但 `ConsoleUI::Start()` 在终端准备或可选线程启动阶段失败，
+进程现在也会降级到相同的纯文本路径，并发布告警级诊断 `RuntimeOptionalUiStartFailed`，而不会把可选 UI
+初始化失败升级成致命运行时错误。
+
 ---
 
 ## 线程安全

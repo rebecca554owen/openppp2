@@ -65,10 +65,6 @@ static constexpr const char kVV[]   = "\xe2\x94\x82";
 // ANSI escape sequences
 // ---------------------------------------------------------------------------
 
-/** @brief Hide the terminal cursor. */
-static constexpr const char kHideCursor[]  = "\x1b[?25l";
-/** @brief Show the terminal cursor. */
-static constexpr const char kShowCursor[]  = "\x1b[?25h";
 /** @brief Clear entire screen and move cursor to (1,1). */
 static constexpr const char kClearScreen[] = "\x1b[2J\x1b[H";
 /** @brief ANSI dark-gray foreground (for OPEN in art). */
@@ -91,8 +87,6 @@ static constexpr const char kColorFatal[]  = "\x1b[1;31m";
 static constexpr const char kColorReset[]  = "\x1b[0m";
 /** @brief ANSI dim/dark gray (for placeholder text). */
 static constexpr const char kColorDim[]    = "\x1b[2;37m";
-/** @brief ANSI reverse-video (used to render the synthetic cursor block). */
-static constexpr const char kColorReverse[] = "\x1b[7m";
 /** @brief ANSI white background (used for the synthetic white-block cursor). */
 static constexpr const char kColorWhiteBg[] = "\x1b[47m";
 /** @brief Enter alternate screen buffer (preserves the user's original console contents). */
@@ -517,7 +511,7 @@ bool ConsoleUI::Start() noexcept {
     vt_enabled_ = EnableVirtualTerminal();
 
     if (!PrepareInputTerminal()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeOptionalUiStartFailed);
         running_.store(false, std::memory_order_release);
         return false;
     }
@@ -560,7 +554,7 @@ bool ConsoleUI::Start() noexcept {
         render_thread_ = std::thread([this]() noexcept { RenderLoop(); });
         input_thread_  = std::thread([this]() noexcept { InputLoop(); });
     } catch (...) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeOptionalUiStartFailed);
         running_.store(false, std::memory_order_release);
         if (render_thread_.joinable()) {
             render_thread_.join();

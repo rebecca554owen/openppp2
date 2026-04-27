@@ -878,7 +878,7 @@ namespace ppp {
                     if (status >= 7) {
                         calli = true;
                     }
-                    else if (status >= 2) {
+                    elif (status >= 2) {
                         mask = 0;
                         metric = -1;
                         calli = true;

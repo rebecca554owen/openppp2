@@ -4,9 +4,9 @@
 
 This page is generated from `ppp/diagnostics/ErrorCodes.def`, which is the single source of truth for `ppp::diagnostics::ErrorCode`.
 
-**Live total: 542 error codes.**
+**Live total: 595 error codes.**
 
-Severity distribution: kInfo=1, kWarning=7, kError=506, kFatal=28.
+Severity distribution: kInfo=8, kWarning=25, kError=539, kFatal=23.
 
 `ERROR_CODES.md` currently keeps the original core taxonomy tables (220 baseline entries) for readability.
 For the complete live catalog (including extended subsystem-specific entries and reserved slots),
@@ -188,13 +188,13 @@ graph TD
 
 | Name | Description | Severity |
 |------|-------------|----------|
-| `AppAlreadyRunning` | Application already running | `kFatal` |
+| `AppAlreadyRunning` | Application already running | `kWarning` |
 | `AppLockAcquireFailed` | Application lock acquisition failed | `kError` |
-| `AppLockReleaseFailed` | Application lock release failed | `kError` |
-| `AppInvalidCommandLine` | Invalid command-line arguments | `kFatal` |
+| `AppLockReleaseFailed` | Application lock release failed | `kWarning` |
+| `AppInvalidCommandLine` | Invalid command-line arguments | `kWarning` |
 | `AppConfigurationMissing` | Application configuration missing | `kFatal` |
 | `AppContextUnavailable` | Application context unavailable | `kError` |
-| `AppPrivilegeRequired` | Administrator or root privilege required | `kFatal` |
+| `AppPrivilegeRequired` | Administrator or root privilege required | `kError` |
 | `AppPreflightCheckFailed` | Startup preflight check failed | `kFatal` |
 
 ---
@@ -223,8 +223,8 @@ graph TD
 |------|-------------|----------|
 | `RuntimeInitializationFailed` | Runtime initialization failed | `kFatal` |
 | `RuntimeEnvironmentInvalid` | Runtime environment invalid | `kFatal` |
-| `RuntimeIoContextMissing` | I/O context unavailable | `kFatal` |
-| `RuntimeSchedulerUnavailable` | Scheduler unavailable | `kFatal` |
+| `RuntimeIoContextMissing` | I/O context unavailable | `kError` |
+| `RuntimeSchedulerUnavailable` | Scheduler unavailable | `kError` |
 | `RuntimeTimerCreateFailed` | Timer creation failed | `kError` |
 | `RuntimeTimerStartFailed` | Timer start failed | `kError` |
 | `RuntimeEventDispatchFailed` | Event dispatch failed | `kError` |
@@ -277,8 +277,8 @@ graph TD
 | `NetworkMaskInvalid` | Network mask invalid | `kError` |
 | `NetworkGatewayInvalid` | Network gateway invalid | `kError` |
 | `NetworkPortInvalid` | Network port invalid | `kError` |
-| `NetworkProtocolUnsupported` | Network protocol unsupported | `kFatal` |
-| `NetworkFirewallBlocked` | Network blocked by firewall | `kError` |
+| `NetworkProtocolUnsupported` | Network protocol unsupported | `kError` |
+| `NetworkFirewallBlocked` | Network blocked by firewall | `kWarning` |
 | `NetworkAddressFamilyMismatch` | Network address family mismatch | `kError` |
 | `NetworkPacketMalformed` | Malformed network packet | `kError` |
 | `NetworkPacketTooLarge` | Network packet too large | `kError` |
@@ -501,7 +501,7 @@ graph TD
 
 | Name | Description | Severity |
 |------|-------------|----------|
-| `CryptoAlgorithmUnsupported` | Crypto algorithm unsupported | `kFatal` |
+| `CryptoAlgorithmUnsupported` | Crypto algorithm unsupported | `kError` |
 
 ---
 

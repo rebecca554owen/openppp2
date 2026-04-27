@@ -117,7 +117,7 @@ if (sectionKey.size()) {
                     }
 
                     if (NULLPTR == sectionPtr) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldMissing);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFileMalformed);
                         continue;
                     }
 

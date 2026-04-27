@@ -700,7 +700,7 @@ namespace ppp {
                 ppp::string proxy_password;
                 ppp::string proxy_url = IFORWARDING_REWRITE_PROXY_URI(configuration_->client.server_proxy, proxy_uername, proxy_password);
                 if (proxy_url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldMissing);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
                     return -1;
                 }
 
@@ -711,7 +711,9 @@ namespace ppp {
 
                 ResetSS();
                 if (!IFORWARDING_VERIFY_PROXY_URI(proxy_url, server_.url, server_.endpoint, server_.protocol)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
+                    }
                     return 0;
                 }
 
@@ -950,7 +952,7 @@ namespace ppp {
                 
                 ProtocolType protocol_type = server_.protocol;
                 if (protocol_type != ProtocolType_HttpProxy && protocol_type != ProtocolType_SocksProxy) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriProtocolUnsupported);
                     return false;
                 }
                 

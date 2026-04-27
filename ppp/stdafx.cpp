@@ -165,7 +165,7 @@ namespace ppp {
      * @return CRC32 value.
      */
     int CRC32(const char* s, int len) noexcept {
-        if (s == NULLPTR) {
+        if (NULLPTR == s) {
             return 0;
         }
 

@@ -206,13 +206,13 @@ namespace ppp
             hEvent_ = WSACreateEvent();
             if (hEvent_ == WSA_INVALID_EVENT)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketEventCreateFailed);
                 return false;
             }
 
             if (WSAEventSelect(listenfd_, hEvent_, FD_ACCEPT | FD_CLOSE) != NOERROR)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketEventSelectFailed);
                 return false;
             }
 
@@ -316,7 +316,7 @@ namespace ppp
                     }
                     else
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketEventEnumFailed);
                     }
 
                     Next();

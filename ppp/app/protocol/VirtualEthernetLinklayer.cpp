@@ -877,6 +877,7 @@ namespace ppp {
 
                 uint64_t deadline = last_ + static_cast<uint64_t>(max_timeout_ms + EXTRA_FAULT_TOLERANT_TIME);
                 if (now >= deadline) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
                     return false;   // idle timeout exceeded -> dead connection
                 }
 
@@ -902,6 +903,9 @@ namespace ppp {
                 YieldContext& y_null = nullof<YieldContext>();   // dummy yield context for synchronous send
                 if (!global::PACKET_Push(PacketAction_KEEPALIVED, transmission, packet, packet_size, 
                                          y_null /* no coroutine context */)) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                    }
                     return false;   // failed to send keep‑alive
                 }
 

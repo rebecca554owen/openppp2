@@ -166,7 +166,7 @@ namespace ppp {
                         if (key == "if") {
                             interface_name = value;
                         }
-                        else if (key == "gw") {
+                        elif (key == "gw") {
                             gateway = value;
                         }
                     }
@@ -225,7 +225,7 @@ namespace ppp {
                         return false;
                     }
 
-                    else if (gw.empty()) {
+                    elif (gw.empty()) {
                         snprintf(add_cmd, sizeof(add_cmd), "route -n add -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
                         snprintf(change_cmd, sizeof(change_cmd), "route -n change -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
                     }
@@ -261,7 +261,7 @@ namespace ppp {
                             snprintf(cmd, sizeof(cmd), "route -n delete -inet6 default %s > /dev/null 2>&1", gw.data());
                         }
                     }
-                    else if (gw.empty()) {
+                    elif (gw.empty()) {
                         snprintf(cmd, sizeof(cmd), "route -n delete -inet6 %s/%d -interface %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
                     }
                     else {
@@ -321,7 +321,7 @@ namespace ppp {
                     if (gateway.is_v6()) {
                         gateway_string = gateway.to_string();
                     }
-                    else if (!nat_mode) {
+                    elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
@@ -349,7 +349,7 @@ namespace ppp {
                     if (gateway.is_v6()) {
                         gateway_string = gateway.to_string();
                     }
-                    else if (!nat_mode) {
+                    elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 

@@ -87,7 +87,7 @@ namespace ppp {
 
             if (host.size() > 0 && path.size() > 0) {
                 bool ok = socket->Run(handshake_type, host, path, y);
-                if (!ok) {
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                 }
 
@@ -96,7 +96,7 @@ namespace ppp {
             else {
                 auto& cfg = configuration->websocket;
                 bool ok = socket->Run(handshake_type, cfg.host, cfg.path, y);
-                if (!ok) {
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                 }
 
@@ -165,7 +165,7 @@ namespace ppp {
                     cfg.ssl.certificate_key_password,
                     cfg.ssl.ciphersuites,
                     y);
-                if (!ok) {
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                 }
 
@@ -183,7 +183,7 @@ namespace ppp {
                     cfg.ssl.certificate_key_password,
                     cfg.ssl.ciphersuites,
                     y);
-                if (!ok) {
+                if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
                 }
 

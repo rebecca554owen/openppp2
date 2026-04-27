@@ -55,6 +55,7 @@ namespace ppp {
 
             boost::system::error_code ec;
             if (boost::filesystem::is_directory(path, ec)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileIsDirectory);
                 return false;
             }
 
@@ -67,7 +68,7 @@ namespace ppp {
                 return true;
             }
 
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileNotFound);
             return false;
         }
 
@@ -153,7 +154,9 @@ namespace ppp {
 
             int fd = open(path, flags);
             if (fd == -1) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileOpenFailed);
+                ppp::diagnostics::SetLastErrorCode(errno == EACCES ? ppp::diagnostics::ErrorCode::FileAccessDenied :
+                    errno == ENOENT ? ppp::diagnostics::ErrorCode::FileNotFound :
+                    ppp::diagnostics::ErrorCode::FileOpenFailed);
                 return false;
             }
             else {
@@ -239,7 +242,9 @@ namespace ppp {
 
             FILE* file_ = fopen(path, "rb"); // Oracle Cloud Shells Compatibility...
             if (!file_) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileOpenFailed, std::shared_ptr<Byte>());
+                return ppp::diagnostics::SetLastError(errno == EACCES ? ppp::diagnostics::ErrorCode::FileAccessDenied :
+                    errno == ENOENT ? ppp::diagnostics::ErrorCode::FileNotFound :
+                    ppp::diagnostics::ErrorCode::FileOpenFailed, std::shared_ptr<Byte>());
             }
 
             MemoryStream stream_;

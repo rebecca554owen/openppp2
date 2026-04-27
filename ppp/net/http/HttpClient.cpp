@@ -112,7 +112,9 @@ namespace ppp {
 
                 ppp::string return_url = ppp::auxiliary::UriAuxiliary::Parse(final_url, tmp_host, tmp_address, tmp_path, tmp_port, protocol_type, NULLPTR, nullof<ppp::coroutines::YieldContext>(), false);
                 if (return_url.empty()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriParseFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpClientVerifyUriParseFailed);
+                    }
                     return false;
                 }
 

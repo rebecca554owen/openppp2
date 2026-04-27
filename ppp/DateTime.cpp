@@ -9,7 +9,7 @@
  * @brief Implements DateTime timezone, parsing, and formatting utilities.
  */
 
-#ifdef _WIN32
+#if defined(_WIN32)
 #include <Windows.h>
 
 #define localtime_r(t, res) localtime_s(res, t)
@@ -102,12 +102,12 @@ namespace ppp
     bool DateTime::TryParse(const char* s, int len, DateTime& out) noexcept 
     {
         out = MinValue();
-        if (s == NULLPTR && len != 0) 
+        if (NULLPTR == s && len != 0) 
         {
             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNullInputWithNonZeroLength);
         }
 
-        if (s != NULLPTR && len == 0) 
+        if (NULLPTR != s && len == 0) 
         {
             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNonNullInputWithZeroLength);
         }

@@ -2,7 +2,7 @@
 
 > **子系统：** `ppp::diagnostics`
 > **相关文件：**
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（542 条实时条目）
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（595 条实时条目）
 > - `ppp/diagnostics/Error.h` — 公共 API、`ErrorCode` 枚举、`ErrorSeverity` 枚举
 > - `ppp/diagnostics/Error.cpp` — 自由函数委托实现
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` 单例声明
@@ -42,7 +42,7 @@
 | **热路径零分配** | 错误码基于 `uint32_t` 枚举；`SetLastErrorCode` 写入 `thread_local` 及原子变量，无堆分配 |
 | **线程隔离** | 每个线程维护独立的 `tls_last_error_code_`，读写无需加锁 |
 | **全进程可观测性** | `last_error_code_snapshot_` 是 `std::atomic<uint32_t>`，所有线程均可见 |
-| **单一信息源** | 所有 542 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
+| **单一信息源** | 所有 595 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
 | **错误报告不抛异常** | `SetLastErrorCode` 声明为 `noexcept`；错误条件通过返回值传递 |
 | **观察者模式** | 通过 `RegisterErrorHandler` 注册具名回调，错误发生时同步调用 |
 | **严重级别感知** | 每个错误码携带 `kTrace`/`kDebug`/`kInfo`/`kWarn`/`kError`/`kFatal` 分级 |
@@ -54,7 +54,7 @@
 ```mermaid
 graph TB
     subgraph ppp/diagnostics
-        Def[ErrorCodes.def\nX-macro 定义\n542 个错误码]
+        Def[ErrorCodes.def\nX-macro 定义\n595 个错误码]
         Eh[Error.h\nErrorSeverity 枚举\nErrorCode 枚举\n自由函数]
         Ec[Error.cpp\n委托给 ErrorHandler::GetDefault()]
         Ehh[ErrorHandler.h\nErrorHandler 类\n单例]
@@ -157,12 +157,10 @@ static constexpr uint32_t kErrorCodeMax = kErrorCodeCount;
 ### 展开 4：`FormatErrorTriplet`（`ErrorHandler.cpp`）
 
 ```cpp
-switch (code) {
-#define X(name, text, severity) case ErrorCode::name: \
-    code_name = #name; code_message = text; break;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-}
+const ErrorDescriptor& descriptor = ResolveErrorDescriptor(code);
+result += descriptor.name;
+result += ": ";
+result += descriptor.text;
 ```
 
 ### 为何使用 X-Macro？
@@ -171,6 +169,7 @@ X-macro 为所有错误元数据提供了唯一权威来源。若改用分离的
 
 - 新增错误码只需在 `ErrorCodes.def` 中增加**一行**。
 - 四种生成结构在编译时自动更新，无需任何运行时初始化。
+- 当数值 ID 的稳定性对外部系统或持久化数据有意义时，新条目应追加到 `ErrorCodes.def` 尾部，避免打乱既有编号。
 
 ```mermaid
 graph LR
@@ -213,10 +212,10 @@ enum class ErrorSeverity : uint8_t {
 
 ```mermaid
 pie title ErrorCode 严重级别分布
-    "kInfo (1)" : 1
-    "kWarning (7)" : 7
-    "kError (506)" : 506
-    "kFatal (28)" : 28
+    "kInfo (8)" : 8
+    "kWarning (25)" : 25
+    "kError (539)" : 539
+    "kFatal (23)" : 23
 ```
 
 ---
@@ -233,7 +232,7 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 542 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配，`kErrorCodeMax` 则是原始整数校验时使用的独占上界。
+`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 595 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配，`kErrorCodeMax` 则是原始整数校验时使用的独占上界。
 
 ### `ErrorCodes.def` 的分类结构
 
@@ -662,12 +661,19 @@ graph TD
 | 错误码 | 消息 | 建议操作 |
 |---|---|---|
 | `RuntimeInitializationFailed` | Runtime initialization failed | 检查启动顺序与依赖子系统 |
-| `AppAlreadyRunning` | Application already running | 删除过期 PID 文件 |
-| `AppInvalidCommandLine` | Invalid command-line arguments | 更正启动命令 |
 | `AppConfigurationMissing` | Configuration missing | 创建 `appsettings.json` |
 | `IPv6Unsupported` | IPv6 unsupported on this platform | 切换至 NAT66 或禁用 IPv6 |
 | `PlatformNotSupportGUAMode` | GUA mode not supported | 在非 Linux 平台使用 NAT66 |
 | `GenericNotSupported` | Operation not supported | 检查平台兼容性 |
+
+### Warning 级别控制结果
+
+| 错误码 | 消息 | 典型含义 |
+|---|---|---|
+| `AppAlreadyRunning` | Application already running | 另一个进程已经持有同一配置作用域的实例锁。 |
+| `AppInvalidCommandLine` | Invalid command-line arguments | 启动参数被拒绝，但不代表运行时已经损坏。 |
+| `RuntimeOptionalUiStartFailed` | Optional UI start failed | 进程已降级到纯文本模式并继续运行。 |
+| `NetworkFirewallBlocked` | Network blocked by firewall | 流量被策略拒绝，但不代表进程失败。 |
 
 ---
 

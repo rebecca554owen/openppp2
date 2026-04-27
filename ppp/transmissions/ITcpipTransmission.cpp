@@ -95,7 +95,7 @@ namespace ppp {
          */
         std::shared_ptr<Byte> ITcpipTransmission::DoReadBytes(YieldContext& y, int length) noexcept {
             if (disposed_.load() != FALSE) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionClosing, NULLPTR);
             }
 
             auto self = shared_from_this();
@@ -114,7 +114,7 @@ namespace ppp {
             }
 
             if (disposed_.load() != FALSE) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                 return false;
             }
 
@@ -130,7 +130,9 @@ namespace ppp {
             }
 
             if (!ok) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable);
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable);
+                }
             }
 
             return ok;
@@ -149,7 +151,7 @@ namespace ppp {
             }
 
             if (disposed_.load() != FALSE) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionClosing, NULLPTR);
             }
 
             if (length < 1) {
@@ -192,7 +194,7 @@ namespace ppp {
             }
 
             if (disposed_.load() != FALSE) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                 return false;
             }
 

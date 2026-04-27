@@ -348,6 +348,11 @@ When `ShouldEnable()` returns `false`:
 
 This ensures log capture via `./ppp > log.txt` or piped output works without interference.
 
+If `ShouldEnable()` returns `true` but `ConsoleUI::Start()` later fails during terminal
+preparation or optional thread startup, the process now degrades to the same plain-text
+path and publishes `RuntimeOptionalUiStartFailed` as a warning-level diagnostic rather
+than treating optional UI setup as a fatal runtime failure.
+
 ```mermaid
 flowchart TD
     A["PppApplication::Main()"] --> B["ConsoleUI::ShouldEnable()"]
@@ -508,9 +513,9 @@ the render and input threads.
 
 **Returns:** `true` on success; `false` if initialization failed at any step.
 
-**Note:** This method is not `noexcept`. Any exception during thread creation will
-propagate to the caller. `Stop()` must be called even if `Start()` returned `false` to
-clean up any partial initialization.
+**Note:** This method is `noexcept`. Internal startup exceptions are caught, partial state
+is rolled back, and the caller can continue in plain-text mode. Failed optional TUI startup
+publishes `RuntimeOptionalUiStartFailed`.
 
 ---
 

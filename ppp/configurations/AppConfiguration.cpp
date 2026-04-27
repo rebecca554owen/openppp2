@@ -826,9 +826,13 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid);
             }
 
-            ppp::string json_string = File::ReadAllText(path.data());
+            ppp::string json_string = File::ReadAllText(file_path.data());
             if (json_string.empty()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileUnreadable);
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileEmpty);
+                }
+
+                return false;
             }
 
             Json::Value json = JsonAuxiliary::FromString(json_string);
@@ -1049,6 +1053,9 @@ namespace ppp {
 
             ppp::string vbgp = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["vbgp"])));
             if (!ppp::net::http::HttpClient::VerifyUri(vbgp, NULLPTR, NULLPTR, NULLPTR, NULLPTR)) {
+                if (ppp::diagnostics::ErrorCode::Success != ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+                }
                 vbgp = ppp::string();
             }
 

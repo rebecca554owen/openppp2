@@ -231,7 +231,6 @@ namespace ppp
                     return true;
                 }
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
             return false;
         }
 
@@ -286,7 +285,9 @@ namespace ppp
                 {
                     SharedSynchronizedObjectScope scope(syncobj_);
                     bool blocked = Firewall_IsDropNetworkSegment<UInt32>(ip, __ip, 32, network_segments_);
-                    ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+                    if (blocked) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
+                    }
                     return blocked;
                 }
             }
@@ -300,7 +301,9 @@ namespace ppp
                     {
                         SharedSynchronizedObjectScope scope(syncobj_);
                         bool blocked = Firewall_IsDropNetworkSegment<Int128>(ip, __ip, 128, network_segments_);
-                        ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+                        if (blocked) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
+                        }
                         return blocked;
                     }
                 }
@@ -369,7 +372,9 @@ namespace ppp
                     return tail != endl;
                 };
             bool blocked = IsSameNetworkDomains(host_lower, contains);
-            ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+            if (blocked) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
+            }
             return blocked;
         }
 

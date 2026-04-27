@@ -447,9 +447,11 @@ void ShutdownDiagnostics() {
 
 - [ ] 在返回失败值前调用 `SetLastErrorCode(...)` 或 `SetLastError(...)`。
 - [ ] 选择最具体的 `ErrorCode`，不要默认使用宽泛通用码。
-- [ ] 如果没有合适的码，在 `ppp/diagnostics/Error.h` 中添加，并加上清晰注释。
+- [ ] 如果没有合适的码，在 `ppp/diagnostics/ErrorCodes.def` 末尾追加一行，并写清晰的消息与严重级别。
 - [ ] 验证新码在 `FormatErrorString` 中有有意义的消息。
 - [ ] 如果新增了错误码，同步更新 `ERROR_CODES.md` 和 `ERROR_CODES_CN.md`。
+- [ ] 包装层如果下层已经发布了更具体的错误码，就不要覆盖；只有当前错误仍为 `Success` 时才写入兜底码。
+- [ ] 除非明确接受后续数值 ID 重排，否则新错误码应追加到 `ppp/diagnostics/ErrorCodes.def` 尾部。
 
 入口兜底约束：
 

@@ -171,14 +171,14 @@ namespace ppp
             SynchronizedObjectScope scope(Internal->Lock);
             if (NULLPTR != Internal->Default)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppAlreadyRunning);
                 return NULLPTR;
             }
 
             std::shared_ptr<boost::asio::io_context> context = make_shared_object<boost::asio::io_context>();
             if (NULLPTR == context)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -200,7 +200,7 @@ namespace ppp
             std::shared_ptr<boost::asio::io_context> context = make_shared_object<boost::asio::io_context>();
             if (NULLPTR == context)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -601,7 +601,7 @@ namespace ppp
                 });
             if (NULLPTR == t)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
@@ -615,7 +615,7 @@ namespace ppp
             bool ok = awaitable->Await();
             if (!ok)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ThreadSyncConditionWaitFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartupHandshakeFailed);
             }
 
             return ok;

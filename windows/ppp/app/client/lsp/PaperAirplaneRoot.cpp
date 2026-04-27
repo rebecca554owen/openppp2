@@ -103,7 +103,7 @@ namespace ppp
                                 if (error != WSAENOBUFS)
                                 {
                                     Debugger::Write(L"First WSCEnumProtocols Error!");
-                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspEnumProtocolsFailed);
                                     return FALSE;
                                 }
                             }
@@ -118,7 +118,7 @@ namespace ppp
                             if ((TotalProtos = WSCEnumProtocols(NULLPTR, ProtoInfo, &ProtoInfoSize, &error)) == SOCKET_ERROR)
                             {
                                 Debugger::Write(L"Second WSCEnumProtocols Error!");
-                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspEnumProtocolsFailed);
                                 return FALSE;
                             }
                             return TRUE;
@@ -199,7 +199,7 @@ namespace ppp
                                         if (WSCGetProviderPath(&ProtoInfo[i].ProviderId, filterpath, &filterpathlen, &errorcode) == SOCKET_ERROR)
                                         {
                                             Debugger::Write(L"WSCGetProviderPath Error!");
-                                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspGetProviderPathFailed);
                                             return WSAEPROVIDERFAILEDINIT;
                                         }
                                         break;
@@ -210,14 +210,14 @@ namespace ppp
                                 if (dwExpandEnvironmentStr == 0)
                                 {
                                     Debugger::Write(L"ExpandEnvironmentStrings Error!");
-                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspExpandProviderPathFailed);
                                     return WSAEPROVIDERFAILEDINIT;
                                 }
 
                                 if ((hfilter = LoadLibraryW(filterpath)) == NULLPTR)
                                 {
                                     Debugger::Write(L"LoadLibrary Error!");
-                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspProviderLoadFailed);
                                     return WSAEPROVIDERFAILEDINIT;
                                 }
 
@@ -225,7 +225,7 @@ namespace ppp
                                 if (NULLPTR == wspstartupfunc)
                                 {
                                     Debugger::Write(L"GetProcessAddress Error!");
-                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspStartupExportMissing);
                                     return WSAEPROVIDERFAILEDINIT;
                                 }
 
@@ -233,7 +233,7 @@ namespace ppp
                                 if (errorcode != ERROR_SUCCESS)
                                 {
                                     Debugger::Write(L"wspstartupfunc Error!");
-                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspStartupFailed);
                                     return errorcode;
                                 }
 
