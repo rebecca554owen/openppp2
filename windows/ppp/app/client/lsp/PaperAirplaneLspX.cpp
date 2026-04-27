@@ -12,6 +12,7 @@
 
 #include "PaperAirplaneRoot.h"
 #include "PaperAirplaneLspX.h"
+#include <ppp/diagnostics/Error.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Iphlpapi.lib")
@@ -53,12 +54,25 @@ namespace ppp
                         {
                             if (nError != WSAENOBUFS)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                                 return NULLPTR;
                             }
                         }
 
                         pProtoInfo = (LPWSAPROTOCOL_INFOW)::GlobalAlloc(GPTR, dwSize);
+                        if (NULLPTR == pProtoInfo)
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                            return NULLPTR;
+                        }
+
                         *lpnTotalProtocols = ::WSCEnumProtocols(NULLPTR, pProtoInfo, &dwSize, &nError);
+                        if (SOCKET_ERROR == *lpnTotalProtocols)
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
+                            ::GlobalFree(pProtoInfo);
+                            return NULLPTR;
+                        }
 
                         return std::shared_ptr<WSAPROTOCOL_INFOW>(pProtoInfo,
                             [](WSAPROTOCOL_INFOW* p) noexcept
@@ -75,6 +89,12 @@ namespace ppp
 
                         // Get layered protocol's catalog ID by GUID
                         pProtoInfo = GetProvider(&nProtocols);
+                        if (NULLPTR == pProtoInfo.get())
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
+                            return FALSE;
+                        }
+
                         int nError, i;
                         for (i = 0; i < nProtocols; i++)
                         {
@@ -119,6 +139,12 @@ namespace ppp
                         // Find base protocols and store their information in array
                         // Enumerate all installed protocol providers
                         pProtoInfo = GetProvider(&nProtocols);
+                        if (NULLPTR == pProtoInfo.get())
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
+                            return FALSE;
+                        }
+
                         BOOL bFindUdp = FALSE;
                         BOOL bFindTcp = FALSE;
                         for (int i = 0; i < nProtocols; i++)
@@ -154,6 +180,7 @@ namespace ppp
                         WSAPROTOCOL_INFOW LayeredProtocolInfo;
                         if (nArrayCount < 1)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
                             return FALSE;
                         }
                         else
@@ -170,11 +197,18 @@ namespace ppp
                         if (::WSCInstallProvider(&providerGuid,
                             pwszPathName, &LayeredProtocolInfo, 1, &nError) == SOCKET_ERROR)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                             return FALSE;
                         }
 
                         // Enumerate protocols again to get layered protocol's catalog ID
                         pProtoInfo = GetProvider(&nProtocols);
+                        if (NULLPTR == pProtoInfo.get())
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
+                            return FALSE;
+                        }
+
                         for (int i = 0; i < nProtocols; i++)
                         {
                             if (memcmp(&pProtoInfo.get()[i].ProviderId, &providerGuid, sizeof(providerGuid)) == 0)
@@ -223,17 +257,24 @@ namespace ppp
                             if (::WSCInstallProvider(&ProviderChainGuid,
                                 pwszPathName, OriginalProtocolInfo, nArrayCount, &nError) == SOCKET_ERROR)
                             {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                                 return FALSE;
                             }
                         }
                         else
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                             return FALSE;
                         }
 
                         // Reorder Winsock catalog to put our protocol chain first
                         // Enumerate installed protocols again
                         pProtoInfo = GetProvider(&nProtocols);
+                        if (NULLPTR == pProtoInfo.get())
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
+                            return FALSE;
+                        }
 
                         DWORD dwIds[1000];
                         int nIndex = 0;
@@ -261,6 +302,7 @@ namespace ppp
                         // Reorder Winsock catalog
                         if ((nError = ::WSCWriteProviderOrder(dwIds, nIndex)) != ERROR_SUCCESS)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                             return FALSE;
                         }
 
@@ -358,6 +400,7 @@ namespace ppp
                     {
                         if (NULLPTR == wszExePath)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspNoLspNullExePath);
                             return false;
                         }
 
@@ -367,6 +410,10 @@ namespace ppp
                         INT nErrno = ERROR_SUCCESS;
 
                         int nErr = WSCSetApplicationCategory(wszExePath, dwExePathLength, NULLPTR, 0, dwPermittedLspCategories, &dwPrevCat, &nErrno);
+                        if (ERROR_SUCCESS != nErr)
+                        {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                        }
                         return nErr == ERROR_SUCCESS;
                     }
                 }

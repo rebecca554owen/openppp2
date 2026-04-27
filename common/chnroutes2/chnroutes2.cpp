@@ -270,7 +270,7 @@ static ppp::function<void()> http_easy_timeout(const std::shared_ptr<boost::asio
         milliseconds = 0;
     }
 
-    auto t = ppp::make_shared_object<boost::asio::deadline_timer>(socket->get_executor());
+    auto t = ppp::make_shared_object<boost::asio::steady_timer>(socket->get_executor());
     if (NULLPTR == t) {
         return NULLPTR;
     }
@@ -691,6 +691,8 @@ void chnroutes2_getiplist_async(const ppp::function<void(ppp::string&)>& cb) noe
             cb(iplist);
         };
 
+    // The helper thread is intentionally detached because the callback owns the completion path.
+    // No raw state is captured here, so the worker can safely outlive the caller stack frame.
     std::thread t(w);
     t.detach();
 }

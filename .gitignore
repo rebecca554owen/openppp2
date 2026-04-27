@@ -78,7 +78,15 @@ debug.md
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+nul
 ppp.log
+
 /ppp/x64
 /ppp/Debug
 /ppp/Release
+
+build-*/
+build_*/
+builds/cmake-check/
+AGENTS.md

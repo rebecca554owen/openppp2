@@ -1,4 +1,4 @@
-﻿#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
+#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -6,6 +6,8 @@
 #include <ppp/IDisposable.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
+
 #include <ppp/io/File.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
@@ -19,82 +21,20 @@
 #include <ppp/net/native/icmp.h>
 #include <ppp/net/native/checksum.h>
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
+#include <ppp/ipv6/IPv6Packet.h>
 
-extern void DebugLog(const char* format, ...) noexcept;
-
-#if defined(_MACOS)
-static bool MacosSetIPv6Address(const ppp::string& ifr_name, const ppp::string& address, int prefix_length) noexcept {
-    if (ifr_name.empty() || address.empty()) {
-        return false;
-    }
-
-    char command[1200];
-    snprintf(command, sizeof(command), "ifconfig %s inet6 %s prefixlen %d alias > /dev/null 2>&1", ifr_name.data(), address.data(), std::max<int>(0, std::min<int>(128, prefix_length)));
-    return system(command) == 0;
-}
-
-static bool MacosDeleteIPv6Address(const ppp::string& ifr_name, const ppp::string& address) noexcept {
-    if (ifr_name.empty() || address.empty()) {
-        return false;
-    }
-
-    char command[1200];
-    snprintf(command, sizeof(command), "ifconfig %s inet6 %s delete > /dev/null 2>&1", ifr_name.data(), address.data());
-    return system(command) == 0;
-}
-
-static bool MacosSetIPv6Route(const ppp::string& ifr_name, const ppp::string& destination, int prefix_length, const ppp::string& gateway) noexcept {
-    if (ifr_name.empty() || destination.empty()) {
-        return false;
-    }
-
-    char command[1200];
-    if (destination == "::" && prefix_length == 0) {
-        if (gateway.empty()) {
-            snprintf(command, sizeof(command), "route -n add -inet6 default -interface %s > /dev/null 2>&1", ifr_name.data());
-        }
-        else {
-            snprintf(command, sizeof(command), "route -n add -inet6 default %s > /dev/null 2>&1", gateway.data());
-        }
-    }
-    else if (gateway.empty()) {
-        snprintf(command, sizeof(command), "route -n add -inet6 %s/%d -interface %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifr_name.data());
-    }
-    else {
-        snprintf(command, sizeof(command), "route -n add -inet6 %s/%d %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gateway.data());
-    }
-    return system(command) == 0;
-}
-
-static bool MacosDeleteIPv6Route(const ppp::string& ifr_name, const ppp::string& destination, int prefix_length, const ppp::string& gateway) noexcept {
-    if (ifr_name.empty() || destination.empty()) {
-        return false;
-    }
-
-    char command[1200];
-    if (destination == "::" && prefix_length == 0) {
-        if (gateway.empty()) {
-            snprintf(command, sizeof(command), "route -n delete -inet6 default -interface %s > /dev/null 2>&1", ifr_name.data());
-        }
-        else {
-            snprintf(command, sizeof(command), "route -n delete -inet6 default %s > /dev/null 2>&1", gateway.data());
-        }
-    }
-    else if (gateway.empty()) {
-        snprintf(command, sizeof(command), "route -n delete -inet6 %s/%d -interface %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), ifr_name.data());
-    }
-    else {
-        snprintf(command, sizeof(command), "route -n delete -inet6 %s/%d %s > /dev/null 2>&1", destination.data(), std::max<int>(0, std::min<int>(128, prefix_length)), gateway.data());
-    }
-    return system(command) == 0;
-}
-#endif
 #include <ppp/net/asio/vdns.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
+
+/**
+ * @file VEthernetNetworkSwitcher.cpp
+ * @brief Client-side virtual Ethernet network switcher implementation.
+ * @details Licensed under GPL-3.0.
+ */
 
 #if defined(_WIN32)
 #include <windows/ppp/tap/TapWindows.h>
@@ -109,6 +49,48 @@ static bool MacosDeleteIPv6Route(const ppp::string& ifr_name, const ppp::string&
 #include <linux/ppp/tap/TapLinux.h>
 #endif
 #endif
+
+
+/** @brief Returns whether current platform supports managed IPv6 operations. */
+static bool ClientSupportsManagedIPv6() noexcept {
+#if defined(_WIN32) || defined(_LINUX) || defined(_MACOS)
+    return true;
+#else
+    return false;
+#endif
+}
+
+/** @brief Validates whether extensions describe an applicable managed IPv6 assignment. */
+static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
+    bool status_ok = extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_Applied ||
+        extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_ServerAssigned ||
+        extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_ClientRequested;
+
+    return status_ok &&
+        (extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
+        extensions.AssignedIPv6Mode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Mode_Gua) &&
+        extensions.AssignedIPv6AddressPrefixLength == ppp::ipv6::IPv6_MAX_PREFIX_LENGTH &&
+        extensions.AssignedIPv6Address.is_v6() &&
+        !extensions.AssignedIPv6Address.is_unspecified() &&
+        !extensions.AssignedIPv6Address.is_multicast() &&
+        !extensions.AssignedIPv6Address.is_loopback();
+}
+
+/** @brief Compares two managed IPv6 assignment snapshots for equality. */
+static bool SameManagedIPv6Configuration(
+    const ppp::app::protocol::VirtualEthernetInformationExtensions& left,
+    const ppp::app::protocol::VirtualEthernetInformationExtensions& right) noexcept {
+
+    return left.AssignedIPv6Mode == right.AssignedIPv6Mode &&
+        left.AssignedIPv6AddressPrefixLength == right.AssignedIPv6AddressPrefixLength &&
+        left.AssignedIPv6Flags == right.AssignedIPv6Flags &&
+        left.AssignedIPv6Address == right.AssignedIPv6Address &&
+        left.AssignedIPv6Gateway == right.AssignedIPv6Gateway &&
+        left.AssignedIPv6RoutePrefix == right.AssignedIPv6RoutePrefix &&
+        left.AssignedIPv6RoutePrefixLength == right.AssignedIPv6RoutePrefixLength &&
+        left.AssignedIPv6Dns1 == right.AssignedIPv6Dns1 &&
+        left.AssignedIPv6Dns2 == right.AssignedIPv6Dns2;
+}
 
 using ppp::auxiliary::StringAuxiliary;
 using ppp::collections::Dictionary;
@@ -131,6 +113,7 @@ using ppp::transmissions::ITransmission;
 namespace ppp {
     namespace app {
         namespace client {
+            /** @brief Constructs network switcher and initializes baseline state flags. */
             VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
                 : VEthernet(context, lwip, vnet, mta)
                 , configuration_(configuration)
@@ -147,21 +130,25 @@ namespace ppp {
                 icmppackets_aid_ = RandomNext();
             }
 
+            /** @brief Finalizes network switcher on destruction. */
             VEthernetNetworkSwitcher::~VEthernetNetworkSwitcher() noexcept {
                 Finalize();
             }
 
+            /** @brief Initializes network interface snapshot defaults. */
             VEthernetNetworkSwitcher::NetworkInterface::NetworkInterface() noexcept
                 : Index(-1) {
 
             }
 
+            /** @brief Creates concrete TCP/IP stack implementation for VEthernet. */
             std::shared_ptr<ppp::ethernet::VNetstack> VEthernetNetworkSwitcher::NewNetstack() noexcept {
                 auto my = shared_from_this();
                 auto self = std::dynamic_pointer_cast<VEthernetNetworkSwitcher>(my);
                 return make_shared_object<VEthernetNetworkTcpipStack>(self);
             }
 
+            /** @brief Performs periodic tick maintenance for QoS, exchanger, and timers. */
             bool VEthernetNetworkSwitcher::OnTick(uint64_t now) noexcept {
                 if (!VEthernet::OnTick(now)) {
                     return false;
@@ -209,6 +196,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles native IPv4 packet input and forwards eligible NAT traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept {
                 if (!vnet) {
                     return false;
@@ -251,16 +239,24 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles raw IPv6 packet input and forwards approved traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept {
-                if (!vnet || NULLPTR == packet || packet_length < 40) {
+                if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
                 }
 
-                if ((packet[0] >> 4) != 6) {
+
+                if (!IsApprovedIPv6Packet(packet, packet_length)) {
                     return false;
                 }
 
-                app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, 80));
+                boost::asio::ip::address_v6 source;
+                boost::asio::ip::address_v6 destination;
+                if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
+                    return false;
+                }
+
+                app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, app::protocol::kVEthernetTunnelOverhead));
 
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
@@ -271,6 +267,42 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Validates IPv6 packet source and destination against assigned policy. */
+            bool VEthernetNetworkSwitcher::IsApprovedIPv6Packet(Byte* packet, int packet_length) noexcept {
+                if (NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
+                    return false;
+                }
+
+                boost::asio::ip::address_v6 source;
+                boost::asio::ip::address_v6 destination;
+                if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
+                    return false;
+                }
+
+                boost::asio::ip::address_v6::bytes_type src_bytes = source.to_bytes();
+                if (src_bytes[0] == 0xfe && (src_bytes[1] & 0xc0) == 0x80) {
+                    return false;
+                }
+
+                if (destination.is_unspecified() || destination.is_loopback() || destination.is_multicast()) {
+                    return false;
+                }
+
+                const VirtualEthernetInformationExtensions& approved = information_extensions_;
+                bool valid_mode = approved.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
+                    approved.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
+                if (!ipv6_applied_ || !valid_mode || approved.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH || !approved.AssignedIPv6Address.is_v6()) {
+                    return false;
+                }
+
+                if (source != approved.AssignedIPv6Address.to_v6()) {
+                    return false;
+                }
+
+                return true;
+            }
+
+            /** @brief Routes parsed IP frame to protocol-specific handlers. */
             bool VEthernetNetworkSwitcher::OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
                 if (packet->ProtocolType == ip_hdr::IP_PROTO_UDP) {
                     return OnUdpPacketInput(packet);
@@ -283,6 +315,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Handles UDP frame forwarding, DNS redirect, and static mode paths. */
             bool VEthernetNetworkSwitcher::OnUdpPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
                 std::shared_ptr<UdpFrame> frame = UdpFrame::Parse(packet.get());
                 if (NULLPTR == frame) {
@@ -338,6 +371,7 @@ namespace ppp {
                 return exchanger->SendTo(sourceEP, destinationEP, messages->Buffer.get(), messages->Length);
             }
 
+            /** @brief Sends ICMP Echo Reply generated from tracked packet context. */
             bool VEthernetNetworkSwitcher::ER(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, int ttl, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IPFrame> reply = ppp::net::asio::InternetControlMessageProtocol::ER(packet, frame, ttl, allocator);
                 if (NULLPTR == reply) {
@@ -348,6 +382,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Sends ICMP Time Exceeded generated from tracked packet context. */
             bool VEthernetNetworkSwitcher::TE(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, UInt32 source, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IPFrame> reply = ppp::net::asio::InternetControlMessageProtocol::TE(packet, frame, source, allocator);
                 if (NULLPTR == reply) {
@@ -358,6 +393,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Resolves ACK identifier and emits appropriate ICMP response packet. */
             bool VEthernetNetworkSwitcher::ERORTE(int ack_id) noexcept {
                 std::shared_ptr<IPFrame> packet;
                 if (ack_id != 0) {
@@ -395,6 +431,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Processes ICMP input and dispatches to gateway/other echo paths. */
             bool VEthernetNetworkSwitcher::OnIcmpPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
@@ -430,6 +467,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Forwards ICMP packet to non-gateway destination through exchanger. */
             bool VEthernetNetworkSwitcher::EchoOtherServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 if (NULLPTR == exchanger) {
                     return false;
@@ -452,6 +490,7 @@ namespace ppp {
                 return exchanger->Echo(messages->Buffer.get(), messages->Length);
             }
 
+            /** @brief Tracks ICMP packet by ACK ID and triggers remote gateway echo flow. */
             bool VEthernetNetworkSwitcher::EchoGatewayServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 static constexpr int max_icmp_packets_aid = (1 << 24) - 1;
                 
@@ -460,6 +499,7 @@ namespace ppp {
                 }
 
                 int ack_id = 0;
+                /** @brief Allocates a unique ACK ID and stores packet until callback/timeout. */
                 for (SynchronizedObjectScope scope(GetSynchronizedObject());;) {
                     if (IsDisposed()) {
                         return false;
@@ -518,8 +558,9 @@ namespace ppp {
                 }
             }
 
+            /** @brief Dispatches switcher finalization and then disposes base VEthernet. */
             void VEthernetNetworkSwitcher::Dispose() noexcept {
-                auto self = shared_from_this();
+                auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::dispatch(*context, 
                     [self, this, context]() noexcept {
@@ -528,18 +569,21 @@ namespace ppp {
                 VEthernet::Dispose();
             }
 
+            /** @brief Releases objects, packets, and timeout handlers. */
             void VEthernetNetworkSwitcher::Finalize() noexcept {
                 ReleaseAllObjects();
                 ReleaseAllPackets();
                 ReleaseAllTimeouts();
             }
 
+            /** @brief Clears all tracked ICMP packet records. */
             void VEthernetNetworkSwitcher::ReleaseAllPackets() noexcept {
                 // Clear all ICMP packet container.
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 icmppackets_.clear();
             }
 
+            /** @brief Releases all registered timeout callbacks. */
             void VEthernetNetworkSwitcher::ReleaseAllTimeouts() noexcept {
                 TimeoutEventHandlerTable timeouts; {
                     // Clear all ICMP packet container.
@@ -553,11 +597,13 @@ namespace ppp {
             }
 
 #if defined(_ANDROID) || defined(_IPHONE)
+            /** @brief Stores bypass IP list text used by mobile route setup. */
             void VEthernetNetworkSwitcher::SetBypassIpList(ppp::string&& bypass_ip_list) noexcept {
                 bypass_ip_list_ = std::move(bypass_ip_list);
             }
 #endif
 
+            /** @brief Creates QoS controller with configured bandwidth policy. */
             std::shared_ptr<ppp::transmissions::ITransmissionQoS> VEthernetNetworkSwitcher::NewQoS() noexcept {
                 int64_t bandwidth = std::max<int64_t>(0, configuration_->client.bandwidth);
                 if (bandwidth < 0) {
@@ -568,11 +614,12 @@ namespace ppp {
                 return make_shared_object<ppp::transmissions::ITransmissionQoS>(context, bandwidth);
             }
 
+            /** @brief Creates exchanger instance using configured client GUID. */
             std::shared_ptr<VEthernetExchanger> VEthernetNetworkSwitcher::NewExchanger() noexcept {
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 auto guid = StringAuxiliary::GuidStringToInt128(configuration->client.guid);
                 if (guid == 0) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionIdInvalid, std::shared_ptr<VEthernetExchanger>(NULLPTR));
                 }
 
                 auto my = shared_from_this();
@@ -580,28 +627,32 @@ namespace ppp {
                 return make_shared_object<VEthernetExchanger>(self, configuration, GetContext(), guid);
             }
 
+            /** @brief Creates HTTP proxy switcher bound to exchanger. */
             VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr VEthernetNetworkSwitcher::NewHttpProxy(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
                 if (NULLPTR == exchanger) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr(NULLPTR));
                 }
                 else {
                     return make_shared_object<VEthernetHttpProxySwitcher>(exchanger);
                 }
             }
 
+            /** @brief Creates SOCKS proxy switcher bound to exchanger. */
             VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr VEthernetNetworkSwitcher::NewSocksProxy(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
                 if (NULLPTR == exchanger) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr(NULLPTR));
                 }
                 else {
                     return make_shared_object<VEthernetSocksProxySwitcher>(exchanger);
                 }
             }
 
+            /** @brief Returns buffer allocator from runtime configuration. */
             std::shared_ptr<ppp::threading::BufferswapAllocator> VEthernetNetworkSwitcher::GetBufferAllocator() noexcept {
                 return configuration_->GetBufferAllocator();
             }
 
+            /** @brief Converts UDP payload to IP frame and emits it to local output. */
             bool VEthernetNetworkSwitcher::DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
@@ -647,9 +698,13 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Applies managed IPv6 address, route, and DNS configuration. */
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept {
+                if (!ClientSupportsManagedIPv6()) {
+                    return false;
+                }
+
                 if (ipv6_applied_) {
-                    DebugLog("client ipv6 apply skipped reason=already-applied");
                     return false;
                 }
 
@@ -660,107 +715,61 @@ namespace ppp {
 
                 auto tun_ni = tun_ni_;
                 if (NULLPTR == tun_ni) {
-                    DebugLog("client ipv6 apply failed reason=no-tun-interface");
                     return false;
                 }
 
-                DebugLog("client ipv6 apply begin mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
-                    (unsigned)extensions.AssignedIPv6Mode,
-                    (unsigned)extensions.AssignedIPv6PrefixLength,
-                    (unsigned)extensions.AssignedIPv6Flags,
-                    extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
-                    extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "");
 
-                bool applied = false;
+                bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                bool gua_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
+                if (!nat_mode && !gua_mode) {
+                    return false;
+                }
+
+                if (extensions.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+                    return false;
+                }
+
+                if (!extensions.AssignedIPv6Address.is_v6()) {
+                    return false;
+                }
+
+                bool applied = true;
+                bool attempted = false;
+                ipv6_state_.Clear();
+
+                ppp::ipv6::auxiliary::ClientContext ipv6_context;
+                ipv6_context.Tap = tap.get();
+                ipv6_context.InterfaceIndex = tun_ni->Index;
+                ipv6_context.InterfaceName = tun_ni->Name;
+
+                int prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, (int)extensions.AssignedIPv6AddressPrefixLength));
+                if (prefix < 1) {
+                    prefix = 64;
+                }
+
+                ppp::ipv6::auxiliary::CaptureClientOriginalState(ipv6_context, nat_mode, ipv6_state_);
 
                 if (extensions.AssignedIPv6Address.is_v6()) {
-                    std::string addr_std = extensions.AssignedIPv6Address.to_string();
-                    ppp::string addr_str(addr_std.data(), addr_std.size());
-                    int prefix = std::max<int>(1, std::min<int>(128, (int)extensions.AssignedIPv6PrefixLength));
-                    if (prefix < 1) {
-                        prefix = 64;
-                    }
-
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetIPv6Address(tun_ni->Index, addr_str, prefix)) {
-                        applied = true;
-                    }
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ppp::tap::TapLinux::SetIPv6Address(tun_ni->Name, addr_str, prefix)) {
-                            applied = true;
-                            DebugLog("client ipv6 address ok nic=%s address=%s/%d", tun_ni->Name.data(), addr_str.data(), prefix);
-                            if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix) {
-                                bool route_ok = ppp::tap::TapLinux::AddRoute6(tun_ni->Name, addr_str, prefix, ppp::string());
-                                DebugLog("client ipv6 prefix route %s nic=%s route=%s/%d", route_ok ? "ok" : "fail", tun_ni->Name.data(), addr_str.data(), prefix);
-                            }
-                        }
-                        else {
-                            DebugLog("client ipv6 address fail nic=%s address=%s/%d", tun_ni->Name.data(), addr_str.data(), prefix);
-                        }
-                    }
-#else
-                    if (MacosSetIPv6Address(tun_ni->Name, addr_str, prefix)) {
-                        applied = true;
-                    }
-#endif
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientAddress(ipv6_context, extensions.AssignedIPv6Address, prefix, gua_mode, ipv6_state_);
                 }
 
-                bool ipv6_default_route_handled = false;
-#if defined(_LINUX)
-                if (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !extensions.AssignedIPv6Gateway.is_v6()) {
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ppp::tap::TapLinux::AddRoute6(tun_ni->Name, "::", 0, ppp::string())) {
-                            applied = true;
-                            ipv6_default_route_handled = true;
-                            DebugLog("client ipv6 default route ok nic=%s gateway=<direct>", tun_ni->Name.data());
-                        }
-                        else {
-                            ipv6_default_route_handled = true;
-                            DebugLog("client ipv6 default route fail nic=%s gateway=<direct>", tun_ni->Name.data());
-                        }
-                    }
+                if (extensions.AssignedIPv6Gateway.is_v6() || nat_mode) {
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientDefaultRoute(ipv6_context, extensions.AssignedIPv6Gateway, nat_mode, ipv6_state_);
                 }
-#endif
 
-                if (!ipv6_default_route_handled && extensions.AssignedIPv6Gateway.is_v6()) {
-                    std::string gw_std = extensions.AssignedIPv6Gateway.to_string();
-                    ppp::string gw_str(gw_std.data(), gw_std.size());
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetIPv6DefaultGateway(tun_ni->Index, gw_str, 0)) {
-                        applied = true;
-                    }
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ppp::tap::TapLinux::AddRoute6(tun_ni->Name, "::", 0, gw_str)) {
-                            applied = true;
-                            DebugLog("client ipv6 default route ok nic=%s gateway=%s", tun_ni->Name.data(), gw_str.data());
-                        }
-                        else {
-                            DebugLog("client ipv6 default route fail nic=%s gateway=%s", tun_ni->Name.data(), gw_str.data());
-                        }
-                    }
-#else
-                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, gw_str)) {
-                        applied = true;
-                    }
-#endif
-                }
-                else if (!ipv6_default_route_handled && extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetIPv6DefaultRoute(tun_ni->Index, 0)) {
-                        applied = true;
-                    }
-#elif defined(_MACOS)
-                    if (MacosSetIPv6Route(tun_ni->Name, "::", 0, ppp::string())) {
-                        applied = true;
-                    }
-#endif
+                if (nat_mode && extensions.AssignedIPv6RoutePrefix.is_v6() &&
+                    extensions.AssignedIPv6RoutePrefixLength > 0 &&
+                    extensions.AssignedIPv6RoutePrefixLength < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH) {
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientSubnetRoute(
+                        ipv6_context,
+                        extensions.AssignedIPv6RoutePrefix,
+                        extensions.AssignedIPv6RoutePrefixLength,
+                        extensions.AssignedIPv6Gateway,
+                        nat_mode,
+                        ipv6_state_);
                 }
 
                 ppp::vector<ppp::string> dns_servers;
@@ -774,46 +783,28 @@ namespace ppp {
                 }
 
                 if (!dns_servers.empty()) {
-#if defined(_WIN32)
-                    if (ppp::win32::network::SetDnsAddressesV6(tun_ni->Index, dns_servers)) {
-                        applied = true;
-                        ppp::tap::TapWindows::DnsFlushResolverCache();
-                    }
-#else
-                    ipv6_original_dns_restore_ = ppp::unix__::UnixAfx::GetDnsResolveConfiguration();
-                    ppp::vector<boost::asio::ip::address> dns_addrs;
-                    ppp::vector<boost::asio::ip::address> current_addrs;
-                    ppp::unix__::UnixAfx::GetDnsAddresses(current_addrs);
-                    for (auto& s : dns_servers) {
-                        boost::system::error_code ec;
-                        auto addr = StringToAddress(s, ec);
-                        if (!ec && addr.is_v6()) {
-                            dns_addrs.emplace_back(addr);
-                        }
-                    }
-                    if (!dns_addrs.empty()) {
-                        if (ppp::unix__::UnixAfx::MergeDnsAddresses(dns_addrs, current_addrs)) {
-                            applied = true;
-                            DebugLog("client ipv6 dns ok count=%d", (int)dns_addrs.size());
-                        }
-                        else {
-                            DebugLog("client ipv6 dns fail count=%d", (int)dns_addrs.size());
-                        }
-                    }
-#endif
+                    attempted = true;
+                    applied &= ppp::ipv6::auxiliary::ApplyClientDns(ipv6_context, dns_servers, ipv6_state_);
                 }
-                
+
+                applied &= attempted;
+
                 if (applied) {
-                    ipv6_applied_ = true;
-                    DebugLog("client ipv6 apply done");
+                    ipv6_applied_      = true;
+                    // Memoize the successfully-applied address so that SendRequestedIPv6Configuration()
+                    // can use it as a sticky hint on reconnect to re-request the same address when the
+                    // user has not configured an explicit RequestedIPv6() preference.
+                    last_assigned_ipv6_ = extensions.AssignedIPv6Address;
                 }
                 else {
-                    DebugLog("client ipv6 apply skipped-or-failed");
+                    ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, extensions.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
+                    ipv6_state_.Clear();
                 }
 
                 return applied;
             }
 
+            /** @brief Restores previous IPv6 configuration captured before apply. */
             void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
                 if (!ipv6_applied_) {
                     return;
@@ -831,113 +822,60 @@ namespace ppp {
                     return;
                 }
 
-                auto& ext = information_extensions_;
-
-                bool ipv6_default_route_cleared = false;
-#if defined(_LINUX)
-                if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat && !ext.AssignedIPv6Gateway.is_v6()) {
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, ppp::string());
-                        ipv6_default_route_cleared = true;
-                    }
-                }
-#endif
-
-                if (!ipv6_default_route_cleared && ext.AssignedIPv6Gateway.is_v6()) {
-                    std::string gw_std = ext.AssignedIPv6Gateway.to_string();
-                    ppp::string gw_str(gw_std.data(), gw_std.size());
-#if defined(_WIN32)
-                    ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index);
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, gw_str);
-                    }
-#else
-                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, gw_str);
-#endif
-                }
-                else if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_WIN32)
-                    ppp::win32::network::DeleteIPv6DefaultGateway(tun_ni->Index);
-#elif defined(_MACOS)
-                    MacosDeleteIPv6Route(tun_ni->Name, "::", 0, ppp::string());
-#endif
+                int prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, (int)information_extensions_.AssignedIPv6AddressPrefixLength));
+                if (prefix < 1) {
+                    prefix = 64;
                 }
 
-                if (ext.AssignedIPv6Address.is_v6()) {
-                    std::string addr_std = ext.AssignedIPv6Address.to_string();
-                    ppp::string addr_str(addr_std.data(), addr_std.size());
-                    int prefix = std::max<int>(1, std::min<int>(128, (int)ext.AssignedIPv6PrefixLength));
-#if defined(_WIN32)
-                    ppp::win32::network::DeleteIPv6Address(tun_ni->Index, addr_str);
-#elif defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Prefix) {
-                            ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, addr_str, prefix, ppp::string());
-                        }
-                        ppp::tap::TapLinux::DeleteIPv6Address(tun_ni->Name, addr_str, prefix);
-                    }
-#else
-                    MacosDeleteIPv6Address(tun_ni->Name, addr_str);
-#endif
-                }
-                else if (ext.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat) {
-#if defined(_LINUX)
-                    ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                    if (NULLPTR != linux_tap) {
-                        ppp::tap::TapLinux::DeleteRoute6(tun_ni->Name, "::", 0, ppp::string());
-                    }
-#endif
-                }
+                ppp::ipv6::auxiliary::ClientContext ipv6_context;
+                ipv6_context.Tap = tap.get();
+                ipv6_context.InterfaceIndex = tun_ni->Index;
+                ipv6_context.InterfaceName = tun_ni->Name;
 
-#if defined(_WIN32)
-                // Windows: clear IPv6 DNS by setting empty, then flush
-                ppp::vector<ppp::string> empty_dns;
-                ppp::win32::network::SetDnsAddressesV6(tun_ni->Index, empty_dns);
-                ppp::tap::TapWindows::DnsFlushResolverCache();
-#else
-                // Linux: restore original DNS configuration
-                if (!ipv6_original_dns_restore_.empty()) {
-                    ppp::unix__::UnixAfx::SetDnsResolveConfiguration(ipv6_original_dns_restore_);
-                }
-#endif
+                bool nat_mode = information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, information_extensions_.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
 
                 ipv6_applied_ = false;
-                ipv6_original_dns_restore_.clear();
+                ipv6_state_.Clear();
             }
 
+            /** @brief Adapts base information callback to extension-aware overload. */
             bool VEthernetNetworkSwitcher::OnInformation(const std::shared_ptr<VirtualEthernetInformation>& info) noexcept {
                 VirtualEthernetInformationExtensions extensions;
                 extensions.Clear();
                 return OnInformation(info, extensions);
             }
 
+            /** @brief Updates runtime state from server information and extensions. */
             bool VEthernetNetworkSwitcher::OnInformation(const std::shared_ptr<VirtualEthernetInformation>& info, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
                     return false;
                 }
 
-                DebugLog("client switcher info ipv6 mode=%u prefix=%u flags=%u address=%s gateway=%s dns1=%s dns2=%s",
-                    (unsigned)extensions.AssignedIPv6Mode,
-                    (unsigned)extensions.AssignedIPv6PrefixLength,
-                    (unsigned)extensions.AssignedIPv6Flags,
-                    extensions.AssignedIPv6Address.is_v6() ? extensions.AssignedIPv6Address.to_string().c_str() : "",
-                    extensions.AssignedIPv6Gateway.is_v6() ? extensions.AssignedIPv6Gateway.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns1.is_v6() ? extensions.AssignedIPv6Dns1.to_string().c_str() : "",
-                    extensions.AssignedIPv6Dns2.is_v6() ? extensions.AssignedIPv6Dns2.to_string().c_str() : "");
 
-                if (ipv6_applied_ && !information_extensions_.Equals(extensions)) {
+                bool previous_assignment = HasManagedIPv6Assignment(information_extensions_);
+                bool current_assignment = HasManagedIPv6Assignment(extensions);
+                if (ipv6_applied_ && (!previous_assignment || !current_assignment || !SameManagedIPv6Configuration(information_extensions_, extensions))) {
                     RestoreAssignedIPv6();
                 }
 
                 information_extensions_ = extensions;
 
-                if (extensions.HasAny()) {
-                    ApplyAssignedIPv6(extensions);
+                bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
+                if (!valid_ipv6_assignment && ipv6_applied_) {
+                    RestoreAssignedIPv6();
+                }
+
+                if (valid_ipv6_assignment) {
+                    if (!ClientSupportsManagedIPv6()) {
+                    }
+                    elif (extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Nat66 &&
+                        extensions.AssignedIPv6Mode != VirtualEthernetInformationExtensions::IPv6Mode_Gua) {
+                    }
+                    elif (!ipv6_applied_) {
+                        ApplyAssignedIPv6(extensions);
+                    }
                 }
 
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_;
@@ -963,6 +901,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Creates Windows PaperAirplane controller bound to exchanger. */
             VEthernetNetworkSwitcher::PaperAirplaneControllerPtr VEthernetNetworkSwitcher::NewPaperAirplaneController() noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = GetExchanger();
                 if (NULLPTR == exchanger) {
@@ -973,6 +912,7 @@ namespace ppp {
                 }
             }
 #elif defined(_LINUX)
+            /** @brief Creates Linux protector network instance for socket protection. */
             VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::NewProtectorNetwork() noexcept {
 #if defined(_ANDROID)
                 // Embedding the so framework into the Android platform does not use sendfd/recvfd unix to share fd across processes, 
@@ -990,6 +930,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Retrieves latest information snapshot from exchanger. */
             std::shared_ptr<VEthernetNetworkSwitcher::VirtualEthernetInformation> VEthernetNetworkSwitcher::GetInformation() noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
@@ -999,11 +940,13 @@ namespace ppp {
                 return exchanger->GetInformation();
             }
             
+            /** @brief Creates transmission statistics collector instance. */
             VEthernetNetworkSwitcher::ITransmissionStatisticsPtr VEthernetNetworkSwitcher::NewStatistics() noexcept {
                 return make_shared_object<ITransmissionStatistics>();
             }
 
 #if defined(_WIN32)
+            /** @brief Builds switcher network-interface snapshot from Windows adapter details. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetNetworkInterface(const ppp::win32::network::AdapterInterfacePtr& ai, const ppp::win32::network::NetworkInterfacePtr& ni) noexcept {
                 if (NULLPTR == ai || NULLPTR == ni) {
                     return NULLPTR;
@@ -1027,6 +970,7 @@ namespace ppp {
                 return result;
             }
 
+            /** @brief Resolves Windows network-interface snapshot by adapter interface. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetNetworkInterface(const ppp::win32::network::AdapterInterfacePtr& ai) noexcept {
                 if (NULLPTR == ai) {
                     return NULLPTR;
@@ -1036,6 +980,7 @@ namespace ppp {
                 return Windows_GetNetworkInterface(ai, ni);
             }
 
+            /** @brief Gets Windows TAP-side network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetTapNetworkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap) noexcept {
                 int interface_index = tap->GetInterfaceIndex();
                 if (interface_index == -1) {
@@ -1054,16 +999,18 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            /** @brief Gets Windows underlying physical network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Windows_GetUnderlyingNetowrkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap, const ppp::string& nic) noexcept {
                 auto [ai, ni] = ppp::win32::network::GetUnderlyingNetowrkInterface2(tap->GetId(), nic);
                 return Windows_GetNetworkInterface(ai, ni);
             }
-#elif !defined(_IPHONE)
+#elif !defined(_ANDROID) && !defined(_IPHONE)
             class UnixNetworkInterface final : public VEthernetNetworkSwitcher::NetworkInterface {
             public:
                 ppp::string DnsResolveConfiguration;
 
             public:
+                /** @brief Restores Unix DNS resolver configuration from captured state. */
                 static bool SetDnsResolveConfiguration(const std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface>& underlying_ni) noexcept {
                     if (NULLPTR == underlying_ni) {
                         return false;
@@ -1104,6 +1051,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Gets Unix TAP/TUN-side network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Unix_GetTapNetworkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap) noexcept {
                 int interface_index = tap->GetInterfaceIndex();
                 if (interface_index == -1) {
@@ -1153,6 +1101,7 @@ namespace ppp {
                 return ni;
             }
 
+            /** @brief Gets Unix underlying physical network-interface snapshot. */
             static std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> Unix_GetUnderlyingNetowrkInterface(const std::shared_ptr<VEthernetNetworkSwitcher::ITap>& tap, const ppp::string& nic) noexcept {
                 std::shared_ptr<UnixNetworkInterface> ni = make_shared_object<UnixNetworkInterface>();
                 if (NULLPTR == ni) {
@@ -1217,6 +1166,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Enables or disables outbound QUIC blocking policy. */
             bool VEthernetNetworkSwitcher::BlockQUIC(bool value) noexcept {
                 // Set the status of the current VPN client switcher that needs to block QUIC traffic flags.
                 block_quic_ = value;
@@ -1224,6 +1174,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Applies local HTTP proxy endpoint to Windows system settings. */
             bool VEthernetNetworkSwitcher::SetHttpProxyToSystemEnv() noexcept {
                 // Windows platform uses the system's Internet function library to set the system HTTP proxy environment.
                 auto http_proxy = GetHttpProxy();
@@ -1254,6 +1205,7 @@ namespace ppp {
                 return bok;
             }
 
+            /** @brief Clears Windows system HTTP proxy settings managed by switcher. */
             bool VEthernetNetworkSwitcher::ClearHttpProxyToSystemEnv() noexcept {
                 // Windows platform uses the system's Internet function library to clear the system HTTP proxy environment.
                 ppp::string server;
@@ -1263,6 +1215,7 @@ namespace ppp {
 #endif
 
 #if defined(_ANDROID) || defined(_IPHONE)
+            /** @brief Builds mobile-side route table including bypass and DNS exceptions. */
             bool VEthernetNetworkSwitcher::AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept {
                 RouteInformationTablePtr rib = make_shared_object<RouteInformationTable>();
                 if (NULLPTR == rib)  {
@@ -1321,21 +1274,22 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Creates and configures static-mode aggligator instance. */
             bool VEthernetNetworkSwitcher::PreparedAggregator() noexcept {
                 std::shared_ptr<boost::asio::io_context> context = ppp::threading::Executors::GetDefault();
                 if (NULLPTR == context) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 }
 
                 std::shared_ptr<Byte> buffer = ppp::threading::Executors::GetCachedBuffer(context);
                 if (NULLPTR == buffer) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                 }
 
                 std::shared_ptr<aggligator::aggligator> aggligator = 
                     make_shared_object<aggligator::aggligator>(*context, buffer, PPP_BUFFER_SIZE, PPP_AGGLIGATOR_CONGESTIONS);
                 if (NULLPTR == aggligator) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 aggligator_ = aggligator;
@@ -1347,13 +1301,12 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Initializes switcher runtime components and opens all services. */
             bool VEthernetNetworkSwitcher::Open(const std::shared_ptr<ITap>& tap) noexcept {
-#if !defined(_IPHONE)
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 // Get and retrieve the current underlying Ethernet interface information!
 #if defined(_WIN32)
                 underlying_ni_ = Windows_GetUnderlyingNetowrkInterface(tap, preferred_nic_);
-#elif defined(_ANDROID)
-                underlying_ni_.reset();
 #else
                 underlying_ni_ = Unix_GetUnderlyingNetowrkInterface(tap, preferred_nic_);
 #endif
@@ -1365,22 +1318,21 @@ namespace ppp {
                         underlying_ni->GatewayServer = ngw;
                     }
                 }
-#if !defined(_ANDROID)
                 else {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 // Compatibility by all means try to check and fix the gateway route of the physical network card once, 
                 // Otherwise there will be no network with all kinds of chain problems!
                 FixUnderlyingNgw();
 #endif
-#endif
                 // Construction of VEtherent virtual Ethernet switcher processing framework.
+                /** @brief Creates base VEthernet framework before higher-level services. */
                 if (!VEthernet::Open(tap)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }
 
-#if !defined(_IPHONE)
+#if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_WIN32)
                 // Get network interface information for TAP-Windows virtual Ethernet devices!
                 tun_ni_ = Windows_GetTapNetworkInterface(tap);
@@ -1391,7 +1343,7 @@ namespace ppp {
 
                 // The vEthernet network switcher cannot be opened when the virtual network adapter device interface for the VPN startup link cannot be found!
                 if (NULLPTR == tun_ni_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
 #endif
 
@@ -1401,7 +1353,7 @@ namespace ppp {
                 // Instantiate the local QoS throughput speed control module!
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = NewQoS();
                 if (NULLPTR == qos) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 }
 
 #if defined(_LINUX)
@@ -1411,7 +1363,7 @@ namespace ppp {
 #if defined(_ANDROID)
                 protector_network = NewProtectorNetwork();
                 if (NULLPTR == protector_network) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                 }
 #else
                 if (protect_mode_) {
@@ -1426,7 +1378,7 @@ namespace ppp {
                 }
                 elif(!exchanger->Open()) {
                     IDisposable::DisposeReferences(qos, exchanger);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }
 
                 // Enable the local HTTP PROXY server middleware to provide proxy services directly by the VPN.
@@ -1482,7 +1434,7 @@ namespace ppp {
 
                     // Add VPN remote server to IPList bypass route table iplist.
                     if (!AddRemoteEndPointToIPList(underlying_ni->GatewayServer)) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteAddFailed);
                     }
                 }
 #endif
@@ -1544,6 +1496,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Starts optional PaperAirplane helper service on Windows. */
             bool VEthernetNetworkSwitcher::UsePaperAirplaneController() noexcept {
                 // Open the [PaperAirplane NSP/LSP] paper airplane server controller, 
                 // Depending on the configuration and whether it is a CLI command line hosted network flag.
@@ -1574,6 +1527,7 @@ namespace ppp {
 #endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
+            /** @brief Attempts to restore default route on underlying physical NIC. */
             bool VEthernetNetworkSwitcher::FixUnderlyingNgw() noexcept {
                 auto ni = underlying_ni_;
                 if (NULLPTR == ni) {
@@ -1598,6 +1552,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Installs VPN route entries into host operating system. */
             void VEthernetNetworkSwitcher::AddRoute() noexcept {
 #if defined(_WIN32)
                 // Find and delete all default route information!
@@ -1652,6 +1607,7 @@ namespace ppp {
                 AddRouteWithDnsServers();
             }
 
+            /** @brief Deletes conflicting default routes while VPN is active. */
             bool VEthernetNetworkSwitcher::DeleteAllDefaultRoute() noexcept {
                 if (auto tap = GetTap(); NULLPTR != tap) {
 #if defined(_WIN32)
@@ -1688,6 +1644,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Removes VPN route entries and restores system defaults. */
             void VEthernetNetworkSwitcher::DeleteRoute() noexcept {
 #if defined(_WIN32)
                 // Delete the loaded route table from the windows operating system.
@@ -1744,18 +1701,22 @@ namespace ppp {
                 DeleteRouteWithDnsServers();
             }
 
+            /** @brief Returns formatted cached remote URI string. */
             ppp::string VEthernetNetworkSwitcher::GetRemoteUri() noexcept {
                 return server_ru_;
             }
 
+            /** @brief Sets preferred physical NIC hint for route operations. */
             void VEthernetNetworkSwitcher::PreferredNic(const ppp::string& nic) noexcept {
                 preferred_nic_ = nic;
             }
 
+            /** @brief Sets preferred physical gateway hint for route operations. */
             void VEthernetNetworkSwitcher::PreferredNgw(const boost::asio::ip::address& gw) noexcept {
                 preferred_ngw_ = gw;
             }
 
+            /** @brief Registers IP-list file or URL source for later route loading. */
             bool VEthernetNetworkSwitcher::AddLoadIPList(
                 const ppp::string&                                              path, 
 #if defined(_LINUX) 
@@ -1767,22 +1728,22 @@ namespace ppp {
                 using File = ppp::io::File;
 
                 if (path.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 ppp::string fullpath = File::RewritePath(path.data());
                 if (fullpath.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 fullpath = File::GetFullPath(path.data());
                 if (fullpath.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 }
 
                 bool vbgp_url = ppp::net::http::HttpClient::VerifyUri(url, NULLPTR, NULLPTR, NULLPTR, NULLPTR);
                 if (!vbgp_url && !File::Exists(fullpath.data())) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
                 }
                 
                 uint32_t ngw = IPEndPoint::AnyAddress;
@@ -1801,7 +1762,7 @@ namespace ppp {
                 }
 
                 if (NULLPTR == ribs) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
                 else {
                     auto tail = std::find_if(ribs->begin(), ribs->end(),
@@ -1837,6 +1798,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Loads all registered IP-list files into route information table. */
             bool VEthernetNetworkSwitcher::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {
                 rib_ = NULLPTR;
                 fib_ = NULLPTR;
@@ -1871,6 +1833,7 @@ namespace ppp {
                 return any;
             }
 
+            /** @brief Adds DNS-specific route exceptions to operating system table. */
             void VEthernetNetworkSwitcher::AddRouteWithDnsServers() noexcept {
                 // Clear the current cached dns server ip address list.
                 for (auto& dns_servers : dns_serverss_) {
@@ -1974,6 +1937,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Adds one host route entry to operating system table. */
             bool VEthernetNetworkSwitcher::AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
 #if defined(_WIN32)
                 MIB_IPFORWARDROW route;
@@ -2014,6 +1978,7 @@ namespace ppp {
             }
 
 #if defined(_WIN32)
+            /** @brief Deletes one host route entry from Windows route table snapshot. */
             bool VEthernetNetworkSwitcher::DeleteRoute(const std::shared_ptr<MIB_IPFORWARDTABLE>& mib, uint32_t ip, uint32_t gw, int prefix) noexcept {
                 // Delete the IP route for the dns server list added for the windows operating system.
                 if (NULLPTR == mib) {
@@ -2024,6 +1989,7 @@ namespace ppp {
                 return ppp::win32::network::Router::Delete(mib, ip, mask, gw);
             }
 #else
+            /** @brief Deletes one host route entry from Unix route table. */
             bool VEthernetNetworkSwitcher::DeleteRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
 #if defined(_MACOS)
                 // Delete the IP route for the dns server list added for the macos operating system.
@@ -2053,6 +2019,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Removes DNS-specific route exceptions from operating system table. */
             void VEthernetNetworkSwitcher::DeleteRouteWithDnsServers() noexcept {
                 // Delete all vpn dns server routes from the operating system.
                 if (std::shared_ptr<ppp::tap::ITap> tap = GetTap(); NULLPTR != tap) {
@@ -2102,6 +2069,7 @@ namespace ppp {
             // In some PC and network production environments, third - party programs will destroy VPN deployment routing table information 
             // At certain times.In PPP PRIVATE NETWORK™ 1, this NETWORK route protector exists by default, but PPP PRIVATE Network ™ 2 does 
             // Not currently exist, so a new implementation of this section is needed.
+            /** @brief Starts background default-route protector worker. */
             bool VEthernetNetworkSwitcher::ProtectDefaultRoute() noexcept {
                 auto tap = GetTap();
                 if (NULLPTR == tap) {
@@ -2120,21 +2088,22 @@ namespace ppp {
 #endif
 
                 // Create a new network protection backend subthread.
-                auto self = shared_from_this();
-                std::thread([self, this]() noexcept {
-                    auto prepare = [self, this]() noexcept {
+                auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
+                /** @brief Background loop that periodically repairs default-route drift. */
+                std::thread([self]() noexcept {
+                    auto prepare = [self]() noexcept {
                         // If the current VEthernet framework object instance is released, the process is break.
-                        if (IsDisposed()) {
+                        if (self->IsDisposed()) {
                             return false;
                         }
 
                         // If the route is not added to the system, the route pops out without setting the flag.
-                        if (!route_added_) {
+                        if (!self->route_added_) {
                             return false;
                         }
 
                         // Check whether the physical nic interface information still exists.
-                        std::shared_ptr<NetworkInterface> underlying_ni = underlying_ni_;
+                        std::shared_ptr<NetworkInterface> underlying_ni = self->underlying_ni_;
                         if (NULLPTR == underlying_ni) {
                             return false;
                         }
@@ -2160,14 +2129,14 @@ namespace ppp {
                         }
 
                         // Try to get the lock, if you can't get the lock, do not deal with it and wait for the next execution.
-                        if (prdr_.try_lock()) {
+                        if (self->prdr_.try_lock()) {
                             ok = prepare();
                             if (ok) {
-                                ok = DeleteAllDefaultRoute();
+                                ok = self->DeleteAllDefaultRoute();
                             }
 
                             // Release the obtained prdr lock and decide whether to exit the process.
-                            prdr_.unlock();
+                            self->prdr_.unlock();
                             if (!ok) {
                                 break;
                             }
@@ -2188,6 +2157,7 @@ namespace ppp {
             }
 #endif
 
+            /** @brief Checks whether destination IP should bypass VPN forwarding path. */
             bool VEthernetNetworkSwitcher::IsBypassIpAddress(const boost::asio::ip::address& ip) noexcept {
                 if (!ip.is_v4()) {
                     return false;
@@ -2240,6 +2210,7 @@ namespace ppp {
 #endif
             }
 
+            /** @brief Releases all runtime services, routes, and related resources. */
             void VEthernetNetworkSwitcher::ReleaseAllObjects() noexcept {
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 // Windows platform needs to set the prdr synchronization lock state to prevent the problem of multi-thread concurrent competition.
@@ -2286,10 +2257,9 @@ namespace ppp {
                 }
 #endif
 
-#if !defined(_IPHONE)
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 RestoreAssignedIPv6();
 
-#if !defined(_ANDROID)
                 // Delete VPN route table information configured in the operating system!
                 if (exchangeof(route_added_, false)) {
                     // Delete routes entries configured by the VPN program from the operating system. 
@@ -2326,11 +2296,6 @@ namespace ppp {
 
                 // Clear all route tables and forwarding tables held by the current object.
                 LoadAllIPListWithFilePaths(boost::asio::ip::address_v4::any());
-#else
-                tun_ni_.reset();
-                underlying_ni_.reset();
-                route_added_ = false;
-#endif
 #endif
 
 #if defined(_LINUX)
@@ -2344,6 +2309,7 @@ namespace ppp {
 #endif
             }
 
+            /** @brief Removes timeout callback associated with a key. */
             bool VEthernetNetworkSwitcher::DeleteTimeout(void* k) noexcept {
                 if (NULLPTR == k) {
                     return false;
@@ -2353,6 +2319,7 @@ namespace ppp {
                 return Dictionary::RemoveValueByKey(timeouts_, k);
             }
 
+            /** @brief Registers timeout callback associated with a key. */
             bool VEthernetNetworkSwitcher::EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept {
                 if (NULLPTR == k || NULLPTR == timeout) {
                     return false;
@@ -2363,9 +2330,10 @@ namespace ppp {
                 return r.second;
             }
 
+            /** @brief Loads DNS redirect rules from file or inline content. */
             bool VEthernetNetworkSwitcher::LoadAllDnsRules(const ppp::string& rules, bool load_file_or_string) noexcept {
                 if (rules.empty()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetNetworkSwitcherDnsRulesEmpty);
                 }
 
                 int events = 0;
@@ -2376,9 +2344,14 @@ namespace ppp {
                     events = ppp::app::client::dns::Rule::Load(rules, dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
                 }
 
-                return events > 0;
+                if (1 > events) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
+                }
+
+                return true;
             }
 
+            /** @brief Adds remote endpoints and static servers to route/bypass tables. */
             bool VEthernetNetworkSwitcher::AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept {
                 using ProtocolType = VEthernetExchanger::ProtocolType;
 
@@ -2490,6 +2463,7 @@ namespace ppp {
 
                 // Check whether the static tunnel specifies an IP address endpoint (required for transit).
                 ppp::unordered_set<boost::asio::ip::tcp::endpoint> servers;
+                /** @brief Parses and registers one static tunnel server endpoint. */
                 auto StaticEchoAddRemoteEndPoint = 
                     [this, &servers, &fib_add_route_ipv4, &exchanger](const ppp::string& server_string) noexcept {
                         if (server_string.empty()) {
@@ -2552,6 +2526,7 @@ namespace ppp {
                 return fib_add_route_ipv4(remoteIP);
             }
 
+            /** @brief Coroutine DNS redirect implementation for one outbound query. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(
                 ppp::coroutines::YieldContext&                              y,
                 const std::shared_ptr<boost::asio::ip::udp::socket>&        socket,
@@ -2567,7 +2542,7 @@ namespace ppp {
 
                 bool opened = ppp::coroutines::asio::async_open(y, *socket, serverEP.protocol());
                 if (!opened) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 int handle = socket->native_handle();
@@ -2585,7 +2560,7 @@ namespace ppp {
                         auto protector_network = GetProtectorNetwork(); 
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(handle, y)) {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                             }
                         }
                     }
@@ -2595,7 +2570,7 @@ namespace ppp {
                 socket->send_to(boost::asio::buffer(messages->Buffer.get(), messages->Length), serverEP,
                     boost::asio::socket_base::message_end_of_record, ec);
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
                 }
 
                 const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
@@ -2610,24 +2585,29 @@ namespace ppp {
                         }
                     });
                 if (NULLPTR == cb) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 }
 
                 const auto timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
                 if (NULLPTR == timeout) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 }
 
                 if (!EmplaceTimeout(socket.get(), cb)) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                 }
 
-                const auto max_buffer_size = PPP_BUFFER_SIZE - sizeof(serverEP);
+                const auto max_buffer_size = PPP_BUFFER_SIZE;
                 boost::asio::ip::udp::endpoint sourceEP = IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                 boost::asio::ip::udp::endpoint destinationEP(destinationIP, frame->Destination.Port);
+                
+                const auto serverEPPtr = make_shared_object<boost::asio::ip::udp::endpoint>();
+                if (NULLPTR == serverEPPtr) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                }
 
-                socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *reinterpret_cast<boost::asio::ip::udp::endpoint*>(buffer.get() + max_buffer_size),
-                    [self, this, socket, timeout, buffer, sourceEP, destinationEP](boost::system::error_code ec, size_t sz) noexcept {
+                socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,
+                    [self, this, socket, timeout, buffer, sourceEP, destinationEP, serverEPPtr](boost::system::error_code ec, size_t sz) noexcept {
                         DeleteTimeout(socket.get());
                         if (ec == boost::system::errc::success) {
                             if (sz > 0) {
@@ -2644,6 +2624,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Entry point for DNS redirection decision and async execution. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<BufferSegment>& messages) noexcept {
                 ::dns::Message m;
                 if (m.decode(static_cast<uint8_t*>(messages->Buffer.get()), messages->Length) != ::dns::BufferResult::NoError) {
@@ -2716,6 +2697,7 @@ namespace ppp {
                     });
             }
 
+            /** @brief Gets current static mode and optionally updates it. */
             bool VEthernetNetworkSwitcher::StaticMode(bool* static_mode) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 bool snow = static_mode_;
@@ -2726,6 +2708,7 @@ namespace ppp {
                 return snow;
             }
 
+            /** @brief Gets current mux size and optionally updates it. */
             uint16_t VEthernetNetworkSwitcher::Mux(uint16_t* mux) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 uint16_t snow = mux_;
@@ -2736,6 +2719,7 @@ namespace ppp {
                 return snow;
             }
 
+            /** @brief Gets current mux acceleration flags and optionally updates them. */
             uint8_t VEthernetNetworkSwitcher::MuxAcceleration(uint8_t* mux_acceleration) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 uint8_t snow = mux_acceleration_;
@@ -2746,6 +2730,7 @@ namespace ppp {
                 return snow;
             }
 
+            /** @brief Performs periodic update work for static-echo socket rotation. */
             bool VEthernetNetworkSwitcher::OnUpdate(uint64_t now) noexcept {
                 if (VEthernet::OnUpdate(now)) {
                     std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
@@ -2759,6 +2744,7 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)   
 #if defined(_LINUX)
+            /** @brief Gets current Linux protect mode and optionally updates it. */
             bool VEthernetNetworkSwitcher::ProtectMode(bool* protect_mode) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 bool snow = protect_mode_;

@@ -1,580 +1,518 @@
-# 🌐 **Analysis of OPENPPP2 Transport Layer Control Algorithms**
+# Transport, Framing, And Protected Tunnel Model
+
+[中文版本](TRANSMISSION_CN.md)
+
+## Scope
+
+This document explains the transport core of OPENPPP2 from the implementation upward. The goal is to describe what the transmission subsystem actually does and why it is more than a socket wrapper with a cipher.
+
+The key source files are `ppp/transmissions/ITransmission.*`, `ppp/transmissions/ITcpipTransmission.*`, `ppp/transmissions/IWebsocketTransmission.*`, and the packet-consuming protocol files in `ppp/app/protocol/*`.
 
 ---
 
-## ⚙️ **1. Overall Architecture Design Principles**
+## 1. What The Transmission Layer Solves
 
-> **Overall Architecture Flowchart:**
+The transmission subsystem has to do several things at once:
 
-```mermaid
-graph TD
-    A[Application Layer Data] --> B{Connection Phase}
-    B -->|Initial Connection| C[NOP Empty Packet Rounds]
-    B -->|Establish Connection| D[Handshake Protocol]
-    D --> E[Secure Channel]
-    E --> F{Transmission Phase}
-    F -->|High Security Needs| G[Full Security Mode]
-    F -->|Performance Priority| H[Configured Security Mode]
-    
-    C --> I[Firewall Bypass]
-    D --> J[Exploit Vulnerabilities]
-    G --> K[Deep Defense]
-    H --> L[Performance Optimization]
-    
-    I --> M[Protocol Obfuscation]
-    J --> N[Printable Exemption]
-    K --> O[Resource Consumption]
-    L --> P[Efficiency Enhancement]
-```
+| Requirement | Meaning |
+|-------------|---------|
+| Multi-carrier support | Work over TCP, WebSocket, WSS, and related carriers |
+| Protected channel | Establish a protected state before normal tunnel traffic flows |
+| Framing discipline | Protect packet boundaries and packet length metadata |
+| Carrier independence | Keep upper-layer tunnel semantics separate from carrier type |
+| Pre-handshake mode | Support base94-style pre-handshake or plaintext-compatible traffic |
+| Session-specific working keys | Derive per-connection working cipher state from configured keys and handshake-time entropy |
 
 ---
 
-## 🎯 **2. NOP Empty Packet Rounds Design Principles**
-
-> **Firewall Detection Mechanisms:**
+## 2. Layering Model
 
 ```mermaid
 flowchart TD
-    A[Firewall Detection Mechanism] --> B[Timing Pattern Analysis]
-    B --> C[Machine Learning Classification]
-    C --> D[Protocol Fingerprinting]
-    D --> E[Connection Blocking]
+    A[Carrier: TCP / WS / WSS] --> B[Handshake]
+    B --> C[Framing]
+    C --> D[Metadata protection]
+    D --> E[Payload protection]
+    E --> F[VirtualEthernetLinklayer]
+    F --> G[Client / Server Runtime]
 ```
 
-> **NOP Empty Packet Solution:**
+### Layer Responsibilities
 
-```mermaid
-flowchart TD
-    F[NOP Empty Packet Solution] --> G[Random Rounds kl-kh]
-    G --> H[Random Packet Length kx]
-    H --> I[Random Time Intervals]
-    I --> J[Random Content Generation]
-    J --> K[Simulate Legitimate Traffic]
-    K --> L[Break Fingerprinting]
-```
-
-> **Defense Effect:**
-
-```mermaid
-graph TD
-    M[Defense Effect]
-    M --> N[Increases analysis cost by 10x]
-    M --> O[Reduces recognition accuracy by 80%]
-    M --> P[Consumes Firewall Resources]
-```
+| Layer | Responsibility |
+|-------|----------------|
+| Carrier | Socket I/O and transport selection |
+| Handshake | Session setup, dummy traffic, and working-key input exchange |
+| Framing | Length protection and packet boundary handling |
+| Metadata protection | Header masking, shuffling, delta encoding, and cipher application |
+| Payload protection | Body encryption and transform pipeline |
+| Link-layer | Tunnel action semantics |
 
 ---
 
-## 📝 **3. Printable Plaintext Exemption Vulnerability Exploitation**
-
-> **Process Steps:**
-
-```mermaid
-sequenceDiagram
-    participant FW as Firewall
-    participant Client
-    participant Server
-    
-    Note over FW: Deep Packet Inspection Strategy
-    FW->>FW: Check if content is printable ASCII (32-126)
-    FW->>FW: Printable → Allow<br/>Non-printable → Deep Inspection
-    
-    Client->>Server: Handshake packet (Base94 encoded, enforced all printable characters)
-    Note over Client: During connection: use Base94 encoding
-    FW->>FW: Recognized as printable content, allow
-    
-    Server->>Client: Response packet (Base94 encoded)
-    FW->>FW: Recognized as printable content, allow
-    
-    Client->>Server: IV vector (encrypted, still using Base94)
-    FW->>FW: Continue allowing
-    
-    Server->>Client: Activation command, establish secure channel
-```
-
----
-
-## 🔄 **4. Dynamic Security Level Adjustment Mechanism**
-
-> **State Diagram:**
-
-```mermaid
-stateDiagram-v2
-    [*] --> Disconnected
-    Disconnected --> Handshaking : Connection Request
-    Handshaking --> FullSecurity : During Handshake
-    
-    state FullSecurity {
-        [*] --> Base94 : Force Base94
-        Base94 --> ProtocolEnc : Protocol Encryption
-        ProtocolEnc --> TransportEnc : Transport Encryption
-        TransportEnc --> LengthObf : Length Obfuscation
-        LengthObf --> ByteShuffle : Byte Reordering
-        ByteShuffle --> DeltaEncode : Differential Encoding
-    }
-    
-    FullSecurity --> Established : Handshake Success
-    Established --> ConfigSecurity : Enter Transmission
-    state ConfigSecurity {
-        [*] --> Base94Config : Conditional Base94
-        Base94Config --> ProtocolEnc : Protocol Encryption
-        ProtocolEnc --> TransportEnc : Transport Encryption
-        TransportEnc --> LengthConfig : Conditional Length Obfuscation
-        LengthConfig --> ShuffleConfig : Conditional Byte Reordering
-        ShuffleConfig --> DeltaConfig : Conditional Differential Encoding
-    }
-    
-    Established --> [*] : Connection Disconnection
-```
-
----
-
-## 🧩 **5. Protocol Obfuscation Technical Details**
-
-> **Base94 Character Set:**
-
-```plaintext
-!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~
-```
-
-> **Protocol Obfuscation Flowchart:**
-
-```mermaid
-graph BT
-    A[Protocol Obfuscation Technology] --> B[Base94 Encoding]
-    A --> C[Random Padding]
-    A --> D[Dynamic Header]
-    
-    B --> E[Encoding Principles]
-    E --> F["Printable Character Set (32-126)"]
-    F --> G["ASCII 94 Characters:"]
-    
-    C --> H[Padding Control]
-    H --> I["kx Parameter: Padding Length"]
-    I --> J["Random Characters Count = Random(1, kx)"]
-    
-    D --> K[Header Structure]
-    K --> L["Byte 1: Random Frame ID (0x01-0xFF)"]
-    K --> M["Bytes 2-3: Length Fields"]
-    K --> N["Byte 4: Checksum"]
-```
-
----
-
-## 🔐 **6. Dual-Key Encryption System**
-
-> **Class Diagram:**
+## 3. Class Hierarchy
 
 ```mermaid
 classDiagram
-    class EncryptionSystem {
-        +ProtocolLayer : Ciphertext
-        +TransportLayer : Ciphertext
-        +UpdateKeys(iv) : void
+    class ITransmission {
+        +HandshakeClient(YieldContext) bool
+        +HandshakeServer(YieldContext) bool
+        +Read(YieldContext, length) shared_ptr~Byte~
+        +Write(YieldContext, packet, length) bool
+        +Encrypt(packet, length) bool
+        +Decrypt(packet, length) bool
+        +Dispose() void
+        #DoReadBytes(YieldContext, buf, offset, length) int
+        #DoWriteBytes(YieldContext, buf, offset, length) bool
+        -protocol_  ICiphertext
+        -transport_ ICiphertext
+        -handshaked_ atomic~bool~
+        -disposed_  atomic~bool~
     }
-    class ProtocolLayer {
-        +Algorithm : string
-        +Key : string
-        +Encrypt(data) : byte[]
-        +Decrypt(data) : byte[]
+    class ITcpipTransmission {
+        -socket_ TSocket
+        +DoReadBytes() int
+        +DoWriteBytes() bool
     }
-    class TransportLayer {
-        +Algorithm : string
-        +Key : string
-        +Encrypt(data) : byte[]
-        +Decrypt(data) : byte[]
+    class IWebSocketTransmission {
+        -websocket_ WsStream
+        +DoReadBytes() int
+        +DoWriteBytes() bool
     }
-    EncryptionSystem "1" *-- "1" ProtocolLayer
-    EncryptionSystem "1" *-- "1" TransportLayer
+    class SslWebSocketTransmission {
+        -ssl_context_ ssl~context~
+    }
+    ITransmission <|-- ITcpipTransmission
+    ITransmission <|-- IWebSocketTransmission
+    IWebSocketTransmission <|-- SslWebSocketTransmission
 ```
+
+### Key Source Anchors
+
+| Class | File |
+|-------|------|
+| `ITransmission` | `ppp/transmissions/ITransmission.h` / `.cpp` |
+| `ITcpipTransmission` | `ppp/transmissions/ITcpipTransmission.h` / `.cpp` |
+| `IWebSocketTransmission` | `ppp/transmissions/IWebsocketTransmission.h` / `.cpp` |
+| `SslWebSocketTransmission` | `ppp/transmissions/IWebsocketTransmission.h` |
 
 ---
 
-## 📏 **7. Length Obfuscation Technical Details**
+## 4. Carrier Types
 
-> **Flowchart:**
+### TCP
+
+TCP is the most direct carrier path. When `tcp.listen.port` is non-zero, a `boost::asio::ip::tcp::acceptor` binds to that port. Each accepted socket is wrapped in an `ITcpipTransmission`. No HTTP upgrade is involved; the connection starts directly with the OPENPPP2 handshake.
+
+| Config | Meaning |
+|--------|---------|
+| `tcp.listen.port` | Listen port |
+| `tcp.connect.timeout` | Connect timeout in seconds |
+| `tcp.inactive.timeout` | Inactive (idle) session timeout |
+| `tcp.turbo` | Carrier-side latency optimization (disables Nagle algorithm) |
+| `tcp.fast-open` | TCP Fast Open support (Linux kernel ≥ 3.7) |
+| `tcp.backlog` | Listen backlog queue depth |
+
+#### TCP Connection Lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant Sender
-    participant Receiver
-    participant FW as Firewall
-    
-    Sender->>Sender: Prepare Data
-    Sender->>Sender: Generate Random Frame ID
-    Sender->>Sender: Calculate Original Length L
-    Sender->>Sender: L' = L ^ kf
-    
-    alt Protocol Layer Encryption
-        Sender->>Sender: Encrypt Length Field
-    end
-    
-    Sender->>FW: Send Header [FrameID + L']
-    FW->>FW: Analyze Length Pattern
-    FW-->>Sender: Possibly Allow
-    
-    Sender->>Receiver: Send Payload
-    Receiver->>Receiver: Parse FrameID
-    Receiver->>Receiver: Reverse Obfuscation: L = L' ^ kf
-    
-    alt Protocol Layer Encryption
-        Receiver->>Receiver: Decrypt Length Field
-    end
-    
-    Receiver->>Receiver: Verify Length Consistency
+    participant C as Client
+    participant S as Server
+    participant ASIO as Boost.Asio
+
+    C->>S: TCP SYN (plain TCP socket)
+    S->>ASIO: async_accept
+    ASIO-->>S: new TSocket
+    S->>S: ShiftToScheduler(socket)
+    S->>S: wrap in ITcpipTransmission
+    S->>C: HandshakeServer(y)
+    C->>S: HandshakeClient(y)
+    Note over C,S: ITransmission channel established
+    C->>S: tunnel frames (Read/Write loop)
 ```
+
+### WebSocket
+
+WebSocket is used when HTTP-compatible transport is needed (e.g., for traversal of HTTP proxies or CDN nodes that only pass HTTP traffic). The carrier performs a standard HTTP Upgrade handshake before the OPENPPP2 handshake begins.
+
+| Config | Meaning |
+|--------|---------|
+| `ws.listen.port` | Plain WebSocket listen port |
+| `wss.listen.port` | Secure WebSocket (TLS) listen port |
+| `ws.path` | HTTP Upgrade path (e.g., `/tunnel`) |
+| `ws.host` | Host header value for WebSocket upgrade |
+| `ws.verify-peer` | Peer certificate verification for WSS |
+| `ws.ssl.certificate` | Server TLS certificate path |
+| `ws.ssl.certificate-key` | Server TLS private key path |
+| `ws.ssl.ca-certificate` | CA bundle for peer verification |
+
+#### Client URI Scheme Mapping
+
+| URI Form | Transport |
+|----------|-----------|
+| `ppp://host:port/` | Plain TCP |
+| `ppp://ws/host:port/` | Plain WebSocket |
+| `ppp://wss/host:port/` | TLS WebSocket (WSS) |
+
+### WSS
+
+WSS adds TLS at the carrier layer via `boost::asio::ssl::stream<TSocket>`. That does not replace the inner OPENPPP2 protocol cipher layer — it only changes the carrier protection layer. The two cipher layers are independently configurable.
 
 ---
 
-## 🕵️‍♂️ **8. Vulnerability Exploitation Points Analysis**
+## 5. Two Framing Families
+
+OPENPPP2 has two transmission families depending on whether the handshake has completed.
+
+### Base94 Family
+
+Used when either of these is true:
+- the handshake has not yet completed
+- plaintext-compatible mode is enabled in configuration
+
+The base94 family has two shapes: an initial extended-header form (used for the first packet) and a later simple-header form (used for all subsequent packets). The first packet is more expensive because it establishes the initial parse state via an extended validation field. Later packets use a simpler 4-byte header.
+
+Control flow:
 
 ```mermaid
-graph TD
-    A[Firewall Vulnerabilities] --> B[Printable Exemption]
-    A --> C(Resource Limits)
-    A --> D(Behavior Pattern Dependence)
-    
-    B --> E[OPENPPP2 Exploitation]
-    E --> F["Handshake Stage Enforces Base94"]
-    F --> G["All Printable Content"]
-    G --> H["Induces Allow"]
-    
-    C --> I[OPENPPP2 Exploitation]
-    I --> J["NOP Packet Resource Consumption"]
-    J --> K["kl/kh Rounds Control"]
-    K --> L["2^10-2^12 Rounds Consumption"]
-    
-    D --> M[OPENPPP2 Exploitation]
-    M --> N["Simulate Legitimate Traffic Patterns"]
-    N --> O["HTTP/TLS-like Behavior"]
-    O --> P["Bypass Machine Learning Models"]
+stateDiagram-v2
+    [*] --> Extended : connection opened\nframe_tn_ = 0 / frame_rn_ = 0
+    Extended --> Simple : first packet validated\nframe_tn_++ / frame_rn_++
+    Simple --> Simple : later packets\nframe_tn_++ / frame_rn_++
 ```
+
+Fields controlled by frame counters `frame_tn_` (transmit) and `frame_rn_` (receive):
+
+- When `frame_tn_ == 0`: extended header is written (4+3 bytes = 7 bytes total header).
+- When `frame_tn_ > 0`: simple header is written (4 bytes total header).
+- Receiver mirrors the logic using `frame_rn_`.
+
+### Binary Protected Family
+
+Used after handshake in the normal protected path. Uses a compact 3-byte binary header (seed byte + two protected length bytes) followed by the encrypted payload.
+
+#### Binary Header Layout (post-handshake)
+
+```
+Byte 0:  seed (random, drives per-packet kf)
+Byte 1:  protected_length_hi
+Byte 2:  protected_length_lo
+Byte 3…N: encrypted payload body
+```
+
+The length bytes are not a plain 16-bit integer. They undergo: protocol-cipher encryption → XOR masking with `kf`-derived factor → byte shuffling → delta encoding. The receiver reverses all five steps in opposite order.
 
 ---
 
-## 🛡️ **9. Defense Mechanism Effectiveness Matrix**
+## 6. Base94 Header Behavior
 
-| Attack Type / Defense Mechanism | NOP Pack | Base94 | Dynamic Keys | Byte Reordering | Length Obfuscation | Differential Encoding |
-|--------------------------------|----------|--------|--------------|----------------|-------------------|------------------------|
-| Protocol Fingerprinting        | High     | High   | Medium       | High           | Low               | Low                    |
-| Traffic Timing Analysis        | High     | Medium | High         | High           | Medium            | Low                    |
-| Ciphertext Differential Analysis | Medium | Low    | High         | Medium         | High              | High                   |
-| Deep Content Inspection        | Low      | High   | Medium       | High           | Medium            | Low                    |
-| Replay Attacks                 | Low      | Low    | High         | High           | High              | High                   |
-| Man-in-the-Middle Attacks      | Low      | Low    | High         | High           | High              | High                   |
+The base94 header is not a plain literal length prefix.
 
-### **Explanation:**
-1. **Rows correspond to defense mechanisms**
-2. **Columns correspond to attack types**
-3. **Cell values: effectiveness (High/Medium/Low)**
+It uses:
+- a random key byte (`ks`) that seeds the per-packet factor `kf`
+- a filler byte derived from `kf`
+- base94 digits derived from transformed length data
+- in the first packet, an additional validation field (3 extra bytes)
 
-4. **Usage Suggestions:**
-```mermaid
-graph TD
-    A[Choose Defense Mechanisms] --> B{Attack Types}
-    B -->|Protocol Fingerprint/Timing Analysis| C[NOP + Byte Reordering]
-    B -->|Ciphertext Differential| D[Dynamic Keys + Differential]
-    B -->|Replay/Man-in-the-Middle| E[Dynamic Keys + Length Obfuscation]
-    B -->|Deep Content Inspection| F[Base94 + Byte Reordering]
-```
-
-> 💡 **Deployment Tip:** Combining defense mechanisms (e.g., Dynamic Keys + Byte Reordering) can cover 87% of attack types (based on matrix data, combined defense improves effectiveness by 40%+).
-
----
-
-## 🔑 **10. Full Handshake Protocol Timeline (Timeline Illustration)**
-
-```mermaid
-timeline
-    title Handshake Protocol Timeline (milliseconds)
-    section_Phase 1: NOP Interference
-        0-100 ： Send NOP packet 1 (random length)
-        100-200 ： Send NOP packet 2 (random length)
-        ... ： ...
-        t1 ： Send NOP packet N (kl ≤ N ≤ kh)
-    section_Phase 2: Session Establishment
-        t1+50 ： Send Session ID (Server)
-        t1+100 ： Receive Session ID (Client)
-        t1+150 ： Send IV vector (Client)
-    section_Phase 3: Capability Negotiation
-        t1+200 ： Send MUX flag (Server)
-        t1+250 ： Send acknowledgment packet (Client)
-    section_Phase 4: Key Upgrade
-        t1+300 ： Key Upgrade
-        t1+350 ： Key Upgrade
-        t1+400 ： New Key Activation
-```
-
----
-
-## 🔐 **11. Dynamic Key Upgrade Process**
-
-```mermaid
-flowchart TB
-    subgraph Client
-        A[Generate Random IV] --> B["New Protocol Key = Protocol-Key + IV"]
-        A --> C["New Transport Key = Transport-Key + IV"]
-        B --> D[Encrypt Protocol Layer Keys]
-        C --> E[Encrypt Transport Layer Keys]
-    end
-    
-    subgraph Server
-        F[Receive IV] --> G["New Protocol Key = Protocol-Key + IV"]
-        F --> H["New Transport Key = Transport-Key + IV"]
-        G --> I[Decrypt Protocol Layer]
-        H --> J[Decrypt Transport Layer]
-    end
-    
-    D --> K[Secure Channel]
-    E --> K
-    I --> K
-    J --> K
-```
-
----
-
-## 💡 **12. Firewall Defense Recommendations**
-
-```mermaid
-graph TD
-    A[Enhance Detection] --> B[Deep Inspection Strategy]
-    A --> C[Behavior Analysis Model]
-    A --> D[Resource Optimization]
-    B --> E[Remove Exemptions]
-    B --> F[Full Traffic Inspection]
-    B --> G[Protocol Feature Updates]
-    C --> H[Machine Learning]
-    H --> I[Identify NOP Packets]
-    I --> J[Anomaly Detection]
-    D --> K[Hardware Acceleration]
-    D --> L[Resource Pool Management]
-    D --> M[Priority Scheduling]
-    J --> N[Blocking Strategies]
-    F --> N
-    G --> N
-```
-
----
-
-## 🔎 **13. NOP Packet Generation Algorithm**
+The packet state switches from extended to simple after the first successful parse, tracked by `frame_rn_` reaching 1.
 
 ```mermaid
 flowchart TD
-    Start[Start] --> Init[Initialize Parameters]
-    Init --> CalcRounds["Random Rounds = 2^kl to 2^kh"]
-    CalcRounds --> Loop["i=0; i<Rounds; i++"]
-    Loop --> GenLength["Random Length = 1~kx"]
-    GenLength --> Generate["Generate Random Characters"]
-    Generate --> Send["Send NOP Packet"]
-    Send --> Decision["i < Rounds?"]
-    Decision -->|Yes| Loop
-    Decision -->|No| End[Proceed to Real Handshake]
+    A["Send packet (base94 path)"] --> B{"frame_tn_ == 0?"}
+    B -->|"yes (first packet)"| C["write 7-byte extended header\n(seed + filler + 3 base94 digits + 3 validate bytes)\nframe_tn_++"]
+    B -->|"no (later packets)"| D["write 4-byte simple header\n(seed + filler + 2 base94 digits)\nframe_tn_++"]
+    C --> E["write payload"]
+    D --> E
+
+    F["Receive packet (base94 path)"] --> G{"frame_rn_ == 0?"}
+    G -->|"yes"| H["read 7 bytes\nvalidate extended header\nframe_rn_++"]
+    G -->|"no"| I["read 4 bytes\nparse simple header\nframe_rn_++"]
+    H --> J["read payload (length from header)"]
+    I --> J
 ```
 
 ---
 
-## 💻 **14. KEY Parameter Details (Mind Map)**
+## 7. Binary Header Behavior
+
+In the binary path, the header stores protected metadata rather than a naked length prefix.
+
+### Send-Side Pipeline (5 Steps)
+
+1. **Adjust length**: decrement payload length by 1 before header encoding. This avoids zero-length ambiguity — a zero payload length after decrement is an obvious error, not a valid empty packet.
+2. **Protocol-cipher encrypt**: if `protocol_` cipher is configured, encrypt the two length bytes using the cipher's ECB-style single-block transform.
+3. **XOR-mask**: derive `header_kf` from the seed byte using the same `kf` derivation as the payload. XOR the length bytes with `header_kf`-derived values.
+4. **Shuffle**: swap the two length bytes according to a deterministic shuffle rule derived from `header_kf`.
+5. **Delta-encode**: apply delta encoding to the final 3-byte header (seed + 2 length bytes) to prevent the header from being a static fingerprint.
+
+### Receive-Side Pipeline (reverse 5 Steps)
+
+1. **Delta-decode**: reverse the 3-byte delta encoding.
+2. **Derive `header_kf`**: compute from the seed byte.
+3. **Unshuffle**: swap bytes back.
+4. **XOR-unmask**: remove the XOR masking.
+5. **Protocol-cipher decrypt**: if cipher configured, decrypt the length bytes.
+6. **Reconstruct length**: add 1 back to the decoded value.
 
 ```mermaid
-mindmap
-  root((KEY Parameters))
-    kf
-      Type: Integer
-      Function: Basic Mask Value
-      Vulnerability Exploits:
-        - Dynamic XOR Core
-        - Changes per Connection
-        - Breaks Fixed Features
-      Defense Measures: Dynamic Entropy Analysis
-    
-    kx
-      Type: Integer (0-255)
-      Function: Padding Length
-      Vulnerability Exploits:
-        - Control Padding Length
-        - Stage 1: 1-kx
-        - Stage 2: 1-(i386: SHL 1,02h)
-      Defense Measures: Structural Detection
-    
-    kl/kh
-      Type: Integer
-      Function: NOP Rounds Control
-      Vulnerability Exploits:
-        - 2^kl ~ 2^kh Rounds
-        - Typical: 1024-4096
-      Defense Measures: Behavioral Timing Analysis
-    
-    protocol
-      Type: String
-      Function: Protocol Algorithm
-      Vulnerability Exploits:
-        - Algorithm Configuration
-        - Common: aes-128-cfb
-        - Header Encryption
-      Defense Measures: Protocol Fingerprinting
-    
-    transport
-      Type: String
-      Function: Transport Algorithm
-      Vulnerability Exploits:
-        - Payload Encryption
-        - Common: aes-256-cfb
-        - Double Encryption
-      Defense Measures: Deep Packet Decryption
-    
-    masked
-      Type: Boolean
-      Function: Random Masking
-      Vulnerability Exploits:
-        - Dynamic XOR
-        - Enhance Randomness
-      Defense Measures: XOR Recognition
-    
-    plaintext
-      Type: Boolean
-      Function: Base94 Mode
-      Vulnerability Exploits:
-        - Enforced during Handshake
-        - Bypass Characters
-      Defense Measures: Remove Exemption
-    
-    delta-encode
-      Type: Boolean
-      Function: Differential Encoding
-      Vulnerability Exploits:
-        - Change Statistics
-        - Reverse Recognition
-      Defense Measures: Differential Analysis
-    
-    shuffle-data
-      Type: Boolean
-      Function: Byte Reordering
-      Vulnerability Exploits:
-        - Destroy Structure
-        - Permutation Space
-      Defense Measures: Reordering Detection
+sequenceDiagram
+    participant S as Sender
+    participant W as Wire
+    participant R as Receiver
+
+    S->>S: payload_len -= 1 (avoid zero ambiguity)
+    S->>S: protocol_cipher.encrypt(len_bytes)
+    S->>S: XOR mask with header_kf
+    S->>S: byte shuffle
+    S->>S: delta encode 3-byte header
+    S->>W: write [seed, protected_len_hi, protected_len_lo, payload...]
+
+    W->>R: read 3-byte header
+    R->>R: delta decode
+    R->>R: derive header_kf from seed
+    R->>R: unshuffle
+    R->>R: XOR unmask
+    R->>R: protocol_cipher.decrypt(len_bytes)
+    R->>R: payload_len += 1
+    R->>W: read payload_len bytes
+    R->>R: transport_cipher.decrypt(payload)
 ```
 
 ---
 
-## 🔍 **15. Attack Detection and Defense System Architecture**
+## 8. Payload Transform Pipeline
+
+The payload path can include multiple transforms applied in sequence:
+
+| Transform | Controlled By | When Active |
+|-----------|--------------|-------------|
+| Rolling XOR masking | `key.masked` | When `masked = true` in config |
+| Deterministic shuffling | `key.shuffle_data` | When `shuffle_data = true` |
+| Delta encoding | `key.delta_encode` | When `delta_encode = true` |
+| Transport cipher | `transport_` slot | When transport cipher configured and handshaked |
+
+The runtime chooses conservative behavior before handshake (base94 with no transport cipher) and full protection after handshake.
 
 ```mermaid
-graph TD
-    A[Traffic Capture] --> B[Preprocessing]
-    B --> C[Feature Extraction]
-    C --> D{Detection Engine}
-    D --> E[Protocol Fingerprint Detection]
-    D --> F[Behavior Timing Analysis]
-    D --> G[Content Deep Inspection]
-    E --> H[Feature Library Matching]
-    F --> I[Machine Learning Model]
-    G --> J[Decryption Attempts]
-    H --> K[Suspicious Score]
-    I --> K
-    J --> K
-    K --> L{Score > Threshold}
-    L -->|Yes| M[Block Connection]
-    L -->|No| N[Allow]
-    M --> O[Record Attack Features]
-    O --> P[Update Feature Library]
+flowchart LR
+    A["Input payload bytes"] --> B["Rolling XOR mask\n(if key.masked)"]
+    B --> C["Deterministic shuffle\n(if key.shuffle_data)"]
+    C --> D["Delta encode\n(if key.delta_encode)"]
+    D --> E["transport_cipher.encrypt\n(if transport_ && handshaked_)"]
+    E --> F["Output bytes to wire"]
+
+    G["Input bytes from wire"] --> H["transport_cipher.decrypt\n(if transport_ && handshaked_)"]
+    H --> I["Delta decode"]
+    I --> J["Unshuffle"]
+    J --> K["XOR unmask"]
+    K --> L["Recovered payload"]
 ```
 
 ---
 
-## 🔧 **16. Performance Optimization Strategies**
+## 9. Two Cipher Slots
 
-> **Resource Consumption and Performance Balance Model:**
+OPENPPP2 keeps two independent cipher slots:
+
+| Slot | JSON Config Key | Role | When Applied |
+|------|----------------|------|-------------|
+| `protocol_` | `key.protocol` + `key.protocol-key` | Protects header length metadata | On every frame header |
+| `transport_` | `key.transport` + `key.transport-key` | Protects payload body bytes | On every frame payload |
+
+This is a meaningful architectural split. Metadata and payload are handled differently because metadata leakage matters even when payload content is protected. An attacker who can observe packet lengths and patterns can infer traffic types (DNS, video, VoIP) even without decrypting the payload. Protecting the length field independently raises the bar for traffic analysis.
+
+Both cipher objects are `ppp::cryptography::Ciphertext` instances. The session-specific key material for both is derived during handshake using:
+
+```
+working_key = base_key XOR ivv XOR (nmux low-bit-derived factor)
+```
+
+Where `ivv` is the client-generated per-connection entropy value exchanged during handshake and `nmux` is the server-generated multiplexing hint. This means every connection uses different working keys even if the base key in `appsettings.json` is the same.
+
+---
+
+## 10. Handshake In Transmission Terms
+
+The transmission handshake does not just authenticate a peer. It shapes traffic and creates connection-specific working-key state.
+
+### Client-Side Handshake
+
+1. Send NOP prelude (dummy traffic to obscure handshake start)
+2. Receive real `session_id` from server
+3. Generate fresh `ivv` (random per-connection entropy, typically 16 bytes)
+4. Send `ivv` to server
+5. Receive `nmux` from server (low bit = mux flag)
+6. Mark `handshaked_ = true`
+7. Rebuild `protocol_` and `transport_` cipher state using `ivv`
+
+### Server-Side Handshake
+
+1. Send NOP prelude
+2. Send real `session_id` to client
+3. Generate and send `nmux`
+4. Receive `ivv` from client
+5. Mark `handshaked_ = true`
+6. Rebuild cipher state using `ivv`
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: NOP prelude (session_id = 0, high bit set)
+    S->>C: NOP prelude (session_id = 0, high bit set)
+    S->>C: session_id (real, non-zero)
+    C->>S: ivv (16 random bytes)
+    S->>C: nmux (1 byte: low bit = mux flag)
+    Note over C,S: Both sides rebuild protocol_ and transport_\nusing base_key + ivv + nmux
+    Note over C,S: handshaked_ = true on both sides
+    Note over C,S: Binary protected framing now active
+```
+
+---
+
+## 11. Dummy Handshake Packets (NOP Prelude)
+
+The NOP prelude is not empty traffic. It is structured dummy traffic designed to make the handshake look like normal tunnel data to a passive observer.
+
+When `session_id == 0`, the packet packer:
+1. Sets the high bit of the first byte (distinguishes it from real session traffic).
+2. Generates a random payload of random length (up to MTU).
+3. Writes the dummy bytes in base94 format.
+
+The receiver recognizes the dummy by checking the high bit and ignores the payload content. The random length and content prevent passive observers from identifying the handshake by timing or size.
+
+After both sides have exchanged NOP preludes, the real `session_id` exchange begins and the handshake proceeds normally.
+
+---
+
+## 12. Connection-Specific Key Derivation
+
+The client generates `ivv` fresh for every new connection. The server uses it along with the base key and `nmux` to rebuild connection-specific cipher state. This means:
+
+- Different connections between the same client and server use different working keys.
+- Compromise of one connection's working key does not expose other connections.
+- Passive traffic analysis that relies on key reuse (e.g., replay attacks with static keys) is defeated.
+
+The `nmux` low bit additionally conditions the key derivation on whether multiplexing is active, meaning MUX and non-MUX sessions produce different cipher states even with the same `ivv`.
+
+---
+
+## 13. Handshake Timeout
+
+Handshake is bounded by a timer derived from connection timeout settings:
+
+```
+handshake_timeout = tcp.connect.timeout
+```
+
+If the timer fires before `handshaked_` is set to `true`, the runtime:
+1. Calls `SetLastErrorCode(ErrorCode::SessionHandshakeFailed)`.
+2. Calls `Dispose()` on the transmission.
+3. Does not leave the connection in an indefinite handshake state.
+
+This prevents resource exhaustion from half-open connections where the remote peer starts the handshake but never completes it.
+
+---
+
+## 14. QoS and Statistics Integration
+
+`ITransmission` has two optional integration points for traffic management:
+
+**`ITransmissionStatistics`** — counts bytes read and written. The switcher uses these counters to enforce per-session bandwidth quotas declared in the `INFO` frame and to populate the Console UI speed display.
+
+**`ITransmissionQoS`** — token-bucket rate limiter. When attached, `Write()` will consume tokens before sending. If the bucket is empty, the write yields (coroutine suspension) until tokens refill. This implements the server-side bandwidth cap declared in `client.bandwidth` in the configuration.
+
 ```mermaid
 graph LR
-    A[Performance Metrics] --> B[CPU Usage]
-    A --> C[Memory Consumption]
-    A --> D[Network Latency]
-    A --> E[Throughput]
-    
-    F[Optimization Strategies] --> G[Adaptive NOP Rounds]
-    F --> H[Encryption Algorithm Tiers]
-    F --> I[Dynamic Obfuscation Strength]
-    
-    G --> J["Adjust kl/kh Based on Network Conditions"]
-    H --> K["AES-128 for Real-time Streams"]
-    H --> L["AES-256 for Sensitive Data"]
-    I --> M["Enable Full Obfuscation in Low Load"]
-    I --> N["Simplify Obfuscation Layers in High Load"]
-    
-    style A fill:#f9f,stroke:#333
-    style F fill:#bbf,stroke:#333
+    A["ITransmission::Write(y, buf, len)"] --> B{"ITransmissionQoS\nattached?"}
+    B -->|"yes"| C["ConsumeTokens(len)\n(may yield coroutine)"]
+    B -->|"no"| D["proceed directly"]
+    C --> D
+    D --> E["Encrypt(buf, len)"]
+    E --> F["DoWriteBytes(y, buf, offset, len)"]
+    F --> G["ITransmissionStatistics\nAddOutputBytes(len)"]
 ```
 
 ---
 
-## ⚠️ **Root Cause and Repair Suggestions for Vulnerabilities**
+## 15. Why `ITransmission` Matters
 
-### 1. **Printable Plaintext Exemption Vulnerability**
+This file is one of the most important in the repository because it centralizes many behaviors that other systems spread across several libraries:
 
-> **Root Cause:**
+- handshake and timeout control
+- early traffic shaping (NOP prelude)
+- metadata protection (header transform pipeline)
+- payload protection (payload transform pipeline)
+- carrier-independent I/O dispatch
+- QoS token-bucket integration
+- statistics collection
 
-```mermaid
-graph LR
-    A[Firewall Optimization] --> B[Printable Exemption]
-    B --> C[Reduces Detection Resources]
-    C --> D[Exploited]
-```
-
-> **Repair Suggestions:**
-- Remove exemption policies
-- Conduct full deep traffic inspection
-- Enhance hardware resources
+That density is a consequence of the design, not just an implementation accident. The alternative — spreading these responsibilities across the TCP carrier, the WebSocket carrier, and the link-layer protocol — would make it much harder to ensure consistent security properties across all carrier types.
 
 ---
 
-### 2. **NOP Packet Recognition Vulnerability**
+## 16. Practical Configuration Examples
 
-```mermaid
-graph LR
-    E[Behavior Analysis] --> F[Fixed Pattern Recognition]
-    F --> G[Protocol Fingerprint]
-    G --> H[Bypass]
+### Minimum Secure Configuration
+
+```json
+{
+  "tcp": {
+    "listen": { "port": 2096 },
+    "connect": { "timeout": 15 },
+    "inactive": { "timeout": 300 }
+  },
+  "key": {
+    "kf": 154,
+    "kh": 181,
+    "kl": 152,
+    "kx": 191,
+    "sb": 0,
+    "protocol": "aes-128-cfb",
+    "protocol-key": "YourProtocolKey",
+    "transport": "aes-256-cfb",
+    "transport-key": "YourTransportKey",
+    "masked": true,
+    "delta_encode": true,
+    "shuffle_data": true
+  }
+}
 ```
 
-> **Fix:** Incorporate AI-based analysis, update dynamic fingerprint database.
+### WebSocket over TLS (WSS)
+
+```json
+{
+  "websocket": {
+    "host": "vpn.example.com",
+    "path": "/tunnel",
+    "listen": {
+      "ws": { "port": 0 },
+      "wss": { "port": 443 }
+    },
+    "ssl": {
+      "certificate": "/etc/ssl/certs/server.pem",
+      "certificate-key": "/etc/ssl/private/server.key",
+      "verify-peer": false
+    }
+  }
+}
+```
+
+Client URI for WSS:
+
+```
+ppp://wss/vpn.example.com:443/
+```
 
 ---
 
-### 3. **Protocol Recognition Vulnerability**
+## Related Documents
 
-```mermaid
-graph LR
-    I[Encrypted Protocol Features] --> J[Fixed Handshake]
-    J --> K[Recognition]
-    K --> L[Obfuscation]
-```
-
-> **Fix:** Deep protocol analysis, behavior-based baseline detection.
-
----
-
-### 4. **Key Upgrade Vulnerability**
-
-```mermaid
-graph LR
-    M[Static Keys] --> N[Static Analysis Bypass]
-    N --> O[Dynamic Keys]
-```
-
-> **Fix:** Use dynamic key management, monitor behavioral anomalies.
-
----
-
-## 💡 **Summary Recommendations**
-
-```mermaid
-graph TD
-    A[Select Defense Mechanisms] --> B{Attack Types}
-    B -->|Protocol Fingerprint/Timing Analysis| C[NOP + Byte Reordering]
-    B -->|Ciphertext Differential| D[Dynamic Keys + Differential]
-    B -->|Replay/Man-in-the-Middle| E[Dynamic Keys + Length Obfuscation]
-    B -->|Deep Content Inspection| F[Base94 + Reordering]
-```
-
-> **Deployment Suggestion:** Use multi-layered defense (e.g., Dynamic Keys + Byte Reordering) for over 87% coverage of attack types (based on matrix data).
+- [`HANDSHAKE_SEQUENCE.md`](HANDSHAKE_SEQUENCE.md) — Detailed handshake exchange walkthrough
+- [`PACKET_FORMATS.md`](PACKET_FORMATS.md) — Wire format for all packet types
+- [`TRANSMISSION_PACK_SESSIONID.md`](TRANSMISSION_PACK_SESSIONID.md) — Session ID packaging details
+- [`CONFIGURATION.md`](CONFIGURATION.md) — Full `appsettings.json` schema including transport config
+- [`SECURITY.md`](SECURITY.md) — Security architecture and threat model
+- [`EDSM_STATE_MACHINES.md`](EDSM_STATE_MACHINES.md) — Session state machine lifecycle

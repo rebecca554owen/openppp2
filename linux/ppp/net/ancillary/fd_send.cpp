@@ -33,6 +33,7 @@
 #endif
 
 #include "ancillary.h"
+#include <ppp/diagnostics/Error.h>
 
 int ancil_send_fds_with_buffer(int sock, const int* fds, unsigned n_fds, void* buffer) noexcept
 {
@@ -62,7 +63,14 @@ int ancil_send_fds_with_buffer(int sock, const int* fds, unsigned n_fds, void* b
         ((int*)CMSG_DATA(cmsg))[i] = fds[i];
     }
 
-    return (sendmsg(sock, &msghdr, 0) >= 0 ? 0 : -1);
+    int status = sendmsg(sock, &msghdr, 0);
+    if (status < 0)
+    {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+        return -1;
+    }
+
+    return 0;
 }
 
 #ifndef SPARE_SEND_FDS

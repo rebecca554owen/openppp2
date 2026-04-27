@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file Int128.h
+ * @brief Cross-platform 128-bit signed integer utilities and helpers.
+ */
+
 #include <ppp/stdafx.h>
 #include <cstdint>
 #include <iosfwd>       // for std::ostream, std::istream (lightweight)
@@ -33,9 +38,12 @@ namespace ppp
 #if defined(_PPP_INT128)
 #pragma pack(push, 1)
 
-    // 128-bit signed integer with explicit layout for endianness.
-    // The member order is adjusted so that on big-endian systems the high part (hi)
-    // resides at the lower address, matching the natural memory order of a 128-bit value.
+    /**
+     * @brief Software 128-bit signed integer with explicit two-word layout.
+     *
+     * The internal member order is selected by endianness so raw object bytes
+     * match the native memory order for the host architecture.
+     */
     class Int128 final
     {
     public:
@@ -53,140 +61,263 @@ namespace ppp
 #endif
 
     public:
+        /** @brief Constructs zero value. */
         Int128() = default;                                            // Zero-initialized by member initializers
+        /** @brief Constructs from signed 8-bit value with sign extension. */
         Int128(signed char value) noexcept : lo(static_cast<unsigned long long>(value)), hi(value < 0 ? ~0ULL : 0ULL) {}
+        /** @brief Constructs from signed 16-bit value with sign extension. */
         Int128(signed short int value) noexcept : lo(static_cast<unsigned long long>(value)), hi(value < 0 ? ~0ULL : 0ULL) {}
+        /** @brief Constructs from signed 32-bit value with sign extension. */
         Int128(signed int value) noexcept : lo(static_cast<unsigned long long>(value)), hi(value < 0 ? ~0ULL : 0ULL) {}
+        /** @brief Constructs from signed long value with sign extension. */
         Int128(signed long int value) noexcept : lo(static_cast<unsigned long long>(value)), hi(value < 0 ? ~0ULL : 0ULL) {}
+        /** @brief Constructs from signed 64-bit value with sign extension. */
         Int128(signed long long value) noexcept : lo(static_cast<unsigned long long>(value)), hi(value < 0 ? ~0ULL : 0ULL) {}
+        /** @brief Constructs from boolean value. */
         Int128(bool value) noexcept : lo(value), hi(0) {}
+        /** @brief Constructs from unsigned 8-bit value. */
         Int128(unsigned char value) noexcept : lo(value), hi(0) {}
+        /** @brief Constructs from unsigned 16-bit value. */
         Int128(unsigned short value) noexcept : lo(value), hi(0) {}
+        /** @brief Constructs from unsigned 32-bit value. */
         Int128(unsigned int value) noexcept : lo(value), hi(0) {}
+        /** @brief Constructs from unsigned long value. */
         Int128(unsigned long int value) noexcept : lo(value), hi(0) {}
+        /** @brief Constructs from unsigned 64-bit value. */
         Int128(unsigned long long value) noexcept : lo(value), hi(0) {}
+        /** @brief Copy constructor. */
         Int128(const Int128& value) noexcept = default;
+        /**
+         * @brief Constructs from high and low 64-bit halves.
+         * @param high Signed high half.
+         * @param low Unsigned low half.
+         */
         Int128(signed long long high, unsigned long long low) noexcept : lo(low), hi(high) {}
 
     private:
-        // Construct from a little-endian 32-bit array (ints[0] = least significant).
-        // The sign parameter indicates the sign of the final value.
+        /**
+         * @brief Constructs from little-endian 32-bit limbs.
+         * @param sign Sign indicator (<0 negative, >=0 non-negative).
+         * @param ints Limb array where `ints[0]` is least significant.
+         * @param intslen Number of limbs in `ints`.
+         */
         Int128(int sign, const unsigned int* ints, int intslen);
 
     public:
+        /** @brief Copy assignment operator. */
         Int128&                                                         operator=(const Int128& value) noexcept = default;
 
-        // Comparison operators (friends)
+        /** @brief Equality comparison. */
         friend bool                                                     operator==(const Int128& left, const Int128& right) noexcept;
+        /** @brief Inequality comparison. */
         friend bool                                                     operator!=(const Int128& left, const Int128& right) noexcept;
+        /** @brief Less-than comparison. */
         friend bool                                                     operator<(const Int128& left, const Int128& right) noexcept;
+        /** @brief Greater-than comparison. */
         friend bool                                                     operator>(const Int128& left, const Int128& right) noexcept;
+        /** @brief Less-than or equal comparison. */
         friend bool                                                     operator<=(const Int128& left, const Int128& right) noexcept;
+        /** @brief Greater-than or equal comparison. */
         friend bool                                                     operator>=(const Int128& left, const Int128& right) noexcept;
 
-        // Arithmetic operators
+        /** @brief Addition operator. */
         friend Int128                                                   operator+(const Int128& left, const Int128& right) noexcept;
+        /** @brief Subtraction operator. */
         friend Int128                                                   operator-(const Int128& left, const Int128& right) noexcept;
+        /** @brief Multiplication operator. */
         friend Int128                                                   operator*(const Int128& left, const Int128& right) noexcept;
+        /** @brief Division operator. */
         friend Int128                                                   operator/(const Int128& left, const Int128& right);
+        /** @brief Modulus operator. */
         friend Int128                                                   operator%(const Int128& left, const Int128& right);
 
-        // Unary negation
+        /** @brief Unary negation. */
         Int128                                                          operator-() const noexcept;
 
-        // Increment / decrement (now non-const)
+        /** @brief Prefix increment. */
         Int128&                                                         operator++() noexcept;      // prefix
+        /** @brief Postfix increment. */
         Int128                                                          operator++(int) noexcept;    // postfix
+        /** @brief Prefix decrement. */
         Int128&                                                         operator--() noexcept;      // prefix
+        /** @brief Postfix decrement. */
         Int128                                                          operator--(int) noexcept;    // postfix
 
-        // Compound assignment
+        /** @brief Compound add assignment. */
         Int128&                                                         operator+=(const Int128& value) noexcept;
+        /** @brief Compound subtract assignment. */
         Int128&                                                         operator-=(const Int128& value) noexcept;
+        /** @brief Compound multiply assignment. */
         Int128&                                                         operator*=(const Int128& value) noexcept;
+        /** @brief Compound divide assignment. */
         Int128&                                                         operator/=(const Int128& value);
+        /** @brief Compound modulus assignment. */
         Int128&                                                         operator%=(const Int128& value);
+        /** @brief Compound bitwise-AND assignment. */
         Int128&                                                         operator&=(const Int128& value) noexcept;
+        /** @brief Compound bitwise-OR assignment. */
         Int128&                                                         operator|=(const Int128& value) noexcept;
+        /** @brief Compound bitwise-XOR assignment. */
         Int128&                                                         operator^=(const Int128& value) noexcept;
+        /** @brief Compound left-shift assignment. */
         Int128&                                                         operator<<=(int shift) noexcept;
+        /** @brief Compound right-shift assignment. */
         Int128&                                                         operator>>=(int shift) noexcept;
 
-        // Bitwise operators
+        /** @brief Bitwise NOT. */
         friend Int128                                                   operator~(const Int128& value) noexcept;
+        /** @brief Bitwise OR. */
         friend Int128                                                   operator|(const Int128& left, const Int128& right) noexcept;
+        /** @brief Bitwise AND. */
         friend Int128                                                   operator&(const Int128& left, const Int128& right) noexcept;
+        /** @brief Bitwise XOR. */
         friend Int128                                                   operator^(const Int128& left, const Int128& right) noexcept;
 
-        // Shift operators (shift count modulo 128, arithmetic right shift for negative numbers)
+        /** @brief Left shift with shift count normalized modulo 128. */
         friend Int128                                                   operator<<(const Int128& value, int shift) noexcept;
+        /** @brief Arithmetic right shift with shift count normalized modulo 128. */
         friend Int128                                                   operator>>(const Int128& value, int shift) noexcept;
 
-        // Stream I/O (binary, always little-endian)
+        /** @brief Writes decimal text form to output stream. */
         friend std::ostream&                                            operator<<(std::ostream& out, const Int128& value);
-        friend std::istream&                                            operator>>(std::istream& in, Int128& value);   // now non-const reference
+        /** @brief Reads decimal text form from input stream. */
+        friend std::istream&                                            operator>>(std::istream& in, Int128& value);
+
+        /** @brief Writes binary representation in fixed little-endian order. */
+        friend std::ostream&                                            WriteBinary(std::ostream& out, const Int128& value);
+        /** @brief Reads binary representation in fixed little-endian order. */
+        friend std::istream&                                            ReadBinary(std::istream& in, Int128& value);
 
 #if defined(_MSC_VER) || __cplusplus >= 201103L
-        // Explicit conversion operators (C++11 and later)
+        /** @brief Explicit conversion to bool. */
         explicit                                                        operator bool() const noexcept;
+        /** @brief Explicit conversion to signed char. */
         explicit                                                        operator signed char() const noexcept;
+        /** @brief Explicit conversion to signed short. */
         explicit                                                        operator signed short int() const noexcept;
+        /** @brief Explicit conversion to signed int. */
         explicit                                                        operator signed int() const noexcept;
+        /** @brief Explicit conversion to signed long. */
         explicit                                                        operator signed long() const noexcept;
+        /** @brief Explicit conversion to signed long long. */
         explicit                                                        operator signed long long() const noexcept;
+        /** @brief Explicit conversion to unsigned char. */
         explicit                                                        operator unsigned char() const noexcept;
+        /** @brief Explicit conversion to unsigned short. */
         explicit                                                        operator unsigned short() const noexcept;
+        /** @brief Explicit conversion to unsigned int. */
         explicit                                                        operator unsigned int() const noexcept;
+        /** @brief Explicit conversion to unsigned long. */
         explicit                                                        operator unsigned long() const noexcept;
+        /** @brief Explicit conversion to unsigned long long. */
         explicit                                                        operator unsigned long long() const noexcept;
 #endif
 
     public:
+        /**
+         * @brief Gets the sign of the current value.
+         * @return -1 for negative, 0 for zero, 1 for positive.
+         */
         int                                                             Sign() const noexcept;     // -1, 0, or 1
 
     public:
-        // String conversion (delegates to stl::to_string)
+        /**
+         * @brief Converts value to string in base 10.
+         * @tparam TString Destination string type.
+         * @return String form of the value.
+         */
         template <typename TString>
         TString                                                         ToString() const;
 
+        /**
+         * @brief Converts value to string in the specified radix.
+         * @tparam TString Destination string type.
+         * @param radix Base in range [2, 36], clamped when out of range.
+         * @return String form of the value.
+         */
         template <typename TString>
         TString                                                         ToString(int radix) const;
 
+        /**
+         * @brief Converts value to hexadecimal string.
+         * @tparam TString Destination string type.
+         * @return Base-16 string.
+         */
         template <typename TString>
         TString                                                         ToHex() const;
 
+        /**
+         * @brief Converts value to binary string.
+         * @tparam TString Destination string type.
+         * @return Base-2 string.
+         */
         template <typename TString>
         TString                                                         ToBinary() const;
 
     private:
-        // Core arithmetic helpers
+        /** @brief Multiplies two values and returns low 128 bits. */
         static Int128                                                   Multiply(const Int128& left, const Int128& right) noexcept;
+        /** @brief Divides two values and returns quotient with output remainder. */
         static Int128                                                   Divide(const Int128& dividend, const Int128& divisor, Int128& remainder);
 
-        // Two's complement negation (modifies *this)
+        /** @brief In-place two's-complement negation. */
         void                                                            Negate() noexcept;
 
-        // Unsigned absolute value (as two 64-bit parts)
+        /** @brief Computes absolute-value bit pattern as two 64-bit words. */
         static void                                                     Absolute(const Int128& val, unsigned long long& out_lo, unsigned long long& out_hi) noexcept;
 
-        // Decompose an Int128 into four 32-bit little-endian parts (parts[0] = least significant).
-        // This representation is independent of host endianness and is used for all multi-precision arithmetic.
+        /**
+         * @brief Decomposes value into four little-endian 32-bit limbs.
+         * @param val Source value.
+         * @param parts Output limbs; `parts[0]` is least significant.
+         */
         static void                                                     Decompose(const Int128& val, unsigned int parts[4]) noexcept;
 
-        // Compose an Int128 from four 32-bit little-endian parts (absolute value, sign not applied).
+        /**
+         * @brief Composes value from four little-endian 32-bit limbs.
+         * @param parts Input limbs; `parts[0]` is least significant.
+         * @return Reconstructed value from the low 128 bits.
+         */
         static Int128                                                   Compose(const unsigned int parts[4]) noexcept;
 
-        // Division helpers (Knuth's algorithm D)
+        /** @brief Gets normalization shift count for division helper path. */
         static int                                                      GetNormalizeShift(unsigned int value) noexcept;
+        /** @brief Returns logical length ignoring high zero limbs. */
         static int                                                      GetLength(const unsigned int* uints, int uintslen) noexcept;
+        /** @brief Left-normalizes limbs for division algorithm. */
         static void                                                     Normalize(const unsigned int* u, int l, unsigned int* un, int shift) noexcept;
+        /** @brief Reverses normalization shift for remainder limbs. */
         static void                                                     Unnormalize(const unsigned int* un, unsigned int* r, int shift) noexcept;
+        /** @brief Computes unsigned quotient and remainder on 128-bit limbs. */
         static void                                                     DivModUnsigned(const unsigned int* u, const unsigned int* v, unsigned int* q, unsigned int* r) noexcept;
 
     public:
+        /** @brief Base constant 2^32 used by limb arithmetic. */
         static const unsigned long long                                 Base32 = 0x100000000ULL;
+        /** @brief Sign-bit mask for the high 64-bit signed half. */
         static const unsigned long long                                 NegativeSignMask = 0x1ULL << 63;   // mask for the sign bit in hi
     };
+
+    /**
+     * @brief Converts `Int128` to string with specified radix.
+     * @tparam TString Destination string type.
+     * @param value Source value.
+     * @param radix Base in range [2, 36], clamped when out of range.
+     * @return String representation.
+     */
+    template <typename TString>
+    TString                                                             Int128ToString(const Int128& value, int radix);
+
+    /**
+     * @brief Parses string into `Int128` using provided radix.
+     * @tparam TString Source string type.
+     * @param v Input text.
+     * @param radix Base in range [2, 36], clamped when out of range.
+     * @return Parsed value (saturated on overflow paths in this implementation).
+     */
+    template <typename TString>
+    Int128                                                              Int128FromString(const TString& v, int radix) noexcept;
+
 #pragma pack(pop)
 
     // -------------------------------------------------------------------------
@@ -436,6 +567,8 @@ namespace ppp
         }
 
         shift %= 128;   // modulo 128 to avoid undefined behavior
+        if (shift == 0)
+            return value;
 
         // Work on unsigned copies
         unsigned long long lo = value.lo;
@@ -471,6 +604,8 @@ namespace ppp
         }
 
         shift %= 128;
+        if (shift == 0)
+            return value;
 
         unsigned long long lo = value.lo;
         unsigned long long hi = static_cast<unsigned long long>(value.hi);
@@ -499,7 +634,7 @@ namespace ppp
     }
 
     // -------------------------------------------------------------------------
-    // Binary I/O (always little-endian)
+    // Binary I/O helpers (always little-endian)
     // -------------------------------------------------------------------------
 
     // Compile-time endianness detection with fallback for unknown compilers.
@@ -546,7 +681,7 @@ namespace ppp
     }
 #endif
 
-    inline std::ostream& operator<<(std::ostream& out, const Int128& value)
+    inline std::ostream& WriteBinary(std::ostream& out, const Int128& value)
     {
         unsigned int parts[4];
         Int128::Decompose(value, parts);
@@ -559,8 +694,7 @@ namespace ppp
         return out;
     }
 
-    // Input operator now takes non-const reference
-    inline std::istream& operator>>(std::istream& in, Int128& value)
+    inline std::istream& ReadBinary(std::istream& in, Int128& value)
     {
         unsigned int parts[4];
         for (int i = 0; i < 4; ++i)
@@ -575,6 +709,22 @@ namespace ppp
             parts[i] = le32toh(word);   // convert from little-endian to host
         }
         value = Int128::Compose(parts);
+        return in;
+    }
+
+    inline std::ostream& operator<<(std::ostream& out, const Int128& value)
+    {
+        return out << value.ToString<std::string>();
+    }
+
+    inline std::istream& operator>>(std::istream& in, Int128& value)
+    {
+        std::string text;
+        in >> text;
+        if (!in)
+            return in;
+
+        value = Int128FromString(text, 10);
         return in;
     }
 
@@ -651,7 +801,44 @@ namespace ppp
     template <typename TString>
     inline TString Int128::ToString(int radix) const
     {
-        return stl::to_string<TString, Int128>(*this, radix);
+        static constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        if (radix < 2)
+            radix = 10;
+        else if (radix > 36)
+            radix = 36;
+
+        if (hi == 0 && lo == 0)
+            return TString("0");
+
+        char buffer[130];
+        char* end = buffer + sizeof(buffer);
+        char* current = end;
+
+        unsigned long long magnitude_lo;
+        unsigned long long magnitude_hi;
+        Absolute(*this, magnitude_lo, magnitude_hi);
+
+        unsigned int parts[4];
+        Decompose(Int128(static_cast<signed long long>(magnitude_hi), magnitude_lo), parts);
+
+        while (parts[0] != 0 || parts[1] != 0 || parts[2] != 0 || parts[3] != 0)
+        {
+            unsigned long long remainder = 0;
+            for (int i = 3; i >= 0; --i)
+            {
+                unsigned long long value = (remainder << 32) | parts[i];
+                parts[i] = static_cast<unsigned int>(value / static_cast<unsigned int>(radix));
+                remainder = value % static_cast<unsigned int>(radix);
+            }
+
+            *--current = digits[static_cast<int>(remainder)];
+        }
+
+        if (hi < 0)
+            *--current = '-';
+
+        return TString(current, end - current);
     }
 
     template <typename TString>
@@ -840,7 +1027,6 @@ namespace ppp
     inline void Int128::DivModUnsigned(const unsigned int* u, const unsigned int* v,
                                        unsigned int* q, unsigned int* r) noexcept
     {
-        int m = GetLength(u, 4);
         int n = GetLength(v, 4);
 
         if (n == 0)
@@ -850,121 +1036,59 @@ namespace ppp
             return;
         }
 
-        if (n == 1)
+        for (int i = 0; i < 4; ++i)
         {
-            // Single digit divisor
-            unsigned long long rem = 0;
-            unsigned int v0 = v[0];
-            for (int j = m - 1; j >= 0; --j)
-            {
-                rem = (rem << 32) + u[j];
-                unsigned long long quot = rem / v0;
-                rem -= quot * v0;
-                q[j] = static_cast<unsigned int>(quot);
-            }
-
-            r[0] = static_cast<unsigned int>(rem);
-            for (int i = 1; i < 4; ++i) r[i] = 0;
-            return;
+            q[i] = 0;
+            r[i] = 0;
         }
 
-        if (m < n)
+        auto shift_left_one = [](unsigned int* words) noexcept
         {
-            // Quotient = 0, remainder = dividend
+            unsigned int carry = 0;
             for (int i = 0; i < 4; ++i)
             {
-                q[i] = 0;
-                r[i] = u[i];
+                unsigned int next_carry = words[i] >> 31;
+                words[i] = (words[i] << 1) | carry;
+                carry = next_carry;
             }
-            return;
-        }
+        };
 
-        // General case: Knuth's algorithm D
-        int shift = GetNormalizeShift(v[n - 1]);
-
-        unsigned int un[5] = { 0 };   // normalized dividend (size m+1)
-        unsigned int vn[5] = { 0 };   // normalized divisor (size n+1)
-
-        Normalize(u, m, un, shift);
-        Normalize(v, n, vn, shift);
-
-        // Main division loop
-        for (int j = m - n; j >= 0; --j)
+        auto compare_words = [](const unsigned int* left, const unsigned int* right) noexcept
         {
-            unsigned long long qhat;
-            if (un[j + n] == vn[n - 1])
+            for (int i = 3; i >= 0; --i)
             {
-                qhat = Base32 - 1;
+                if (left[i] != right[i])
+                    return left[i] < right[i] ? -1 : 1;
             }
-            else
-            {
-                qhat = (static_cast<unsigned long long>(un[j + n]) << 32) + un[j + n - 1];
-                qhat /= vn[n - 1];
-            }
+            return 0;
+        };
 
-            // Check and adjust qhat
-            for (;;)
-            {
-                unsigned long long t = static_cast<unsigned long long>(vn[n - 2]) * qhat;
-                unsigned long long high = t >> 32;
-                unsigned long long low = t & 0xFFFFFFFFULL;
-                if (high > un[j + n] ||
-                    (high == un[j + n] && low > un[j + n - 1]))
-                {
-                    --qhat;
-                }
-                else
-                {
-                    break;
-                }
-            }
-
-            // Multiply and subtract (using unsigned arithmetic for borrow propagation)
+        auto subtract_words = [](unsigned int* left, const unsigned int* right) noexcept
+        {
             unsigned long long borrow = 0;
-            for (int i = 0; i < n; ++i)
+            for (int i = 0; i < 4; ++i)
             {
-                unsigned long long p = static_cast<unsigned long long>(vn[i]) * qhat;
-                unsigned long long p_low = p & 0xFFFFFFFFULL;
-                unsigned long long p_high = p >> 32;
-                unsigned long long diff = static_cast<unsigned long long>(un[j + i]) - p_low - borrow;
-                un[j + i] = static_cast<unsigned int>(diff);
-                // borrow = p_high - (diff >> 32);   // old (incorrect) borrow calculation
-                // Correct borrow calculation:
-                // If (p_low + borrow) > un[j+i] then we need to borrow 1 from the high part.
-                // This condition is exactly when diff has the high bit set (diff > 0xFFFFFFFF).
-                // In unsigned arithmetic, diff is in [0, 0x1FFFFFFFF], so diff >> 32 is either 0 or 1.
-                // We need to add that borrowed 1 to the borrow for the next subtraction.
-                // So borrow = p_high + (diff >> 32);
-                borrow = p_high + ((diff >> 32) ? 1ULL : 0ULL);
+                unsigned long long minuend = static_cast<unsigned long long>(left[i]);
+                unsigned long long subtrahend = static_cast<unsigned long long>(right[i]) + borrow;
+                left[i] = static_cast<unsigned int>(minuend - subtrahend);
+                borrow = minuend < subtrahend ? 1ULL : 0ULL;
             }
-            unsigned long long diff = static_cast<unsigned long long>(un[j + n]) - borrow;
-            un[j + n] = static_cast<unsigned int>(diff);
+        };
 
-            q[j] = static_cast<unsigned int>(qhat);
+        for (int bit = 127; bit >= 0; --bit)
+        {
+            shift_left_one(r);
 
-            // If the subtraction resulted in a borrow (diff negative when interpreted as signed),
-            // then we need to add back (rare case).
-            if (static_cast<signed long long>(diff) < 0)
+            unsigned int word_index = static_cast<unsigned int>(bit) / 32U;
+            unsigned int bit_index = static_cast<unsigned int>(bit) % 32U;
+            r[0] |= (u[word_index] >> bit_index) & 1U;
+
+            if (compare_words(r, v) >= 0)
             {
-                --q[j];
-                unsigned long long carry = 0;
-                for (int i = 0; i < n; ++i)
-                {
-                    carry += static_cast<unsigned long long>(un[j + i]) + vn[i];
-                    un[j + i] = static_cast<unsigned int>(carry);
-                    carry >>= 32;
-                }
-                carry += un[j + n];
-                un[j + n] = static_cast<unsigned int>(carry);
+                subtract_words(r, v);
+                q[word_index] |= (1U << bit_index);
             }
         }
-
-        // Unnormalize remainder
-        Unnormalize(un, r, shift);
-
-        // Zero out remaining words in q (if any)
-        for (int i = m - n + 1; i < 4; ++i)
-            q[i] = 0;
     }
 
     // -------------------------------------------------------------------------
@@ -1036,7 +1160,7 @@ namespace ppp
         return resultQuotient;
     }
 
-#else   // !defined(_PPP_INT128) ¨C use compiler's built-in __int128_t
+#else   // !defined(_PPP_INT128) ï¿½C use compiler's built-in __int128_t
     typedef __int128_t Int128;
 #endif
 
@@ -1055,8 +1179,164 @@ namespace ppp
 #if defined(_PPP_INT128)
         return Int128(static_cast<signed long long>(high), low);
 #else
-        return (static_cast<Int128>(high) << 64) | static_cast<Int128>(low);
+        __uint128_t value = (static_cast<__uint128_t>(high) << 64) | static_cast<__uint128_t>(low);
+        return static_cast<Int128>(value);
 #endif
+    }
+
+    inline Int128 PrefixMask128(int prefix) noexcept
+    {
+        if (prefix <= 0)
+            return 0;
+
+        if (prefix >= 128)
+            return MAKE_OWORD(~0ULL, ~0ULL);
+
+        if (prefix >= 64)
+        {
+            unsigned int low_bits = static_cast<unsigned int>(prefix - 64);
+            uint64_t low = low_bits == 0 ? 0ULL : (~0ULL << (64 - low_bits));
+            return MAKE_OWORD(low, ~0ULL);
+        }
+
+        uint64_t high = ~0ULL << (64 - static_cast<unsigned int>(prefix));
+        return MAKE_OWORD(0ULL, high);
+    }
+
+    template <typename TString>
+    inline TString Int128ToString(const Int128& value, int radix)
+    {
+#if defined(_PPP_INT128)
+        return value.template ToString<TString>(radix);
+#else
+        static constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        if (radix < 2)
+            radix = 10;
+        else if (radix > 36)
+            radix = 36;
+
+        if (value == 0)
+            return TString("0");
+
+        char buffer[130];
+        char* end = buffer + sizeof(buffer);
+        char* current = end;
+
+        __uint128_t bits = static_cast<__uint128_t>(value);
+        bool negative = value < 0;
+        __uint128_t magnitude = negative ? (~bits + 1) : bits;
+        __uint128_t base = static_cast<__uint128_t>(static_cast<unsigned int>(radix));
+
+        while (magnitude != 0)
+        {
+            __uint128_t remainder = magnitude % base;
+            magnitude /= base;
+            *--current = digits[static_cast<unsigned int>(remainder)];
+        }
+
+        if (negative)
+            *--current = '-';
+
+        return TString(current, end - current);
+#endif
+    }
+
+    template <typename TString>
+    inline Int128 Int128FromString(const TString& v, int radix) noexcept
+    {
+        if (radix < 2)
+            radix = 10;
+        else if (radix > 36)
+            radix = 36;
+
+        int length = static_cast<int>(v.size());
+        if (length < 1)
+            return 0;
+
+        int i = 0;
+        bool negative = false;
+        if (v[i] == '-')
+        {
+            negative = true;
+            ++i;
+        }
+        else if (v[i] == '+')
+        {
+            ++i;
+        }
+
+        if (i >= length)
+            return 0;
+
+        unsigned int parts[4] = { 0, 0, 0, 0 };
+        static constexpr unsigned int max_positive[4] = { 0xFFFFFFFFU, 0xFFFFFFFFU, 0xFFFFFFFFU, 0x7FFFFFFFU };
+        static constexpr unsigned int min_negative_magnitude[4] = { 0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U };
+        const unsigned int* limit = negative ? min_negative_magnitude : max_positive;
+
+        auto compare_parts = [](const unsigned int* left, const unsigned int* right) noexcept
+        {
+            for (int idx = 3; idx >= 0; --idx)
+            {
+                if (left[idx] != right[idx])
+                    return left[idx] < right[idx] ? -1 : 1;
+            }
+            return 0;
+        };
+
+        while (i < length)
+        {
+            char ch = v[i];
+            unsigned int digit;
+            if (ch >= '0' && ch <= '9')
+                digit = static_cast<unsigned int>(ch - '0');
+            else if (ch >= 'A' && ch <= 'Z')
+                digit = static_cast<unsigned int>(ch - 'A' + 10);
+            else if (ch >= 'a' && ch <= 'z')
+                digit = static_cast<unsigned int>(ch - 'a' + 10);
+            else
+                break;
+
+            if (digit >= static_cast<unsigned int>(radix))
+                break;
+
+            unsigned long long carry = digit;
+            for (int idx = 0; idx < 4; ++idx)
+            {
+                unsigned long long value = static_cast<unsigned long long>(parts[idx]) * static_cast<unsigned long long>(radix) + carry;
+                parts[idx] = static_cast<unsigned int>(value);
+                carry = value >> 32;
+            }
+
+            if (carry != 0 || compare_parts(parts, limit) > 0)
+            {
+                parts[0] = limit[0];
+                parts[1] = limit[1];
+                parts[2] = limit[2];
+                parts[3] = limit[3];
+                break;
+            }
+
+            ++i;
+        }
+
+        unsigned long long low = static_cast<unsigned long long>(parts[0]) |
+                                (static_cast<unsigned long long>(parts[1]) << 32);
+        unsigned long long high = static_cast<unsigned long long>(parts[2]) |
+                                 (static_cast<unsigned long long>(parts[3]) << 32);
+
+        if (!negative)
+            return MAKE_OWORD(low, high);
+
+        if (parts[0] == min_negative_magnitude[0] &&
+            parts[1] == min_negative_magnitude[1] &&
+            parts[2] == min_negative_magnitude[2] &&
+            parts[3] == min_negative_magnitude[3])
+        {
+            return MAKE_OWORD(0ULL, 0x8000000000000000ULL);
+        }
+
+        return -MAKE_OWORD(low, high);
     }
 
 } // namespace ppp
@@ -1072,13 +1352,14 @@ namespace std
     {
         std::size_t operator()(const ppp::Int128& v) const noexcept
         {
-            std::hash<int64_t> h;
+            std::hash<uint64_t> h;
 #if defined(_PPP_INT128)
-            std::size_t h1 = h(static_cast<int64_t>(v.lo));
-            std::size_t h2 = h(static_cast<int64_t>(v.hi));
+            std::size_t h1 = h(static_cast<uint64_t>(v.lo));
+            std::size_t h2 = h(static_cast<uint64_t>(v.hi));
 #else
-            std::size_t h1 = h(static_cast<int64_t>(v));
-            std::size_t h2 = h(static_cast<int64_t>(v >> 64));
+            __uint128_t bits = static_cast<__uint128_t>(v);
+            std::size_t h1 = h(static_cast<uint64_t>(bits));
+            std::size_t h2 = h(static_cast<uint64_t>(bits >> 64));
 #endif
             return h1 ^ (h2 << 1);
         }
@@ -1091,6 +1372,12 @@ namespace std
 // -------------------------------------------------------------------------
 namespace stl
 {
+    template <typename TString>
+    inline TString to_string(const ppp::Int128& num, int radix = 10) noexcept
+    {
+        return ppp::Int128ToString<TString>(num, radix);
+    }
+
     template <>
     struct is_signed<ppp::Int128> : true_type {};
 }

@@ -5,6 +5,7 @@
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
 #include <ppp/app/client/proxys/VEthernetLocalProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetLocalProxyConnection.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
 #include <ppp/net/Ipep.h>
@@ -14,10 +15,20 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+/**
+ * @file VEthernetLocalProxyConnection.cpp
+ * @brief Implements local proxy connection lifecycle and bridge establishment.
+ * @author OpenPPP Contributors
+ * @license GPL-3.0
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
             namespace proxys {
+                /**
+                 * @brief Builds a local proxy connection and initializes its timeout state.
+                 */
                 VEthernetLocalProxyConnection::VEthernetLocalProxyConnection(const VEthernetLocalProxySwitcherPtr& proxy, const VEthernetExchangerPtr& exchanger, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept
                     : disposed_(false)
                     , context_(context)
@@ -35,6 +46,9 @@ namespace ppp {
                     Finalize();
                 }
 
+                /**
+                 * @brief Defers cleanup onto socket executor or fallback strand.
+                 */
                 void VEthernetLocalProxyConnection::Dispose() noexcept {
                     std::shared_ptr<VEthernetLocalProxyConnection> self = shared_from_this();
                     ppp::threading::Executors::ContextPtr context = context_;
@@ -54,6 +68,9 @@ namespace ppp {
                     }
                 }
 
+                /**
+                 * @brief Releases active bridge channels, closes socket, and unregisters self.
+                 */
                 void VEthernetLocalProxyConnection::Finalize() noexcept {
                     for (;;) {
                         std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_);
@@ -80,6 +97,9 @@ namespace ppp {
                     proxy_->ReleaseConnection(this);
                 }
 
+                /**
+                 * @brief Executes handshake first, then runs whichever bridge type is active.
+                 */
                 bool VEthernetLocalProxyConnection::Run(YieldContext& y) noexcept {
                     bool ok = this->Handshake(y);
                     if (!ok) {
@@ -101,13 +121,16 @@ namespace ppp {
                         return connection->run();
                     }
                     else {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
                 }
 
+                /**
+                 * @brief Writes outgoing payload to the currently selected bridge backend.
+                 */
                 bool VEthernetLocalProxyConnection::SendBufferToPeer(YieldContext& y, const void* messages, int messages_size) noexcept {
                     if (NULLPTR == messages || messages_size < 1) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetLocalProxyConnectionSendInvalidPayload);
                     }
 
                     if (disposed_) {
@@ -123,10 +146,16 @@ namespace ppp {
                     if (NULLPTR != R) {
                         std::shared_ptr<boost::asio::ip::tcp::socket> socket = R->GetRemoteSocket(); 
                         if (NULLPTR == socket) {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                         }
 
-                        return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(messages, messages_size), y);
+                        bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(messages, messages_size), y);
+                        if (!ok) {
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                            }
+                        }
+                        return ok;
                     }
                     
                     std::shared_ptr<vmux::vmux_skt> K = this->connection_mux_;
@@ -134,29 +163,35 @@ namespace ppp {
                         return K->send_to_peer_yield(messages, messages_size, y);
                     }
 
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
  
+                /**
+                 * @brief Creates a bridge path in priority order: rinetd, mux, then transmission tunnel.
+                 */
                 bool VEthernetLocalProxyConnection::ConnectBridgeToPeer(const std::shared_ptr<ppp::app::protocol::AddressEndPoint>& destinationEP, YieldContext& y) noexcept {
                     using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<VEthernetLocalProxyConnection>;
                     
                     if (NULLPTR == destinationEP) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     }
 
                     auto configuration = exchanger_->GetConfiguration();
                     if (NULLPTR == configuration) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     }
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = GetSocket();
                     if (NULLPTR == socket || !socket->is_open()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     }
 
                     auto self = shared_from_this();
                     if (auto switcher = exchanger_->GetSwitcher(); NULLPTR != switcher) {
                         if (auto tap = switcher->GetTap(); NULLPTR != tap && tap->IsHostedNetwork()) {
+                            /**
+                             * @brief Hosted-network mode prefers direct rinetd bridge after DNS resolution.
+                             */
                             boost::system::error_code ec;
                             boost::asio::ip::address address = StringToAddress(destinationEP->Host.data(), ec);
                             if (ec) {
@@ -164,7 +199,7 @@ namespace ppp {
                             }
 
                             if (ppp::net::IPEndPoint::IsInvalid(address)) {
-                                return false;
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                             }
 
                             int rinetd_status = VEthernetNetworkTcpipConnection::Rinetd(self,
@@ -177,6 +212,11 @@ namespace ppp {
                                 connection_rinetd_,
                                 y);
                             if (rinetd_status < 1) {
+                                if (rinetd_status < 0) {
+                                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
+                                    }
+                                }
                                 return rinetd_status == 0;
                             }
 
@@ -185,19 +225,28 @@ namespace ppp {
                         }
                     }
 
+                    /**
+                     * @brief Attempt vmux fast path before creating a full transmission tunnel.
+                     */
                     int mux_status = VEthernetNetworkTcpipConnection::Mux(self, exchanger_, destinationEP->Host, destinationEP->Port, socket, connection_mux_, y);
                     if (mux_status < 1) {
+                        if (mux_status < 0) {
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxyApplyFailed);
+                            }
+                        }
                         return mux_status == 0;
                     }
 
                     std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger_->ConnectTransmission(context_, strand_, y);
                     if (NULLPTR == transmission) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     std::shared_ptr<VEthernetTcpipConnection> connection =
                         make_shared_object<VEthernetTcpipConnection>(self, configuration, context_, strand_, exchanger_->GetId(), socket);
                     if (NULLPTR == connection) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         IDisposable::DisposeReferences(transmission);
                         return false;
                     }
@@ -211,6 +260,7 @@ namespace ppp {
 
                     bool ok = connection->Connect(y, transmission, destinationEP->Host, destinationEP->Port);
                     if (!ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpConnectFailed);
                         IDisposable::DisposeReferences(connection, transmission);
                         return false;
                     }
@@ -219,22 +269,37 @@ namespace ppp {
                     return true;
                 }
 
+                /**
+                 * @brief Parses destination host/port and infers address type.
+                 */
                 std::shared_ptr<ppp::app::protocol::AddressEndPoint> VEthernetLocalProxyConnection::GetAddressEndPointByProtocol(const ppp::string& host, int port) noexcept {
                     if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     if (host.empty()) {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     std::shared_ptr<ppp::app::protocol::AddressEndPoint> destinationEP = make_shared_object<ppp::app::protocol::AddressEndPoint>();
                     if (NULLPTR == destinationEP) {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     boost::system::error_code ec;
                     boost::asio::ip::address address = StringToAddress(host, ec);
+
+                    if (ec) {
+                        ppp::string endpoint = host;
+                        ppp::string parsed_host;
+                        int parsed_port = port;
+                        if (ppp::net::Ipep::ParseEndPoint(endpoint, parsed_host, parsed_port)) {
+                            address = StringToAddress(parsed_host, ec);
+                            if (!ec && parsed_port > ppp::net::IPEndPoint::MinPort && parsed_port <= ppp::net::IPEndPoint::MaxPort) {
+                                port = parsed_port;
+                            }
+                        }
+                    }
 
                     if (ec) {
                         destinationEP->Type = ppp::app::protocol::AddressType::Domain;
@@ -246,7 +311,7 @@ namespace ppp {
                         destinationEP->Type = ppp::app::protocol::AddressType::IPv6;
                     }
                     else {
-                        return NULLPTR;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, std::shared_ptr<ppp::app::protocol::AddressEndPoint>(NULLPTR));
                     }
 
                     destinationEP->Host = host;
@@ -254,6 +319,9 @@ namespace ppp {
                     return destinationEP;
                 }
 
+                /**
+                 * @brief Extends connection timeout using linked or connect timeout policy.
+                 */
                 void VEthernetLocalProxyConnection::Update() noexcept {
                     bool linked = false;
                     if (VirtualEthernetTcpipConnectionPtr connection = connection_; NULLPTR != connection) {

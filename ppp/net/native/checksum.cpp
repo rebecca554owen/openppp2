@@ -1,6 +1,12 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <atomic>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file checksum.cpp
+ * @brief Packet parsing, checksum, and routing-table helper implementations.
+ */
 
 #include <ppp/io/File.h>
 #include <ppp/net/Socket.h>
@@ -25,10 +31,14 @@ namespace ppp
     {
         namespace native
         {
+            /** @brief Cached IPv4 header size in bytes. */
             const int           ip_hdr::IP_HLEN    = sizeof(struct ip_hdr);
+            /** @brief Cached TCP header size in bytes. */
             const int           tcp_hdr::TCP_HLEN  = sizeof(struct tcp_hdr);
+            /** @brief Default TTL value used for new IPv4 headers. */
             const unsigned char ip_hdr::IP_DFT_TTL = Socket::GetDefaultTTL();
 
+            /** @brief Generates a monotonic non-zero IPv4 identification value. */
             unsigned short ip_hdr::NewId() noexcept
             {
                 static std::atomic<unsigned int> aid = ATOMIC_FLAG_INIT;
@@ -43,34 +53,45 @@ namespace ppp
                 }
             }
 
+            /**
+             * @brief Validates and parses an IPv4 header from raw packet bytes.
+             * @param packet Packet start pointer.
+             * @param len In/out packet length; may be adjusted to header-reported length.
+             * @return Parsed header pointer on success, otherwise `NULLPTR`.
+             */
             struct ip_hdr* ip_hdr::Parse(const void* packet, int& len) noexcept
             {
                 struct ip_hdr* iphdr = (struct ip_hdr*)packet;
                 if (NULLPTR == iphdr)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIpParseNullPacket);
                     return NULLPTR;
                 }
 
                 int iphdr_ver = IPH_V(iphdr);
                 if (iphdr_ver != ip_hdr::IP_VER)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 int iphdr_hlen = IPH_HL(iphdr) << 2;
                 if (iphdr_hlen > len)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 if (iphdr_hlen < IP_HLEN)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 int ttl = IPH_TTL(iphdr);
                 if (ttl < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
@@ -91,12 +112,14 @@ namespace ppp
                 /* All ones (broadcast) or all zeroes (old skool broadcast). */
                 if (iphdr->dest == IP_ADDR_ANY_VALUE)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
                 /* ~iphdr->dest == IP_ADDR_ANY_VALUE */ 
                 if (iphdr->src == IP_ADDR_ANY_VALUE || iphdr->src == IP_ADDR_BROADCAST_VALUE) 
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
@@ -111,37 +134,55 @@ namespace ppp
                     int checksum = inet_chksum(iphdr, iphdr_hlen);
                     if (checksum != 0)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                         return NULLPTR;
                     }
                 }
 #endif
 
                 int proto = IPH_PROTO(iphdr);
-                return proto == IP_PROTO_UDP || proto == IP_PROTO_TCP || proto == IP_PROTO_ICMP ? iphdr : NULLPTR;
+                if (proto == IP_PROTO_UDP || proto == IP_PROTO_TCP || proto == IP_PROTO_ICMP)
+                {
+                    return iphdr;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
+                return NULLPTR;
             }
 
+            /**
+             * @brief Validates and parses a TCP header from an IPv4 payload.
+             * @param iphdr Parsed IPv4 header.
+             * @param packet TCP segment start pointer.
+             * @param size TCP segment size in bytes.
+             * @return Parsed TCP header pointer on success, otherwise `NULLPTR`.
+             */
             struct tcp_hdr* tcp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept
             {
                 if (NULLPTR == iphdr || size < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumTcpParseInvalidArguments);
                     return NULLPTR;
                 }
 
                 struct tcp_hdr* tcphdr = (struct tcp_hdr*)packet;
                 if (NULLPTR == tcphdr)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumTcpParseNullHeader);
                     return NULLPTR;
                 }
 
                 int hdrlen_bytes = TCPH_HDRLEN_BYTES(tcphdr);
                 if (hdrlen_bytes < TCP_HLEN || hdrlen_bytes > size) // 错误的数据报
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 int len = size - hdrlen_bytes;
                 if (len < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
@@ -155,6 +196,7 @@ namespace ppp
                         iphdr->dest);
                     if (pseudo_checksum != 0)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                         return NULLPTR;
                     }
                 }
@@ -162,27 +204,50 @@ namespace ppp
                 return tcphdr;
             }
 
+            /**
+             * @brief Validates and parses a UDP header from an IPv4 payload.
+             * @param iphdr Parsed IPv4 header.
+             * @param packet UDP datagram start pointer.
+             * @param size UDP datagram size in bytes.
+             * @return Parsed UDP header pointer on success, otherwise `NULLPTR`.
+             */
             struct udp_hdr* udp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept {
                 if (NULLPTR == iphdr || size < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumUdpParseInvalidArguments);
                     return NULLPTR;
                 }
 
                 struct udp_hdr* udphdr = (struct udp_hdr*)packet;
                 if (NULLPTR == udphdr)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumUdpParseNullHeader);
                     return NULLPTR;
                 }
 
-                if (size != ntohs(udphdr->len)) // 错误的数据报
+                /**
+                 * @brief Validate UDP length field before using it.
+                 * @note udphdr->len is network byte order; convert with ntohs.
+                 *       Minimum valid UDP length is sizeof(struct udp_hdr) = 8 bytes.
+                 */
+                int udp_total_len = ntohs(udphdr->len);
+                if (udp_total_len < static_cast<int>(sizeof(struct udp_hdr)))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    return NULLPTR;
+                }
+
+                if (size != udp_total_len) // Invalid datagram: size mismatch
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
                 int hdrlen_bytes = sizeof(struct udp_hdr);
                 int len = size - hdrlen_bytes;
-                if (len < 1)
+                if (len < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
@@ -196,6 +261,7 @@ namespace ppp
                         iphdr->dest);
                     if (pseudo_checksum != 0)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                         return NULLPTR;
                     }
                 }
@@ -203,16 +269,25 @@ namespace ppp
                 return udphdr;
             }
 
+            /**
+             * @brief Validates and parses an ICMP header from an IPv4 payload.
+             * @param iphdr Parsed IPv4 header.
+             * @param packet ICMP payload start pointer.
+             * @param size ICMP payload size in bytes.
+             * @return Parsed ICMP header pointer on success, otherwise `NULLPTR`.
+             */
             struct icmp_hdr* icmp_hdr::Parse(struct ip_hdr* iphdr, const void* packet, int size) noexcept
             {
                 if (NULLPTR == iphdr || size < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIcmpParseInvalidArguments);
                     return NULLPTR;
                 }
 
                 struct icmp_hdr* icmphdr = (struct icmp_hdr*)packet;
                 if (NULLPTR == icmphdr)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIcmpParseNullHeader);
                     return NULLPTR;
                 }
 
@@ -222,6 +297,7 @@ namespace ppp
                     unsigned short cksum = inet_chksum(icmphdr, size);
                     if (cksum != 0)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                         return NULLPTR;
                     }
                 }
@@ -230,16 +306,19 @@ namespace ppp
                 int len = size - sizeof(struct icmp_hdr);
                 if (len < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
                 return icmphdr;
             }
 
+            /** @brief Converts current MAC address object to text. */
             ppp::string eth_addr::ToString() noexcept
             {
                 return ToString(*this);
             }
 
+            /** @brief Converts provided MAC address to `xx:xx:xx:xx:xx:xx` text. */
             ppp::string eth_addr::ToString(const struct eth_addr& mac) noexcept
             {
                 char sz[1000];
@@ -259,10 +338,12 @@ namespace ppp
                 return "00:00:00:00:00:00";
             }
             
+            /** @brief Parses MAC text in colon or dash format into binary bytes. */
             bool eth_addr::TryParse(const char* mac_string, struct eth_addr& mac) noexcept
             {
                 if (NULLPTR == mac_string || *mac_string == '\x0')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
@@ -287,6 +368,7 @@ namespace ppp
                         
                     if (count != 6) 
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                         return false;
                     }
                 }
@@ -296,6 +378,12 @@ namespace ppp
             }
 
 #if defined(__SIMD__)
+            /**
+             * @brief Computes standard Internet checksum with SIMD acceleration.
+             * @param dataptr Pointer to contiguous bytes.
+             * @param len Buffer size in bytes.
+             * @return 16-bit folded sum value (before one's complement inversion).
+             */
             unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept /* MARCO C/C++: __SSE2__ */
             {
                 uint8_t* data = (uint8_t*)dataptr;
@@ -375,6 +463,12 @@ namespace ppp
                 return ntohs(static_cast<uint16_t>(acc));
             }
 #else
+            /**
+             * @brief Computes standard Internet checksum using scalar arithmetic.
+             * @param dataptr Pointer to contiguous bytes.
+             * @param len Buffer size in bytes.
+             * @return 16-bit folded sum value (before one's complement inversion).
+             */
             unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept 
             {
                 unsigned int acc;
@@ -418,15 +512,18 @@ namespace ppp
             }
 #endif
 
+            /** @brief Loads CIDR routes from file and inserts them with a shared gateway. */
             bool RouteInformationTable::AddAllRoutesByIPList(const ppp::string& path, uint32_t gw) noexcept
             {
                 if (path.empty())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                     return false;
                 }
 
                 if (!ppp::io::File::Exists(path.data()))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                     return false;
                 }
 
@@ -439,16 +536,19 @@ namespace ppp
                 return AddAllRoutes(cidrs, gw);
             }
 
+            /** @brief Parses multiple CIDR lines and inserts each route entry. */
             bool RouteInformationTable::AddAllRoutes(const ppp::string& cidrs, uint32_t gw) noexcept
             {
                 if (cidrs.empty())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddAllRoutesInputEmpty);
                     return false;
                 }
 
                 ppp::vector<ppp::string> routes;
                 if (Tokenize<ppp::string>(cidrs, routes, "\r\n") < 1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddAllRoutesTokenizeFailed);
                     return false;
                 }
 
@@ -460,10 +560,12 @@ namespace ppp
                 return any;
             }
 
+            /** @brief Parses one CIDR string and inserts an IPv4 route entry. */
             bool RouteInformationTable::AddRoute(const ppp::string& cidr, uint32_t gw) noexcept
             {
                 if (cidr.empty())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddRouteInputEmpty);
                     return false;
                 }
 
@@ -480,18 +582,28 @@ namespace ppp
                 {
                     if (i == 0)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddRouteMissingHostBeforeSlash);
                         return false;
                     }
 
                     host = cidr.substr(0, i);
                     prefix_f = true;
-                    prefix = atoi(cidr.data() + (i + 1));
+                    
+                    char* endptr = NULLPTR;
+                    long parsed_prefix = strtol(cidr.data() + (i + 1), &endptr, 10);
+                    if (NULLPTR == endptr || endptr == (cidr.data() + (i + 1)) || *endptr != '\x0') {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddRouteInvalidPrefix);
+                        return false;
+                    }
+
+                    prefix = static_cast<int>(parsed_prefix);
                 }
 
                 boost::system::error_code ec;
                 boost::asio::ip::address ip = StringToAddress(host, ec);
                 if (ec)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
@@ -503,11 +615,13 @@ namespace ppp
                     }
                     elif(prefix < 0 || prefix > 32)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                         return false;
                     }
                 }
                 else
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                     return false;
                 }
 
@@ -515,26 +629,31 @@ namespace ppp
                 return AddRoute(htonl(in.to_uint()), prefix, gw);
             }
 
+            /** @brief Inserts or updates route entry identified by destination/prefix. */
             bool RouteInformationTable::AddRoute(uint32_t ip, int prefix, uint32_t gw) noexcept
             {
                 if (prefix < MIN_PREFIX_VALUE || prefix > MAX_PREFIX_VALUE)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                     return false;
                 }
 
                 if (IPEndPoint::NoneAddress == ip)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 if (IPEndPoint::AnyAddress == gw || IPEndPoint::NoneAddress == gw)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                     return false;
                 }
 
                 uint32_t mask = IPEndPoint::PrefixToNetmask(prefix);
                 if ((ip & mask) != ip)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
@@ -559,12 +678,14 @@ namespace ppp
                 return true;
             }
 
+            /** @brief Deletes all route entries under one destination key. */
             bool RouteInformationTable::DeleteRoute(uint32_t ip) noexcept
             {
                 auto tail = routes.find(ip);
                 auto endl = routes.end();
                 if (tail == endl)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -572,12 +693,14 @@ namespace ppp
                 return true;
             }
 
+            /** @brief Deletes route entries matching destination and gateway. */
             bool RouteInformationTable::DeleteRoute(uint32_t ip, uint32_t gw) noexcept
             {
                 auto tail = routes.find(ip);
                 auto endl = routes.end();
                 if (tail == endl)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -596,15 +719,23 @@ namespace ppp
                     DeleteRoute(ip, prefix, gw);
                 }
             
-                return prefixes.size() > 0;
+                if (0 < prefixes.size())
+                {
+                    return true;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+                return false;
             }
 
+            /** @brief Deletes one route entry matching destination/prefix/gateway. */
             bool RouteInformationTable::DeleteRoute(uint32_t ip, int prefix, uint32_t gw) noexcept
             {
                 auto tail = routes.find(ip);
                 auto endl = routes.end();
                 if (tail == endl)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -617,6 +748,7 @@ namespace ppp
 
                 if (entry_tail == entries.end())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                     return false;
                 }
 
@@ -628,26 +760,34 @@ namespace ppp
                 return true;
             }
 
+            /** @brief Returns mutable access to route entries table. */
             RouteEntriesTable& RouteInformationTable::GetAllRoutes() noexcept
             {
                 return routes;
             }
 
+            /** @brief Removes all route entries from RIB. */
             void RouteInformationTable::Clear() noexcept
             {
                 routes.clear();
             }
 
+            /** @brief Builds forwarding table snapshot from route-information table. */
             ForwardInformationTable::ForwardInformationTable(RouteInformationTable& rib) noexcept
             {
                 Fill(rib);
             }
 
+            /** @brief Performs next-hop lookup using default prefix bounds. */
             uint32_t ForwardInformationTable::GetNextHop(uint32_t ip, RouteEntriesTable& routes) noexcept 
             {
                 return GetNextHop(ip, MIN_PREFIX_VALUE, MAX_PREFIX_VALUE, routes);
             }
 
+            /**
+             * @brief Performs longest-prefix-match lookup in the provided route table.
+             * @return Next-hop IPv4 address in network order, or `IPEndPoint::NoneAddress`.
+             */
             uint32_t ForwardInformationTable::GetNextHop(uint32_t ip, int min_prefix_value, int max_prefix_value, RouteEntriesTable& routes) noexcept
             {
                 for (int prefix = max_prefix_value; prefix >= min_prefix_value; prefix--)
@@ -673,16 +813,19 @@ namespace ppp
                 return IPEndPoint::NoneAddress;
             }
 
+            /** @brief Performs next-hop lookup against internal forwarding table. */
             uint32_t ForwardInformationTable::GetNextHop(uint32_t ip) noexcept
             {
                 return GetNextHop(ip, routes);
             }
 
+            /** @brief Returns mutable access to forwarding route table. */
             RouteEntriesTable& ForwardInformationTable::GetAllRoutes() noexcept
             {
                 return routes;
             }
 
+            /** @brief Copies routes from RIB and sorts each bucket by prefix descending. */
             void ForwardInformationTable::Fill(RouteInformationTable& rib) noexcept
             {
                 routes = rib.GetAllRoutes();
@@ -697,11 +840,13 @@ namespace ppp
                 }
             }
 
+            /** @brief Removes all forwarding entries. */
             void ForwardInformationTable::Clear() noexcept
             {
                 routes.clear();
             }
 
+            /** @brief Formats raw bytes as uppercase MAC text with zero padding. */
             ppp::string eth_addr::BytesToMacAddress(const void* data, int size) noexcept
             {
                 if ((size < 1) || (NULLPTR != data && size < 1))
@@ -719,7 +864,7 @@ namespace ppp
                 }
 
                 char mac_str[18];
-                sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+                snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
                     default_byte_arr[0], default_byte_arr[1], default_byte_arr[2],
                     default_byte_arr[3], default_byte_arr[4], default_byte_arr[5]);
                 return mac_str;

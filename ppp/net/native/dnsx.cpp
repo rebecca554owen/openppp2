@@ -8,9 +8,12 @@
 // All public functions are re‑entrant, exception‑neutral, and produce no
 // undefined behavior even when presented with arbitrary byte sequences.
 // =======================================================================================
+/// @file dnsx.cpp
+/// @brief DNS query host extraction with safe RFC 1035 name decoding.
 
 #include <ppp/stdafx.h>
 #include <ppp/net/native/checksum.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <cstring>      // std::memcpy, std::strlen
 #include <memory>       // std::shared_ptr
@@ -59,6 +62,7 @@ namespace ppp {
                 {
                     // Guard against excessive recursion (malicious compression loops or deep nesting).
                     if (depth > DNS_MAX_RECURSION_DEPTH) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
@@ -66,6 +70,7 @@ namespace ppp {
                     if (NULLPTR == szEncodedStr || NULLPTR == pusEncodedStrLen ||
                         NULLPTR == szDotStr || NULLPTR == ppDecodePos ||
                         szEncodedStr < szPacketStartPos || szEncodedStr >= szPacketEndPos) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
 
@@ -80,6 +85,7 @@ namespace ppp {
                     for (;;) {
                         // Ensure we never read past the packet boundary before accessing the label length.
                         if (pDecodePos >= szPacketEndPos) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                             return false;
                         }
 
@@ -104,6 +110,7 @@ namespace ppp {
                             // RFC 1035: label length must be between 1 and 63 inclusive.
                             // Length 0 is illegal here because the terminator is handled above.
                             if (nLabelDataLen == 0 || nLabelDataLen > DNS_MAX_LABEL_LEN) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -111,11 +118,13 @@ namespace ppp {
                             // +1 accounts for the dot that will be appended after the label.
                             // Use size_t to avoid unsigned integer overflow.
                             if (plainStrLen + static_cast<size_t>(nLabelDataLen) + 1 > static_cast<size_t>(nDotStrSize)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
                             // Ensure the entire label data is within the packet bounds (exact boundary allowed).
                             if (pDecodePos + 1 + nLabelDataLen > szPacketEndPos) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -135,11 +144,13 @@ namespace ppp {
                             // the start of the packet to another location where the name continues.
 
                             if (NULLPTR == szPacketStartPos) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
                             // The pointer occupies 2 bytes; verify they are present.
                             if (pDecodePos + 2 > szPacketEndPos) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -150,6 +161,7 @@ namespace ppp {
                             // Use uintptr_t to avoid signed overflow in pointer arithmetic.
                             uintptr_t packet_len = static_cast<uintptr_t>(szPacketEndPos - szPacketStartPos);
                             if (static_cast<uintptr_t>(usJumpPos) >= packet_len) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;   // Jump target is outside the packet → malformed.
                             }
 
@@ -165,6 +177,7 @@ namespace ppp {
                                 szPacketEndPos,
                                 &jumpDecodePos,
                                 depth + 1)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
@@ -182,6 +195,15 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Legacy compatibility wrapper (ExtractName) using the new safe implementation.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Backward-compatible wrapper around @ref ExtractNameEx.
+                /// @param szEncodedStr Pointer to encoded DNS name.
+                /// @param pusEncodedStrLen [out] Wire bytes consumed by the name.
+                /// @param szDotStr Output buffer for decoded dot-separated name.
+                /// @param nDotStrSize Size of @p szDotStr in bytes.
+                /// @param szPacketStartPos Packet start pointer.
+                /// @param szPacketEndPos Packet end pointer (one-past-last).
+                /// @param ppDecodePos [in/out] Parser cursor after decoding.
+                /// @return true on success; false on malformed or truncated data.
                 static bool ExtractName(char*                                               szEncodedStr,
                     uint16_t*                                                               pusEncodedStrLen,
                     char*                                                                   szDotStr,
@@ -210,12 +232,14 @@ namespace ppp {
                     const ppp::function<bool(dns_hdr*, ppp::string&, uint16_t, uint16_t)>&  fPredicateE) noexcept
                 {
                     // Validate that predicates are callable.
-                    if (!fPredicateB || !fPredicateE) {
+                    if (false == static_cast<bool>(fPredicateB) || false == static_cast<bool>(fPredicateE)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsxExtractHostNullPredicate);
                         return ppp::string();
                     }
 
                     // Basic integrity: the packet must contain at least a DNS header.
-                    if (NULLPTR == szPacketStartPos || nPacketLength < static_cast<int>(sizeof(dns_hdr))) {
+                    if (NULLPTR == szPacketStartPos || static_cast<int>(sizeof(dns_hdr)) > nPacketLength) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return ppp::string();
                     }
 
@@ -237,9 +261,11 @@ namespace ppp {
                     try {
                         pioBuffers = make_shared_alloc<Byte>(MAX_DOMAINNAME_LEN_STR);
                         if (NULLPTR == pioBuffers) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                             return ppp::string();   // Allocation failure.
                         }
                     } catch (const std::bad_alloc&) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return ppp::string();       // Exception safety: return empty on allocation failure.
                     }
 
@@ -270,6 +296,7 @@ namespace ppp {
                     // After the name, the question section contains QTYPE (2 bytes) and QCLASS (2 bytes).
                     // Ensure we have at least 4 bytes remaining.
                     if (pDecodePos + 4 > packetEnd) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return ppp::string();   // Packet truncated before the type/class fields.
                     }
 
@@ -291,6 +318,11 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Public API: ExtractHostY – uses default first predicate, custom second predicate.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Extracts query host with default header predicate and custom final predicate.
+                /// @param szPacketStartPos Pointer to DNS packet bytes.
+                /// @param nPacketLength Packet length in bytes.
+                /// @param fPredicateE Predicate applied to decoded name and query fields.
+                /// @return Extracted host name, or empty string on failure/rejection.
                 ppp::string ExtractHostY(const Byte*                                        szPacketStartPos,
                     int                                                                     nPacketLength,
                     const ppp::function<bool(dns_hdr*, ppp::string&, uint16_t, uint16_t)>&  fPredicateE) noexcept
@@ -309,6 +341,11 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Public API: ExtractHostX – uses custom first predicate, default second predicate.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Extracts query host with custom header predicate and default final predicate.
+                /// @param szPacketStartPos Pointer to DNS packet bytes.
+                /// @param nPacketLength Packet length in bytes.
+                /// @param fPredicateB Predicate applied to DNS header before decoding.
+                /// @return Extracted host name, or empty string on failure/rejection.
                 ppp::string ExtractHostX(const Byte*        szPacketStartPos,
                     int                                     nPacketLength,
                     const ppp::function<bool(dns_hdr*)>&    fPredicateB) noexcept
@@ -324,6 +361,10 @@ namespace ppp {
                 // ---------------------------------------------------------------------------------------
                 // Public API: ExtractHost – simplest version, using both default predicates.
                 // ---------------------------------------------------------------------------------------
+                /// @brief Extracts query host using default header and query predicates.
+                /// @param szPacketStartPos Pointer to DNS packet bytes.
+                /// @param nPacketLength Packet length in bytes.
+                /// @return Extracted host name, or empty string on parse failure.
                 ppp::string ExtractHost(const Byte* szPacketStartPos, int nPacketLength) noexcept
                 {
                     // Default first predicate: standard query (QR=0, OPCODE=0).

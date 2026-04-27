@@ -1,5 +1,11 @@
 #include <ppp/stdafx.h>
 #include <ppp/threading/Thread.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file Thread.cpp
+ * @brief Implements managed thread lifecycle and TLS helpers.
+ */
 
 namespace ppp
 {
@@ -10,6 +16,9 @@ namespace ppp
         typedef std::shared_ptr<Thread>             ThreadPtr;
         typedef ppp::unordered_map<int, ThreadPtr>  ThreadTable;
 
+        /**
+         * @brief Shared runtime table used to map OS thread ids to `Thread` instances.
+         */
         struct ThreadInternal final
         {
             ThreadTable                             Threads;
@@ -18,11 +27,17 @@ namespace ppp
 
         static std::shared_ptr<ThreadInternal>      Internal;
 
+        /**
+         * @brief Initializes static runtime state for thread bookkeeping.
+         */
         void Thread_cctor() noexcept 
         {
             Internal = ppp::make_shared_object<ThreadInternal>();
         }
 
+        /**
+         * @brief Constructs an idle thread wrapper.
+         */
         Thread::Thread() noexcept
             : Id(0)
             , State(ThreadState::Stopped)
@@ -31,17 +46,26 @@ namespace ppp
 
         }
 
+        /**
+         * @brief Constructs an idle thread wrapper with start callback.
+         */
         Thread::Thread(const ThreadStart& start) noexcept
             : Thread()
         {
             _start = start;
         }
 
+        /**
+         * @brief Detaches the underlying thread during destruction.
+         */
         Thread::~Thread() noexcept
         {
             Detach();
         }
 
+        /**
+         * @brief Detaches the underlying thread when possible.
+         */
         bool Thread::Detach() noexcept
         {
             auto& t = _thread;
@@ -57,15 +81,22 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
         }
 
+        /**
+         * @brief Gets the instance mutex used for state synchronization.
+         */
         Thread::SynchronizedObject& Thread::GetSynchronizedObject() noexcept
         {
             return _syncobj;
         }
 
+        /**
+         * @brief Looks up the managed wrapper for the currently executing thread.
+         */
         std::shared_ptr<Thread> Thread::GetCurrentThread() noexcept
         {
             SynchronizedObjectScope scope(Internal->Lock);
@@ -74,11 +105,17 @@ namespace ppp
             return tail != endl ? tail->second : NULLPTR;
         }
 
+        /**
+         * @brief Returns processor count from platform utility.
+         */
         int Thread::GetProcessorCount() noexcept
         {
             return ppp::GetProcesserCount();
         }
 
+        /**
+         * @brief Joins the underlying thread when joinable.
+         */
         bool Thread::Join() noexcept
         {
             auto& t = _thread;
@@ -94,20 +131,26 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadJoinFailed);
                 return false;
             }
         }
 
+        /**
+         * @brief Starts the configured callback on a new std::thread.
+         */
         bool Thread::Start() noexcept
         {
             SynchronizedObjectScope scope(_syncobj);
             if (State != ThreadState::Stopped)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
             if (Id != 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
@@ -116,10 +159,14 @@ namespace ppp
 
             if (NULLPTR == start)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 return false;
             }
 
             auto self = shared_from_this();
+            /**
+             * @brief Worker entry routine updating registration and lifecycle state.
+             */
             auto thread_start = [this, self, start]() noexcept
                 {
                     constantof(Id) = GetCurrentThreadId();
@@ -154,6 +201,9 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Reads a thread-local data slot.
+         */
         void* Thread::GetData(int index) noexcept
         {
             SynchronizedObjectScope scope(_syncobj);
@@ -169,6 +219,9 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Writes or removes a thread-local data slot.
+         */
         void* Thread::SetData(int index, const void* value) noexcept
         {
             SynchronizedObjectScope scope(_syncobj);
@@ -194,6 +247,9 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Stores startup priority preference for this thread wrapper.
+         */
         void Thread::SetPriority(ThreadPriority priority) noexcept
         {
             constantof(Priority) = priority;

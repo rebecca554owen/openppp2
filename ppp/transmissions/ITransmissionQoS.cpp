@@ -1,5 +1,11 @@
 #include <ppp/transmissions/ITransmissionQoS.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file ITransmissionQoS.cpp
+ * @brief Implements bandwidth-aware flow control for transmission reads.
+ */
 
 using ppp::threading::Executors;
 using ppp::coroutines::YieldContext;
@@ -8,6 +14,9 @@ namespace ppp {
     namespace transmissions {
         using BeginReadAsynchronousCallback = ITransmissionQoS::BeginReadAsynchronousCallback;
 
+        /**
+         * @brief Initializes QoS state and applies initial bandwidth.
+         */
         ITransmissionQoS::ITransmissionQoS(const std::shared_ptr<boost::asio::io_context>& context, Int64 bandwidth) noexcept
             : disposed_(false)
             , context_(context)
@@ -17,10 +26,18 @@ namespace ppp {
             SetBandwidth(bandwidth);
         }
 
+        /**
+         * @brief Ensures pending operations are released during destruction.
+         */
         ITransmissionQoS::~ITransmissionQoS() noexcept {
             Finalize();
         }
 
+        /**
+         * @brief Resumes all suspended coroutine contexts.
+         * @param contexts Collection of coroutine handles awaiting resume.
+         * @return Number of resumed contexts.
+         */
         static int ITransmissionQoS_ResumeAllContexts(ppp::list<YieldContext*>& contexts) noexcept {
             int events = 0;
             for (YieldContext* y : contexts) {
@@ -31,6 +48,11 @@ namespace ppp {
             return events;
         }
 
+        /**
+         * @brief Executes all queued begin-read callbacks.
+         * @param s Collection of begin-read callbacks.
+         * @return Number of callbacks executed.
+         */
         static int ITransmissionQoS_ResumeAllReads(ppp::list<BeginReadAsynchronousCallback>& s) noexcept {
             int events = 0;
             for (const BeginReadAsynchronousCallback& f : s) {
@@ -41,25 +63,31 @@ namespace ppp {
             return events;
         }
 
+        /**
+         * @brief Performs a throttled read under the current bandwidth policy.
+         */
         std::shared_ptr<Byte> ITransmissionQoS::ReadBytes(YieldContext& y, int length, const ReadBytesAsynchronousCallback& cb) noexcept {
             if (length < 1) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionQosReadBytesLengthInvalid, NULLPTR);
             }
 
             if (NULLPTR == cb) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionQosReadBytesNullCallback, NULLPTR);
             }
 
             YieldContext* co = y.GetPtr();
             if (NULLPTR == co) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid, NULLPTR);
             }
 
             bool bawait = false; 
+            /**
+             * @brief Critical section deciding whether the coroutine must wait.
+             */
             for (;;) { // co_await
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
                 }
 
                 bawait = IsPeek();
@@ -73,7 +101,7 @@ namespace ppp {
             if (bawait) {
                 bool suspend = y.Suspend();
                 if (!suspend) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid, NULLPTR);
                 }
             }
 
@@ -87,13 +115,18 @@ namespace ppp {
             return packet;
         }
 
+        /**
+         * @brief Accounts bytes after a completed read operation.
+         */
         bool ITransmissionQoS::EndRead(int bytes_transferred) noexcept {
             if (bytes_transferred < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionQosEndReadInvalidBytes);
                 return false;
             }
             else {
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
             }
@@ -102,12 +135,16 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Schedules or executes a read-start callback based on throttle state.
+         */
         bool ITransmissionQoS::BeginRead(const BeginReadAsynchronousCallback& cb) noexcept {
             if (cb) {
                 bool bawait = false; 
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     if (disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
@@ -126,13 +163,20 @@ namespace ppp {
                 return true;
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionQosBeginReadNullCallback);
             return false;
         }
 
+        /**
+         * @brief Marks the object disposed and releases all pending waits.
+         */
         void ITransmissionQoS::Finalize() noexcept {
             ppp::list<BeginReadAsynchronousCallback> reads;
             ppp::list<YieldContext*> contexts; 
 
+            /**
+             * @brief Atomically switches to disposed state and drains wait queues.
+             */
             for (;;) {
                 SynchronizedObjectScope scope(syncobj_);
                 disposed_ = true;
@@ -151,6 +195,9 @@ namespace ppp {
             ITransmissionQoS_ResumeAllContexts(contexts);
         }
 
+        /**
+         * @brief Posts deferred disposal work to the associated io_context.
+         */
         void ITransmissionQoS::Dispose() noexcept {
             std::shared_ptr<ITransmissionQoS> self = GetReference();
             std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -161,6 +208,9 @@ namespace ppp {
                 });
         }
 
+        /**
+         * @brief Posts periodic QoS window refresh and waiter release logic.
+         */
         void ITransmissionQoS::Update(UInt64 tick) noexcept {
             std::shared_ptr<ITransmissionQoS> self = GetReference();
             std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -171,6 +221,9 @@ namespace ppp {
                     ppp::list<BeginReadAsynchronousCallback> reads;
                     ppp::list<YieldContext*> contexts; 
 
+                    /**
+                     * @brief Releases deferred operations when a new second begins.
+                     */
                     for (SynchronizedObjectScope scope(syncobj_);;) {
                         UInt64 now   = tick / 1000; 
                         if (now != last_) {

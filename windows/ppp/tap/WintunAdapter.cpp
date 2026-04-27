@@ -1,9 +1,10 @@
-﻿// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 //  Implementation
 // -----------------------------------------------------------------------------
 
 // Refer: https://git.zx2c4.com/wintun/tree/example/example.c
 #include <windows/ppp/tap/WintunAdapter.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/tap/ITap.h>
 #include <ppp/net/native/ip.h>
 #include <ppp/threading/Executors.h>
@@ -64,6 +65,7 @@ struct ReadyWintunAdapter
 #endif
                 DLL_HANDLE = LoadLibraryW(wzDllPath);
                 if (!DLL_HANDLE) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunCreateFailed);
                     return false; // LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32
                 }
             }
@@ -71,7 +73,7 @@ struct ReadyWintunAdapter
         
 #define GET_PROC(name) \
     name = (decltype(name))GetProcAddress(DLL_HANDLE, #name); \
-    if (!name) { FreeLibrary(DLL_HANDLE); DLL_HANDLE = NULL; return false; }
+    if (!name) { ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunCreateFailed); FreeLibrary(DLL_HANDLE); DLL_HANDLE = NULL; return false; }
 
         GET_PROC(WintunCreateAdapter);
         GET_PROC(WintunOpenAdapter);
@@ -118,6 +120,7 @@ bool WintunAdapter::Open() noexcept {
             adapter_desc_.c_str(),
             adapter_guid_ptr_);
         if (!adapter_handle_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunCreateFailed);
             running_flag_.store(WINTUN_RUNING_STATE_STOP);
             return false;
         }
@@ -126,6 +129,7 @@ bool WintunAdapter::Open() noexcept {
     // Start the Wintun session
     session_handle_ = WintunStartSession(adapter_handle_, ring_buffer_size_);
     if (!session_handle_) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WindowsWintunSessionStartFailed);
         if (adapter_handle_) WintunCloseAdapter(adapter_handle_);
         adapter_handle_ = NULL;
 
@@ -136,6 +140,7 @@ bool WintunAdapter::Open() noexcept {
     // Create an event that can be used to wake the receive thread
     quit_event_ = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!quit_event_) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
         WintunEndSession(session_handle_);
         session_handle_ = NULL;
 
@@ -154,7 +159,10 @@ bool WintunAdapter::Start() noexcept {
     using Awaitable = Executors::Awaitable;
 
     std::shared_ptr<Awaitable> awaitable = ppp::make_shared_object<Awaitable>();
-    if (!awaitable) return false;
+    if (!awaitable) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+        return false;
+    }
 
     int expected = WINTUN_RUNING_STATE_OPEN;
     if (!running_flag_.compare_exchange_strong(expected, WINTUN_RUNING_STATE_RUNNING, std::memory_order_acquire)) {
@@ -166,7 +174,7 @@ bool WintunAdapter::Start() noexcept {
 
     try {
         std::thread(
-            [self, this, awaitable_weak]() {
+            [self, awaitable_weak]() {
                 ppp::SetThreadPriorityToMaxLevel();
                 ppp::SetThreadName("wintun");
 
@@ -175,10 +183,11 @@ bool WintunAdapter::Start() noexcept {
                     a->Processed();
                 }
 
-                ReceiveLoop();
+                self->ReceiveLoop();
             }).detach();
     }
     catch (...) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
         Stop();   // Clean up if thread creation fails
         return false;
     }
@@ -217,8 +226,9 @@ void WintunAdapter::Finalize() noexcept {
 }
 
 void WintunAdapter::Stop() noexcept {
-    // Atomically set the stop flag and retrieve the previous state
-    uint32_t old = state_.fetch_or(STOP_BIT, std::memory_order_acq_rel);
+    // Atomically set the stop flag. The in-flight counter remains protected by the same state word.
+    // The returned value is intentionally ignored because only the stop bit transition matters here.
+    state_.fetch_or(STOP_BIT, std::memory_order_acq_rel);
 
     // Wait for all in‑flight packets to complete.
     // The load with acquire ensures we see every release from fetch_sub.
@@ -226,7 +236,7 @@ void WintunAdapter::Stop() noexcept {
         std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
     }
 
-    // Ensure Finalize runs only once (multiple Stop calls are harmless)
+    // Ensure Finalize runs only once. Multiple Stop calls are harmless and will wait for completion.
     int excepted = 0;
     if (finalized_.compare_exchange_weak(excepted, 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
         Finalize();
@@ -242,13 +252,17 @@ void WintunAdapter::Stop() noexcept {
 }
 
 bool WintunAdapter::SendPacket(const uint8_t* data, uint32_t len) noexcept {
-    if (!session_handle_) return false;
+    if (!session_handle_) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
+        return false;
+    }
 
     // Atomically increment the in‑flight counter and check the stop flag
     uint32_t old = state_.fetch_add(1, std::memory_order_acq_rel);
     if (old & STOP_BIT) {
         // Already stopped – rollback and reject
         state_.fetch_sub(1, std::memory_order_release);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WintunAdapterSendStoppedState);
         return false;
     }
 
@@ -263,6 +277,12 @@ bool WintunAdapter::SendPacket(const uint8_t* data, uint32_t len) noexcept {
 
             success = true;
         }
+        else {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelPacketInjectFailed);
+        }
+    }
+    else {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketTooLarge);
     }
 
     // Decrement the in‑flight counter (release order pairs with acquire in Stop)
@@ -277,7 +297,10 @@ bool WintunAdapter::Ready() noexcept {
 
 void WintunAdapter::ReceiveLoop() noexcept {
     HANDLE read_event = WintunGetReadWaitEvent(session_handle_);
-    if (!read_event || !quit_event_) return;
+    if (!read_event || !quit_event_) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WintunAdapterReceiveLoopInvalidState);
+        return;
+    }
 
     HANDLE events[2] = { read_event, quit_event_ };
 

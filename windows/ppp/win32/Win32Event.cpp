@@ -4,6 +4,8 @@
 #include <exception>
 #include <string>
 
+#include <ppp/diagnostics/Error.h>
+
 #include <Windows.h>
 
 namespace ppp
@@ -45,6 +47,7 @@ namespace ppp
 
             if (name.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventOpenKernelEventNameEmpty);
                 return -1;
             }
 
@@ -53,6 +56,7 @@ namespace ppp
             {
                 if (openOrCreate)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                     return -1;
                 }
 
@@ -66,7 +70,13 @@ namespace ppp
                 }
             }
 
-            return NULLPTR != hKrlEvt ? 0 : 1;
+            if (NULLPTR != hKrlEvt)
+            {
+                return 0;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+            return 1;
         }
 
         Win32Event::~Win32Event() noexcept
@@ -88,9 +98,22 @@ namespace ppp
             HANDLE h = hKrlEvt.load();
             if (NULLPTR == h)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
-            return WaitForSingleObject(hKrlEvt, millisecondsTimeout) == WAIT_OBJECT_0;
+
+            DWORD wait_result = WaitForSingleObject(hKrlEvt, millisecondsTimeout);
+            if (WAIT_OBJECT_0 == wait_result)
+            {
+                return true;
+            }
+            elif (WAIT_TIMEOUT == wait_result)
+            {
+                return false;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ThreadSyncConditionWaitFailed);
+            return false;
         }
 
         bool Win32Event::WaitOne() noexcept
@@ -103,9 +126,17 @@ namespace ppp
             HANDLE h = hKrlEvt.load();
             if (NULLPTR == h)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
-            return SetEvent(h);
+
+            if (SetEvent(h))
+            {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            return false;
         }
 
         bool Win32Event::Reset() noexcept
@@ -113,9 +144,17 @@ namespace ppp
             HANDLE h = hKrlEvt.load();
             if (NULLPTR == h)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
-            return ResetEvent(h);
+
+            if (ResetEvent(h))
+            {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            return false;
         }
 
         bool Win32Event::IsValid() noexcept

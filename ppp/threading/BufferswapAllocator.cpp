@@ -5,11 +5,22 @@
 #include <ppp/io/File.h>
 #include <ppp/cryptography/EVP.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file BufferswapAllocator.cpp
+ * @brief Implements block-partitioned virtual memory allocation and release.
+ */
 
 namespace ppp
 {
     namespace threading
     {
+        /**
+         * @brief Initializes block allocators until the requested memory is covered.
+         * @param path Root path template for non-Windows mapped files.
+         * @param memory_size Total target memory size in bytes.
+         */
         BufferswapAllocator::BufferswapAllocator(const ppp::string& path, uint64_t memory_size) noexcept
             : block_count_(0)
             , memory_size_(0)
@@ -22,8 +33,10 @@ namespace ppp
             {
                 ppp::string bufferblock_rootpath = ppp::io::File::GetFullPath(ppp::io::File::RewritePath(path.data()).data());
 #endif
-                // The required amount of virtual memory is allocated cyclically, and the maximum capacity per slice is limited to 1GB, 
-                // Which is considered to be compatible with 32-bit platforms such as X86.
+                /**
+                 * @brief Splits requested capacity into cyclic chunks capped at 1GB.
+                 * @details Keeps each block within practical limits for 32-bit targets.
+                 */
                 uint32_t bufferblock_sequenceno = 0;
                 uint64_t residual_memory_size = memory_size;
                 while (residual_memory_size > 0)
@@ -40,8 +53,10 @@ namespace ppp
                         residual_memory_size = 0;
                     }
 
-                    // Windows differs from the Linux/MacOS platform in that virtual memory is allocated 
-                    // Via kernel functions on Windows and there is no need to generate memory-mapped files.
+                    /**
+                     * @brief Builds a per-block identifier/path for platform-specific backing.
+                     * @details Windows uses kernel virtual memory names; non-Windows uses mapped files.
+                     */
                     Random rand(++bufferblock_sequenceno);
                     Int128 guid;
                     rand.SetSeed(((int*)&guid)[0] = rand.Next());
@@ -57,15 +72,17 @@ namespace ppp
                     bufferblock_path = ppp::io::File::GetFullPath(bufferblock_path.data());
 #endif
 
-                    // Request allocation of virtual memory block.
+                    /** @brief Requests allocation of one backing virtual memory block. */
                     std::shared_ptr<BufferblockAllocator> bufffer_block = make_shared_object<BufferblockAllocator>(bufferblock_path, block_memory_size);
                     if (NULLPTR == bufffer_block)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         break;
                     }
 
                     if (!bufffer_block->IsVaild())
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryPoolCreateFailed);
                         break;
                     }
 
@@ -76,6 +93,9 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Disposes all managed blocks and clears internal state.
+         */
         BufferswapAllocator::~BufferswapAllocator() noexcept
         {
             BufferblockAllocatorList blocks;
@@ -92,6 +112,11 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Allocates memory by scanning managed blocks in round-robin style.
+         * @param allocated_size Requested byte count.
+         * @return Allocated pointer, or null when no block can satisfy the request.
+         */
         void* BufferswapAllocator::Alloc(uint32_t allocated_size) noexcept
         {
             if (allocated_size == 0)
@@ -113,10 +138,15 @@ namespace ppp
                 }
                 elif(block_length++ >= block_count_)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryPoolExhausted);
                     return NULLPTR;
                 }
                 else 
                 {
+                    /**
+                     * @brief Rotates current block to the tail after allocation miss.
+                     * @details This approximates round-robin probing across block allocators.
+                     */
                     blocks_.emplace_back(allocator);
                     blocks_.erase(tail);
                     tail = blocks_.begin(); // The following expression is not recommended: tail = std::list.erase(...);
@@ -125,6 +155,11 @@ namespace ppp
             return NULLPTR;
         }
 
+        /**
+         * @brief Frees memory by delegating to the block that owns the pointer.
+         * @param allocated_memory Pointer to release.
+         * @return true when a block accepted the pointer; otherwise false.
+         */
         bool BufferswapAllocator::Free(const void* allocated_memory) noexcept
         {
             if (NULLPTR == allocated_memory)
@@ -144,6 +179,10 @@ namespace ppp
             return false;
         }
 
+        /**
+         * @brief Checks whether this allocator currently has at least one block.
+         * @return true when usable blocks exist; otherwise false.
+         */
         bool BufferswapAllocator::IsVaild() noexcept
         {
             SynchronizedObjectScope scope(syncobj_);
@@ -152,6 +191,11 @@ namespace ppp
             return tail != endl;
         }
 
+        /**
+         * @brief Finds the block containing a specific allocated pointer.
+         * @param allocated_memory Pointer to test.
+         * @return Owning block allocator, or null if not found.
+         */
         std::shared_ptr<BufferblockAllocator> BufferswapAllocator::IsInBlock(const void* allocated_memory) noexcept
         {
             if (NULLPTR == allocated_memory)
@@ -171,6 +215,10 @@ namespace ppp
             return NULLPTR;
         }
 
+        /**
+         * @brief Returns the configured page size of the first available block.
+         * @return Page size in bytes, or 0 when no blocks are available.
+         */
         uint32_t BufferswapAllocator::GetPageSize() noexcept
         {
             SynchronizedObjectScope scope(syncobj_);
@@ -182,11 +230,19 @@ namespace ppp
             return 0;
         }
 
+        /**
+         * @brief Returns the total memory size assembled from all blocks.
+         * @return Total managed size in bytes.
+         */
         uint64_t BufferswapAllocator::GetMemorySize() noexcept
         {
             return memory_size_;
         }
 
+        /**
+         * @brief Aggregates currently available bytes across all blocks.
+         * @return Total free size in bytes.
+         */
         uint64_t BufferswapAllocator::GetAvailableSize() noexcept
         {
             uint64_t memory_size = 0;

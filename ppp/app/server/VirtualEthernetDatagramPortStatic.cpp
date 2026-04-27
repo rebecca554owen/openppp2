@@ -10,6 +10,12 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file VirtualEthernetDatagramPortStatic.cpp
+ * @brief Implements static-echo UDP relay behavior for virtual ethernet traffic.
+ */
 
 typedef ppp::coroutines::YieldContext                   YieldContext;
 typedef ppp::net::IPEndPoint                            IPEndPoint;
@@ -20,6 +26,9 @@ typedef ppp::app::protocol::VirtualEthernetPacket       VirtualEthernetPacket;
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Initializes static relay state and acquires receive buffer.
+             */
             VirtualEthernetDatagramPortStatic::VirtualEthernetDatagramPortStatic(const VirtualEthernetExchangerPtr& exchanger, const std::shared_ptr<boost::asio::io_context>& context, uint32_t source_ip, int source_port) noexcept
                 : disposed_(false)
                 , in_(false)
@@ -36,15 +45,24 @@ namespace ppp {
                 Update();
             }
 
+            /**
+             * @brief Ensures asynchronous resources are finalized.
+             */
             VirtualEthernetDatagramPortStatic::~VirtualEthernetDatagramPortStatic() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Builds source UDP endpoint from stored IPv4/port pair.
+             */
             boost::asio::ip::udp::endpoint VirtualEthernetDatagramPortStatic::GetSourceEndPoint() noexcept {
                 IPEndPoint ep(source_ip_, source_port_);
                 return IPEndPoint::ToEndPoint<boost::asio::ip::udp>(ep);
             }
 
+            /**
+             * @brief Closes socket and releases static relay registration.
+             */
             void VirtualEthernetDatagramPortStatic::Finalize() noexcept {
                 Socket::Closesocket(socket_);
                 disposed_ = true; 
@@ -52,6 +70,9 @@ namespace ppp {
                 exchanger_->StaticEchoReleasePort(source_ip_, source_port_);
             }
 
+            /**
+             * @brief Dispatches finalization to the owning io_context thread.
+             */
             void VirtualEthernetDatagramPortStatic::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -61,13 +82,19 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Opens and configures the UDP socket, then starts async receive loop.
+             * @return True if opening and initialization succeed.
+             */
             bool VirtualEthernetDatagramPortStatic::Open() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetDatagramPortStaticOpenSocketAlreadyOpen);
                     return false;
                 }
 
@@ -79,6 +106,7 @@ namespace ppp {
                     boost::system::error_code ec;
                     localEP_ = socket_.local_endpoint(ec);
                     if (ec) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                         return false;
                     }
 
@@ -96,19 +124,28 @@ namespace ppp {
                 return success;
             }
 
+            /**
+             * @brief Starts one asynchronous receive cycle for static relay traffic.
+             * @return True if receive operation is scheduled.
+             */
             bool VirtualEthernetDatagramPortStatic::Loopback() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool openped = socket_.is_open();
                 if (!openped) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 auto self = shared_from_this();
                 socket_.async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), sourceEP_,
                     [self, this](const boost::system::error_code& ec, std::size_t sz) noexcept {
+                        /**
+                         * @brief Handles one datagram, optional DNS cache insert, and re-arms receive.
+                         */
                         if (ec == boost::system::errc::operation_canceled) {
                             return false;
                         }
@@ -132,6 +169,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Normalizes source endpoint form then forwards to raw source-ip overload.
+             */
             bool VirtualEthernetDatagramPortStatic::Output(
                 VirtualEthernetSwitcher*                            switcher, 
                 VirtualEthernetExchanger*                           exchanger, 
@@ -153,11 +193,15 @@ namespace ppp {
                         return Output(switcher, exchanger, messages, message_length, inEP, remoteEP);
                     }
                     else {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                         return false;
                     }
                 }
             }
 
+            /**
+             * @brief Encapsulates and emits payload through the static echo tunnel socket.
+             */
             bool VirtualEthernetDatagramPortStatic::Output(
                 VirtualEthernetSwitcher*                            switcher, 
                 VirtualEthernetExchanger*                           exchanger, 
@@ -168,25 +212,30 @@ namespace ppp {
                 const boost::asio::ip::udp::endpoint&               remoteEP) noexcept {
 
                 if (NULLPTR == switcher || NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetDatagramPortStaticOutputInvalidContext);
                     return false;
                 }
 
                 if (NULLPTR == messages || message_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 boost::asio::ip::udp::socket& socket = switcher->static_echo_socket_;
                 if (!socket.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 boost::asio::ip::address remoteIP = remoteEP.address();
                 if (!remoteIP.is_v4()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                     return false;
                 }
 
                 auto allocated_context = exchanger->static_allocated_context_;
                 if (NULLPTR == allocated_context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
 
@@ -208,6 +257,7 @@ namespace ppp {
                     message_length,
                     packet_length);
                 if (NULLPTR == packet_output) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     return false;
                 }
 
@@ -216,6 +266,7 @@ namespace ppp {
                     exchanger->static_echo_source_ep_, boost::asio::socket_base::message_end_of_record, ec);
                 
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false;
                 }
 
@@ -227,8 +278,12 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Instance output helper that refreshes timeout on success.
+             */
             bool VirtualEthernetDatagramPortStatic::Output(const void* messages, int message_length, const boost::asio::ip::udp::endpoint& remoteEP) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
@@ -240,6 +295,10 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Tries to satisfy DNS query from namespace cache and output cached response.
+             * @return Positive on output success; -1 if no usable cached response.
+             */
             int VirtualEthernetDatagramPortStatic::NamespaceQuery(
                 const boost::asio::ip::udp::endpoint&               destinationEP,
                 const void*                                         packet,
@@ -266,22 +325,30 @@ namespace ppp {
                 return -1;
             }
 
+            /**
+             * @brief Sends outbound UDP payload with optional DNS cache short-circuit.
+             * @return True on successful send or cache-hit output.
+             */
             bool VirtualEthernetDatagramPortStatic::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket_.is_open();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
                 int destinationPort = destinationEP.port();
                 if (destinationPort <= IPEndPoint::MinPort || destinationPort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return false;
                 }
 
@@ -293,6 +360,7 @@ namespace ppp {
                             goto LABEL_OK;
                         }
                         elif(status == 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                             return false;
                         }
                     }
@@ -308,6 +376,7 @@ namespace ppp {
                 }
 
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false; // Failed to sendto the datagram packet. 
                 }
                 else {

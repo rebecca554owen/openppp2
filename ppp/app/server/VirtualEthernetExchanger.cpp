@@ -6,6 +6,7 @@
 #include <ppp/app/server/VirtualInternetControlMessageProtocolStatic.h>
 #include <ppp/app/server/VirtualEthernetDatagramPortStatic.h>
 #include <ppp/app/server/VirtualEthernetIPv6.h>
+#include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
@@ -19,6 +20,15 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
+#include <ppp/ipv6/IPv6Packet.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file VirtualEthernetExchanger.cpp
+ * @brief Implements per-session packet forwarding, NAT, DNS relay and mapping handlers.
+ * @author OPENPPP2 Team
+ * @license GPL-3.0
+ */
 
 typedef ppp::app::protocol::VirtualEthernetInformation              VirtualEthernetInformation;
 typedef ppp::collections::Dictionary                                Dictionary;
@@ -35,19 +45,24 @@ typedef ppp::threading::Executors                                   Executors;
 typedef ppp::collections::Dictionary                                Dictionary;
 
 namespace {
+    /**
+     * @brief Converts matching ICMPv6 gateway echo requests into echo replies in-place.
+     * @param packet Raw IPv6 packet buffer.
+     * @param packet_length Packet length in bytes.
+     * @param gateway Expected gateway destination address.
+     * @return True when packet was transformed to a valid echo reply.
+     */
     static bool HandleIPv6GatewayEchoReply(ppp::Byte* packet, int packet_length, const boost::asio::ip::address_v6& gateway) noexcept {
         if (NULLPTR == packet || packet_length < 48) {
             return false;
         }
 
         ppp::app::server::VirtualEthernetIPv6MinimalHeader* header = reinterpret_cast<ppp::app::server::VirtualEthernetIPv6MinimalHeader*>(packet);
-        if ((header->VersionTrafficClass >> 4) != 6 || header->NextHeader != IPPROTO_ICMPV6) {
-            return false;
-        }
-
         boost::asio::ip::address_v6 source;
         boost::asio::ip::address_v6 destination;
-        if (!ppp::app::server::ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+        ppp::Byte next_header = 0;
+        int payload_length = 0;
+        if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination, &next_header, &payload_length) || next_header != IPPROTO_ICMPV6) {
             return false;
         }
 
@@ -55,8 +70,8 @@ namespace {
             return false;
         }
 
-        icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(packet + 40);
-        int icmp_length = packet_length - 40;
+        icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(packet + ppp::ipv6::IPv6_HEADER_MIN_SIZE);
+        int icmp_length = payload_length;
         if (icmp_length < static_cast<int>(sizeof(icmp_hdr))) {
             return false;
         }
@@ -69,7 +84,7 @@ namespace {
         boost::asio::ip::address_v6::bytes_type gateway_bytes = gateway.to_bytes();
         memcpy(header->Source, gateway_bytes.data(), gateway_bytes.size());
         memcpy(header->Destination, source_bytes.data(), source_bytes.size());
-        header->HopLimit = 64;
+        header->HopLimit = ppp::ipv6::IPv6_DEFAULT_HOP_LIMIT;
 
         icmp->icmp_type = 129;
         icmp->icmp_chksum = 0;
@@ -81,6 +96,9 @@ namespace {
 namespace ppp {
     namespace app {
         namespace server {
+            /**
+             * @brief Initializes exchanger state for one virtual session.
+             */
             VirtualEthernetExchanger::VirtualEthernetExchanger(
                 const VirtualEthernetSwitcherPtr&                       switcher,
                 const AppConfigurationPtr&                              configuration,
@@ -115,21 +133,24 @@ namespace ppp {
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
             }
 
+            /** @brief Releases exchanger resources. */
             VirtualEthernetExchanger::~VirtualEthernetExchanger() noexcept {
                 Finalize();
             }
 
+            /** @brief Gets preferred TUN descriptor hint. */
             int VirtualEthernetExchanger::GetPreferredTunFd() noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 return preferred_tun_fd_;
             }
 
+            /** @brief Sets preferred TUN descriptor hint. */
             void VirtualEthernetExchanger::SetPreferredTunFd(int fd) noexcept {
                 SynchronizedObjectScope scope(syncobj_);
                 preferred_tun_fd_ = fd;
-                DebugLog("server ipv6 transit preferred-fd update session=%s fd=%d", auxiliary::StringAuxiliary::Int128ToGuidString(GetId()).data(), fd);
             }
 
+            /** @brief Defers finalization onto exchanger io context. */
             void VirtualEthernetExchanger::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -139,7 +160,18 @@ namespace ppp {
                     });
             }
 
+            /** @brief Finalizes all runtime objects and unregisters session from switcher. */
             void VirtualEthernetExchanger::Finalize() noexcept {
+                // BUG-15 + BUG-17: Guard against double-finalization.  disposed_ must be set
+                // to true at the very top, BEFORE any map is cleared, so that any concurrent
+                // async callback that checks disposed_ first will bail out immediately and will
+                // not touch datagrams_, mappings_, or timeouts_ after we release them.
+                if (disposed_) {
+                    return;
+                }
+
+                disposed_ = true;
+
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
                 for (;;) {
                     Dictionary::ReleaseAllObjects(datagrams_);
@@ -172,7 +204,6 @@ namespace ppp {
                         mux->close_exec();
                     }
 
-                    disposed_ = true;
                     break;
                 }
 
@@ -188,69 +219,114 @@ namespace ppp {
                 Dictionary::ReleaseAllObjects(static_echo_datagram_ports);
 
                 static_allocated_context_.reset();
+
+                // BUG-15: Guard every switcher call with a null check — switcher_ may be null
+                // if the constructor did not receive a valid switcher reference.
                 if (switcher_) {
-                    VirtualEthernetInformationExtensions extensions;
-                    if (switcher_->BuildInformationIPv6Extensions(GetId(), extensions)) {
-                        switcher_->DeleteIPv6Exchanger(GetId(), extensions.AssignedIPv6Address);
-                    }
+                    switcher_->DeleteIPv6Exchanger(GetId());
+                    switcher_->DeleteExchanger(this);
+                    switcher_->DeleteNatInformation(this, address_);
+                    switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
                 }
-                switcher_->DeleteExchanger(this);
-                switcher_->DeleteNatInformation(this, address_);
-                switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
             }
 
+            /** @brief Gets firewall assigned to this exchanger. */
             VirtualEthernetExchanger::FirewallPtr VirtualEthernetExchanger::GetFirewall() noexcept {
                 return firewall_;
             }
 
+            /** @brief Rejects direct connect requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Rejects direct push requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Rejects direct disconnect requests to enforce server-side safety policy. */
             bool VirtualEthernetExchanger::OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Handles logical echo acknowledgment from client. */
             bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept {
                 DoEcho(transmission, ack_id, y);
                 return true;
             }
 
+            /** @brief Handles ICMP echo payload forwarded from client. */
             bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 SendEchoToDestination(transmission, packet, packet_length);
                 return true;
             }
 
+            /** @brief Handles UDP send request from virtual client endpoint. */
             bool VirtualEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 SendPacketToDestination(transmission, sourceEP, destinationEP, packet, packet_length, y);
                 return true;
             }
 
+            /** @brief Rejects connect-ack packets from client side for safety hardening. */
             bool VirtualEthernetExchanger::OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Rejects legacy information packet to keep protocol surface strict. */
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Processes extended information packets, including IPv6 assignment requests. */
             bool VirtualEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
-                return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
+                if (disposed_ || NULLPTR == switcher_ || NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    return false;
+                }
+
+                const VirtualEthernetInformationExtensions& request = information.Extensions;
+                bool has_ipv6_request = request.RequestedIPv6Address.is_v6();
+                bool is_server_response = request.AssignedIPv6Address.is_v6() || request.IPv6StatusCode != VirtualEthernetInformationExtensions::IPv6Status_None;
+                if (!has_ipv6_request || is_server_response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                    return false;
+                }
+
+                VirtualEthernetInformationExtensions response;
+                if (!switcher_->UpdateIPv6Request(GetId(), request, response)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
+                    return false;
+                }
+
+                VirtualEthernetInformation info;
+                info.Clear();
+                
+                VirtualEthernetSwitcher::InformationEnvelope envelope;
+                envelope.Base = info;
+                envelope.Extensions = response;
+                envelope.ExtendedJson = response.ToJson();
+                return DoInformation(transmission, envelope, y);
             }
 
+            /** @brief Allocates static-echo relay session for client. */
             bool VirtualEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 StaticEcho(transmission, y);
                 return true;
             }
 
+            /** @brief Rejects client-originated static assignment packets for safety hardening. */
             bool VirtualEthernetExchanger::OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false; // Immediate return false and forcefully close the connection due to a suspected malicious attack on the server.
             }
 
+            /** @brief Applies VMUX enable/disable request and acknowledges resulting state. */
             bool VirtualEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept {
                 bool err = true;
                 for (;;) {
@@ -315,38 +391,75 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Handles client NAT packet and forwards via IPv4 or IPv6 routing path. */
             bool VirtualEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                if (NULLPTR == switcher_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                    return false;
+                }
+
+                VirtualEthernetLoggerPtr logger = switcher_->GetLogger();
+                if (NULLPTR != logger) {
+                    logger->Packet(GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ClientToServer);
+                }
+
                 AppConfigurationPtr configuration = GetConfiguration();
                 bool forwarded = false;
                 if (configuration->server.subnet) {
                     forwarded = ForwardNatPacketToDestination(packet, packet_length, y);
                 }
 
-                if (!forwarded) {
+                if (!forwarded && switcher_->IsIPv6ServerEnabled()) {
                     ForwardIPv6PacketToDestination(packet, packet_length, y);
                 }
 
                 return true;
             }
 
+            /** @brief Forwards IPv6 packet toward local exchanger or transit gateway. */
             bool VirtualEthernetExchanger::ForwardIPv6PacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    return false;
+                }
+
+                AppConfigurationPtr configuration = GetConfiguration();
+
+                if (!switcher_->IsIPv6ServerEnabled()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
                 boost::asio::ip::address_v6 source;
                 boost::asio::ip::address_v6 destination;
-                if (!ParseVirtualEthernetIPv6Header(packet, packet_length, source, destination)) {
+                if (!ppp::ipv6::TryParsePacket(packet, packet_length, source, destination)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
                     return false;
                 }
 
-                const auto& ipv6 = GetConfiguration()->server.ipv6;
-                boost::system::error_code ec;
-                boost::asio::ip::address gateway = StringToAddress(ipv6.gateway, ec);
-                if (!ec && gateway.is_v6()) {
+                VirtualEthernetInformationExtensions approved;
+                if (!switcher_->TryGetAssignedIPv6Extensions(GetId(), approved) || !approved.AssignedIPv6Address.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseUnavailable);
+                    return false;
+                }
+
+                if (source != approved.AssignedIPv6Address.to_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
+                    return false;
+                }
+
+                boost::asio::ip::address gateway = switcher_->GetIPv6TransitGateway();
+                if (gateway.is_v6()) {
                     if (HandleIPv6GatewayEchoReply(packet, packet_length, gateway.to_v6())) {
                         return DoNat(transmission_, packet, packet_length, y);
                     }
+                }
+
+                // Reject packets destined for loopback or multicast addresses; these
+                // must never be forwarded into the virtual network fabric.
+                if (destination.is_loopback() || destination.is_multicast()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PacketRejected);
+                    return false;
                 }
 
                 VirtualEthernetSwitcher::VirtualEthernetExchangerPtr exchanger = switcher_->FindIPv6Exchanger(destination);
@@ -354,19 +467,31 @@ namespace ppp {
                     return switcher_->SendIPv6TransitPacket(packet, packet_length);
                 }
 
+                if (!configuration->server.subnet && configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
+                    return false;
+                }
+
                 ITransmissionPtr transmission = exchanger->GetTransmission();
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 if (exchanger->DoNat(transmission, packet, packet_length, y)) {
+                    VirtualEthernetLoggerPtr logger = switcher_->GetLogger();
+                    if (NULLPTR != logger) {
+                        logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToClient);
+                    }
                     return true;
                 }
 
                 transmission->Dispose();
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
                 return false;
             }
 
+            /** @brief Registers NAT mapping after LAN information announcement. */
             bool VirtualEthernetExchanger::OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (configuration->server.subnet) {
@@ -376,6 +501,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Allocates static echo context and responds with assigned session values. */
             bool VirtualEthernetExchanger::StaticEcho(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;
@@ -398,21 +524,35 @@ namespace ppp {
                 }
             }
 
+            /** @brief Registers this exchanger in switcher NAT table using announced IP/mask. */
             bool VirtualEthernetExchanger::Arp(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask) noexcept {
                 using VES = VirtualEthernetSwitcher;
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    return false;
+                }
+
+                if (IPEndPoint::IsInvalid(IPEndPoint(mask, IPEndPoint::MinPort))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
+                    return false;
+                }
+
+                if (IPEndPoint::IsInvalid(IPEndPoint(ip, IPEndPoint::MinPort))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 auto my = shared_from_this();
                 std::shared_ptr<VirtualEthernetExchanger> exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(my);
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
                     return false;
                 }
 
                 VES::NatInformationPtr nat = switcher_->AddNatInformation(exchanger, ip, mask);
                 if (NULLPTR == nat) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingCreateFailed);
                     return false;
                 }
             
@@ -425,6 +565,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Removes timeout callback entry by native key pointer. */
             bool VirtualEthernetExchanger::DeleteTimeout(void* k) noexcept {
                 if (NULLPTR == k) {
                     return false;
@@ -434,6 +575,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Forwards one UDP payload to destination through cached/new datagram port. */
             bool VirtualEthernetExchanger::SendPacketToDestination(const ITransmissionPtr& transmission, 
                 const boost::asio::ip::udp::endpoint&   sourceEP, 
                 const boost::asio::ip::udp::endpoint&   destinationEP, 
@@ -442,11 +584,13 @@ namespace ppp {
                 YieldContext&                           y) noexcept {
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool fin = false;
                 if (NULLPTR == packet && packet_length != 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
                 elif(NULLPTR == packet || packet_length < 1) {
@@ -458,11 +602,13 @@ namespace ppp {
 
                 if (NULLPTR != firewall) {
                     if (firewall->IsDropNetworkPort(destinationPort, false)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
                         return false;
                     }
 
                     boost::asio::ip::address destinationIP = destinationEP.address();
                     if (firewall->IsDropNetworkSegment(destinationIP)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
                         return false;
                     }
                 }
@@ -485,6 +631,7 @@ namespace ppp {
 
                         if (NULL != firewall) {
                             if (firewall->IsDropNetworkDomains(hostDomain)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
                                 return false;
                             }
                         }
@@ -493,6 +640,7 @@ namespace ppp {
                     int status = VirtualEthernetDatagramPort::NamespaceQuery(switcher_, this, sourceEP, destinationEP, hostDomain, 
                         packet, packet_length, queries_type, queries_clazz, false);
                     if (status < 0) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
                         return false;
                     }
                     elif(status > 0) {
@@ -545,6 +693,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Sends DNS query to redirect endpoint and relays async response.
+             */
             bool VirtualEthernetExchanger::INTERNAL_RedirectDnsQuery(
                 ITransmissionPtr                                    transmission,
                 boost::asio::ip::udp::endpoint                      redirectEP,
@@ -555,23 +706,42 @@ namespace ppp {
                 bool                                                static_transit) noexcept {
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    return false;
+                }
+
+                if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    return false;
+                }
+
+                if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
 
                 const std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
                     return false;
                 }
                 
                 const auto context = transmission->GetContext();
+                if (NULLPTR == context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
+                    return false;
+                }
+
                 const std::shared_ptr<boost::asio::ip::udp::socket> socket = make_shared_object<boost::asio::ip::udp::socket>(*context);
                 if (!socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
                 boost::system::error_code ec;
                 socket->open(destinationEP.protocol(), ec);
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
 
@@ -581,12 +751,15 @@ namespace ppp {
                 ppp::net::Socket::SetSignalPipeline(handle, false);
                 ppp::net::Socket::ReuseSocketAddress(handle, true);
 
-                socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP, 
+socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP, 
                     boost::asio::socket_base::message_end_of_record, ec);
                 if (ec) {
+                    Socket::Closesocket(socket);  // Clean up socket on send failure
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     return false;
                 }
 
+                /** @brief Timer callback closes socket if redirect query times out. */
                 const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
                 const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
                     [socket_weak](Timer*) noexcept {
@@ -596,38 +769,75 @@ namespace ppp {
                         }
                     });
                 if (NULLPTR == cb) {
+                    Socket::Closesocket(socket);  // Clean up socket on callback alloc failure
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
-                const auto timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
+                std::shared_ptr<ppp::threading::Timer> timeout;  // Non-const to allow disposal
+                {
+                    std::shared_ptr<ppp::threading::Timer> created_timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
+                    timeout = created_timeout;
+                }
                 if (NULLPTR == timeout) {
+                    Socket::Closesocket(socket);  // Clean up socket on timeout alloc failure
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     return false;
                 }
                 
                 if (!timeouts_.emplace(socket.get(), cb).second) {
+                    timeout->Dispose();  // Clean up timeout on insert failure
+                    Socket::Closesocket(socket);  // Clean up socket on timeout entry conflict
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetExchangerTimeoutEntryConflict);
                     return false;
                 }
 
-                const auto max_buffer_size = PPP_BUFFER_SIZE - sizeof(destinationEP);
+                const auto max_buffer_size = PPP_BUFFER_SIZE;
                 const auto self = shared_from_this();
+                
+                // BUG-16: buffer_ is a shared scratch buffer owned by this exchanger.
+                // Multiple concurrent INTERNAL_RedirectDnsQuery calls are possible when
+                // the client sends several DNS queries in quick succession before any
+                // reply arrives.  Each outstanding async_receive_from must have its own
+                // dedicated receive buffer; sharing buffer_ across concurrent receives
+                // would cause later arriving data to corrupt an earlier in-flight read.
+                // Allocate a per-call heap buffer so every outstanding receive is
+                // independently owned and there is no aliasing between concurrent calls.
+                const std::shared_ptr<ppp::threading::BufferswapAllocator> recv_allocator = transmission->BufferAllocator;
+                const std::shared_ptr<Byte> recv_buffer = ppp::threading::BufferswapAllocator::MakeByteArray(recv_allocator, max_buffer_size);
+                if (NULLPTR == recv_buffer) {
+                    DeleteTimeout(socket.get());  // Clean up timeout entry
+                    Socket::Closesocket(socket);  // Clean up socket on buffer alloc failure
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    return false;
+                }
 
-                socket->async_receive_from(boost::asio::buffer(buffer_.get(), max_buffer_size),
-                    *reinterpret_cast<boost::asio::ip::udp::endpoint*>(buffer_.get() + max_buffer_size),
-                    [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP](boost::system::error_code ec, size_t sz) noexcept {
+                const auto responseEP = make_shared_object<boost::asio::ip::udp::endpoint>();
+                if (NULLPTR == responseEP) {
+                    DeleteTimeout(socket.get());  // Clean up timeout entry
+                    Socket::Closesocket(socket);  // Clean up socket on endpoint alloc failure
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    return false;
+                }
+
+                /** @brief Receives redirect DNS response and forwards to static/dynamic path. */
+                socket->async_receive_from(boost::asio::buffer(recv_buffer.get(), max_buffer_size),
+                    *responseEP,
+                    [self, this, socket, sourceEP, timeout, static_transit, transmission, destinationEP, responseEP, recv_buffer](boost::system::error_code ec, size_t sz) noexcept {
                         DeleteTimeout(socket.get());
                         if (ec == boost::system::errc::success) {
                             int bytes_transferred = static_cast<int>(sz);
                             if (bytes_transferred > 0) {
                                 if (static_transit) {
-                                    VirtualEthernetDatagramPortStatic::Output(switcher_.get(), this, buffer_.get(), bytes_transferred, sourceEP, destinationEP);
+                                    VirtualEthernetDatagramPortStatic::Output(switcher_.get(), this, recv_buffer.get(), bytes_transferred, sourceEP, destinationEP);
                                 }
-                                elif(!DoSendTo(transmission, sourceEP, destinationEP, buffer_.get(), bytes_transferred, nullof<YieldContext>())) {
+                                elif(!DoSendTo(transmission, sourceEP, destinationEP, recv_buffer.get(), bytes_transferred, nullof<YieldContext>())) {
                                     transmission->Dispose();
                                 }
 
                                 AppConfigurationPtr configuration = GetConfiguration();
                                 if (NULLPTR != configuration && configuration->udp.dns.cache) {
-                                    VirtualEthernetDatagramPort::NamespaceQuery(switcher_, buffer_.get(), bytes_transferred);
+                                    VirtualEthernetDatagramPort::NamespaceQuery(switcher_, recv_buffer.get(), bytes_transferred);
                                 }
                             }
                         }
@@ -641,6 +851,9 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Resolves configured DNS redirect host and dispatches redirect send.
+             */
             bool VirtualEthernetExchanger::INTERNAL_RedirectDnsQuery(
                 const ITransmissionPtr&                             transmission, 
                 const boost::asio::ip::udp::endpoint&               sourceEP,
@@ -650,20 +863,24 @@ namespace ppp {
                 bool                                                static_transit) noexcept {
 
                 if (!packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
 
                 if (!transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = transmission->BufferAllocator;
                 const auto buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_length);
                 if (NULLPTR == buffer) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
                 else {
@@ -675,12 +892,22 @@ namespace ppp {
                 const ITransmissionPtr in = transmission;
 
                 const auto configuration = GetConfiguration();
+                if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                    return false;
+                }
+
                 const auto self = shared_from_this();
                 const std::shared_ptr<boost::asio::io_context> context = in->GetContext();
+                if (NULLPTR == context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
+                    return false;
+                }
 
                 const Ipep::GetAddressByHostNameCallback cb = 
-                    [self, this, buffer, packet_length, static_transit, source, in, destination, context](IPEndPoint* redirectEP) noexcept {
+                    [self, this, buffer, packet_length, static_transit, source, in, destination, context](const std::shared_ptr<IPEndPoint>& redirectEP) noexcept {
                         if (!redirectEP) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
                             return false;
                         }
 
@@ -692,9 +919,17 @@ namespace ppp {
                         return true;
                     };
 
-                return Ipep::GetAddressByHostName(*context, configuration->udp.dns.redirect, PPP_DNS_SYS_PORT, cb);
+                if (!Ipep::GetAddressByHostName(*context, configuration->udp.dns.redirect, PPP_DNS_SYS_PORT, cb)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
+                    return false;
+                }
+
+                return true;
             }
 
+            /**
+             * @brief Applies DNS redirect policy for one outgoing DNS query packet.
+             */
             int VirtualEthernetExchanger::RedirectDnsQuery(
                 const ITransmissionPtr&                             transmission,
                 const boost::asio::ip::udp::endpoint&               sourceEP,
@@ -726,6 +961,7 @@ namespace ppp {
                     wrap_shared_pointer(packet), packet_length, static_transit);
             }
 
+            /** @brief Schedules periodic maintenance for all exchanger-owned runtime objects. */
             bool VirtualEthernetExchanger::Update(UInt64 now) noexcept {
                 if (disposed_) {
                     return false;
@@ -737,8 +973,38 @@ namespace ppp {
                     [self, this, now]() noexcept {
                         int session_id = static_echo_session_id_.load();
                         if (session_id != 0) {
-                            SynchronizedObjectScope scope(static_echo_syncobj_);
-                            Dictionary::UpdateAllObjects(static_echo_datagram_ports_, now);
+                            // D1-4: Do NOT call UpdateAllObjects (which invokes Dispose() on expired
+                            // ports) while static_echo_syncobj_ is held.  Disposing a UDP datagram
+                            // port may trigger OS socket-close syscalls and re-entrant callbacks,
+                            // both of which must not run under the lock.
+                            //
+                            // Instead, collect all stale ports into a local vector under the lock,
+                            // erase them from the map, release the lock, and then dispose them
+                            // outside the lock.  This is the standard snapshot-and-release pattern.
+                            ppp::vector<VirtualEthernetDatagramPortStaticPtr> stale_ports;
+
+                            {
+                                SynchronizedObjectScope scope(static_echo_syncobj_);
+                                for (auto tail = static_echo_datagram_ports_.begin(); tail != static_echo_datagram_ports_.end();) {
+                                    const VirtualEthernetDatagramPortStaticPtr& port = tail->second;
+                                    if (NULLPTR == port || port->IsPortAging(now)) {
+                                        if (NULLPTR != port) {
+                                            stale_ports.emplace_back(port);
+                                        }
+
+                                        tail = static_echo_datagram_ports_.erase(tail);
+                                    }
+                                    else {
+                                        ++tail;
+                                    }
+                                }
+                            }
+
+                            // Dispose expired ports outside the lock to avoid holding
+                            // static_echo_syncobj_ across socket-close syscalls.
+                            for (auto& port : stale_ports) {
+                                IDisposable::Dispose(*port);
+                            }
                         }
 
                         UploadTrafficToManagedServer();
@@ -751,6 +1017,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Polls VMUX and tears it down when update fails. */
             bool VirtualEthernetExchanger::DoMuxEvents() noexcept {
                 if (disposed_) {
                     return false;
@@ -769,6 +1036,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Uploads traffic delta counters to managed server when link is available. */
             bool VirtualEthernetExchanger::UploadTrafficToManagedServer() noexcept {
                 VirtualEthernetManagedServerPtr server = managed_server_;
                 if (NULLPTR == server) {
@@ -813,39 +1081,47 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Creates ICMP and static-ICMP helper components for this exchanger. */
             bool VirtualEthernetExchanger::Open() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 auto my = shared_from_this();
                 std::shared_ptr<VirtualEthernetExchanger> exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(my);
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
                     return false;
                 }
 
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
                     return false;
                 }
 
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 if (NULLPTR == context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                     return false;
                 }
 
                 ITransmissionPtr transmission = GetTransmission();
                 if (NULLPTR == transmission) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 VirtualInternetControlMessageProtocolPtr echo = NewEchoTransmissions(transmission);
                 if (NULLPTR == echo) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                     return false;
                 }
 
                 std::shared_ptr<VirtualInternetControlMessageProtocolStatic> static_echo = make_shared_object<VirtualInternetControlMessageProtocolStatic>(exchanger, configuration, context);
                 if (NULLPTR == static_echo) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
@@ -854,6 +1130,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Constructs echo forwarding helper bound to current session. */
             VirtualEthernetExchanger::VirtualInternetControlMessageProtocolPtr VirtualEthernetExchanger::NewEchoTransmissions(const ITransmissionPtr& transmission) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -864,6 +1141,7 @@ namespace ppp {
                 return make_shared_object<VirtualInternetControlMessageProtocol>(exchanger, transmission);
             }
 
+            /** @brief Constructs UDP datagram port proxy for one source endpoint. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::NewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (NULLPTR == transmission) {
                     return NULLPTR;
@@ -874,14 +1152,17 @@ namespace ppp {
                 return make_shared_object<VirtualEthernetDatagramPort>(self, transmission, sourceEP);
             }
 
+            /** @brief Finds a cached datagram port by source endpoint key. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 return Dictionary::FindObjectByKey(datagrams_, sourceEP);
             }
 
+            /** @brief Removes and returns cached datagram port by source endpoint key. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 return Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
             }
 
+            /** @brief Parses and forwards ICMP packet to echo subsystem after firewall checks. */
             bool VirtualEthernetExchanger::SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept {
                 if (disposed_) {
                     return false;
@@ -918,6 +1199,7 @@ namespace ppp {
                 return echo->Echo(ip, icmp, IPEndPoint(icmp->Destination, IPEndPoint::MinPort));
             }
 
+            /** @brief Forwards IPv4 NAT packet to matching peer exchangers in same subnet. */
             bool VirtualEthernetExchanger::ForwardNatPacketToDestination(Byte* packet, int packet_length, YieldContext& y) noexcept {
                 using VES = VirtualEthernetSwitcher;
                 
@@ -935,6 +1217,7 @@ namespace ppp {
                     return false;
                 }
 
+                /** @brief Delivers a packet to the exchanger that owns destination address. */
                 static const auto forward = 
                     [](VirtualEthernetSwitcher* switcher, uint32_t destination, Byte* packet, int packet_length, YieldContext& y) noexcept -> int {
                         VES::NatInformationPtr nat = switcher->FindNatInformation(destination);
@@ -952,6 +1235,10 @@ namespace ppp {
                         ITransmissionPtr transmission = exchanger->GetTransmission(); 
                         if (NULLPTR != transmission) {
                             if (exchanger->DoNat(transmission, packet, packet_length, y)) {
+                                VirtualEthernetLoggerPtr logger = switcher->GetLogger();
+                                if (NULLPTR != logger) {
+                                    logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToClient);
+                                }
                                 return 1;
                             }
 
@@ -965,17 +1252,30 @@ namespace ppp {
                     return forward(switcher_.get(), destination, packet, packet_length, y) > 0;
                 }
                 else {
+                    // BUG-19: The original loop iterated every host address in the subnet,
+                    // which is up to 16 million iterations for a /8 — blocking the IO thread
+                    // for an unbounded time.  Cap the broadcast walk at 256 host addresses to
+                    // bound worst-case latency while still covering practical subnet sizes
+                    // (/24 and smaller, which are the common deployment configurations).
+                    // Subnets larger than /24 will only have their first 256 hosts forwarded;
+                    // this is an intentional safety limit, not a correctness regression, because
+                    // iterating millions of addresses synchronously would stall every other
+                    // session on the same IO thread.
+                    static constexpr uint32_t kMaxBroadcastHosts = 256;
+
                     bool any = false;
                     uint32_t current = htonl(ip->src);
                     uint32_t mask = ntohl(source->SubmaskAddress);
                     uint32_t first = current & mask;
                     uint32_t boardcast = first | (~mask); // first | (~first & 0xff);
+                    uint32_t walked = 0;
 
-                    for (uint32_t address = first; address < boardcast; address++) {
+                    for (uint32_t address = first; address < boardcast && walked < kMaxBroadcastHosts; address++) {
                         if (current == address) {
                             continue;
                         }
 
+                        walked++;
                         int status = forward(switcher_.get(), htonl(address), packet, packet_length, y);
                         if (status < 0) {
                             break;
@@ -988,6 +1288,7 @@ namespace ppp {
                 }
             }
 
+            /** @brief Handles FRP mapping entry registration notification. */
             bool VirtualEthernetExchanger::OnFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (configuration->server.mapping) {
@@ -997,6 +1298,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP UDP payload to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1006,6 +1308,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP connect result to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1015,6 +1318,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP disconnect event to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1024,6 +1328,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards FRP TCP stream payload to corresponding mapping port. */
             bool VirtualEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
@@ -1033,6 +1338,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Creates, opens and registers FRP mapping port if absent. */
             bool VirtualEthernetExchanger::RegisterMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 if (disposed_) {
                     return false;
@@ -1070,6 +1376,7 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Builds FRP mapping port object with disposal hook. */
             VirtualEthernetExchanger::VirtualEthernetMappingPortPtr VirtualEthernetExchanger::NewMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 class MappingPort : public VirtualEthernetMappingPort {
                 public:
@@ -1079,11 +1386,26 @@ namespace ppp {
                     }
 
                 public:
+                    /** @brief Unregisters mapping key asynchronously, then disposes base resources. */
                     virtual void Dispose() noexcept override {
-                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer();  NULLPTR != linklayer) {
-                            VirtualEthernetExchanger* exchanger = dynamic_cast<VirtualEthernetExchanger*>(linklayer.get());
-                            if (NULLPTR != exchanger) {
-                                VirtualEthernetMappingPort::DeleteMappingPort(exchanger->mappings_, ProtocolIsNetworkV4(), ProtocolIsTcpNetwork(), GetRemotePort());
+                        // Remove the mapping entry after leaving the current call stack so
+                        // disposal cannot re-enter the exchanger while its lock is held.
+                        if (std::shared_ptr<VirtualEthernetLinklayer> linklayer = GetLinklayer(); NULLPTR != linklayer) {
+                            if (std::shared_ptr<VirtualEthernetExchanger> exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(linklayer); NULLPTR != exchanger) {
+                                auto self = shared_from_this();
+                                std::shared_ptr<boost::asio::io_context> context = exchanger->GetContext();
+                                auto remove_mapping = [exchanger, self]() noexcept {
+                                    SynchronizedObjectScope scope(exchanger->syncobj_);
+                                    VirtualEthernetMappingPort::DeleteMappingPort(
+                                        exchanger->mappings_, self->ProtocolIsNetworkV4(), self->ProtocolIsTcpNetwork(), self->GetRemotePort());
+                                };
+
+                                if (NULLPTR != context) {
+                                    boost::asio::post(*context, std::move(remove_mapping));
+                                }
+                                else {
+                                    remove_mapping();
+                                }
                             }
                         }
 
@@ -1100,10 +1422,12 @@ namespace ppp {
                 return make_shared_object<MappingPort>(self, transmission, tcp, in, remote_port);
             }
 
+            /** @brief Finds FRP mapping port by direction/protocol/remote-port key. */
             VirtualEthernetExchanger::VirtualEthernetMappingPortPtr VirtualEthernetExchanger::GetMappingPort(bool in, bool tcp, int remote_port) noexcept {
                 return VirtualEthernetMappingPort::FindMappingPort(mappings_, in, tcp, remote_port);
             }
 
+            /** @brief Runs keepalive and disposes exchanger when keepalive fails. */
             bool VirtualEthernetExchanger::DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept {
                 if (disposed_) {
                     return false;
@@ -1117,6 +1441,7 @@ namespace ppp {
                 return false;
             }
 
+            /** @brief Handles static-echo ICMP packet and relays via static echo engine. */
             bool VirtualEthernetExchanger::StaticEchoEchoToDestination(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 if (disposed_) {
                     return false;
@@ -1162,6 +1487,7 @@ namespace ppp {
                 return echo->Echo(ip, frame, IPEndPoint::ToEndPoint(sourceEP));
             }
 
+            /** @brief Releases static-echo datagram port by source address and port. */
             bool VirtualEthernetExchanger::StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept {
                 std::shared_ptr<VirtualEthernetDatagramPortStatic> datagram_port;
                 if (source_port <= IPEndPoint::MinPort || source_port > IPEndPoint::MaxPort) {
@@ -1182,6 +1508,7 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Forwards static-echo UDP packet to destination through cached/static port. */
             bool VirtualEthernetExchanger::StaticEchoSendToDestination(const std::shared_ptr<ppp::app::protocol::VirtualEthernetPacket>& packet) noexcept {
                 if (disposed_) {
                     return false;
@@ -1268,36 +1595,73 @@ namespace ppp {
                 }
 
                 for (;;) {
-                    bool ok = false;
-                    bool nw = false;
-
                     uint64_t key = MAKE_QWORD(source_ip, source_port);
-                    std::shared_ptr<boost::asio::io_context> context = GetContext(); 
-                    if (NULLPTR != context) {
-                        SynchronizedObjectScope scope(static_echo_syncobj_);
-                        ok = ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port);
-
-                        if (!ok) {
-                            datagram_port = make_shared_object<VirtualEthernetDatagramPortStatic>(exchanger, context, source_ip, source_port);
-                            if (NULLPTR == datagram_port) {
-                                return false;
-                            }
-
-                            nw = true;
-                            ok = datagram_port->Open() && ppp::collections::Dictionary::TryAdd(static_echo_datagram_ports_, key, datagram_port);
-                        }
+                    std::shared_ptr<boost::asio::io_context> context = GetContext();
+                    if (NULLPTR == context) {
+                        break;
                     }
 
-                    if (nw) {
-                        if (ok) {
-                            if (NULLPTR != logger) {
-                                logger->Port(GetId(), transmission, datagram_port->GetSourceEndPoint(), datagram_port->GetLocalEndPoint());
+                    /**
+                     * @brief Fast path: check whether a port already exists without opening a socket.
+                     *
+                     * The map lookup runs under the lock; if a port is found, we avoid
+                     * allocating a new socket entirely.
+                     */
+                    bool already_exists = false;
+                    {
+                        SynchronizedObjectScope scope(static_echo_syncobj_);
+                        already_exists = ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port);
+                    }
+
+                    if (already_exists) {
+                        break;
+                    }
+
+                    /**
+                     * @brief Slow path: create and open the socket BEFORE acquiring the lock.
+                     *
+                     * Performing the UDP socket allocation and Open() syscall outside the lock
+                     * prevents static_echo_syncobj_ from being held during potentially blocking
+                     * OS operations.  A concurrent thread may race to insert the same key;
+                     * the second check inside the lock below resolves such races.
+                     */
+                    std::shared_ptr<VirtualEthernetDatagramPortStatic> new_port =
+                        make_shared_object<VirtualEthernetDatagramPortStatic>(exchanger, context, source_ip, source_port);
+                    if (NULLPTR == new_port) {
+                        return false;
+                    }
+
+                    if (!new_port->Open()) {
+                        new_port->Dispose();
+                        return false;
+                    }
+
+                    /**
+                     * @brief Under the lock: attempt to insert the newly opened port.
+                     *
+                     * If another thread already inserted a port for the same key during the
+                     * Open() window, TryAdd returns false; we discard our port and use theirs.
+                     */
+                    bool inserted = false;
+                    {
+                        SynchronizedObjectScope scope(static_echo_syncobj_);
+                        if (!ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port)) {
+                            inserted = ppp::collections::Dictionary::TryAdd(static_echo_datagram_ports_, key, new_port);
+                            if (inserted) {
+                                datagram_port = new_port;
                             }
                         }
-                        else {
-                            datagram_port->Dispose();
-                            return false;
+                        /** @brief datagram_port now holds whichever entry won the insertion race. */
+                    }
+
+                    if (inserted) {
+                        if (NULLPTR != logger) {
+                            logger->Port(GetId(), transmission, datagram_port->GetSourceEndPoint(), datagram_port->GetLocalEndPoint());
                         }
+                    }
+                    else {
+                        /** @brief Lost the insertion race; dispose our redundant port. */
+                        new_port->Dispose();
                     }
 
                     break;

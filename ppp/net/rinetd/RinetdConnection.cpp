@@ -1,6 +1,12 @@
+/**
+ * @file RinetdConnection.cpp
+ * @brief Implements socket lifecycle and forwarding for rinetd relay sessions.
+ */
+
 #include <ppp/net/rinetd/RinetdConnection.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
@@ -11,6 +17,9 @@
 namespace ppp {
     namespace net {
         namespace rinetd {
+            /**
+             * @brief Initializes relay state and optional platform QoS helpers.
+             */
             RinetdConnection::RinetdConnection(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& local_socket) noexcept
                 : disposed_(false)
                 , connected_(false)
@@ -28,10 +37,16 @@ namespace ppp {
                 Update();
             }
 
+            /**
+             * @brief Destructor that enforces final cleanup.
+             */
             RinetdConnection::~RinetdConnection() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Schedules finalization onto the configured execution context.
+             */
             void RinetdConnection::Dispose() noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
@@ -43,6 +58,9 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Updates absolute timeout for connect or inactivity phase.
+             */
             void RinetdConnection::Update() noexcept {
                 uint64_t now = ppp::threading::Executors::GetTickCount();
                 if (remote_buffer_) {
@@ -53,6 +71,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Releases QoS objects and closes both relay sockets.
+             */
             void RinetdConnection::Finalize() noexcept {
 #if defined(_WIN32)
                 for (std::shared_ptr<ppp::net::QoSS>& qoss : qoss_) {
@@ -65,30 +86,39 @@ namespace ppp {
                 ppp::net::Socket::Closesocket(remote_socket_);
             }
  
+            /**
+             * @brief Opens and connects the remote socket endpoint.
+             */
             bool RinetdConnection::Open(const boost::asio::ip::tcp::endpoint& remoteEP, ppp::coroutines::YieldContext& y) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (remote_socket_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RinetdConnectionOpenSocketAlreadyAllocated);
                     return false;
                 }
 
                 boost::asio::ip::address remoteIP = remoteEP.address();
                 if (remoteIP.is_unspecified()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 if (remoteIP.is_multicast()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 if (ppp::net::IPEndPoint::IsInvalid(remoteIP)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return false;
                 }
 
                 int remotePort = remoteEP.port();
                 if (remotePort <= ppp::net::IPEndPoint::MinPort || remotePort > ppp::net::IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return false;
                 }
 
@@ -97,14 +127,22 @@ namespace ppp {
                 remote_socket_= socket;
                 
                 if (NULLPTR == socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
                 bool opened = ppp::coroutines::asio::async_open(y, *socket, remoteEP.protocol());
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                     return false;
                 }
 
+                /**
+                 * @brief Linux-specific physical-network protection for non-loopback peers.
+                 *
+                 * IPv4 remote sockets may be protected to avoid routing loops with virtual
+                 * adapters, while IPv6 is intentionally excluded by original design notes.
+                 */
 #if defined(_WIN32)
                 if (ppp::net::Socket::IsDefaultFlashTypeOfService()) {
                     qoss_[1] = ppp::net::QoSS::New(socket->native_handle(), remoteIP, remotePort);
@@ -117,6 +155,7 @@ namespace ppp {
                     auto protector_network = ProtectorNetwork; 
                     if (NULLPTR != protector_network) {
                         if (!protector_network->Protect(socket->native_handle(), y)) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                             return false;
                         }
                     }
@@ -136,23 +175,30 @@ namespace ppp {
                 return connect_ok;
             }
 
+            /**
+             * @brief Allocates forwarding buffers and starts both relay directions.
+             */
             bool RinetdConnection::Run() noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     return false;
                 }
 
                 local_buffer_ = ppp::threading::BufferswapAllocator::MakeByteArray(configuration->GetBufferAllocator(), PPP_BUFFER_SIZE);
                 if (NULLPTR == local_buffer_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
                 remote_buffer_ = ppp::threading::BufferswapAllocator::MakeByteArray(configuration->GetBufferAllocator(), PPP_BUFFER_SIZE);
                 if (NULLPTR == remote_buffer_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return false;
                 }
 
@@ -164,13 +210,21 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Starts one asynchronous forwarding loop.
+             *
+             * The callback chain performs read->write recursion and disposes the whole
+             * connection whenever either direction encounters EOF or an I/O error.
+             */
             bool RinetdConnection::ForwardXToY(boost::asio::ip::tcp::socket* socket, boost::asio::ip::tcp::socket* to, Byte* buffer) noexcept {
                 if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 bool opened = socket->is_open();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     return false;
                 }
 
@@ -179,6 +233,7 @@ namespace ppp {
                     [self, this, socket, to, buffer](const boost::system::error_code& ec, uint32_t sz) noexcept {
                         int bytes_transferred = std::max<int>(-1, ec ? -1 : static_cast<int>(sz));
                         if (bytes_transferred < 1) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpReceiveFailed);
                             Dispose();
                             return false;
                         }

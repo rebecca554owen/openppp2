@@ -1,3 +1,8 @@
+/**
+ * @file websocket_close_websocket.cpp
+ * @brief Implements WebSocket close and scheduler migration helpers.
+ */
+
 #include <ppp/net/asio/websocket.h>
 #include <ppp/net/asio/templates/SslSocket.h>
 #include <ppp/net/asio/templates/WebSocket.h>
@@ -11,11 +16,17 @@
 namespace ppp {
     namespace net {
         namespace asio {
+            /**
+             * @brief Asynchronously closes and disposes the WebSocket transport.
+             */
             void websocket::Dispose() noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
                 ppp::threading::Executors::StrandPtr strand = strand_;
 
+                /**
+                 * @brief Posts close logic to executor to preserve strand affinity.
+                 */
                 ppp::threading::Executors::Post(context, strand,
                     [self, this, context, strand]() noexcept {
                         disposed_ = true;
@@ -26,6 +37,10 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Migrates socket execution to the configured scheduler context.
+             * @return true when migration succeeds; otherwise false.
+             */
             bool websocket::ShiftToScheduler() noexcept {
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket_new;
                 ppp::threading::Executors::ContextPtr scheduler;

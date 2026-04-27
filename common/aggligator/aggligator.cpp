@@ -699,7 +699,7 @@ namespace aggligator
             return true;
         }
 
-        timeout_ptr = make_shared_object<boost::asio::deadline_timer>(context_); // Create new timer
+        timeout_ptr = make_shared_object<boost::asio::steady_timer>(context_); // Create new timer
         if (!timeout_ptr)                                                   // Allocation failed
         {
             return false;
@@ -718,7 +718,7 @@ namespace aggligator
         if (t)                                                              // Timer exists
         {
             auto self = shared_from_this();                                 // Keep aggregator alive
-            t->expires_from_now(boost::posix_time::milliseconds(10));       // Short interval for responsiveness
+            t->expires_from_now(std::chrono::milliseconds(10));             // Short interval for responsiveness
             t->async_wait(
                 [self, this](boost::system::error_code ec) noexcept
                 {
@@ -875,14 +875,14 @@ namespace aggligator
         }
 
         // Set a timeout for the handshake phase
-        deadline_timer timeout = make_shared_object<boost::asio::deadline_timer>(context_);
+        deadline_timer timeout = make_shared_object<boost::asio::steady_timer>(context_);
         if (!timeout)
         {
             return false;
         }
         else
         {
-            timeout->expires_from_now(boost::posix_time::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
+            timeout->expires_from_now(std::chrono::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
             timeout->async_wait(                                            // If handshake not completed, close socket
                 [socket](boost::system::error_code ec) noexcept
                 {
@@ -1332,7 +1332,7 @@ namespace aggligator
             return false;
         }
 
-        deadline_timer t = make_shared_object<boost::asio::deadline_timer>(context_);
+        deadline_timer t = make_shared_object<boost::asio::steady_timer>(context_);
         if (!t)
         {
             close();
@@ -1344,7 +1344,7 @@ namespace aggligator
         int bind_port = pclient->local_port_;                               // Local UDP port (if any)
 
         auto self = shared_from_this();
-        t->expires_from_now(boost::posix_time::seconds(AGGLIGATOR_RECONNECT_TIMEOUT));
+        t->expires_from_now(std::chrono::seconds(AGGLIGATOR_RECONNECT_TIMEOUT));
         t->async_wait(
             [self, this, connections, bind_port, servers](boost::system::error_code ec) noexcept
             {
@@ -1558,7 +1558,7 @@ namespace aggligator
             return false;
         }
 
-        deadline_timer timeout = make_shared_object<boost::asio::deadline_timer>(aggligator->context_);
+        deadline_timer timeout = make_shared_object<boost::asio::steady_timer>(aggligator->context_);
         if (!timeout)
         {
             close();
@@ -1566,7 +1566,7 @@ namespace aggligator
         }
 
         auto self = shared_from_this();                                     // Keep client alive
-        timeout->expires_from_now(boost::posix_time::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
+        timeout->expires_from_now(std::chrono::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
         timeout->async_wait(
             [self, this](boost::system::error_code ec) noexcept
             {

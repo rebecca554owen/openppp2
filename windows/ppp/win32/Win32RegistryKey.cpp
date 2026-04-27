@@ -1,4 +1,5 @@
 #include <windows/ppp/win32/Win32RegistryKey.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp
 {
@@ -28,14 +29,21 @@ namespace ppp
             result = RegOpenKeyEx(hKey, subKey.c_str(), 0, KEY_READ, &keyHandle);
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileOpenFailed);
                 return L"";
             }
 
             result = RegQueryValueEx(keyHandle, valueName.c_str(), 0, &type, reinterpret_cast<BYTE*>(buffer), &size);
             RegCloseKey(keyHandle);
 
-            if (result != ERROR_SUCCESS || type != REG_SZ)
+            if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileReadFailed);
+                return L"";
+            }
+            if (type != REG_SZ)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32RegistryReadTypeMismatch);
                 return L"";
             }
 
@@ -64,14 +72,21 @@ namespace ppp
             result = RegOpenKeyEx(hKey, subKey.c_str(), 0, KEY_READ, &keyHandle);
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileOpenFailed);
                 return 0;
             }
 
             result = RegQueryValueEx(keyHandle, valueName.c_str(), 0, &type, reinterpret_cast<BYTE*>(&data), &size);
             RegCloseKey(keyHandle);
 
-            if (result != ERROR_SUCCESS || type != REG_DWORD)
+            if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileReadFailed);
+                return 0;
+            }
+            if (type != REG_DWORD)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32RegistryReadTypeMismatch);
                 return 0;
             }
 
@@ -99,12 +114,20 @@ namespace ppp
             result = RegOpenKeyEx(hKey, subKey.c_str(), 0, KEY_READ, &keyHandle);
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileOpenFailed);
                 return ppp::vector<WORD>();
             }
 
             result = RegQueryValueEx(keyHandle, valueName.c_str(), 0, &type, NULLPTR, &dataSize);
-            if (result != ERROR_SUCCESS || type != REG_BINARY)
+            if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileReadFailed);
+                RegCloseKey(keyHandle);
+                return ppp::vector<WORD>();
+            }
+            if (type != REG_BINARY)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32RegistryReadTypeMismatch);
                 RegCloseKey(keyHandle);
                 return ppp::vector<WORD>();
             }
@@ -115,6 +138,7 @@ namespace ppp
 
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileReadFailed);
                 return ppp::vector<WORD>();
             }
 
@@ -146,13 +170,19 @@ namespace ppp
             result = RegCreateKeyEx(hKey, subKey.c_str(), 0, NULLPTR, 0, KEY_ALL_ACCESS, NULLPTR, &keyHandle, &dwDisposition);
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileCreateFailed);
                 return false;
             }
 
             result = RegSetValueEx(keyHandle, valueName.c_str(), 0, REG_SZ, reinterpret_cast<const BYTE*>(valueData.c_str()), static_cast<DWORD>(valueData.length() * sizeof(wchar_t)));
             RegCloseKey(keyHandle);
 
-            return (result == ERROR_SUCCESS);
+            if (result != ERROR_SUCCESS)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                return false;
+            }
+            return true;
         }
 
         // 写入 DWORD 值
@@ -165,13 +195,19 @@ namespace ppp
             result = RegCreateKeyEx(hKey, subKey.c_str(), 0, NULLPTR, 0, KEY_ALL_ACCESS, NULLPTR, &keyHandle, &dwDisposition);
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileCreateFailed);
                 return false;
             }
 
             result = RegSetValueEx(keyHandle, valueName.c_str(), 0, REG_DWORD, reinterpret_cast<BYTE*>(&valueData), sizeof(valueData));
             RegCloseKey(keyHandle);
 
-            return (result == ERROR_SUCCESS);
+            if (result != ERROR_SUCCESS)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                return false;
+            }
+            return true;
         }
 
         // 写入 WORD 数组值
@@ -184,13 +220,19 @@ namespace ppp
             result = RegCreateKeyEx(hKey, subKey.c_str(), 0, NULLPTR, 0, KEY_ALL_ACCESS, NULLPTR, &keyHandle, &dwDisposition);
             if (result != ERROR_SUCCESS)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileCreateFailed);
                 return false;
             }
 
             result = RegSetValueEx(keyHandle, valueName.c_str(), 0, REG_BINARY, reinterpret_cast<const BYTE*>(valueData), dataSize);
             RegCloseKey(keyHandle);
 
-            return (result == ERROR_SUCCESS);
+            if (result != ERROR_SUCCESS)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                return false;
+            }
+            return true;
         }
     }
 }

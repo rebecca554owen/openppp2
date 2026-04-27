@@ -5,8 +5,50 @@ SET(NAME ppp)
 PROJECT(${NAME} C CXX) # CMAKE_CURRENT_SOURCE_DIR
 
 # C/CXX compiler configurations.
-SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
-SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
+IF(MSVC)
+    SET(CMAKE_C_FLAGS "")
+    SET(CMAKE_CXX_FLAGS "")
+    SET(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} /nologo")
+    ADD_COMPILE_OPTIONS(/EHsc)
+    ADD_COMPILE_OPTIONS(/MP)
+    ADD_COMPILE_OPTIONS(/bigobj)
+    ADD_COMPILE_OPTIONS(/wd4244)
+    ADD_COMPILE_OPTIONS(/wd4819)
+    ADD_COMPILE_OPTIONS(/wd4566)
+    ADD_COMPILE_OPTIONS(/wd4309)
+    ADD_COMPILE_OPTIONS(/wd4334)
+    ADD_COMPILE_OPTIONS(/wd4267)
+    ADD_DEFINITIONS(-D_WIN32_WINNT=0x0601)
+    ADD_DEFINITIONS(-D_CONSOLE)
+    ADD_DEFINITIONS(-DUNICODE)
+    ADD_DEFINITIONS(-D_UNICODE)
+    ADD_DEFINITIONS(-D_CRT_SECURE_NO_WARNINGS)
+    ADD_DEFINITIONS(-D_CRT_SECURE_NO_DEPRECATE)
+    ADD_DEFINITIONS(-D_CRT_NONSTDC_NO_DEPRECATE)
+    ADD_DEFINITIONS(-D_WINSOCK_DEPRECATED_NO_WARNINGS)
+    ADD_DEFINITIONS(-D_CRT_NON_CONFORMING_SWPRINTFS)
+    ADD_DEFINITIONS(-D_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
+    ADD_DEFINITIONS(-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
+    ADD_DEFINITIONS(-D_SILENCE_STDEXT_HASH_DEPRECATION_WARNINGS)
+    ADD_DEFINITIONS(-D__SIMD__)
+    ADD_DEFINITIONS(-DJEMALLOC)
+    ADD_DEFINITIONS(-DFUNCTION)
+    ADD_DEFINITIONS(-DBUDDY_ALLOC_IMPLEMENTATION)
+    IF(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        ADD_DEFINITIONS(-DWIN32)
+    ENDIF()
+    STRING(REGEX REPLACE "([/-])M[TD]d?" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+    STRING(REGEX REPLACE "([/-])M[TD]d?" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+    STRING(REGEX REPLACE "([/-])M[TD]d?" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    STRING(REGEX REPLACE "([/-])M[TD]d?" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /MTd")
+    SET(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /MT")
+    SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd")
+    SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
+ELSE()
+    SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
+    SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
+ENDIF()
 
 # Configure predefined compilation macros.
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)
@@ -41,49 +83,60 @@ ENDIF()
 SET(PLATFORM_COMPILER_CLANG FALSE)
 SET(PLATFORM_SYSTEM_LINUX FALSE)
 SET(PLATFORM_SYSTEM_DARWIN FALSE)
-SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
-SET(USE_SYSTEM_THIRD_PARTY FALSE)
-OPTION(USE_SYSTEM_STATIC_THIRD_PARTY "Use system static libraries on Linux" OFF)
-OPTION(ALLOW_SYSTEM_THIRD_PARTY_FALLBACK "Allow fallback to system shared libraries" OFF)
-
-IF(DEFINED ENV{THIRD_PARTY_LIBRARY_DIR} AND NOT "$ENV{THIRD_PARTY_LIBRARY_DIR}" STREQUAL "")
-    SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})
-ENDIF()
+SET(PLATFORM_SYSTEM_WINDOWS FALSE)
 
 IF(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     SET(PLATFORM_COMPILER_CLANG TRUE)
 ENDIF()
 
-IF(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "Darwin")
+IF(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME MATCHES "Windows")
+    SET(PLATFORM_SYSTEM_WINDOWS TRUE)
+ELSEIF(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "Darwin")
     SET(PLATFORM_SYSTEM_DARWIN TRUE)
 ELSE()
     SET(PLATFORM_SYSTEM_LINUX TRUE)
-    IF(NOT EXISTS ${THIRD_PARTY_LIBRARY_DIR})
-        IF(ALLOW_SYSTEM_THIRD_PARTY_FALLBACK)
-            SET(USE_SYSTEM_THIRD_PARTY TRUE)
-            MESSAGE(WARNING "Using system shared libraries because THIRD_PARTY_LIBRARY_DIR was not found. This mode is for development only and does not match the original release build flow.")
-        ELSE()
-            MESSAGE(FATAL_ERROR "THIRD_PARTY_LIBRARY_DIR not found: ${THIRD_PARTY_LIBRARY_DIR}. Provide vendor libraries or set -DALLOW_SYSTEM_THIRD_PARTY_FALLBACK=ON for a development-only system build.")
-        ENDIF()
+ENDIF()
+
+IF(PLATFORM_SYSTEM_WINDOWS)
+    IF(NOT CMAKE_BUILD_TYPE)
+        SET(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    ENDIF()
+
+    IF(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        MESSAGE(FATAL_ERROR "Windows builds only support Debug or Release.")
     ENDIF()
 ENDIF()
 
 # C
 IF(PLATFORM_DEBUG)
-    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_DEBUG -g3")
-ELSE()
+    IF(MSVC)
+        ADD_DEFINITIONS(-D_DEBUG)
+    ELSE()
+        SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_DEBUG -g3")
+    ENDIF()
+ELSEIF(NOT MSVC)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
 ENDIF()
 
 # C/CXX
 IF(PLATFORM_DEBUG)
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_DEBUG -g3")
-ELSE()
+    IF(MSVC)
+        ADD_DEFINITIONS(-D_DEBUG)
+    ELSE()
+        SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_DEBUG -g3")
+    ENDIF()
+ELSEIF(NOT MSVC)
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 ENDIF()
 
+IF(MSVC AND NOT PLATFORM_DEBUG)
+    ADD_DEFINITIONS(-DNDEBUG)
+ENDIF()
+
 # Reduce the display of compiler warnings.
-ADD_COMPILE_OPTIONS(-Wno-deprecated-declarations)
+IF(NOT MSVC)
+    ADD_COMPILE_OPTIONS(-Wno-deprecated-declarations)
+ENDIF()
 
 # When compiling only linux kernel distributions >= 5.10 and later, 
 # You can enable this macro to get the new io_uring asynchronous event driver model support.
@@ -94,20 +147,52 @@ ADD_COMPILE_OPTIONS(-Wno-deprecated-declarations)
 
 # Check C/CXX compiler supports.
 INCLUDE(CheckCXXCompilerFlag)
-CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
-CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
+IF(MSVC)
+    SET(COMPILER_SUPPORTS_CXX17 TRUE)
+    SET(COMPILER_SUPPORTS_CXX1Z FALSE)
+ELSE()
+    CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
+    CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
+ENDIF()
 
 # If the current compiler environment is detected to support AES.
+OPTION(ENABLE_SIMD "Enable x86/x64 SIMD AES-NI implementation" OFF)
+
+SET(PLATFORM_ARCH_X86 FALSE)
+IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|amd64|AMD64|i[3-6]86|x86)$")
+    SET(PLATFORM_ARCH_X86 TRUE)
+ELSEIF(MSVC AND (CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SIZEOF_VOID_P EQUAL 4))
+    SET(PLATFORM_ARCH_X86 TRUE)
+ENDIF()
+
 SET(__SIMD__ FALSE)
+IF(PLATFORM_SYSTEM_WINDOWS AND PLATFORM_ARCH_X86)
+    SET(__SIMD__ TRUE)
+ENDIF()
+
+IF(ENABLE_SIMD)
+    IF(PLATFORM_ARCH_X86)
+        SET(__SIMD__ TRUE)
+    ELSE()
+        MESSAGE(WARNING "ENABLE_SIMD was requested on a non-x86/x64 target; SIMD AES-NI will remain disabled.")
+    ENDIF()
+ENDIF()
+
 IF(__SIMD__)
-    # Add in the compiler flag section.
-    ADD_COMPILE_OPTIONS(-maes -msse2 -mpclmul)
+    # Add compiler flags per toolchain.
+    IF(MSVC)
+        IF(CMAKE_SIZEOF_VOID_P EQUAL 4)
+            ADD_COMPILE_OPTIONS(/arch:SSE2)
+        ENDIF()
+    ELSE()
+        ADD_COMPILE_OPTIONS(-maes -msse2 -mpclmul)
+    ENDIF()
 
     # Add the AES_NI compiler macro.
     ADD_DEFINITIONS(-D__SIMD__)
 
     # Additional options for the old version of GCC.
-    IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8.0)
+    IF(NOT MSVC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8.0)
         ADD_COMPILE_OPTIONS(-march=westmere)
         ADD_COMPILE_OPTIONS(-fno-stack-protector)
     ENDIF()
@@ -129,7 +214,9 @@ IF(PLATFORM_SYSTEM_DARWIN)
     ADD_DEFINITIONS(-DBOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED)
 ELSE()
     # CXX17
-    IF(COMPILER_SUPPORTS_CXX17)
+    IF(MSVC)
+        SET(CMAKE_CXX_STANDARD 17)
+    ELSEIF(COMPILER_SUPPORTS_CXX17)
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
     ELSEIF(COMPILER_SUPPORTS_CXX1Z)
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z")
@@ -139,20 +226,45 @@ ELSE()
     
     # When the __MUSL__ macro is enabled and compilation errors are encountered, you can add the connector option: -static
     # -rdynamic -Wl,-Bstatic -Wl,-Bdynamic -lstdc++ -lpthread -ldl -lz -lrt
-    IF(USE_SYSTEM_THIRD_PARTY)
-        IF(USE_SYSTEM_STATIC_THIRD_PARTY)
-            SET(CMAKE_EXE_LINKER_FLAGS "-static -static-libstdc++ -static-libgcc -rdynamic")
-        ELSE()
-            SET(CMAKE_EXE_LINKER_FLAGS "-rdynamic")
-        ENDIF()
-    ELSE()
-        SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic")
+    IF(NOT MSVC)
+        SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic") 
     ENDIF()
 ENDIF()
 
-IF(USE_SYSTEM_THIRD_PARTY)
+# Set the tripartite library directorys.
+SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+
+IF(PLATFORM_SYSTEM_WINDOWS)
+    SET(OPENSSL_USE_STATIC_LIBS TRUE)
+
+    IF(NOT VCPKG_TARGET_TRIPLET)
+        MESSAGE(FATAL_ERROR "VCPKG_TARGET_TRIPLET is required on Windows.")
+    ENDIF()
+
+    IF(VCPKG_INSTALLED_DIR)
+        SET(VCPKG_DEP_DIR ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET})
+    ELSEIF(VCPKG_ROOT_DIR)
+        SET(VCPKG_DEP_DIR ${VCPKG_ROOT_DIR}/installed/${VCPKG_TARGET_TRIPLET})
+    ELSEIF(VCPKG_ROOT)
+        SET(VCPKG_DEP_DIR ${VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET})
+    ENDIF()
+
+    SET(Boost_NO_SYSTEM_PATHS ON)
+    SET(Boost_USE_STATIC_LIBS ON)
+    SET(Boost_NO_WARN_NEW_VERSIONS ON)
+    SET(BOOST_ROOT ${VCPKG_DEP_DIR})
+    SET(BOOST_INCLUDEDIR ${VCPKG_DEP_DIR}/include)
+    SET(BOOST_LIBRARYDIR ${VCPKG_DEP_DIR}/lib)
+    SET(OPENSSL_ROOT_DIR ${VCPKG_DEP_DIR})
+
+    FIND_PACKAGE(Boost REQUIRED COMPONENTS system filesystem regex thread coroutine context)
     FIND_PACKAGE(OpenSSL REQUIRED)
-    FIND_PACKAGE(Boost REQUIRED COMPONENTS system coroutine thread context regex filesystem)
+    FIND_PATH(JEMALLOC_INCLUDE_DIR NAMES jemalloc/jemalloc.h HINTS ${VCPKG_DEP_DIR}/include NO_DEFAULT_PATH)
+    FIND_LIBRARY(JEMALLOC_LIBRARY NAMES jemalloc_s jemalloc libjemalloc HINTS ${VCPKG_DEP_DIR}/lib ${VCPKG_DEP_DIR}/debug/lib NO_DEFAULT_PATH)
+
+    IF(NOT JEMALLOC_INCLUDE_DIR OR NOT JEMALLOC_LIBRARY)
+        MESSAGE(FATAL_ERROR "Could not locate jemalloc from the active vcpkg installation for ${VCPKG_TARGET_TRIPLET}.")
+    ENDIF()
 ENDIF()
 
 # Set the compiled header file search directorys.
@@ -162,23 +274,18 @@ INCLUDE_DIRECTORIES(
     ${PROJECT_SOURCE_DIR}/common/json/include
     ${PROJECT_SOURCE_DIR}/common/lwip/my
     ${PROJECT_SOURCE_DIR}/common/lwip/include
-
-    # ${THIRD_PARTY_LIBRARY_DIR}/curl/include
-    # ${THIRD_PARTY_LIBRARY_DIR}/liburing/src/include
 )
 
-IF(NOT USE_SYSTEM_THIRD_PARTY)
+IF(NOT PLATFORM_SYSTEM_WINDOWS)
     INCLUDE_DIRECTORIES(
         ${THIRD_PARTY_LIBRARY_DIR}/boost
         ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/include
         ${THIRD_PARTY_LIBRARY_DIR}/openssl/include
     )
-ELSE()
-    INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIRS})
 ENDIF()
 
 # Set the third library connection directory to searchs.
-IF(NOT USE_SYSTEM_THIRD_PARTY)
+IF(NOT PLATFORM_SYSTEM_WINDOWS)
     LINK_DIRECTORIES(
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
         ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
@@ -190,7 +297,11 @@ IF(NOT USE_SYSTEM_THIRD_PARTY)
 ENDIF()
 
 # Set the compiled source file search directorys.
-IF(PLATFORM_SYSTEM_DARWIN)
+IF(MSVC)
+    FILE(GLOB_RECURSE PLATFORM_SOURCE_FILES 
+        ${PROJECT_SOURCE_DIR}/windows/*.c 
+        ${PROJECT_SOURCE_DIR}/windows/*.cpp)
+ELSEIF(PLATFORM_SYSTEM_DARWIN)
     FILE(GLOB_RECURSE PLATFORM_SOURCE_FILES 
         ${PROJECT_SOURCE_DIR}/darwin/*.c 
         ${PROJECT_SOURCE_DIR}/darwin/*.cpp)
@@ -202,8 +313,6 @@ ENDIF()
 
 # List of common cpp source files compilations for ppp/unix cmake solution projects.
 FILE(GLOB_RECURSE SOURCE_FILES 
-    ${PROJECT_SOURCE_DIR}/main.cpp 
-    
     ${PROJECT_SOURCE_DIR}/common/lwip/my/*.c 
     ${PROJECT_SOURCE_DIR}/common/lwip/core/*.c 
     ${PROJECT_SOURCE_DIR}/common/lwip/api/*.c 
@@ -215,23 +324,70 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/common/json/src/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/libtcpip/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/dnslib/*.cpp 
-    ${PROJECT_SOURCE_DIR}/common/unix/*.c 
-    ${PROJECT_SOURCE_DIR}/common/unix/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/aesni/aes.cpp
 
     ${PROJECT_SOURCE_DIR}/ppp/*.c 
-    ${PROJECT_SOURCE_DIR}/ppp/*.cpp)
+    ${PROJECT_SOURCE_DIR}/ppp/*.cpp
 
-LIST(FILTER SOURCE_FILES EXCLUDE REGEX ".*/forkform/.*")
+    ${PROJECT_SOURCE_DIR}/main.cpp)
+
+IF(PLATFORM_SYSTEM_WINDOWS)
+    LIST(APPEND SOURCE_FILES ${PROJECT_SOURCE_DIR}/resource.rc)
+ENDIF()
+
+IF(__SIMD__)
+    LIST(APPEND SOURCE_FILES ${AES_NI_SOURCE_FILES})
+ENDIF()
+
+IF(NOT MSVC)
+    FILE(GLOB_RECURSE UNIX_SOURCE_FILES 
+        ${PROJECT_SOURCE_DIR}/common/unix/*.c 
+        ${PROJECT_SOURCE_DIR}/common/unix/*.cpp)
+    LIST(APPEND SOURCE_FILES ${UNIX_SOURCE_FILES})
+ENDIF()
 
 # Add the compiled output binary files.
-ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
+ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES})
 
 # Set the compilation output files path.
-SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
+IF(PLATFORM_SYSTEM_WINDOWS)
+    IF(NOT PPP_OUTPUT_DIR)
+        SET(PPP_OUTPUT_DIR ${PROJECT_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE})
+    ENDIF()
+    SET(EXECUTABLE_OUTPUT_PATH ${PPP_OUTPUT_DIR})
+ELSE()
+    SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
+ENDIF()
 
 # Set up library connections to dependent libraries.
-IF(PLATFORM_SYSTEM_DARWIN)
+IF(PLATFORM_SYSTEM_WINDOWS)
+    INCLUDE_DIRECTORIES(
+        ${Boost_INCLUDE_DIRS}
+        ${OPENSSL_INCLUDE_DIR}
+        ${JEMALLOC_INCLUDE_DIR})
+
+    SET_TARGET_PROPERTIES(${NAME} PROPERTIES LINK_FLAGS "/MANIFESTUAC:level='requireAdministrator' /SUBSYSTEM:CONSOLE")
+
+    # PPP stays an executable; only the third-party dependencies are static.
+    TARGET_LINK_LIBRARIES(${NAME}
+        ws2_32
+        iphlpapi
+        setupapi
+        ole32
+        oleaut32
+        wbemuuid
+        advapi32
+        userenv
+        crypt32
+        bcrypt
+        ncrypt
+        dnsapi
+
+        ${Boost_LIBRARIES}
+        ${OPENSSL_SSL_LIBRARY}
+        ${OPENSSL_CRYPTO_LIBRARY}
+        ${JEMALLOC_LIBRARY})
+ELSEIF(PLATFORM_SYSTEM_DARWIN)
     SET(BUILD_SHARED_LIBS ON) # System
 
     TARGET_LINK_LIBRARIES(${NAME} 
@@ -251,120 +407,46 @@ IF(PLATFORM_SYSTEM_DARWIN)
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
 
-    IF(USE_SYSTEM_THIRD_PARTY)
-        IF(USE_SYSTEM_STATIC_THIRD_PARTY)
-            TARGET_LINK_LIBRARIES(${NAME}
-                /usr/lib/x86_64-linux-gnu/libssl.a
-                /usr/lib/x86_64-linux-gnu/libcrypto.a
-                /usr/lib/x86_64-linux-gnu/libjemalloc.a
-                /usr/lib/x86_64-linux-gnu/libboost_system.a
-                /usr/lib/x86_64-linux-gnu/libboost_coroutine.a
-                /usr/lib/x86_64-linux-gnu/libboost_thread.a
-                /usr/lib/x86_64-linux-gnu/libboost_context.a
-                /usr/lib/x86_64-linux-gnu/libboost_regex.a
-                /usr/lib/x86_64-linux-gnu/libboost_filesystem.a
-                /usr/lib/x86_64-linux-gnu/libicui18n.a
-                /usr/lib/x86_64-linux-gnu/libicuuc.a
-                /usr/lib/x86_64-linux-gnu/libicudata.a
-                atomic
-                dl
-                pthread
-                z
-                m)
-        ELSE()
-            TARGET_LINK_LIBRARIES(${NAME}
-                ${OPENSSL_SSL_LIBRARY}
-                ${OPENSSL_CRYPTO_LIBRARY}
-                jemalloc
-                atomic
-                dl
-                pthread
-                Boost::system
-                Boost::coroutine
-                Boost::thread
-                Boost::context
-                Boost::regex
-                Boost::filesystem)
-        ENDIF()
-    ELSE()
-        TARGET_LINK_LIBRARIES(${NAME}
-            libssl.a 
-            libcrypto.a 
-            libjemalloc.a
-            # liburing.a
+    TARGET_LINK_LIBRARIES(${NAME}
+        libssl.a 
+        libcrypto.a 
+        libjemalloc.a
+        # liburing.a
 
-            # libbpf.a
-            # libelf.a
-            # libz.a
+        # libbpf.a
+        # libelf.a
+        # libz.a
 
-            atomic
-            dl
-            pthread
+        atomic
+        dl
+        pthread
 
-            libboost_system.a
-            libboost_coroutine.a 
-            libboost_thread.a 
-            libboost_context.a
-            libboost_regex.a 
-            libboost_filesystem.a)
-    ENDIF()
-ELSE()
-    IF(USE_SYSTEM_THIRD_PARTY)
-        IF(USE_SYSTEM_STATIC_THIRD_PARTY)
-            TARGET_LINK_LIBRARIES(${NAME}
-                /usr/lib/x86_64-linux-gnu/libssl.a
-                /usr/lib/x86_64-linux-gnu/libcrypto.a
-                /usr/lib/x86_64-linux-gnu/libjemalloc.a
-                /usr/lib/x86_64-linux-gnu/libboost_system.a
-                /usr/lib/x86_64-linux-gnu/libboost_coroutine.a
-                /usr/lib/x86_64-linux-gnu/libboost_thread.a
-                /usr/lib/x86_64-linux-gnu/libboost_context.a
-                /usr/lib/x86_64-linux-gnu/libboost_regex.a
-                /usr/lib/x86_64-linux-gnu/libboost_filesystem.a
-                /usr/lib/x86_64-linux-gnu/libicui18n.a
-                /usr/lib/x86_64-linux-gnu/libicuuc.a
-                /usr/lib/x86_64-linux-gnu/libicudata.a
-                atomic
-                dl
-                pthread
-                z
-                m)
-        ELSE()
-            TARGET_LINK_LIBRARIES(${NAME}
-                ${OPENSSL_SSL_LIBRARY}
-                ${OPENSSL_CRYPTO_LIBRARY}
-                jemalloc
-                atomic
-                dl
-                pthread
-                Boost::system
-                Boost::coroutine
-                Boost::thread
-                Boost::context
-                Boost::regex
-                Boost::filesystem)
-        ENDIF()
-    ELSE()
-        TARGET_LINK_LIBRARIES(${NAME} 
-            libc.a
-            libssl.a 
-            libcrypto.a 
-            libjemalloc.a
-            # liburing.a
+        libboost_system.a
+        libboost_coroutine.a 
+        libboost_thread.a 
+        libboost_context.a
+        libboost_regex.a 
+        libboost_filesystem.a) 
+ELSEIF(NOT MSVC)
+    TARGET_LINK_LIBRARIES(${NAME} 
+        libc.a
+        libssl.a 
+        libcrypto.a 
+        libjemalloc.a
+        # liburing.a
 
-            # libbpf.a
-            # libelf.a
-            # libz.a
+        # libbpf.a
+        # libelf.a
+        # libz.a
 
-            atomic
-            dl
-            pthread
+        atomic
+        dl
+        pthread
 
-            libboost_system.a
-            libboost_coroutine.a 
-            libboost_thread.a 
-            libboost_context.a 
-            libboost_regex.a
-            libboost_filesystem.a)
-    ENDIF()
+        libboost_system.a
+        libboost_coroutine.a 
+        libboost_thread.a 
+        libboost_context.a 
+        libboost_regex.a
+        libboost_filesystem.a) 
 ENDIF()

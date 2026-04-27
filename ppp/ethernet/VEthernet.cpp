@@ -1,4 +1,9 @@
 #include <ppp/ethernet/VEthernet.h>
+#include <ppp/diagnostics/Error.h>
+/**
+ * @file VEthernet.cpp
+ * @brief Implements TAP-facing virtual Ethernet packet dispatch and timers.
+ */
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/Timer.h>
@@ -30,6 +35,9 @@ namespace ppp
 
     namespace ethernet
     {
+        /**
+         * @brief Initializes VEthernet runtime flags and context.
+         */
         VEthernet::VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta) noexcept
             : disposed_(false)
             , lwip_(lwip)
@@ -41,24 +49,30 @@ namespace ppp
             ssmt_ = 0;
 #if defined(_LINUX)
             ssmt_mq_ = false;
-            ssmt_mq_to_take_effect_ = false;
+            ssmt_mq_to_take_effect_.store(false, std::memory_order_relaxed);
 #endif
 #endif
             assert(NULLPTR != context);
         }
 
+        /**
+         * @brief Finalizes VEthernet and releases all resources.
+         */
         VEthernet::~VEthernet() noexcept
         {
             Finalize();
         }
 
+        /**
+         * @brief Marks object disposed and performs final cleanup.
+         */
         void VEthernet::Finalize() noexcept
         {
             VEthernet* ethernet = this;
             if (ethernet)
             {
                 SynchronizedObjectScope scope(syncobj_);
-                disposed_ = true;
+                disposed_.store(true, std::memory_order_release);
             }
 
             if (ethernet)
@@ -67,16 +81,19 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Releases fragmenter, netstack, TAP callbacks, workers, and timer.
+         */
         void VEthernet::ReleaseAllObjects() noexcept
         {
-            std::shared_ptr<IPFragment> fragment = std::move(fragment_);
+            std::shared_ptr<IPFragment> fragment = std::atomic_exchange(&fragment_, std::shared_ptr<IPFragment>());
             if (NULLPTR != fragment)
             {
                 fragment->Release();
             }
 
             std::shared_ptr<ITap> tap = NULLPTR;
-            std::shared_ptr<VNetstack> netstack = std::move(netstack_);
+            std::shared_ptr<VNetstack> netstack = std::atomic_exchange(&netstack_, std::shared_ptr<VNetstack>());
             if (NULLPTR != netstack)
             {
                 std::shared_ptr<ITap>& netstack_tap = constantof(netstack->Tap);
@@ -100,6 +117,9 @@ namespace ppp
             StopTimeout();
         }
 
+        /**
+         * @brief Stops and destroys the periodic timeout timer.
+         */
         void VEthernet::StopTimeout() noexcept
         {
             std::shared_ptr<ppp::threading::Timer> timeout = std::move(timeout_);
@@ -109,6 +129,9 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Schedules finalization on the owning io_context.
+         */
         void VEthernet::Dispose() noexcept
         {
             auto self = shared_from_this();
@@ -119,25 +142,31 @@ namespace ppp
                 });
         }
 
+        /**
+         * @brief Periodic lightweight update hook.
+         */
         bool VEthernet::OnUpdate(uint64_t now) noexcept
         {
-            return !disposed_;
+            return !disposed_.load(std::memory_order_acquire);
         }
 
+        /**
+         * @brief Periodic second-level maintenance hook.
+         */
         bool VEthernet::OnTick(uint64_t now) noexcept
         {
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }
 
-            std::shared_ptr<IPFragment> fragment = fragment_;
+            std::shared_ptr<IPFragment> fragment = std::atomic_load(&fragment_);
             if (NULLPTR != fragment)
             {
                 fragment->Update(now);
             }
 
-            std::shared_ptr<VNetstack> netstack = netstack_;
+            std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
             if (NULLPTR != netstack)
             {
                 netstack->Update(now);
@@ -146,14 +175,23 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Returns current dispose state.
+         */
         bool VEthernet::IsDisposed() noexcept
         {
-            return disposed_;
+            return disposed_.load(std::memory_order_acquire);
         }
 
+        /**
+         * @brief Internal helper methods for packet bridge entry points.
+         */
         class VETHERNET_INTERNAL final
         {
         public:
+            /**
+             * @brief Dispatches pbuf-backed packet into VEthernet protocol path.
+             */
             static int  PacketInput(VEthernet* my, struct pbuf* packet, int packet_length, bool allocated) noexcept
             {
                 struct ip_hdr* iphdr = (struct ip_hdr*)packet->payload;
@@ -161,6 +199,9 @@ namespace ppp
                 int proto = ip_hdr::IPH_PROTO(iphdr);
                 return my->PacketInput(iphdr, iphdr_hlen, proto, packet, packet_length, allocated);
             }
+            /**
+             * @brief Wraps raw ip_hdr memory into temporary pbuf and dispatches input.
+             */
             static int  PacketInput(VEthernet* my, struct ip_hdr* iphdr, int packet_length) noexcept
             {
                 struct pbuf packet;
@@ -179,6 +220,9 @@ namespace ppp
 
 #if !defined(_WIN32)
         public:
+            /**
+             * @brief Processes SSMT TCP packet in target worker context.
+             */
             static bool PacketSsmtInput(VEthernet* my, struct ip_hdr* iphdr, int iphdr_hlen, tcp_hdr* tcphdr, int tcp_len, int packet_length) noexcept 
             {
                 if (my->OnPacketInput(iphdr, packet_length, iphdr_hlen, ip_hdr::IP_PROTO_TCP, my->vnet_))
@@ -186,7 +230,7 @@ namespace ppp
                     return true;
                 }
 
-                std::shared_ptr<VNetstack> netstack = my->netstack_;
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&my->netstack_);
                 if (NULLPTR != netstack)
                 {
                     return netstack->Input(iphdr, tcphdr, tcp_len);
@@ -194,6 +238,9 @@ namespace ppp
 
                 return false;
             }
+            /**
+             * @brief Routes TCP packet to one SSMT worker by flow hash.
+             */
             static bool PacketSsmtInput(VEthernet* my, struct ip_hdr* iphdr, int packet_length) noexcept
             {
                 using SynchronizedObjectScope = VEthernet::SynchronizedObjectScope;
@@ -214,7 +261,7 @@ namespace ppp
                 }
 
 #if defined(_LINUX)
-                if (my->ssmt_mq_to_take_effect_)
+                if (my->ssmt_mq_to_take_effect_.load(std::memory_order_acquire))
                 {
                     return PacketSsmtInput(my, iphdr, iphdr_hlen, tcphdr, tcp_len, packet_length);
                 }
@@ -278,29 +325,35 @@ namespace ppp
 #endif
         };
 
+        /**
+         * @brief Opens VEthernet with TAP bindings and callback pipeline.
+         */
         bool VEthernet::Open(const std::shared_ptr<ITap>& tap) noexcept
         {
             if (NULLPTR == tap)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOpenNullTap);
             }
 
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             if (!tap->IsOpen())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             std::shared_ptr<IPFragment> fragment = NewFragment();
             if (NULLPTR == fragment)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 
+            /**
+             * @brief Ensures global lwIP loopback stack is opened once.
+             */
             static class netstack_loopback final
             {
             public:
@@ -319,6 +372,7 @@ namespace ppp
                 }
 
             public:
+                /** @brief Attempts one-time netstack loopback initialization. */
                 bool                            try_open_loopback() noexcept
                 {
                     SynchronizedObjectScope scope(syncobj_);
@@ -354,33 +408,33 @@ namespace ppp
                     uint32_t                        ack,    
                     uint16_t                        wnd) noexcept 
                 {
-                    std::shared_ptr<VNetstack> netstack = netstack_;
+                    std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
                     return NULLPTR != netstack ? netstack->LwIpBeginAccept(dest, src, seq, ack, wnd) : 0;
                 };
 
-            // An attempt has been made to open the local loop of the virtual network card.  
-            // If the virtual network card is opened or has been opened before, the operation succeeds. 
-            // If the virtual network card cannot be opened, a failure is returned.
+            /**
+             * @brief Open the process-wide loopback stack once.
+             */
             if (!static_netstack_loopback.try_open_loopback())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelLoopbackSetupFailed);
             }
 
-            // If the virtual network stack is already running, you cannot change the IP, MASK, and GW address of the virtual network card, 
-            // Because the LWIP-@C network stack is difficult to support such behavior, 
-            // Which is handled here to ensure the compatibility of the project code.
+            /**
+             * @brief Enforces immutable lwIP addressing after stack startup.
+             */
             if (lwip::netstack::GW != tap->GatewayServer ||
                 lwip::netstack::IP != tap->IPAddress ||
                 lwip::netstack::MASK != tap->SubmaskAddress) 
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
             }
 
-            // Instantiate and construct a new Netstack processing object.
+            /** @brief Instantiate and open concrete virtual network stack. */
             std::shared_ptr<VNetstack> netstack = NewNetstack();
             if (NULLPTR == netstack)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
             else
             {
@@ -390,11 +444,11 @@ namespace ppp
                 if (!netstack->Open(lwip_, 0))
                 {
                     netstack->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
                 }
             }
  
-            // The following are the associations between various resources and EAP events.
+            /** @brief Bind TAP and fragment callbacks to packet handlers. */
             auto TAP_PACKET_INPUT_EVENT = 
                 [self, this](ppp::tap::ITap*, ppp::tap::ITap::PacketInputEventArgs& e) noexcept
                 {
@@ -407,7 +461,7 @@ namespace ppp
 #if !defined(_WIN32)
                     elif(mta_)
                     {
-                        // If tcp/ip synchronization is enabled in the case of multithreading.
+                        /** @brief Use SSMT sharding when enabled for TCP inputs. */
                         if (ssmt_ > 0 && VETHERNET_INTERNAL::PacketSsmtInput(this, iphdr, packet_length))
                         {
                             return true;
@@ -416,16 +470,16 @@ namespace ppp
                         std::shared_ptr<boost::asio::io_context> executor = lwip::netstack::Executor;
                         if (NULLPTR == executor)
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                         }
 
-                        // If the concurrency is greater than 1, it means that you want to use multi-core, 
-                        // Then the IP packet is delivered to the NIO worker thread, otherwise it is single-core, 
-                        // In which case multi-threading will bring unnecessary thread switching and reduce efficiency.
+                        /**
+                         * @brief Post packet processing to netstack executor in MTA mode.
+                         */
                         pbuf* packet = lwip::netstack_pbuf_copy(iphdr, packet_length);
                         if (NULLPTR == packet)
                         {
-                            return false;
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         }
 
                         auto self = shared_from_this();
@@ -459,14 +513,14 @@ namespace ppp
                     Output(e.Packet, e.PacketLength);
                 };
 
-            // Check whether all callback event objects are allocated successfully.
+            /** @brief Publish packet output callback used by lwIP stack. */
             lwip::netstack::output = [self, this](void* packet, int size) noexcept
             {
                 return Output(packet, size);
             };
             
-            netstack_              = netstack;
-            fragment_              = fragment;
+            std::atomic_store(&netstack_, netstack);
+            std::atomic_store(&fragment_, fragment);
 
             tap->PacketInput       = TAP_PACKET_INPUT_EVENT;
             fragment->PacketInput  = FRAGMENT_PACKET_INPUT_EVENT;
@@ -475,7 +529,7 @@ namespace ppp
 #if !defined(_WIN32)
             if (!ForkAllSsmt())
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
             }
 #endif  
             NextTimeout();
@@ -483,6 +537,9 @@ namespace ppp
         }
 
 #if !defined(_WIN32)
+        /**
+         * @brief Gets previous and optionally updates SSMT worker count.
+         */
         int VEthernet::Ssmt(int* ssmt) noexcept
         {
             SynchronizedObjectScope scope(syncobj_);
@@ -496,6 +553,9 @@ namespace ppp
         }
 
 #if defined(_LINUX)
+        /**
+         * @brief Gets previous and optionally updates Linux multi-queue SSMT mode.
+         */
         bool VEthernet::SsmtMQ(bool* mq) noexcept
         {
             SynchronizedObjectScope scope(syncobj_);
@@ -509,12 +569,15 @@ namespace ppp
         }
 #endif
 
+        /**
+         * @brief Stops all SSMT worker io_context instances.
+         */
         void VEthernet::StopAllSsmt() noexcept
         {
             std::vector<std::shared_ptr<boost::asio::io_context>/**/> stop_ssmts;
             for (SynchronizedObjectScope scope(syncobj_);;)
             {
-                ssmt_mq_to_take_effect_ = false;
+                ssmt_mq_to_take_effect_.store(false, std::memory_order_release);
                 stop_ssmts = std::move(sssmt_);
                 sssmt_.clear();
                 break;
@@ -527,6 +590,9 @@ namespace ppp
         }
 #endif
 
+        /**
+         * @brief Routes packet by protocol to TCP stack or fragment pipeline.
+         */
         int VEthernet::PacketInput(ppp::net::native::ip_hdr* iphdr, int iphdr_hlen, int proto, struct pbuf* packet, int packet_length, bool allocated) noexcept
         {
             if (OnPacketInput(iphdr, packet_length, iphdr_hlen, proto, vnet_))
@@ -541,7 +607,7 @@ namespace ppp
 
             if (proto == ip_hdr::IP_PROTO_TCP)
             {
-                std::shared_ptr<VNetstack> netstack = netstack_;
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
                 if (NULLPTR != netstack)
                 {
                     int tcp_len = packet_length - iphdr_hlen;
@@ -571,7 +637,7 @@ namespace ppp
             
             if (proto == ip_hdr::IP_PROTO_UDP || proto == ip_hdr::IP_PROTO_ICMP)
             {
-                std::shared_ptr<IPFragment> fragment = fragment_;
+                std::shared_ptr<IPFragment> fragment = std::atomic_load(&fragment_);
                 if (NULLPTR != fragment)
                 {
                     std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
@@ -589,22 +655,50 @@ namespace ppp
         }
 
 #if !defined(_WIN32)
+        /**
+         * @brief Creates and starts SSMT worker threads for TCP processing.
+         */
         bool VEthernet::ForkAllSsmt() noexcept
         {
             using Awaitable = ppp::threading::Executors::Awaitable;
 
-            // In the case of allowing multi-threaded concurrent processing, 
-            // Open the vnet hyper-threading technology, improve the virtual NIC I/O network throughput, 
-            // Maximize the drain of hardware resources, which is very effective on very low configuration devices.
+            /**
+             * @brief Skip worker startup when lwIP is enabled or MTA is disabled.
+             */
             if (lwip_ || !mta_)
             {
                 return true;
             }
 
-            // This code has been tested on the "Player Cloud Amlogic S805 chip", the original maximum is only 150Mbps, 
-            // And now it can achieve a larger network throughput and use all the CPU resources.
-            SynchronizedObjectScope scope(syncobj_);
-            for (int i = 0; i < ssmt_; i++)
+            /**
+             * @brief Read the worker count under the lock, then release immediately.
+             *
+             *        The blocking Awaitable::Await() call and the Linux TAP ioctl
+             *        (TapLinux::Ssmt) MUST NOT execute while syncobj_ is held.
+             *        Holding syncobj_ across a blocking wait would prevent any other
+             *        thread from accessing Ssmt(), SsmtMQ(), PacketSsmtInput(), or
+             *        StopAllSsmt() for the entire duration of SSMT startup — a
+             *        significant stall window that can appear as a deadlock to callers.
+             */
+            int worker_count = 0;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                worker_count = ssmt_;
+            }
+
+            /**
+             * @brief Spawn detached worker contexts and await startup readiness.
+             *
+             *        Each iteration:
+             *          1. Creates context + awaitable (no shared state).
+             *          2. Appends context to sssmt_ under a brief lock window.
+             *          3. Launches the detached SSMT thread.
+             *          4. Awaits thread-ready signal WITHOUT holding syncobj_.
+             *          5. Performs optional Linux TAP multi-queue attachment WITHOUT
+             *             holding syncobj_.
+             *          6. On failure, removes the last entry from sssmt_ under lock.
+             */
+            for (int i = 0; i < worker_count; i++)
             {
                 std::shared_ptr<boost::asio::io_context> context = make_shared_object<boost::asio::io_context>();
                 if (NULLPTR == context)
@@ -618,9 +712,17 @@ namespace ppp
                     break;
                 }
 
-                std::weak_ptr<Awaitable> awaitable_weak = awaitable;
-                sssmt_.emplace_back(context);
+                /**
+                 * @brief Register the context into sssmt_ before launching the thread
+                 *        so that StopAllSsmt() can stop it even if Await() has not yet
+                 *        returned.  The lock window is intentionally minimal.
+                 */
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    sssmt_.emplace_back(context);
+                }
 
+                std::weak_ptr<Awaitable> awaitable_weak = awaitable;
                 auto process_wt = 
                     [context, awaitable_weak]() noexcept
                     {
@@ -650,43 +752,71 @@ namespace ppp
                 std::thread ssmt_thread(process_wt);
                 ssmt_thread.detach();
 
+                /**
+                 * @brief Block until the SSMT thread signals readiness — WITHOUT
+                 *        holding syncobj_.  This is the critical fix: previously
+                 *        Await() was called inside the outer SynchronizedObjectScope,
+                 *        which held syncobj_ for the entire multi-thread startup
+                 *        window and could stall or deadlock concurrent callers.
+                 */
                 bool await_ok = awaitable->Await();
                 if (!await_ok) 
                 {
-                    return false;
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (!sssmt_.empty())
+                    {
+                        sssmt_.pop_back();
+                    }
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 }
 
 #if defined(_LINUX)
-                // On Linux platforms, tun/tap multi-queue mode can be turned on to squeeze the hardware cpu power as much as possible.
-                std::shared_ptr<VNetstack> netstack = netstack_; 
+                /** @brief Optionally attach each worker to Linux TAP multi-queue. */
+                std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_); 
                 if (NULLPTR == netstack)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
                 auto tap = netstack->Tap; 
                 if (NULLPTR == tap)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
 
                 auto linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get()); 
                 if (NULLPTR == linux_tap)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceUnsupported);
                 }
                 
+                /**
+                 * @brief TAP ioctl is also performed WITHOUT syncobj_ held.
+                 *        The ioctl may block briefly on kernel round-trip; keeping
+                 *        it lock-free avoids stalling concurrent packet-input threads.
+                 */
                 bool ssmt_ok = linux_tap->Ssmt(context);
                 if (!ssmt_ok)
                 {
                     context->stop();
-                    sssmt_.pop_back();
-                    return false;
+                    
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (!sssmt_.empty())
+                    {
+                        sssmt_.pop_back();
+                    }
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 }
 
                 if (ssmt_mq_)
                 {
-                    ssmt_mq_to_take_effect_ |= true;
+                    /**
+                     * @brief ssmt_mq_to_take_effect_ is now std::atomic<bool>; the store
+                     *        is lock-free and does not require syncobj_ to be held.
+                     *        The release ordering ensures the flag is visible to concurrent
+                     *        SSMT packet-input threads that load it with acquire.
+                     */
+                    ssmt_mq_to_take_effect_.store(true, std::memory_order_release);
                 }
 #endif
             }
@@ -695,12 +825,15 @@ namespace ppp
         }
 #endif
 
+        /**
+         * @brief Schedules the periodic 10 ms timer loop.
+         */
         bool VEthernet::NextTimeout() noexcept
         {
             std::shared_ptr<VEthernet> self = shared_from_this();
             StopTimeout();
 
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
                 return false;
             }
@@ -708,7 +841,7 @@ namespace ppp
             timeout_ = Timer::Timeout(context_, 10, 
                 [self, this](Timer*) noexcept
                 {
-                    if (disposed_)
+                    if (disposed_.load(std::memory_order_acquire))
                     {
                         return false;
                     }
@@ -728,9 +861,12 @@ namespace ppp
         }
 
 #ifdef SYSNAT
+        /**
+         * @brief Returns whether underlying VNetstack currently uses SYSNAT.
+         */
         bool VEthernet::IsSysnat()                             noexcept
         {   
-            std::shared_ptr<VNetstack> stack = netstack_;
+            std::shared_ptr<VNetstack> stack = std::atomic_load(&netstack_);
             if (stack)
             {
                 return stack->sysnat_;
@@ -739,14 +875,20 @@ namespace ppp
         }
 #endif
 
+        /**
+         * @brief Creates default IP fragment helper.
+         */
         std::shared_ptr<VEthernet::IPFragment> VEthernet::NewFragment() noexcept
         {
             return make_shared_object<IPFragment>();
         }
 
+        /**
+         * @brief Returns netstack-managed buffer allocator.
+         */
         std::shared_ptr<ppp::threading::BufferswapAllocator> VEthernet::GetBufferAllocator() noexcept
         {
-            std::shared_ptr<VNetstack> netstack = netstack_;
+            std::shared_ptr<VNetstack> netstack = std::atomic_load(&netstack_);
             if (NULLPTR == netstack)
             {
                 return NULLPTR;
@@ -757,80 +899,98 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Default parsed packet hook implementation.
+         */
         bool VEthernet::OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept
         {
             return true;
         }
 
+        /**
+         * @brief Default native packet hook implementation.
+         */
         bool VEthernet::OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept
         {
             return false;
         }
 
+        /**
+         * @brief Default raw packet hook implementation.
+         */
         bool VEthernet::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept
         {
             return false;
         }
 
+        /**
+         * @brief Serializes and outputs parsed IP frame.
+         */
         bool VEthernet::Output(IPFrame* packet) noexcept
         {
             if (NULLPTR == packet)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOutputFrameNullPacket);
             }
 
-            if (disposed_) 
+            if (disposed_.load(std::memory_order_acquire)) 
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
             std::shared_ptr<BufferSegment> messages = IPFrame::ToArray(allocator, packet);
             if (NULLPTR == messages) 
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 
             return Output(messages->Buffer, messages->Length);
         }
 
+        /**
+         * @brief Outputs raw packet memory through TAP.
+         */
         bool VEthernet::Output(const void* packet, int packet_length) noexcept
         {
             if (NULLPTR == packet || packet_length < 1)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOutputRawInvalidArguments);
             }
 
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             std::shared_ptr<ITap> tap = GetTap();
             if (NULLPTR == tap)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             return tap->Output(packet, packet_length);
         }
 
+        /**
+         * @brief Outputs shared packet buffer through TAP.
+         */
         bool VEthernet::Output(const std::shared_ptr<Byte>& packet, int packet_length) noexcept
         {
             if (NULLPTR == packet || packet_length < 1)
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetOutputSharedInvalidArguments);
             }
             
-            if (disposed_)
+            if (disposed_.load(std::memory_order_acquire))
             {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
             std::shared_ptr<ITap> tap = GetTap();
             if (NULLPTR == tap)
             {
-                return false;   
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             return tap->Output(packet, packet_length);

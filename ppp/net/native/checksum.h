@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file checksum.h
+ * @brief DNS parsing helpers, bit utilities, and Internet checksum primitives.
+ */
+
 #include <ppp/stdafx.h>
 
 // Platform-specific networking headers for socket address structures and byte order.
@@ -13,6 +18,9 @@
 namespace ppp {
     namespace net {
         namespace native {
+            /**
+             * @brief DNS packet parsing utilities.
+             */
             namespace dns {
 
                 // -----------------------------------------------------------------------

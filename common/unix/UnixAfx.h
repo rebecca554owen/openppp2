@@ -38,6 +38,11 @@ namespace ppp
             static bool                                                         set_fd_cloexec(int fd) noexcept;                                    
 
         public:
+            static bool                                                         ExecuteShellCommand(const ppp::string& command, const ppp::function<bool(ppp::string&)>& predicate) noexcept;
+            static ppp::vector<ppp::string>                                     ExecuteShellCommandLines(const ppp::string& command, const ppp::function<bool(const ppp::string&)>& predicate = NULLPTR) noexcept;
+            static ppp::string                                                  ExecuteShellCommand(const ppp::string& command) noexcept;
+
+        public:
             static bool                                                         CloseHandle(const void* handle) noexcept;
             static int64_t                                                      Lseek(int fd, int64_t offset, int whence) noexcept;
             static bool                                                         Lseek2(int fd, int64_t offset, int whence) noexcept { return Lseek(fd, offset, whence) != -1; }

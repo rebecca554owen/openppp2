@@ -4,6 +4,7 @@
 #include <ppp/io/File.h>
 #include <ppp/text/Encoding.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 #include <common/chnroutes2/chnroutes2.h>
 
 #include <Windows.h>
@@ -271,12 +272,14 @@ namespace ppp
                 hModule = LoadLibraryA(moduleName);
                 if (NULLPTR == hModule)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                     return NULLPTR;
                 }
             }
 
             if (NULLPTR == functionName || *functionName == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeGetProcAddressFunctionNameEmpty);
                 return NULLPTR;
             }
 
@@ -289,6 +292,7 @@ namespace ppp
             DWORD size = sizeof(username);
             if (!GetUserNameA(username, &size))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                 return "";
             }
             else
@@ -317,10 +321,17 @@ namespace ppp
             static DnsFlushResolverCacheProc WINAPI_DnsFlushResolverCache = (DnsFlushResolverCacheProc)GetProcAddress("Dnsapi.dll", "DnsFlushResolverCache");
             if (NULLPTR == WINAPI_DnsFlushResolverCache)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                 return false;
             }
 
-            return WINAPI_DnsFlushResolverCache();
+            if (!WINAPI_DnsFlushResolverCache())
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
+                return false;
+            }
+
+            return true;
         }
 
         bool Win32Native::IsUserAnAdministrator() noexcept
@@ -334,6 +345,7 @@ namespace ppp
             HANDLE hToken = NULLPTR;
             if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
                 return false;
             }
 
@@ -356,6 +368,7 @@ namespace ppp
         {
             if (handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCloseHandleInvalidHandleValue);
                 return false;
             }
 
@@ -366,6 +379,7 @@ namespace ppp
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
         }
@@ -374,6 +388,7 @@ namespace ppp
         {
             if (NULLPTR == handle)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCloseWsaEventNullHandle);
                 return false;
             }
 
@@ -384,6 +399,7 @@ namespace ppp
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
         }
@@ -392,6 +408,7 @@ namespace ppp
         {
             if (NULLPTR == filePath || *filePath == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return false;
             }
 
@@ -417,6 +434,7 @@ namespace ppp
 
             if (!ShellExecuteExA(&sei))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                 return false;
             }
 
@@ -437,17 +455,30 @@ namespace ppp
         {
             if (NULLPTR == commandText || *commandText == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeExecuteCommandTextEmpty);
                 return false;
             }
 
             if (runas)
             {
-                return ShellExecuteA(NULLPTR, "runas", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL);
+                INT_PTR ret = reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "runas", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL));
+                if (ret <= 32)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                    return false;
+                }
             }
             else
             {
-                return ShellExecuteA(NULLPTR, "open", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL);
+                INT_PTR ret = reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "open", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL));
+                if (ret <= 32)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                    return false;
+                }
             }
+
+            return true;
         }
 
         bool Win32Native::EnableDebugPrivilege() noexcept
@@ -455,6 +486,7 @@ namespace ppp
             HANDLE hToken = NULLPTR;
             if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
                 return false;
             }
 
@@ -463,6 +495,7 @@ namespace ppp
 
             if (!LookupPrivilegeValue(NULLPTR, SE_DEBUG_NAME, &tkp.Privileges[0].Luid))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
                 CloseHandle(hToken);
                 return false;
             }
@@ -478,7 +511,15 @@ namespace ppp
                 if (lastError != ERROR_SUCCESS)
                 {
                     ok = lastError != ERROR_NOT_ALL_ASSIGNED;
+                    if (!ok)
+                    {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
+                    }
                 }
+            }
+            else
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
             }
 
             CloseHandle(hToken);
@@ -500,6 +541,7 @@ namespace ppp
         {
             if (NULLPTR == tap || tap == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return false;
             }
 
@@ -510,6 +552,12 @@ namespace ppp
 
             BOOL bOK = false;
             HANDLE hEvent = ::CreateEvent(NULLPTR, false, false, NULLPTR);
+            if (NULLPTR == hEvent)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                return false;
+            }
+
             do
             {
                 OVERLAPPED overlapped{};
@@ -532,6 +580,16 @@ namespace ppp
             {
                 ::CloseHandle(hEvent);
             }
+
+            if (!bOK)
+            {
+                DWORD last_error = ::GetLastError();
+                if (ERROR_IO_PENDING != last_error)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
+                }
+            }
+
             return bOK;
         }
 
@@ -539,18 +597,21 @@ namespace ppp
         {
             if (NULLPTR == path || *path == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return "";
             }
 
             DWORD fullpath_size = GetFullPathNameA(path, 0, NULLPTR, NULLPTR);
             if (fullpath_size == 0 || fullpath_size == MAXDWORD)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return "";
             }
 
             LPSTR fullpath_string = (LPSTR)Malloc(fullpath_size + 1);
             if (NULLPTR == fullpath_string)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return "";
             }
 
@@ -559,6 +620,10 @@ namespace ppp
             if (dw != 0)
             {
                 fullpath = ppp::string(fullpath_string, dw);
+            }
+            else
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             Mfree(fullpath_string);
@@ -750,12 +815,6 @@ namespace ppp
             {
                 PHANDLER_ROUTINE f = [](_In_ DWORD fdwCtrlType) -> BOOL
                 {
-                    const ShutdownApplicationEventHandler e = SHUTDOWN_APPLICATION_EVENT;
-                    if (NULLPTR == e)
-                    {
-                        return FALSE;
-                    }
-
                     const DWORD fdw_shutdown_ctrl_types[] =
                     {
                         CTRL_C_EVENT,
@@ -770,10 +829,15 @@ namespace ppp
                     {
                         if (*tmp_fdw_shutdown_ctrl_types++ == fdwCtrlType)
                         {
-                            return e() ? TRUE : FALSE;
+                            const ShutdownApplicationEventHandler e = SHUTDOWN_APPLICATION_EVENT;
+                            if (NULLPTR != e)
+                            {
+                                e();
+                            }
+                            return TRUE;
                         }
                     }
-                    return FALSE;
+                    return TRUE;
                 };
                 bOK = SetConsoleCtrlHandler(f, TRUE);
             }
@@ -785,6 +849,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
         }
@@ -795,7 +860,7 @@ namespace ppp
         {
             // Use CComPtr to automatically release the IShellItem2 interface when the function returns
             // or an exception is thrown.
-            HRESULT hr = SHCreateItemFromParsingName(pPath, nullptr, IID_PPV_ARGS(&pItem));
+            HRESULT hr = SHCreateItemFromParsingName(pPath, NULLPTR, IID_PPV_ARGS(&pItem));
             if (FAILED(hr))
             {
                 throw std::system_error(hr, std::system_category(), "SHCreateItemFromParsingName() failed");
@@ -881,10 +946,16 @@ namespace ppp
             HANDLE hProcess = ::GetCurrentProcess();
             if (NULLPTR == hProcess) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
                 return false;
             }
 
             BOOL ok = ::SetProcessWorkingSetSize(hProcess, INFINITE, INFINITE);
+            if (!ok)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+            }
+
             return ok != FALSE;
         }
 
@@ -902,6 +973,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return ppp::string();
             }
         }
@@ -938,6 +1010,7 @@ namespace ppp
             HANDLE hStdin, hStdout;
             if (!CreatePipe(&hStdin, &hStdout, &sa, 0))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return "";
             }
 
@@ -956,6 +1029,7 @@ namespace ppp
             bool ok = CreateProcessA(NULLPTR, (LPSTR)command.data(), NULLPTR, NULLPTR, TRUE, 0, NULLPTR, NULLPTR, &si, &pi);
             if (!ok)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                 CloseHandle(hStdin);
                 CloseHandle(hStdout);
                 return "";
@@ -1072,6 +1146,7 @@ namespace ppp
                 &ftKernel,
                 &ftUser))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return 0;
             }
 
@@ -1107,18 +1182,21 @@ namespace ppp
             int dw = GetLogicalDriveStringsA(0, NULLPTR);
             if (dw < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                 return "";
             }
 
             auto sb = make_shared_alloc<Byte>(dw);
             if (NULLPTR == sb)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return "";
             }
             
             dw = GetLogicalDriveStringsA(dw, (LPSTR)sb.get());
             if (dw == 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                 return "";
             }
             
@@ -1126,6 +1204,7 @@ namespace ppp
             DWORD maxcomp;
             if (!GetVolumeInformationA((LPSTR)sb.get(), NULLPTR, 0, &serials, &maxcomp, 0, NULLPTR, 0))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                 return "";
             }
 
@@ -1240,12 +1319,14 @@ namespace ppp
             std::wstring name_wstr = ppp::text::Encoding::ascii_to_wstring(name);
             if (name_wstr.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeSetThreadDescriptionNameConvertFailed);
                 return false;
             }
 
             HRESULT hr = __SetThreadDescription__(GetCurrentThread(), name_wstr.data());
             if (FAILED(hr))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                 return false;
             }
 

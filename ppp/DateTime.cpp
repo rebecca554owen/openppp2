@@ -1,7 +1,13 @@
 #include <ppp/DateTime.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <stdio.h>
 #include <time.h>
+
+/**
+ * @file DateTime.cpp
+ * @brief Implements DateTime timezone, parsing, and formatting utilities.
+ */
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -12,16 +18,19 @@
 
 namespace ppp 
 {
+    /** @brief Converts this local value to UTC by subtracting GMT offset. */
     DateTime DateTime::ToUtc() noexcept 
     {
         return AddSeconds(-GetGMTOffset());
     }
 
+    /** @brief Converts this UTC value to local time by adding GMT offset. */
     DateTime DateTime::ToLocal() noexcept 
     {
         return AddSeconds(+GetGMTOffset());
     }
 
+    /** @brief Gets current local wall clock time. */
     DateTime DateTime::Now() noexcept 
     {
         auto now = std::chrono::system_clock::now();
@@ -29,6 +38,7 @@ namespace ppp
         return Local().AddSeconds(ts);
     }
 
+    /** @brief Gets current UTC wall clock time. */
     DateTime DateTime::UtcNow() noexcept 
     {
         auto now = std::chrono::system_clock::now();
@@ -36,6 +46,11 @@ namespace ppp
         return Utc().AddSeconds(ts);
     }
 
+    /**
+     * @brief Returns timezone offset from UTC in seconds.
+     * @param abs When true, recomputes immediately; otherwise uses cached value.
+     * @return Local minus UTC offset in seconds.
+     */
     int DateTime::GetGMTOffset(bool abs) noexcept 
     {
         static constexpr auto gmtOffset = 
@@ -55,11 +70,12 @@ namespace ppp
                 int hour_diff = local->tm_hour - gmt->tm_hour;
                 int min_diff  = local->tm_min - gmt->tm_min;
 
+                /** @details Corrects cross-day wrap-around between local and UTC. */
                 if (local->tm_yday > gmt->tm_yday) 
                 {
                     hour_diff += 24;
                 }
-                else if (local->tm_yday < gmt->tm_yday) 
+                elif (local->tm_yday < gmt->tm_yday) 
                 {
                     hour_diff -= 24;
                 }
@@ -76,17 +92,24 @@ namespace ppp
         return offset;
     }
 
+    /**
+     * @brief Parses numeric date-time segments from free-form text.
+     * @param s Input character buffer.
+     * @param len Input length, or negative to auto-detect via C-string terminator.
+     * @param out Receives parsed result.
+     * @return True when at least one numeric segment is parsed.
+     */
     bool DateTime::TryParse(const char* s, int len, DateTime& out) noexcept 
     {
         out = MinValue();
         if (s == NULLPTR && len != 0) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNullInputWithNonZeroLength);
         }
 
         if (s != NULLPTR && len == 0) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNonNullInputWithZeroLength);
         }
 
         if (len < 0) 
@@ -96,7 +119,7 @@ namespace ppp
 
         if (len < 1) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseInputLengthInvalid);
         }
 
         static constexpr int max_segments_length = 7;
@@ -118,6 +141,7 @@ namespace ppp
                 if (!segments[length].empty()) 
                 {
                     length++;
+                    /** @details Stops once all supported date-time segments are collected. */
                     if (length >= max_segments_length) 
                     {
                         break;
@@ -144,7 +168,7 @@ namespace ppp
 
         if (0 == length) 
         {
-            return false;
+            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::DateTimeTryParseNoNumericSegments);
         }
         else 
         {
@@ -158,13 +182,20 @@ namespace ppp
                 else 
                 {
                     ppp::string& sx = segments[i - 1];
-                    if (sx.empty()) 
+                    if (sx.empty())
                     {
                         t[i - 1] = 0;
                     }
                     else
                     {
-                        t[i - 1] = atoi(sx.c_str());
+                        char* endptr = NULLPTR;
+                        long val = strtol(sx.c_str(), &endptr, 10);
+                        if (NULLPTR == endptr || endptr == sx.c_str() || *endptr != '\x0') {
+                            t[i - 1] = 0;
+                        } 
+                        else {
+                            t[i - 1] = static_cast<int>(val);
+                        }
                     }
                 }
             }
@@ -175,6 +206,12 @@ namespace ppp
         return length > 0;
     }
 
+    /**
+     * @brief Formats the current value with token-based pattern expansion.
+     * @param format Token pattern (y, M, d, H, m, s, f, u, T).
+     * @param fixed Enables truncation when generated segments exceed token width.
+     * @return Formatted string.
+     */
     ppp::string DateTime::ToString(const char* format, bool fixed) noexcept 
     {
         ppp::string result;
@@ -221,6 +258,7 @@ namespace ppp
                 };
 
                 int64_t seg_size = seg.size();
+                /** @details Token width controls left padding or truncation. */
                 if (fixed && seg_size > symbol_size) 
                 {
                     seg = seg.substr(seg_size - symbol_size);

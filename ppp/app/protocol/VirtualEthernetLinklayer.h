@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+/**
+ * @file VirtualEthernetLinklayer.h
+ * @brief Virtual Ethernet link-layer protocol definitions and dispatch interface.
+ */
+
 #pragma once
 
 #include <ppp/configurations/AppConfiguration.h>
@@ -10,24 +17,41 @@
 namespace ppp {
     namespace app {
         namespace protocol {
-            // Address type enumeration for SOCKS-like addressing
+            /**
+             * @brief Address encoding type used by packet endpoint fields.
+             *
+             * Identifies the wire format used to encode the remote host address
+             * in connect and send-to protocol frames.
+             */
             enum AddressType {
-                None                                                        = 0,    // No address type
-                IPv4                                                        = 1,    // IPv4 address
-                IPv6                                                        = 2,    // IPv6 address
-                Domain                                                      = 3,    // Domain name
+                None                                                        = 0,    ///< No address; endpoint is unspecified.
+                IPv4                                                        = 1,    ///< 4-byte IPv4 address in network byte order.
+                IPv6                                                        = 2,    ///< 16-byte IPv6 address in network byte order.
+                Domain                                                      = 3,    ///< Length-prefixed ASCII/UTF-8 domain name.
             };
 
-            // Structure representing an endpoint with address type, host and port
+            /**
+             * @brief Logical endpoint containing address type, host text, and port.
+             *
+             * Used as a decoded representation after parsing a connect or send-to
+             * frame; carries the resolved address family together with host string
+             * and port number before socket operations begin.
+             */
             struct AddressEndPoint {
-                AddressType                                                 Type = AddressType::None;   // Type of the address
-                ppp::string                                                 Host;                       // Host string (IP or domain)
-                int                                                         Port = 0;                   // Port number
+                AddressType                                                 Type = AddressType::None;   ///< Wire address format of the host field.
+                ppp::string                                                 Host;                        ///< Host text: dotted-decimal, colon-hex, or domain string.
+                int                                                         Port = 0;                   ///< Destination port in host byte order.
             };
 
-            /* Virtual Ethernet Link Layer Protocol Handler */
+            /**
+             * @brief Virtual Ethernet packet codec and dispatcher.
+             *
+             * This class serializes outbound protocol frames and parses inbound frames,
+             * then dispatches parsed events through overridable `On*` handlers.
+             */
             class VirtualEthernetLinklayer : public std::enable_shared_from_this<VirtualEthernetLinklayer> {
             public:
+                /** @brief Full information payload including optional extension JSON. */
                 struct                                                    InformationEnvelope {
                     VirtualEthernetInformation                            Base;
                     VirtualEthernetInformationExtensions                  Extensions;
@@ -35,173 +59,209 @@ namespace ppp {
                 };
 
             public:
-                typedef ppp::configurations::AppConfiguration               AppConfiguration;           // Application configuration type
-                typedef std::shared_ptr<AppConfiguration>                   AppConfigurationPtr;        // Shared pointer to configuration
-                typedef ppp::transmissions::ITransmission                   ITransmission;              // Transmission interface type
-                typedef std::shared_ptr<ITransmission>                      ITransmissionPtr;           // Shared pointer to transmission
-                typedef std::shared_ptr<boost::asio::io_context>            ContextPtr;                 // Shared pointer to IO context
-                typedef ppp::coroutines::YieldContext                       YieldContext;               // Coroutine yield context type
+                typedef ppp::configurations::AppConfiguration               AppConfiguration;
+                typedef std::shared_ptr<AppConfiguration>                   AppConfigurationPtr;
+                typedef ppp::transmissions::ITransmission                   ITransmission;
+                typedef std::shared_ptr<ITransmission>                      ITransmissionPtr;
+                typedef std::shared_ptr<boost::asio::io_context>            ContextPtr;
+                typedef ppp::coroutines::YieldContext                       YieldContext;
 
             public:
-                // Packet action opcodes for the virtual Ethernet protocol
+                /** @brief Virtual Ethernet protocol action opcodes.
+                 *
+                 * Each value identifies one protocol message type in the link-layer
+                 * frame header, driving the dispatch table inside `PacketInput`.
+                 */
                 typedef enum {
-                    // Information and keep-alive messages
-                    PacketAction_INFO                                       = 0x7E, // Information exchange
-                    PacketAction_KEEPALIVED                                 = 0x7F, // Keep-alive heartbeat
-
-                    // FRP (Fast Reverse Proxy) related actions
-                    PacketAction_FRP_ENTRY                                  = 0x20, // FRP entry registration
-                    PacketAction_FRP_CONNECT                                = 0x21, // FRP connection request
-                    PacketAction_FRP_CONNECTOK                              = 0x22, // FRP connection acknowledgment
-                    PacketAction_FRP_PUSH                                   = 0x23, // FRP data push
-                    PacketAction_FRP_DISCONNECT                             = 0x24, // FRP disconnection
-                    PacketAction_FRP_SENDTO                                 = 0x25, // FRP UDP send-to
-
-                    // VPN tunnel actions
-                    PacketAction_LAN                                        = 0x28, // LAN advertisement
-                    PacketAction_NAT                                        = 0x29, // NAT traversal data
-                    PacketAction_SYN                                        = 0x2A, // TCP SYN (connection request)
-                    PacketAction_SYNOK                                      = 0x2B, // TCP SYN+ACK (connection accepted)
-                    PacketAction_PSH                                        = 0x2C, // TCP PSH (data push)
-                    PacketAction_FIN                                        = 0x2D, // TCP FIN (connection close)
-                    PacketAction_SENDTO                                     = 0x2E, // UDP send-to
-                    PacketAction_ECHO                                       = 0x2F, // Echo request
-                    PacketAction_ECHOACK                                    = 0x30, // Echo reply
-                    PacketAction_STATIC                                     = 0x31, // Static route request
-                    PacketAction_STATICACK                                  = 0x32, // Static route acknowledgment
-
-                    // Multiplexing (MUX) actions
-                    PacketAction_MUX                                        = 0x35, // MUX setup request
-                    PacketAction_MUXON                                      = 0x36, // MUX established acknowledgment
+                    PacketAction_INFO                                       = 0x7E,   ///< Session information / quota exchange frame.
+                    PacketAction_KEEPALIVED                                 = 0x7F,   ///< Periodic keep-alive heartbeat frame.
+                    PacketAction_FRP_ENTRY                                  = 0x20,   ///< FRP: register a port mapping entry.
+                    PacketAction_FRP_CONNECT                                = 0x21,   ///< FRP: open a new tunneled connection.
+                    PacketAction_FRP_CONNECTOK                              = 0x22,   ///< FRP: acknowledgment for connection open.
+                    PacketAction_FRP_PUSH                                   = 0x23,   ///< FRP: stream payload data.
+                    PacketAction_FRP_DISCONNECT                             = 0x24,   ///< FRP: notify connection closure.
+                    PacketAction_FRP_SENDTO                                 = 0x25,   ///< FRP: UDP datagram delivery.
+                    PacketAction_LAN                                        = 0x28,   ///< LAN subnet advertisement (ip + mask).
+                    PacketAction_NAT                                        = 0x29,   ///< Raw IP/NAT payload forwarding.
+                    PacketAction_SYN                                        = 0x2A,   ///< TCP connect request.
+                    PacketAction_SYNOK                                      = 0x2B,   ///< TCP connect acknowledgment.
+                    PacketAction_PSH                                        = 0x2C,   ///< TCP stream payload data.
+                    PacketAction_FIN                                        = 0x2D,   ///< TCP connection teardown notification.
+                    PacketAction_SENDTO                                     = 0x2E,   ///< UDP datagram with endpoint descriptors.
+                    PacketAction_ECHO                                       = 0x2F,   ///< Echo request (latency probe) payload.
+                    PacketAction_ECHOACK                                    = 0x30,   ///< Echo acknowledgment by ID.
+                    PacketAction_STATIC                                     = 0x31,   ///< Static port mapping query.
+                    PacketAction_STATICACK                                  = 0x32,   ///< Static port mapping acknowledgment.
+                    PacketAction_MUX                                        = 0x35,   ///< MUX channel setup request.
+                    PacketAction_MUXON                                      = 0x36,   ///< MUX channel setup acknowledgment.
                 }                                                           PacketAction;
 
             public:
-                // Error codes for connection outcomes
+                /** @brief Error codes returned by connect acknowledgment actions. */
                 typedef enum {
-                    ERRORS_SUCCESS,                 // Connection succeeded
-                    ERRORS_CONNECT_TO_DESTINATION,  // Failed to connect to destination
-                    ERRORS_CONNECT_CANCEL,          // Connection was cancelled
+                    ERRORS_SUCCESS,                 ///< Connection established successfully.
+                    ERRORS_CONNECT_TO_DESTINATION,  ///< Failed to reach the remote destination host.
+                    ERRORS_CONNECT_CANCEL,          ///< Connection was cancelled by local or remote policy.
                 }                                                           ERROR_CODES;
 
             public:
-                // Constructor initializes the link layer with configuration, context and unique ID
+                /**
+                 * @brief Constructs a link-layer handler.
+                 * @param configuration Application configuration object.
+                 * @param context IO context used by asynchronous operations.
+                 * @param id Session identifier associated with this handler.
+                 */
                 VirtualEthernetLinklayer(
                     const AppConfigurationPtr&                              configuration, 
                     const ContextPtr&                                       context,
                     const Int128&                                           id) noexcept;
-                virtual ~VirtualEthernetLinklayer() noexcept = default;    // Virtual destructor for safe inheritance
+                /** @brief Virtual destructor. */
+                virtual ~VirtualEthernetLinklayer() noexcept = default;
 
             public:
-                // Returns a shared pointer to this instance
+                /** @brief Returns `shared_from_this()` for this object. */
                 std::shared_ptr<VirtualEthernetLinklayer>                   GetReference() noexcept     { return shared_from_this(); }
-                // Returns the associated IO context
+                /** @brief Returns the associated IO context. */
                 ContextPtr                                                  GetContext() noexcept       { return context_; }
-                // Returns the application configuration
+                /** @brief Returns the configuration object. */
                 AppConfigurationPtr&                                        GetConfiguration() noexcept { return configuration_; }
-                // Returns the unique identifier of this link layer instance
+                /** @brief Returns the session identifier for this link layer. */
                 Int128                                                      GetId() noexcept            { return id_; }
 
             public:
-                // Main run loop: processes incoming packets from the transmission
+                /**
+                 * @brief Processes incoming packets until read/parse failure.
+                 * @param transmission Active transport channel.
+                 * @param y Coroutine yield context.
+                 * @return `true` when at least one packet is processed successfully.
+                 */
                 virtual bool                                                Run(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
-                // Generates a new unique connection ID (24-bit)
+                /** @brief Generates a protocol connection ID in 24-bit range. */
                 static int                                                  NewId() noexcept;
 
             public:
+                /** @brief Sends a LAN advertisement packet. */
                 virtual bool                                                DoLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept;
+                /** @brief Sends a NAT frame payload. */
                 virtual bool                                                DoNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept;
+                /** @brief Sends base information payload. */
                 virtual bool                                                DoInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept;
+                /** @brief Sends information envelope with optional extension data. */
                 virtual bool                                                DoInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept;
-                // Send TCP data push on a connection
+                /** @brief Sends TCP payload for an existing connection. */
                 virtual bool                                                DoPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept;
-                // Send TCP connection request using hostname and port
+                /** @brief Sends TCP connect request using domain/host text. */
                 virtual bool                                                DoConnect(const ITransmissionPtr& transmission, int connection_id, const ppp::string& hostname, int port, YieldContext& y) noexcept;
-                // Send TCP connection request using endpoint
+                /** @brief Sends TCP connect request using resolved endpoint. */
                 virtual bool                                                DoConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept;
-                // Send TCP connection acknowledgment with error code
+                /** @brief Sends TCP connect acknowledgment with status code. */
                 virtual bool                                                DoConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept;
-                // Send TCP disconnection notification
+                /** @brief Sends TCP disconnect notification. */
                 virtual bool                                                DoDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept;
-                // Send echo reply (acknowledgment)
+                /** @brief Sends echo acknowledgment by ID. */
                 virtual bool                                                DoEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept;
-                // Send echo request with payload
+                /** @brief Sends echo payload packet. */
                 virtual bool                                                DoEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept;
-                // Send UDP datagram with source and destination endpoints
+                /** @brief Sends UDP payload with destination/source endpoint descriptors. */
                 virtual bool                                                DoSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept;
-                // Request static route information
+                /** @brief Requests static mapping information from peer. */
                 virtual bool                                                DoStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
-                // Respond with static route information for a specific session
+                /** @brief Sends static mapping acknowledgment payload. */
                 virtual bool                                                DoStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept;
 
             public:
-                // Request MUX (multiplexing) setup
+                /** @brief Sends MUX setup request. */
                 virtual bool                                                DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept;
-                // Acknowledge MUX setup with sequence and acknowledgment numbers
+                /** @brief Sends MUX setup acknowledgment. */
                 virtual bool                                                DoMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept;
 
             protected:
-                // Handler for incoming MUX request (override in derived class)
+                /** @brief Handles inbound MUX request. */
                 virtual bool                                                OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept { return false; }
-                // Handler for incoming MUXON acknowledgment (override in derived class)
+                /** @brief Handles inbound MUX acknowledgment. */
                 virtual bool                                                OnMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept { return false; }
 
             public:
-                // Send FRP entry registration
+                /** @brief Sends FRP mapping entry registration. */
                 virtual bool                                                DoFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept;
-                // Send FRP UDP datagram
+                /** @brief Sends FRP UDP payload. */
                 virtual bool                                                DoFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept;
-                // Send FRP connection request
+                /** @brief Sends FRP connect request. */
                 virtual bool                                                DoFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept;
-                // Send FRP connection acknowledgment
+                /** @brief Sends FRP connect acknowledgment. */
                 virtual bool                                                DoFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept;
-                // Send FRP disconnection notification
+                /** @brief Sends FRP disconnect notification. */
                 virtual bool                                                DoFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept;
-                // Send FRP data push
+                /** @brief Sends FRP stream payload. */
                 virtual bool                                                DoFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length, YieldContext& y) noexcept;
 
             protected:
-                // Handlers for FRP actions (override in derived class)
+                /** @brief Handles inbound FRP entry registration. */
                 virtual bool                                                OnFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound FRP UDP payload. */
                 virtual bool                                                OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound FRP connect request. */
                 virtual bool                                                OnFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound FRP connect acknowledgment. */
                 virtual bool                                                OnFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound FRP disconnect notification. */
                 virtual bool                                                OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept { return true; }
+                /** @brief Handles inbound FRP stream payload. */
                 virtual bool                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept { return true; }
 
             protected:
+                /** @brief Handles inbound LAN advertisement. */
                 virtual bool                                                OnLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound NAT payload. */
                 virtual bool                                                OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound base information payload. */
                 virtual bool                                                OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound information envelope payload. */
                 virtual bool                                                OnInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept { return OnInformation(transmission, information.Base, y); }
+                /** @brief Handles inbound TCP stream payload. */
                 virtual bool                                                OnPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound TCP connect request. */
                 virtual bool                                                OnConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound connect acknowledgment. */
                 virtual bool                                                OnConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound disconnect event. */
                 virtual bool                                                OnDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound echo acknowledgment. */
                 virtual bool                                                OnEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound echo payload. */
                 virtual bool                                                OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound UDP payload. */
                 virtual bool                                                OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound static request. */
                 virtual bool                                                OnStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept { return true; }
+                /** @brief Handles inbound static acknowledgment. */
                 virtual bool                                                OnStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept { return true; }
 
             protected:
-                // Preparation hooks before performing connect or sendto
+                /** @brief Hook called after connect endpoint parsing and validation. */
                 virtual bool                                                OnPreparedConnect(const ITransmissionPtr& transmission, int connection_id, const ppp::string& destinationHost, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept { return true; }
+                /** @brief Hook called after UDP endpoints parsing and validation. */
                 virtual bool                                                OnPreparedSendTo(const ITransmissionPtr& transmission, const ppp::string& sourceHost, const boost::asio::ip::udp::endpoint& sourceEP, const ppp::string& destinationHost, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept { return true; }
-                // Sends keep-alive packet if needed, based on timing
+                /** @brief Sends keep-alive payload when scheduler triggers. */
                 virtual bool                                                DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept;
                 
             protected:
-                // Returns the firewall instance for filtering (can be overridden)
+                /** @brief Returns firewall used for endpoint filtering. */
                 virtual std::shared_ptr<ppp::net::Firewall>                 GetFirewall() noexcept;
-                // Processes an incoming packet from the transmission
+                /** @brief Decodes and dispatches one inbound protocol packet. */
                 virtual bool                                                PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept;
 
             private:
-                ContextPtr                                                  context_;       // Associated IO context
-                Int128                                                      id_      = 0;  // Unique identifier
-                UInt64                                                      last_    = 0;  // Last activity timestamp (milliseconds)
-                UInt64                                                      next_ka_ = 0;  // Next keep-alive scheduled timestamp
-                AppConfigurationPtr                                         configuration_; // Application configuration
+                /** @brief Associated IO context used for all async operations. */
+                ContextPtr                                                  context_;
+                /** @brief Session identifier shared with transmission peer. */
+                Int128                                                      id_      = 0;
+                /** @brief Monotonic timestamp of last successfully received packet, in ms. */
+                UInt64                                                      last_    = 0;
+                /** @brief Monotonic timestamp after which the next keep-alive must be sent, in ms. */
+                UInt64                                                      next_ka_ = 0;
+                /** @brief Runtime configuration source; determines timeouts and cipher settings. */
+                AppConfigurationPtr                                         configuration_;
             };
         }
     }

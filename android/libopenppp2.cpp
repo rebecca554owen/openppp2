@@ -1,4 +1,4 @@
-﻿// https://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
+// https://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
 // #define ENOENT           2      /* No such file or directory */
 // #define EAGAIN          11      /* Try again */
 
@@ -13,6 +13,7 @@
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/asio/vdns.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Stopwatch.h>
 
 #include <ppp/auxiliary/JsonAuxiliary.h>
@@ -66,8 +67,6 @@
 #include <android/log.h>
 #include <jni.h>
 
-#include <stdarg.h>
-
 #include <iostream>
 #include <string>
 #include <memory>
@@ -79,17 +78,6 @@
 #ifndef __LIBOPENPPP2_MAIN__
 #define __LIBOPENPPP2_MAIN__                                                libopenppp2_application::GetDefault();
 #endif
-
-void DebugLog(const char* format, ...) noexcept {
-    if (NULLPTR == format) {
-        return;
-    }
-
-    va_list args;
-    va_start(args, format);
-    __android_log_vprint(ANDROID_LOG_INFO, "openppp2", format, args);
-    va_end(args);
-}
 
 #ifdef _ANDROID_REDEF_STD_IN_OUT_ERR
 #ifdef ANDROID
@@ -169,6 +157,75 @@ enum {
     // STOP
     LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING                                      = 401,
 };
+
+static ppp::diagnostics::ErrorCode                                          libopenppp2_translate_error(int err) noexcept {
+    using ErrorCode = ppp::diagnostics::ErrorCode;
+
+    switch (err) {
+    case LIBOPENPPP2_ERROR_SUCCESS:
+        return ErrorCode::Success;
+    case LIBOPENPPP2_ERROR_ALLOCATED_MEMORY:
+    case LIBOPENPPP2_ERROR_NEW_CONFIGURATION_FAIL:
+    case LIBOPENPPP2_ERROR_NEW_NETWORKINTERFACE_FAIL:
+        return ErrorCode::MemoryAllocationFailed;
+    case LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED:
+        return ErrorCode::AppContextUnavailable;
+    case LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_IS_NULL_OR_EMPTY:
+        return ErrorCode::ConfigFieldMissing;
+    case LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_NOT_IS_JSON_OBJECT_STRING:
+        return ErrorCode::ConfigFileMalformed;
+    case LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_CONFIGURE_ERROR:
+        return ErrorCode::ConfigLoadFailed;
+    case LIBOPENPPP2_ERROR_ARG_TUN_IS_INVALID:
+        return ErrorCode::TunnelDeviceMissing;
+    case LIBOPENPPP2_ERROR_ARG_IP_IS_NULL_OR_EMPTY:
+    case LIBOPENPPP2_ERROR_ARG_MASK_IS_NULL_OR_EMPTY:
+        return ErrorCode::ConfigFieldMissing;
+    case LIBOPENPPP2_ERROR_ARG_IP_IS_NOT_AF_INET_FORMAT:
+    case LIBOPENPPP2_ERROR_ARG_IP_IS_INVALID:
+        return ErrorCode::NetworkAddressInvalid;
+    case LIBOPENPPP2_ERROR_ARG_MASK_IS_NOT_AF_INET_FORMAT:
+    case LIBOPENPPP2_ERROR_ARG_MASK_SUBNET_IP_RANGE_GREATER_65535:
+        return ErrorCode::NetworkMaskInvalid;
+    case LIBOPENPPP2_ERROR_IT_IS_RUNING:
+        return ErrorCode::AppAlreadyRunning;
+    case LIBOPENPPP2_ERROR_NETWORK_INTERFACE_NOT_CONFIGURED:
+        return ErrorCode::NetworkInterfaceUnavailable;
+    case LIBOPENPPP2_ERROR_APP_CONFIGURATION_NOT_CONFIGURED:
+        return ErrorCode::AppConfigurationMissing;
+    case LIBOPENPPP2_ERROR_OPEN_VETHERNET_FAIL:
+        return ErrorCode::NetworkInterfaceOpenFailed;
+    case LIBOPENPPP2_ERROR_OPEN_TUNTAP_FAIL:
+        return ErrorCode::TunnelOpenFailed;
+    case LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING:
+        return ErrorCode::RuntimeThreadStartFailed;
+    case LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING:
+        return ErrorCode::AndroidLibInvalidState;
+    case LIBOPENPPP2_ERROR_UNKNOWN:
+    default:
+        return ErrorCode::AndroidLibUnknownFailure;
+    }
+}
+
+static inline int                                                            libopenppp2_set_last_error_for_result(int err) noexcept {
+    using ErrorCode = ppp::diagnostics::ErrorCode;
+
+    if (err == LIBOPENPPP2_ERROR_SUCCESS) {
+        ppp::diagnostics::SetLastErrorCode(ErrorCode::Success);
+        return err;
+    }
+
+    if (ppp::diagnostics::GetLastErrorCodeSnapshot() == ErrorCode::Success) {
+        ppp::diagnostics::SetLastErrorCode(libopenppp2_translate_error(err));
+    }
+
+    return err;
+}
+
+static inline int                                                            libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode code, int err) noexcept {
+    ppp::diagnostics::SetLastErrorCode(code);
+    return err;
+}
 
 typedef std::mutex                                                          SynchronizedObject;
 typedef std::lock_guard<SynchronizedObject>                                 SynchronizedObjectScope;
@@ -363,21 +420,25 @@ bool                                                                        libo
 
 bool                                                                        libopenppp2_application::PostJNI(const ppp::function<void(JNIEnv*)>& task) noexcept {
     if (NULLPTR == task) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AndroidLibNullCallback);
         return false;
     }
 
     std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
     if (NULLPTR == client) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
         return false;
     }
 
     std::shared_ptr<ppp::net::ProtectorNetwork> protector = client->GetProtectorNetwork();
     if (NULLPTR == protector) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         return false;
     }
 
     std::shared_ptr<boost::asio::io_context> context = protector->GetContext();
     if (NULLPTR == context) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
         return false;
     }
 
@@ -477,17 +538,17 @@ bool                                                                        libo
 int                                                                         libopenppp2_application::Invoke(const ppp::function<int()>& task) noexcept {
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
-        return LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
     }
 
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     if (NULLPTR == context) {
-        return LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing, LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING);
     }
 
     std::shared_ptr<Executors::Awaitable> awaitable = ppp::make_shared_object<Executors::Awaitable>();
     if (NULLPTR == awaitable) {
-        return LIBOPENPPP2_ERROR_ALLOCATED_MEMORY;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, LIBOPENPPP2_ERROR_ALLOCATED_MEMORY);
     }
 
     int err = LIBOPENPPP2_ERROR_UNKNOWN;
@@ -499,7 +560,7 @@ int                                                                         libo
 
     bool ok = awaitable->Await();
     if (!ok) {
-        return LIBOPENPPP2_ERROR_UNKNOWN;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed, LIBOPENPPP2_ERROR_UNKNOWN);
     }
 
     return err;
@@ -535,6 +596,7 @@ bool                                                                        libo
     }
 
     if (NULLPTR == clazz) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         return false;
     }
 
@@ -553,6 +615,9 @@ bool                                                                        libo
     }
 
     env->DeleteLocalRef(clazz);
+    if (!result) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+    }
     return result ? true : false;
 }
 
@@ -713,6 +778,9 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1link_1stat
     if (err == LIBOPENPPP2_ERROR_SUCCESS) {
         return status;
     }
+
+    libopenppp2_set_last_error_for_result(err);
+
     elif(err == LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED || err == LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING) {
         return LIBOPENPPP2_LINK_STATE_APPLICATIION_UNINITIALIZED;
     }
@@ -737,6 +805,9 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1aggligator
     if (err == LIBOPENPPP2_ERROR_SUCCESS) {
         return status;
     }
+
+    libopenppp2_set_last_error_for_result(err);
+
     else {
         return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
     }
@@ -755,7 +826,33 @@ __LIBOPENPPP2__(jlong) Java_supersocksr_ppp_android_c_libopenppp2_get_1duration_
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
 
-    return err != LIBOPENPPP2_ERROR_SUCCESS ? -1 : milliseconds;
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+        return -1;
+    }
+
+    return milliseconds;
+}
+
+// package: supersocksr.ppp.android.c
+// public final class libopenpppp2
+// public native int get_last_error_code()
+__LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1last_1error_1code(JNIEnv* env, jobject* this_) noexcept {
+    __LIBOPENPPP2_MAIN__;
+
+    ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCodeSnapshot();
+    return (jint)static_cast<uint32_t>(code);
+}
+
+// package: supersocksr.ppp.android.c
+// public final class libopenpppp2
+// public native string get_last_error_text()
+__LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1last_1error_1text(JNIEnv* env, jobject* this_) noexcept {
+    __LIBOPENPPP2_MAIN__;
+
+    ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCodeSnapshot();
+    const char* text = ppp::diagnostics::FormatErrorString(code);
+    return JNIENV_NewStringUTF(env, text);
 }
 
 // package: supersocksr.ppp.android.c
@@ -767,11 +864,15 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1app_1co
     __LIBOPENPPP2_MAIN__;
 
     std::shared_ptr<ppp::string> json;
-    libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&json]() noexcept {
             json = libopenppp2_get_app_configuration();
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
 
     if (NULLPTR == json) {
         return JNIENV_NewStringUTF(env, NULLPTR);
@@ -786,32 +887,34 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1app_1co
 __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1app_1configuration(JNIEnv* env, jobject* this_, jstring configurations) noexcept {
     __LIBOPENPPP2_MAIN__;
 
+    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+
     std::shared_ptr<ppp::string> json_string = JNIENV_GetStringUTFChars(env, configurations);
     if (NULLPTR == json_string || json_string->empty()) {
-        return LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_IS_NULL_OR_EMPTY;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::ConfigFieldMissing, LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_IS_NULL_OR_EMPTY);
     }
 
     std::shared_ptr<AppConfiguration> config = ppp::make_shared_object<AppConfiguration>();
     if (NULLPTR == config) {
-        return LIBOPENPPP2_ERROR_NEW_CONFIGURATION_FAIL;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, LIBOPENPPP2_ERROR_NEW_CONFIGURATION_FAIL);
     }
 
     Json::Value json = JsonAuxiliary::FromString(*json_string);
     if (!json.isObject()) {
-        return LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_NOT_IS_JSON_OBJECT_STRING;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::ConfigFileMalformed, LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_NOT_IS_JSON_OBJECT_STRING);
     }
 
     bool ok = config->Load(json);
     if (!ok) {
-        return LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_CONFIGURE_ERROR;
+        return libopenppp2_set_last_error_for_result(LIBOPENPPP2_ERROR_ARG_CONFIGURATION_STRING_CONFIGURE_ERROR);
     }
 
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
-        return LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
     }
 
-    return libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&app, &config]() noexcept {
             ppp::net::asio::vdns::ttl = config->udp.dns.ttl;
             ppp::net::asio::vdns::enabled = config->udp.dns.turbo;
@@ -819,6 +922,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1app_1confi
             app->configuration_ = config;
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+    return libopenppp2_set_last_error_for_result(err);
 }
 
 // package: supersocksr.ppp.android.c
@@ -859,31 +963,33 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
     jstring                                                                                 mask) noexcept {
     __LIBOPENPPP2_MAIN__;
 
+    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+
     boost::system::error_code ec;
     if (tun == -1) {
-        return LIBOPENPPP2_ERROR_ARG_TUN_IS_INVALID;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::TunnelDeviceMissing, LIBOPENPPP2_ERROR_ARG_TUN_IS_INVALID);
     }
 
     // 10.0.0.2
     std::shared_ptr<ppp::string> ip_string = JNIENV_GetStringUTFChars(env, ip);
     if (NULLPTR == ip_string || ip_string->empty()) {
-        return LIBOPENPPP2_ERROR_ARG_IP_IS_NULL_OR_EMPTY;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::ConfigFieldMissing, LIBOPENPPP2_ERROR_ARG_IP_IS_NULL_OR_EMPTY);
     }
 
     // 255.255.255.0
     std::shared_ptr<ppp::string> mask_string = JNIENV_GetStringUTFChars(env, mask);
     if (NULLPTR == mask_string || mask_string->empty()) {
-        return LIBOPENPPP2_ERROR_ARG_MASK_IS_NULL_OR_EMPTY;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::ConfigFieldMissing, LIBOPENPPP2_ERROR_ARG_MASK_IS_NULL_OR_EMPTY);
     }
 
     boost::asio::ip::address ip_address = ppp::StringToAddress(ip_string->data(), ec);
     if (ec || !ip_address.is_v4()) {
-        return LIBOPENPPP2_ERROR_ARG_IP_IS_NOT_AF_INET_FORMAT;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, LIBOPENPPP2_ERROR_ARG_IP_IS_NOT_AF_INET_FORMAT);
     }
 
     boost::asio::ip::address mask_address = ppp::StringToAddress(mask_string->data(), ec);
     if (ec || !mask_address.is_v4()) {
-        return LIBOPENPPP2_ERROR_ARG_MASK_IS_NOT_AF_INET_FORMAT;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkMaskInvalid, LIBOPENPPP2_ERROR_ARG_MASK_IS_NOT_AF_INET_FORMAT);
     }
 
     uint32_t addresses[2] = {
@@ -892,17 +998,17 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
     };
 
     if (addresses[0] == IPEndPoint::AnyAddress || addresses[0] == IPEndPoint::LoopbackAddress || addresses[0] == IPEndPoint::NoneAddress) {
-        return LIBOPENPPP2_ERROR_ARG_IP_IS_INVALID;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, LIBOPENPPP2_ERROR_ARG_IP_IS_INVALID);
     }
 
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
-        return LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
     }
     else {
         int prefix = IPEndPoint::NetmaskToPrefix(addresses[1]);
         if (prefix < 16) {
-            return LIBOPENPPP2_ERROR_ARG_MASK_SUBNET_IP_RANGE_GREATER_65535;
+            return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkMaskInvalid, LIBOPENPPP2_ERROR_ARG_MASK_SUBNET_IP_RANGE_GREATER_65535);
         }
         elif(prefix > 30) {
             addresses[1] = IPEndPoint::NetmaskToPrefix(prefix);
@@ -910,7 +1016,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
         }
 
         if (IPEndPoint::IsInvalid(ip_address)) {
-            return LIBOPENPPP2_ERROR_ARG_IP_IS_INVALID;
+            return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkAddressInvalid, LIBOPENPPP2_ERROR_ARG_IP_IS_INVALID);
         }
     }
 
@@ -919,7 +1025,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
 
     std::shared_ptr<libopenppp2_network_interface> network_interface = ppp::make_shared_object<libopenppp2_network_interface>();
     if (NULLPTR == network_interface) {
-        return LIBOPENPPP2_ERROR_NEW_NETWORKINTERFACE_FAIL;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, LIBOPENPPP2_ERROR_NEW_NETWORKINTERFACE_FAIL);
     }
 
     network_interface->BlockQUIC = block_quic;
@@ -931,11 +1037,12 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
     network_interface->GatewayServer = gw_address;
     network_interface->SubmaskAddress = mask_address;
 
-    return libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&app, &network_interface]() noexcept {
             app->network_interface_ = network_interface;
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+    return libopenppp2_set_last_error_for_result(err);
 }
 
 // package: supersocksr.ppp.android.c
@@ -946,6 +1053,7 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1bypass
     
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
         return false;
     }
 
@@ -955,6 +1063,9 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1bypass
             app->bypass_ip_list_ = bypass_ip_list;
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
     return err == LIBOPENPPP2_ERROR_SUCCESS;
 }
 
@@ -966,6 +1077,7 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1dns_1r
 
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
         return false;
     }
 
@@ -975,6 +1087,9 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1dns_1r
             app->dns_rules_list_ = dns_rules_list;
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
     return err == LIBOPENPPP2_ERROR_SUCCESS;
 }
 
@@ -986,19 +1101,23 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1dns_1b
 
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
         return false;
     }
 
     if (ttl < 1) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigValueOutOfRange);
         return false;
     }
 
     std::shared_ptr<ppp::string> dns_string = JNIENV_GetStringUTFChars(env, dns);
     if (NULLPTR == dns_string) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldMissing);
         return false;
     }
 
     if (dns_string->empty()) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigFieldMissing);
         return false;
     }
 
@@ -1006,11 +1125,13 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1dns_1b
     ppp::net::Ipep::ToDnsAddresses(*dns_string, ips);
 
     if (ips.empty()) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
         return false;
     }
 
     auto addresses = ppp::make_shared_object<ppp::net::asio::vdns::IPEndPointVector>();
     if (NULLPTR == addresses) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
         return false;
     }
 
@@ -1031,11 +1152,15 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1bypass_
     __LIBOPENPPP2_MAIN__;
 
     std::shared_ptr<ppp::string> bypass_ip_list;
-    libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&bypass_ip_list]() noexcept {
             bypass_ip_list = libopenppp2_get_bypass_ip_list();
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
 
     if (NULLPTR == bypass_ip_list) {
         return JNIENV_NewStringUTF(env, NULLPTR);
@@ -1066,7 +1191,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1network
     }
 
     std::shared_ptr<ppp::string> json_string;
-    libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&app, &json_string]() noexcept {
             std::shared_ptr<libopenppp2_network_interface> network_interface = app->network_interface_;
             if (NULLPTR != network_interface) {
@@ -1085,6 +1210,10 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1network
 
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
 
     if (NULLPTR == json_string) {
         return JNIENV_NewStringUTF(env, NULLPTR);
@@ -1153,11 +1282,19 @@ static int                                                                      
 
     bool ok = client->Open(tap);
     if (!ok) {
+        if (ppp::diagnostics::GetLastErrorCodeSnapshot() == ppp::diagnostics::ErrorCode::Success) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
+        }
+
         return LIBOPENPPP2_ERROR_OPEN_VETHERNET_FAIL;
     }
 
     VEthernetNetworkSwitcher::ProtectorNetworkPtr protector = client->GetProtectorNetwork();
     if (NULLPTR == protector) {
+        if (ppp::diagnostics::GetLastErrorCodeSnapshot() == ppp::diagnostics::ErrorCode::Success) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        }
+
         return LIBOPENPPP2_ERROR_UNKNOWN;
     }
 
@@ -1168,25 +1305,29 @@ static int                                                                      
 
 static int                                                                          libopenppp2_try_open_ethernet_switcher(std::shared_ptr<VEthernetNetworkSwitcher>& ethernet) noexcept {
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
+    if (NULLPTR == app) {
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
+    }
+
     std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
     if (NULLPTR != client) {
-        return LIBOPENPPP2_ERROR_IT_IS_RUNING;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppAlreadyRunning, LIBOPENPPP2_ERROR_IT_IS_RUNING);
     }
 
     std::shared_ptr<libopenppp2_network_interface> network_interface = app->network_interface_;
     if (NULLPTR == network_interface) {
-        return LIBOPENPPP2_ERROR_NETWORK_INTERFACE_NOT_CONFIGURED;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable, LIBOPENPPP2_ERROR_NETWORK_INTERFACE_NOT_CONFIGURED);
     }
 
     std::shared_ptr<AppConfiguration> configuration = app->configuration_;
     if (NULLPTR == configuration) {
-        return LIBOPENPPP2_ERROR_APP_CONFIGURATION_NOT_CONFIGURED;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppConfigurationMissing, LIBOPENPPP2_ERROR_APP_CONFIGURATION_NOT_CONFIGURED);
     }
 
     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     std::shared_ptr<ITap> tap = libopenppp2_from_tuntap_driver_new(context, network_interface);
     if (NULLPTR == tap) {
-        return LIBOPENPPP2_ERROR_OPEN_TUNTAP_FAIL;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::TunnelOpenFailed, LIBOPENPPP2_ERROR_OPEN_TUNTAP_FAIL);
     }
 
     int err = libopenppp_try_open_ethernet_switcher_new(context, app, tap, client, network_interface, configuration);
@@ -1208,10 +1349,12 @@ static int                                                                      
 // public native int run(int key)
 __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env, jobject* this_, jint key_) noexcept {
     __LIBOPENPPP2_MAIN__;
+
+    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
     
     std::shared_ptr<boost::asio::io_context> context = ppp::make_shared_object<boost::asio::io_context>();
     if (NULLPTR == context) {
-        return LIBOPENPPP2_ERROR_ALLOCATED_MEMORY;
+        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, LIBOPENPPP2_ERROR_ALLOCATED_MEMORY);
     }
 
     int err = LIBOPENPPP2_ERROR_SUCCESS;
@@ -1230,11 +1373,11 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
 
                     auto protector = ethernet->GetProtectorNetwork();
                     if (NULLPTR == protector) {
-                        return LIBOPENPPP2_ERROR_UNKNOWN;
+                        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid, LIBOPENPPP2_ERROR_UNKNOWN);
                     }
 
                     if (!protector->JoinJNI(context, env)) {
-                        return LIBOPENPPP2_ERROR_UNKNOWN;
+                        return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid, LIBOPENPPP2_ERROR_UNKNOWN);
                     }
 
                     return LIBOPENPPP2_ERROR_SUCCESS;
@@ -1268,7 +1411,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
     context->restart();
     context->run(ec);
 
-    return err;
+    return libopenppp2_set_last_error_for_result(err);
 }
 
 // package: supersocksr.ppp.android.c
@@ -1277,20 +1420,23 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
 __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_stop(JNIEnv* env, jobject* this_) noexcept {
     __LIBOPENPPP2_MAIN__;
 
-    return libopenppp2_application::Invoke(
+    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+
+    int err = libopenppp2_application::Invoke(
         []() noexcept -> int {
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
             if (NULLPTR == app) {
-                return LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED;
+                return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
             }
 
             bool ok = app->Release();
             if (!ok) {
-                return LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING;
+                return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AndroidLibInvalidState, LIBOPENPPP2_ERROR_IT_IS_NOT_RUNING);
             }
 
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+    return libopenppp2_set_last_error_for_result(err);
 }
 
 // package: supersocksr.ppp.android.c
@@ -1408,7 +1554,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_prefix_1to_1
         return JNIENV_NewStringUTF(env, mask_string.data());
     }
     else {
-        ppp::Int128 mask = prefix_ ? (((ppp::Int128)-1L) << (128L - prefix_)) : 0L;
+        ppp::Int128 mask = ppp::PrefixMask128(prefix_);
         mask = Ipep::NetworkToHostOrder(mask);
 
         ppp::string mask_string = IPEndPoint(ppp::net::AddressFamily::InterNetworkV6, &mask, sizeof(mask), 0).ToAddressString();
@@ -1423,7 +1569,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1http_1p
     __LIBOPENPPP2_MAIN__;
 
     std::shared_ptr<ppp::string> address_string;
-    libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&address_string]() noexcept -> int {
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
             if (NULLPTR != app) {
@@ -1439,6 +1585,10 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1http_1p
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
 
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
+
     if (NULLPTR == address_string) {
         return JNIENV_NewStringUTF(env, NULLPTR);
     }
@@ -1453,7 +1603,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1socks_1
     __LIBOPENPPP2_MAIN__;
 
     std::shared_ptr<ppp::string> address_string;
-    libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&address_string]() noexcept -> int {
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
             if (NULLPTR != app) {
@@ -1468,6 +1618,10 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1socks_1
 
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
 
     if (NULLPTR == address_string) {
         return JNIENV_NewStringUTF(env, NULLPTR);
@@ -1485,7 +1639,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1etherne
     __LIBOPENPPP2_MAIN__;
 
     std::shared_ptr<ppp::string> json;
-    libopenppp2_application::Invoke(
+    int err = libopenppp2_application::Invoke(
         [&json, default_]() noexcept -> int {
             std::shared_ptr<VirtualEthernetInformation> information;
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
@@ -1513,6 +1667,10 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1etherne
             json = ppp::make_shared_object<ppp::string>(information->ToString());
             return LIBOPENPPP2_ERROR_SUCCESS;
         });
+
+    if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+        libopenppp2_set_last_error_for_result(err);
+    }
 
     if (NULLPTR == json) {
         return JNIENV_NewStringUTF(env, NULLPTR);

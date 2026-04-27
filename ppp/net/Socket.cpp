@@ -1,3 +1,8 @@
+/**
+ * @file Socket.cpp
+ * @brief Cross-platform socket utility implementations for PPP networking.
+ */
+
 // https://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
 // #define ENOENT           2      /* No such file or directory */
 // #define EAGAIN          11      /* Try again */
@@ -8,6 +13,7 @@
 #include <string>
 #include <iostream>
 #include <assert.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <sys/types.h>
 
@@ -15,6 +21,7 @@
 #include <stdint.h>
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#include <Mstcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #else
@@ -66,6 +73,9 @@
 
 namespace ppp {
     namespace net {
+        /**
+         * @brief Converts a native sockaddr into Boost.Asio address and endpoint.
+         */
         static bool Socket_ConvertSockaddrToEndpoint(const struct sockaddr* addr, boost::asio::ip::address& address, boost::asio::ip::tcp::endpoint& endpoint) noexcept {
             const struct sockaddr_in* in4 = (const struct sockaddr_in*)addr;
             const struct sockaddr_in6* in6 = (const struct sockaddr_in6*)addr;
@@ -78,15 +88,22 @@ namespace ppp {
                 boost::asio::ip::address_v6::bytes_type bytes;
                 memcpy(bytes.data(), &in6->sin6_addr.s6_addr, bytes.size());
 
-                address = boost::asio::ip::address_v6(bytes);
+                address = boost::asio::ip::address_v6(bytes, in6->sin6_scope_id);
                 endpoint = boost::asio::ip::tcp::endpoint(address, ntohs(in6->sin6_port));
                 return true;
             }
             else {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                 return false;
             }
         }
 
+        /**
+         * @brief Obtains peer or local endpoint from a file descriptor.
+         * @param endpoint Output endpoint value.
+         * @param fd Native socket descriptor.
+         * @param getpeername_or_getsockname true for getpeername, false for getsockname.
+         */
         static bool Socket_GetPeerNameOrGetSocketName(boost::asio::ip::tcp::endpoint& endpoint, int fd, bool getpeername_or_getsockname) noexcept {
             int err = -1;
             union {
@@ -102,7 +119,8 @@ namespace ppp {
                 err = ::getsockname(fd, (struct sockaddr*)&address, &address_size);
             }
 
-            if (err != 0) {
+            if (0 != err) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                 return false;
             }
 
@@ -110,26 +128,39 @@ namespace ppp {
             return Socket_ConvertSockaddrToEndpoint((struct sockaddr*)&address, boost_address, endpoint);
         }
 
+        /**
+         * @brief Gets local endpoint information for a native socket.
+         */
         boost::asio::ip::tcp::endpoint Socket::GetLocalEndPoint(int fd) noexcept {
             boost::asio::ip::tcp::endpoint endpoint;
             Socket_GetPeerNameOrGetSocketName(endpoint, fd, false);
             return endpoint;
         }
 
+        /**
+         * @brief Gets remote peer endpoint information for a native socket.
+         */
         boost::asio::ip::tcp::endpoint Socket::GetRemoteEndPoint(int fd) noexcept {
             boost::asio::ip::tcp::endpoint endpoint;
             Socket_GetPeerNameOrGetSocketName(endpoint, fd, true);
             return endpoint;
         }
 
+        /**
+         * @brief Polls socket state with millisecond timeout.
+         */
         bool Socket::Poll(int s, int milliSeconds, SelectMode mode) noexcept {
             int64_t microSeconds = milliSeconds;
             microSeconds *= 1000;
             return Socket::PolH(s, microSeconds, mode);
         }
 
+        /**
+         * @brief Polls socket state with microsecond timeout.
+         */
         bool Socket::PolH(int s, int64_t microSeconds, SelectMode mode) noexcept {
-            if (s == -1) {
+            if (-1 == s) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -196,9 +227,11 @@ namespace ppp {
                 }
             }
 #endif
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
             return false;
         }
 
+        /** @brief Cancels pending asynchronous operations on UDP socket. */
         void Socket::Cancel(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -210,6 +243,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Cancels pending asynchronous operations on TCP socket. */
         void Socket::Cancel(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -221,6 +255,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Cancels pending asynchronous accept operations. */
         void Socket::Cancel(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (s.is_open()) {
@@ -232,6 +267,7 @@ namespace ppp {
             }
         }
 
+        /** @brief Cancels pending UDP resolver operations. */
         void Socket::Cancel(const boost::asio::ip::udp::resolver& resolver) noexcept {
             boost::asio::ip::udp::resolver& s = constantof(resolver);
             try {
@@ -240,6 +276,7 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
+        /** @brief Cancels pending TCP resolver operations. */
         void Socket::Cancel(const boost::asio::ip::tcp::resolver& resolver) noexcept {
             boost::asio::ip::tcp::resolver& s = constantof(resolver);
             try {
@@ -248,8 +285,9 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
-        void Socket::Cancel(const boost::asio::deadline_timer& deadline_timer) noexcept {
-            boost::asio::deadline_timer& t = constantof(deadline_timer);
+        /** @brief Cancels pending steady (monotonic) timer operations. */
+        void Socket::Cancel(const boost::asio::steady_timer& deadline_timer) noexcept {
+            boost::asio::steady_timer& t = constantof(deadline_timer);
             boost::system::error_code ec;
             try {
                 t.cancel(ec);
@@ -257,51 +295,63 @@ namespace ppp {
             catch (const std::exception&) {}
         }
 
+        /** @brief Shared-pointer UDP socket cancel overload. */
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::udp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 Cancel(*socket);
             }
         }
 
+        /** @brief Shared-pointer TCP socket cancel overload. */
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 Cancel(*socket);
             }
         }
 
+        /** @brief Shared-pointer acceptor cancel overload. */
         void Socket::Cancel(const std::shared_ptr<boost::asio::ip::tcp::acceptor>& acceptor) noexcept {
             if (NULLPTR != acceptor) {
                 Cancel(*acceptor);
             }
         }
 
+        /** @brief Shared-pointer UDP socket close overload. */
         bool Socket::Closesocket(const std::shared_ptr<boost::asio::ip::udp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 return Closesocket(*socket);
             }
             else {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullInstance);
                 return false;
             }
         }
 
+        /** @brief Shared-pointer TCP socket close overload. */
         bool Socket::Closesocket(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
             if (NULLPTR != socket) {
                 return Closesocket(*socket);
             }
             else {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullInstance);
                 return false;
             }
         }
 
+        /** @brief Shared-pointer acceptor close overload. */
         bool Socket::Closesocket(const std::shared_ptr<boost::asio::ip::tcp::acceptor>& acceptor) noexcept {
             if (NULLPTR != acceptor) {
                 return Closesocket(*acceptor);
             }
             else {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullInstance);
                 return false;
             }
         }
 
+        /**
+         * @brief Performs half-close on native socket send channel.
+         */
         void Socket::Shutdown(int fd) noexcept {
             if (fd != -1) {
                 int how;
@@ -315,6 +365,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Closes a native socket descriptor.
+         */
         void Socket::Closesocket(int fd) noexcept {
             if (fd != -1) {
 #if defined(_WIN32)
@@ -325,6 +378,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Queries system default IPv4 TTL value.
+         */
         int Socket::GetDefaultTTL() noexcept {
             static constexpr int DFL_TTL = 64;
 
@@ -366,6 +422,9 @@ namespace ppp {
         // Otherwise, the QEMU user mode VM frantically reports error logs.
         SOCKET_RESTRICTIONS Socket::SOCKET_RESTRICTIONS_; 
 
+        /**
+         * @brief Probes platform socket option support at startup.
+         */
         SOCKET_RESTRICTIONS::SOCKET_RESTRICTIONS() noexcept 
             : IPV6_TCLASS_ON(true)
             , IP_TOS_ON(true)
@@ -411,6 +470,9 @@ namespace ppp {
         }
 
 #if defined(_LINUX)
+        /**
+         * @brief Validates IPv4 IP_TOS availability on current runtime.
+         */
         bool SOCKET_RESTRICTIONS::ValidV4(int sockfd) noexcept {
             int tos = IPTOS_LOWDELAY;
             int err = ::setsockopt(sockfd, SOL_IP, IP_TOS, (char*)&tos, sizeof(tos));
@@ -419,9 +481,13 @@ namespace ppp {
             }
 
             IP_TOS_ON = false;
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             return false;
         }
 
+        /**
+         * @brief Validates IPv6 traffic-class option availability.
+         */
         bool SOCKET_RESTRICTIONS::ValidV6(int sockfd) noexcept {
             int tos = IPTOS_LOWDELAY;
 #if defined(IPV6_TCLASS)
@@ -432,12 +498,17 @@ namespace ppp {
 #endif
 
             IPV6_TCLASS_ON = false;
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             return false;
         }
 #endif  
 
+        /**
+         * @brief Applies DSCP/TOS hints to a socket.
+         */
         bool Socket::SetTypeOfService(int fd, int tos) noexcept {
-            if (fd == -1) {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -465,12 +536,21 @@ namespace ppp {
                 any |= ::setsockopt(fd, SOL_IP, IP_TOS, (char*)&tos, sizeof(tos)) == 0;
             }
 #endif
-            return any;
+            if (!any) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+                return false;
+            }
+
+            return true;
         }
 
+        /**
+         * @brief Configures SIGPIPE behavior where supported.
+         */
         bool Socket::SetSignalPipeline(int fd, bool sigpipe) noexcept {
             int err = 0;
-            if (fd == -1) {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -478,23 +558,41 @@ namespace ppp {
             int opt = sigpipe ? 0 : 1;
             err = ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char*)&opt, sizeof(opt));
 #endif
-            return err == 0;
+            if (0 == err) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
         }
 
+        /**
+         * @brief Enables or disables SO_REUSEADDR.
+         */
         bool Socket::ReuseSocketAddress(int fd, bool reuse) noexcept {
-            if (fd == -1) {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
             int flag = reuse ? 1 : 0;
-            return ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag)) == 0;
+            if (0 == ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag))) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
         }
 
         /* TCP MSS values – what’s changed?
          * https://blog.apnic.net/2019/07/31/tcp-mss-values-whats-changed/ 
          */
+        /**
+         * @brief Gets TCP maximum segment size from socket options.
+         */
         int Socket::GetTcpMss(int fd) noexcept {
-            if (fd == -1) {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return -1;
             }
 
@@ -502,17 +600,22 @@ namespace ppp {
             socklen_t mss_len = sizeof(mss);
 
             if (::getsockopt(fd, IPPROTO_TCP, TCP_MAXSEG, (char*)&mss, &mss_len) < 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                 return -1;
             }
 
             return mss;
         }
 
+        /**
+         * @brief Sets TCP MSS with conservative min/max clamping.
+         */
         bool Socket::SetTcpMss(int fd, int mss) noexcept {
             static constexpr int TCP_MIN_MSS = 536;
             static constexpr int TCP_MAX_MSS = 1460;
 
-            if (fd == -1) {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -524,11 +627,79 @@ namespace ppp {
             }
 
             int err = ::setsockopt(fd, IPPROTO_TCP, TCP_MAXSEG, (char*)&mss, sizeof(mss));
-            return err == 0;
+            if (0 == err) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
         }
 
+        /**
+         * @brief Enables TCP keepalive and optional platform-specific tunables.
+         */
+        bool Socket::SetKeepAlive(int fd, bool enable, int idle_seconds, int interval_seconds, int probe_count) noexcept {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
+                return false;
+            }
+
+            int on = enable ? 1 : 0;
+            if (::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&on, sizeof(on)) != 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+                return false;
+            }
+
+            if (!enable) {
+                return true;
+            }
+
+            idle_seconds = std::max<int>(1, idle_seconds);
+            interval_seconds = std::max<int>(1, interval_seconds);
+            probe_count = std::max<int>(1, probe_count);
+
+#if defined(_WIN32)
+            tcp_keepalive settings;
+            memset(&settings, 0, sizeof(settings));
+            settings.onoff = 1;
+            settings.keepalivetime = static_cast<ULONG>(idle_seconds) * 1000UL;
+            settings.keepaliveinterval = static_cast<ULONG>(interval_seconds) * 1000UL;
+
+            DWORD returned = 0;
+            if (0 == ::WSAIoctl((SOCKET)fd, SIO_KEEPALIVE_VALS,
+                &settings, sizeof(settings),
+                NULLPTR, 0,
+                &returned, NULLPTR, NULLPTR)) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
+#else
+#if defined(TCP_KEEPIDLE)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&idle_seconds, sizeof(idle_seconds));
+#elif defined(TCP_KEEPALIVE)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, (char*)&idle_seconds, sizeof(idle_seconds));
+#endif
+
+#if defined(TCP_KEEPINTVL)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (char*)&interval_seconds, sizeof(interval_seconds));
+#endif
+
+#if defined(TCP_KEEPCNT)
+            ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (char*)&probe_count, sizeof(probe_count));
+#endif
+
+            return true;
+#endif
+        }
+
+        /**
+         * @brief Applies send/receive socket buffer sizes when values are provided.
+         */
         bool Socket::SetWindowSizeIfNotZero(int sockfd, int cwnd, int rwnd) noexcept {
-            if (sockfd == -1) {
+            if (-1 == sockfd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
@@ -545,9 +716,17 @@ namespace ppp {
                 any |= setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (char*)&rwnd, sizeof(rwnd)) > -1;  
             }
             
-            return any;
+            if (!any) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+                return false;
+            }
+
+            return true;
         }
         
+        /**
+         * @brief Applies default low-level options to a native socket handle.
+         */
         void Socket::AdjustDefaultSocketOptional(int sockfd, bool in4) noexcept {
             if (sockfd != -1) {
                 uint8_t tos = SOCKET_RESTRICTIONS_.IP_TOS_DEFAULT_FLASH ? IPTOS_LOWDELAY : 0;
@@ -588,11 +767,22 @@ namespace ppp {
                 int no_sigpipe = 1;
                 ::setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
 #endif
+
+                /**
+                 * @brief Keepalive rationale for long-idle forwarded sessions.
+                 */
+                // User-space forwarders such as rinetd often reclaim idle TCP
+                // sessions earlier than NAT devices. Keepalive prevents VMUX
+                // sub-links from being silently dropped while the mux is idle.
+                SetKeepAlive(sockfd, true);
             }
         }
 
         // https://source.android.google.cn/devices/tech/debug/native-crash?hl=zh-cn
         // https://android.googlesource.com/platform/bionic/+/master/docs/fdsan.md
+        /**
+         * @brief Gracefully closes a TCP socket.
+         */
         bool Socket::Closesocket(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -604,42 +794,70 @@ namespace ppp {
 
                 try {
                     s.close(ec);
-                    return ec == boost::system::errc::success;
+                    if (boost::system::errc::success == ec) {
+                        return true;
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
+                    return false;
                 }
                 catch (const std::exception&) {}
             }
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
             return false;
         }
 
+        /**
+         * @brief Closes a TCP acceptor.
+         */
         bool Socket::Closesocket(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (s.is_open()) {
                 boost::system::error_code ec;
                 try {
                     s.close(ec);
-                    return ec == boost::system::errc::success;
+                    if (boost::system::errc::success == ec) {
+                        return true;
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
+                    return false;
                 }
                 catch (const std::exception&) {}
             }
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
             return false;
         }
 
+        /**
+         * @brief Closes a UDP socket.
+         */
         bool Socket::Closesocket(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
                 boost::system::error_code ec;
                 try {
                     s.close(ec);
-                    return ec == boost::system::errc::success;
+                    if (boost::system::errc::success == ec) {
+                        return true;
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
+                    return false;
                 }
                 catch (const std::exception&) {}
             }
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
             return false;
         }
 
+        /**
+         * @brief Returns native handle of an open TCP socket.
+         */
         int Socket::GetHandle(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (!socket.is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return -1;
             }
 
@@ -648,13 +866,18 @@ namespace ppp {
                 return ndfs;
             }
             catch (const std::exception&) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNativeHandleQueryFailed);
                 return -1;
             }
         }
 
+        /**
+         * @brief Returns native handle of an open TCP acceptor.
+         */
         int Socket::GetHandle(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (!s.is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return -1;
             }
 
@@ -663,13 +886,18 @@ namespace ppp {
                 return ndfs;
             }
             catch (const std::exception&) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNativeHandleQueryFailed);
                 return -1;
             }
         }
 
+        /**
+         * @brief Returns native handle of an open UDP socket.
+         */
         int Socket::GetHandle(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (!s.is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return -1;
             }
 
@@ -678,20 +906,26 @@ namespace ppp {
                 return ndfs;
             }
             catch (const std::exception&) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNativeHandleQueryFailed);
                 return -1;
             }
         }
 
+        /**
+         * @brief Starts loopback accept recursion for shared-pointer acceptor API.
+         */
         bool Socket::AcceptLoopbackAsync(
             const AsioTcpAcceptor&                                  acceptor,
             const AcceptLoopbackCallback&                           callback,
             const GetContextCallback&                               context) noexcept {
             if (!acceptor || !acceptor->is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return false;
             }
 
             if (!callback) {
                 Closesocket(acceptor);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullAcceptCallback);
                 return false;
             }
 
@@ -706,16 +940,21 @@ namespace ppp {
             }
             else {
                 Closesocket(acceptor);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                 return false;
             }
         }
 
+        /**
+         * @brief Internal accept loop implementation for callback and scheduler modes.
+         */
         static bool SocketAcceptLoopbackAsync(
             const boost::asio::ip::tcp::acceptor&                   acceptor,
             const Socket::AcceptLoopbackCallback&                   callback,
             const Socket::GetContextCallback&                       context,
             const Socket::AcceptLoopbackSchedulerCallback&          scheduler) noexcept {
             if (!acceptor.is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return false;
             }
 
@@ -736,12 +975,14 @@ namespace ppp {
             }
 
             if (!context_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return false;
             }
 
             boost::asio::ip::tcp::acceptor* const acceptor_ = addressof(acceptor);
             const Socket::AsioTcpSocket           socket_   = strand_ ? make_shared_object<boost::asio::ip::tcp::socket>(*strand_) : make_shared_object<boost::asio::ip::tcp::socket>(*context_);
             if (NULLPTR == socket_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
@@ -753,6 +994,9 @@ namespace ppp {
                                 return;
                             }
 
+                            /**
+                             * @brief Complex accept path with socket setup and delegation.
+                             */
                             bool success = false;
                             do { /* boost::system::errc::connection_aborted */
                                 if (ec) { /* ECONNABORTED */
@@ -803,11 +1047,15 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Starts loopback accept recursion using simple callback mode.
+         */
         bool Socket::AcceptLoopbackAsync(
             const boost::asio::ip::tcp::acceptor&                   acceptor,
             const AcceptLoopbackCallback&                           callback,
             const GetContextCallback&                               context) noexcept {
             if (!callback) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullAcceptCallback);
                 return false;
             }
 
@@ -815,14 +1063,21 @@ namespace ppp {
             return SocketAcceptLoopbackAsync(acceptor, callback, context, ac);
         }
 
+        /**
+         * @brief Starts loopback accept recursion using scheduler callback mode.
+         */
         bool Socket::AcceptLoopbackSchedulerAsync(const boost::asio::ip::tcp::acceptor& acceptor, const AcceptLoopbackSchedulerCallback& callback) noexcept {
             if (!callback) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNullAcceptCallback);
                 return false;
             }
 
             return SocketAcceptLoopbackAsync(acceptor, NULLPTR, NULLPTR, callback);
         }
 
+        /**
+         * @brief Opens, configures, binds, and listens on a TCP acceptor.
+         */
         bool Socket::OpenAcceptor(
             const boost::asio::ip::tcp::acceptor&                   acceptor,
             const boost::asio::ip::address&                         listenIP,
@@ -845,6 +1100,7 @@ namespace ppp {
 
             boost::asio::ip::tcp::acceptor& acceptor_ = constantof(acceptor);
             if (acceptor_.is_open()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidState);
                 return false;
             }
 
@@ -857,7 +1113,7 @@ namespace ppp {
             }
 
             if (ec) {
-                return false;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed);
             }
 
             int handle = acceptor_.native_handle();
@@ -868,7 +1124,8 @@ namespace ppp {
 
             acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
             if (ec) {
-                return false;
+                Closesocket(acceptor_);  // Clean up opened acceptor
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             }
 
             acceptor_.set_option(boost::asio::ip::tcp::no_delay(noDelay), ec);
@@ -879,7 +1136,8 @@ namespace ppp {
                 if (listenPort != IPEndPoint::MinPort) {
                     acceptor_.bind(boost::asio::ip::tcp::endpoint(address_, IPEndPoint::MinPort), ec);
                     if (ec) {
-                        return false;
+                        Closesocket(acceptor_);  // Clean up opened acceptor
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     }
                 }
             }
@@ -890,12 +1148,16 @@ namespace ppp {
 
             acceptor_.listen(backlog, ec);
             if (ec) {
-                return false;
+                Closesocket(acceptor_);  // Clean up opened acceptor
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketListenFailed);
             }
 
             return true;
         }
 
+        /**
+         * @brief Opens/configures/binds a UDP socket for listening.
+         */
         bool Socket::OpenSocket(
             const boost::asio::ip::udp::socket&                     socket,
             const boost::asio::ip::address&                         listenIP,
@@ -918,6 +1180,7 @@ namespace ppp {
             boost::asio::ip::udp::socket& socket_ = constantof(socket);
             if (!opened) {
                 if (socket_.is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidState);
                     return false;
                 }
 
@@ -929,7 +1192,7 @@ namespace ppp {
                 }
 
                 if (ec) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 }
             }
 
@@ -941,7 +1204,8 @@ namespace ppp {
 
             socket_.set_option(boost::asio::ip::udp::socket::reuse_address(true), ec);
             if (ec) {
-                return false;
+                Closesocket(socket_);  // Clean up opened socket
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             }
 
             socket_.bind(boost::asio::ip::udp::endpoint(address_, listenPort), ec);
@@ -949,13 +1213,17 @@ namespace ppp {
                 if (listenPort != IPEndPoint::MinPort) {
                     socket_.bind(boost::asio::ip::udp::endpoint(address_, IPEndPoint::MinPort), ec);
                     if (ec) {
-                        return false;
+                        Closesocket(socket_);  // Clean up opened socket
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     }
                 }
             }
             return true;
         }
 
+        /**
+         * @brief Applies default and transport-specific options to a TCP socket.
+         */
         void Socket::AdjustSocketOptional(const boost::asio::ip::tcp::socket& socket, bool in4, bool fastOpen, bool noDealy) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -971,6 +1239,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Applies default options to a UDP socket.
+         */
         void Socket::AdjustSocketOptional(const boost::asio::ip::udp::socket& socket, bool in4) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
@@ -982,17 +1253,27 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Toggles non-blocking mode on native descriptor.
+         */
         bool Socket::SetNonblocking(int fd, bool nonblocking) noexcept {
-            if (fd == -1) {
+            if (-1 == fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
             }
 
 #if defined(_WIN32)
             u_long flags = nonblocking ? 1 : 0;
-            return ioctlsocket(fd, FIONBIO, &flags) == 0;
+            if (0 == ioctlsocket(fd, FIONBIO, &flags)) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
 #else
             int flags = fcntl(fd, F_GETFD, 0);
-            if (flags == -1) {
+            if (-1 == flags) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                 return false;
             }
 
@@ -1004,12 +1285,21 @@ namespace ppp {
             }
 
             int err = fcntl(fd, F_SETFL, flags);
-            return err == 0;
+            if (0 == err) {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
 #endif
         }
 
+        /**
+         * @brief Cancels and closes a POSIX stream descriptor.
+         */
         bool Socket::Closestream(boost::asio::posix::stream_descriptor* stream) noexcept {
             if (NULLPTR == stream) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::StreamDescriptorNull);
                 return false;
             }
 
@@ -1023,28 +1313,35 @@ namespace ppp {
 
             try {
                 stream->close(ec);
-                if (ec == boost::system::errc::success) {
+                if (boost::system::errc::success == ec) {
                     return true;
                 }
             }
             catch (const std::exception&) {}
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
             return false;
         }
 
+        /**
+         * @brief Applies default options to an already-open TCP socket.
+         */
         bool Socket::AdjustDefaultSocketOptional(boost::asio::ip::tcp::socket& socket, bool turbo) noexcept {
             bool opened = socket.is_open();
             if (!opened) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                 return false;
             }
 
             boost::system::error_code ec;
             boost::asio::ip::tcp::endpoint localEP = socket.local_endpoint(ec);
             if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                 return false;
             }
             else {
                 socket.set_option(boost::asio::ip::tcp::no_delay(turbo), ec);
                 if (ec) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
             }
@@ -1058,9 +1355,13 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Determines local IPv4 source address for a destination.
+         */
         uint32_t Socket::GetBestInterfaceIP(uint32_t destination) noexcept {
             int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-            if (sock_fd == -1) {
+            if (-1 == sock_fd) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                 return IPEndPoint::AnyAddress;
             }
 
@@ -1081,9 +1382,11 @@ namespace ppp {
             Socket::Closesocket(sock_fd);
 
             if (err < 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
                 return IPEndPoint::AnyAddress;
             }
             elif(local_endpoint.sin_family != AF_INET) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                 return IPEndPoint::AnyAddress;
             }
             else {

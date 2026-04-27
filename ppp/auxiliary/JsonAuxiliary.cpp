@@ -1,7 +1,15 @@
+/**
+ * @file JsonAuxiliary.cpp
+ * @brief Implementation of JSON serialization and typed conversion helpers.
+ */
 #include <ppp/auxiliary/JsonAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 
 namespace ppp {
     namespace auxiliary {
+        /**
+         * @brief Serialize a JSON value into compact JSON text.
+         */
         ppp::string JsonAuxiliary::ToString(const Json::Value& json) noexcept {
             Json::FastWriter fw;
             ppp::string s = fw.write(json);
@@ -10,6 +18,9 @@ namespace ppp {
             return s;
         }
 
+        /**
+         * @brief Serialize a JSON value into pretty-printed JSON text.
+         */
         ppp::string JsonAuxiliary::ToStyledString(const Json::Value& json) noexcept {
             ppp::string s = json.toStyledString();
             s = RTrim(s);
@@ -17,28 +28,45 @@ namespace ppp {
             return s;
         }
 
+        /**
+         * @brief Parse JSON from a raw character buffer.
+         */
         Json::Value JsonAuxiliary::FromString(const char* json_string, int json_size) noexcept {
             if (NULLPTR == json_string) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringNullInput);
                 return Json::Value();
             }
 
             if (json_size < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringInvalidSize);
                 return Json::Value();
             }
 
             if (*json_string == '\x0') {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringInputEmpty);
                 return Json::Value();
             }
 
             Json::Reader reader;
             Json::Value json;
-            return reader.parse(json_string, json_string + json_size, json) ? json : Json::Value();
+            if (!reader.parse(json_string, json_string + json_size, json)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::JsonAuxiliaryFromStringParseFailed);
+                return Json::Value();
+            }
+
+            return json;
         }
 
+        /**
+         * @brief Parse JSON from a string object.
+         */
         Json::Value JsonAuxiliary::FromString(const ppp::string& json) noexcept {
             return FromString(json.data(), (int)json.size());
         }
 
+        /**
+         * @brief Convert scalar JSON values into textual form.
+         */
         ppp::string JsonAuxiliary::AsString(const Json::Value& json) noexcept {
             if (json.isNull()) {
                 return ppp::string();
@@ -72,6 +100,9 @@ namespace ppp {
             return ppp::string();
         }
 
+        /**
+         * @brief Convert a JSON value to signed 64-bit integer with fallback.
+         */
         Int64 JsonAuxiliary::AsInt64(const Json::Value& json, Int64 default_value) noexcept {
             if (json.isInt64()) {
                 return json.asInt64();
@@ -95,6 +126,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Convert a JSON value to unsigned 64-bit integer.
+         */
         UInt64 JsonAuxiliary::AsUInt64(const Json::Value& json) noexcept {
             if (json.isUInt64()) {
                 return json.asUInt64();
@@ -118,6 +152,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Convert a JSON value to double precision value.
+         */
         double JsonAuxiliary::AsDouble(const Json::Value& json) noexcept {
             if (json.isDouble()) {
                 double d = json.asDouble();
@@ -141,6 +178,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Convert a JSON value to 128-bit integer.
+         */
         Int128 JsonAuxiliary::AsInt128(const Json::Value& json) noexcept {
             if (json.isDouble()) {
                 double d = json.asDouble();
@@ -164,6 +204,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Convert a JSON value into boolean semantics.
+         */
         bool JsonAuxiliary::AsBoolean(const Json::Value& json) noexcept {
             if (json.isNull()) {
                 return false;

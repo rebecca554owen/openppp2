@@ -1,4 +1,5 @@
 #include <ppp/stdafx.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/IPEndPoint.h>
 
 #include <windows/ppp/net/QoSS.h>
@@ -37,18 +38,21 @@ namespace ppp
         {
             if (fd == INVALID_SOCKET)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return NULLPTR;
             }
 
             std::shared_ptr<QoSS> qos = make_shared_object<QoSS>(fd);
             if (NULLPTR == qos)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
             QOS_VERSION ver = { 1, 0 };
             if (!QOSCreateHandle(&ver, &qos->h_))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 return NULLPTR;
             }
 
@@ -56,6 +60,7 @@ namespace ppp
             {
                 if (!QOSAddSocketToFlow(qos->h_, fd, NULLPTR, QOSTrafficTypeControl, QOS_NON_ADAPTIVE_FLOW, &qos->f_))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return NULLPTR;
                 }
             }
@@ -63,16 +68,19 @@ namespace ppp
             {
                 if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                     return NULLPTR;
                 }
 
                 if (!host.is_v4() && !host.is_v6())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressFamilyMismatch);
                     return NULLPTR;
                 }
 
                 if (IPEndPoint::IsInvalid(host))
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
@@ -85,6 +93,7 @@ namespace ppp
 
                     if (!QOSAddSocketToFlow(qos->h_, fd, reinterpret_cast<sockaddr*>(&in), QOSTrafficTypeControl, QOS_NON_ADAPTIVE_FLOW, &qos->f_))
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                         return NULLPTR;
                     }
                 }
@@ -97,6 +106,7 @@ namespace ppp
 
                     if (!QOSAddSocketToFlow(qos->h_, fd, reinterpret_cast<sockaddr*>(&in6), QOSTrafficTypeControl, QOS_NON_ADAPTIVE_FLOW, &qos->f_))
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                         return NULLPTR;
                     }
                 }
@@ -109,6 +119,7 @@ namespace ppp
             // This will fail if we're not admin, but we ignore it
             if (!QOSSetFlow(qos->h_, qos->f_, QOSSetOutgoingDSCPValue, sizeof(DWORD), &dscp, 0, NULLPTR))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                 return NULLPTR;
             }
 

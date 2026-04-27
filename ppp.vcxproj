@@ -279,6 +279,13 @@
     <ClCompile Include="common\lwip\core\udp.c" />
     <ClCompile Include="common\lwip\my\sys_arch.c" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="ppp\app\ApplicationConfig.cpp" />
+    <ClCompile Include="ppp\app\ApplicationHelp.cpp" />
+    <ClCompile Include="ppp\app\ApplicationInitialize.cpp" />
+    <ClCompile Include="ppp\app\ApplicationMainLoop.cpp" />
+    <ClCompile Include="ppp\app\ApplicationNetwork.cpp" />
+    <ClCompile Include="ppp\app\ConsoleUI.cpp" />
+    <ClCompile Include="ppp\app\PppApplication.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.cpp" />
@@ -295,6 +302,8 @@
     <ClCompile Include="ppp\app\server\VirtualEthernetNamespaceCache.cpp" />
     <ClCompile Include="ppp\app\server\VirtualInternetControlMessageProtocolStatic.cpp" />
     <ClCompile Include="ppp\configurations\Ini.cpp" />
+    <ClCompile Include="ppp\diagnostics\Error.cpp" />
+    <ClCompile Include="ppp\diagnostics\ErrorHandler.cpp" />
     <ClCompile Include="ppp\diagnostics\PreventReturn.cpp" />
     <ClCompile Include="ppp\hash\hash_bytes.cpp" />
     <ClCompile Include="ppp\net\asio\vdns.cpp" />
@@ -365,11 +374,13 @@
     <ClCompile Include="ppp\transmissions\ITransmissionQoS.cpp" />
     <ClCompile Include="ppp\transmissions\IWebsocketTransmission.cpp" />
     <ClCompile Include="ppp\transmissions\proxys\IForwarding.cpp" />
+    <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneConnection.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneController.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspX.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.cpp" />
+    <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp" />
     <ClCompile Include="windows\ppp\net\proxies\HttpProxy.cpp" />
     <ClCompile Include="windows\ppp\net\QoSS.cpp" />
     <ClCompile Include="windows\ppp\net\Win32SocketAcceptor.cpp" />
@@ -597,6 +608,8 @@
     <ClInclude Include="ppp\app\server\VirtualInternetControlMessageProtocolStatic.h" />
     <ClInclude Include="ppp\collections\LinkedList.h" />
     <ClInclude Include="ppp\configurations\Ini.h" />
+    <ClInclude Include="ppp\diagnostics\Error.h" />
+    <ClInclude Include="ppp\diagnostics\ErrorHandler.h" />
     <ClInclude Include="ppp\diagnostics\PreventReturn.h" />
     <ClInclude Include="ppp\hash\hash_bytes.h" />
     <ClInclude Include="ppp\net\asio\vdns.h" />
@@ -620,6 +633,9 @@
     <ClInclude Include="ppp\app\server\VirtualInternetControlMessageProtocol.h" />
     <ClInclude Include="ppp\auxiliary\JsonAuxiliary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h" />
+    <ClInclude Include="ppp\app\ConsoleUI.h" />
+    <ClInclude Include="ppp\app\PppApplication.h" />
+    <ClInclude Include="ppp\app\PppApplicationInternal.h" />
     <ClInclude Include="ppp\auxiliary\StringAuxiliary.h" />
     <ClInclude Include="ppp\auxiliary\UriAuxiliary.h" />
     <ClInclude Include="ppp\cryptography\Ciphertext.h" />
@@ -636,6 +652,7 @@
     <ClInclude Include="ppp\collections\Dictionary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetLinklayer.h" />
     <ClInclude Include="ppp\configurations\AppConfiguration.h" />
+    <ClInclude Include="ppp\ipv6\IPv6Auxiliary.h" />
     <ClInclude Include="ppp\coroutines\asio\asio.h" />
     <ClInclude Include="ppp\coroutines\YieldContext.h" />
     <ClInclude Include="ppp\cryptography\EVP.h" />
@@ -683,6 +700,7 @@
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneLspX.h" />
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.h" />
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.h" />
+    <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h" />
     <ClInclude Include="windows\ppp\net\proxies\HttpProxy.h" />
     <ClInclude Include="windows\ppp\net\QoSS.h" />
     <ClInclude Include="windows\ppp\tap\tap-windows.h" />

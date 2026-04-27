@@ -1,5 +1,12 @@
 #pragma once
 
+/**
+ * @file VirtualEthernetMappingPort.h
+ * @brief Declares virtual Ethernet mapping port server/client forwarding components.
+ * @author ("OPENPPP2 Team")
+ * @license ("GPL-3.0")
+ */
+
 #include <ppp/stdafx.h>
 #include <ppp/net/asio/IAsynchronousWriteIoQueue.h>
 #include <ppp/net/Ipep.h>
@@ -16,48 +23,70 @@
 namespace ppp {
     namespace app {
         namespace protocol {
-            // Forward declaration of the main mapping port class
+            /**
+             * @brief Manages one virtual Ethernet mapping port for TCP/UDP forwarding.
+             */
             class VirtualEthernetMappingPort : public std::enable_shared_from_this<VirtualEthernetMappingPort> {
             public:
                 // Type aliases for convenience
-                typedef ppp::coroutines::YieldContext                                       YieldContext;
-                typedef ppp::transmissions::ITransmission                                   ITransmission;
-                typedef std::shared_ptr<ITransmission>                                      ITransmissionPtr;
-                typedef ppp::configurations::AppConfiguration                               AppConfiguration;
-                typedef std::shared_ptr<AppConfiguration>                                   AppConfigurationPtr;
-                typedef std::shared_ptr<VirtualEthernetMappingPort>                         Ptr;
-                typedef std::shared_ptr<VirtualEthernetLogger>                              VirtualEthernetLoggerPtr;
+                typedef ppp::coroutines::YieldContext                                       YieldContext;        ///< Coroutine suspend/resume context passed through async call chains.
+                typedef ppp::transmissions::ITransmission                                   ITransmission;       ///< Abstract virtual Ethernet transmission channel.
+                typedef std::shared_ptr<ITransmission>                                      ITransmissionPtr;    ///< Shared ownership handle for a transmission channel.
+                typedef ppp::configurations::AppConfiguration                               AppConfiguration;    ///< Application-wide runtime configuration type.
+                typedef std::shared_ptr<AppConfiguration>                                   AppConfigurationPtr; ///< Shared ownership handle for the configuration object.
+                typedef std::shared_ptr<VirtualEthernetMappingPort>                         Ptr;                 ///< Canonical shared-pointer alias for this class.
+                typedef std::shared_ptr<VirtualEthernetLogger>                              VirtualEthernetLoggerPtr; ///< Shared ownership handle for the structured event logger.
 
             public:
-                // Constructor: initializes the mapping port with linklayer, transmission, protocol type, IP version, and remote port
+                /**
+                 * @brief Constructs a mapping port instance.
+                 * @param linklayer Linklayer used for FRP control/data messaging.
+                 * @param transmission Active transmission channel.
+                 * @param tcp True for TCP mapping, false for UDP mapping.
+                 * @param in Direction/side flag used by mapping key.
+                 * @param remote_port Remote service port.
+                 * @return N/A.
+                 * @note The object starts in non-opened state until server/client open methods are called.
+                 */
                 VirtualEthernetMappingPort(const std::shared_ptr<VirtualEthernetLinklayer>& linklayer, const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port) noexcept;
-                // Destructor: cleans up resources
+                /**
+                 * @brief Destroys the mapping port and owned runtime resources.
+                 * @return N/A.
+                 * @note Equivalent cleanup path is also reachable through `Dispose()`.
+                 */
                 virtual ~VirtualEthernetMappingPort() noexcept;
 
             public:
-                // Returns the associated IO context
+                /** @brief Gets IO context. @return Shared io_context pointer. @note Lightweight getter. */
                 std::shared_ptr<boost::asio::io_context>                                    GetContext() noexcept;
-                // Returns the linklayer instance
+                /** @brief Gets linklayer instance. @return Shared VirtualEthernetLinklayer pointer. @note Lightweight getter. */
                 std::shared_ptr<VirtualEthernetLinklayer>                                   GetLinklayer() noexcept;
-                // Returns the transmission instance
+                /** @brief Gets transmission instance. @return Shared ITransmission pointer. @note Lightweight getter. */
                 ITransmissionPtr                                                            GetTransmission() noexcept;
-                // Checks if the network protocol is TCP
+                /** @brief Checks TCP mode. @return True when protocol is TCP. @note Lightweight state check. */
                 bool                                                                        ProtocolIsTcpNetwork() noexcept;
-                // Checks if the network protocol is UDP
+                /** @brief Checks UDP mode. @return True when protocol is UDP. @note Lightweight state check. */
                 bool                                                                        ProtocolIsUdpNetwork() noexcept;
-                // Checks if the network IP version is IPv4
+                /** @brief Checks inbound flag. @return True when inbound/in flag is set. @note Naming follows existing protocol semantics. */
                 bool                                                                        ProtocolIsNetworkV4() noexcept;
-                // Checks if the network IP version is IPv6
+                /** @brief Checks non-inbound flag. @return True when inbound/in flag is not set. @note Naming follows existing protocol semantics. */
                 bool                                                                        ProtocolIsNetworkV6() noexcept;
-                // Returns the remote port number
+                /** @brief Gets mapped remote port. @return Remote port number. @note Lightweight getter. */
                 int                                                                         GetRemotePort() noexcept;
-                // Returns the logger instance
+                /** @brief Gets logger. @return Shared logger pointer. @note Lightweight getter. */
                 VirtualEthernetLoggerPtr                                                    GetLogger() noexcept { return logger_; }
-                // Returns the buffer allocator
+                /** @brief Gets buffer allocator. @return Shared allocator pointer. @note Lightweight getter. */
                 std::shared_ptr<ppp::threading::BufferswapAllocator>                        GetBufferAllocator() noexcept { return buffer_allocator_; }
                 
             public:
-                // Computes a hash key from IP version, protocol type, and port
+                /**
+                 * @brief Builds mapping dictionary key.
+                 * @param in Direction/side flag.
+                 * @param tcp Protocol flag.
+                 * @param remote_port Remote port value.
+                 * @return 32-bit composite key.
+                 * @note Key packs flags in high bits and port in low 16 bits.
+                 */
                 static constexpr uint32_t                                                   GetHashCode(bool in, bool tcp, int remote_port) noexcept {
                     uint32_t key = (in ? 1 : 0) << 24;   // bit 24: IPv4=1, IPv6=0
                     key |= (tcp ? 1 : 0) << 16;          // bit 16: TCP=1, UDP=0
@@ -66,69 +95,73 @@ namespace ppp {
                 }
 
             public:
-                // Returns the bound endpoint of the FRP server (if any)
+                /** @brief Gets currently bound FRP server endpoint. @return TCP endpoint value. @note Returns default endpoint when server is not opened. */
                 boost::asio::ip::tcp::endpoint                                              BoundEndPointOfFrpServer() noexcept;
-                // Opens the FRP server side (listening for incoming FRP connections)
+                /** @brief Opens FRP server side. @param logger Logger for connect/session events. @return True on success. @note Creates TCP/UDP network sockets by mapping mode. */
                 virtual bool                                                                OpenFrpServer(const VirtualEthernetLoggerPtr& logger) noexcept;
-                // Opens the FRP client side (connecting to a local destination)
+                /** @brief Opens FRP client side. @param local_ip Local destination bind/connect address. @param local_port Local destination port. @return True on success. @note Used by remote side to reach local service. */
                 virtual bool                                                                OpenFrpClient(const boost::asio::ip::address& local_ip, int local_port) noexcept;
-                // Disposes the mapping port, releasing all resources
+                /** @brief Disposes mapping port and owned sessions. @return void. @note Safe to call multiple times. */
                 virtual void                                                                Dispose() noexcept;
-                // Updates internal state and cleans up timed-out connections
+                /** @brief Updates timeouts/aging state. @param now Current tick count in milliseconds. @return True when update completed. @note Expired sessions/ports may be closed during this pass. */
                 virtual bool                                                                Update(UInt64 now) noexcept;
-                // Generates a new unique connection ID
+                /** @brief Generates a new connection id. @return Positive unique id. @note Used for FRP connection correlation. */
                 static int                                                                  NewId() noexcept;
 
             public:
-                // Finds a mapping port by its properties in a given dictionary
+                /** @brief Finds mapping port by key fields. @param mappings Mapping dictionary. @param in Direction flag. @param tcp Protocol flag. @param remote_port Remote port. @return Matched mapping port or null. @note Lookup key is generated by `GetHashCode()`. */
                 static std::shared_ptr<VirtualEthernetMappingPort>                          FindMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port) noexcept;
-                // Adds a mapping port to a dictionary
+                /** @brief Inserts mapping port by key fields. @param mappings Mapping dictionary. @param in Direction flag. @param tcp Protocol flag. @param remote_port Remote port. @param mapping_port Mapping object to insert. @return True on success. @note Existing key insertion behavior follows container semantics. */
                 static bool                                                                 AddMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port, const Ptr& mapping_port) noexcept;
-                // Deletes a mapping port from a dictionary and returns it
+                /** @brief Removes and returns mapping port by key fields. @param mappings Mapping dictionary. @param in Direction flag. @param tcp Protocol flag. @param remote_port Remote port. @return Removed mapping object or null. @note Safe when key is absent. */
                 static std::shared_ptr<VirtualEthernetMappingPort>                          DeleteMappingPort(ppp::unordered_map<uint32_t, Ptr>& mappings, bool in, bool tcp, int remote_port) noexcept;
 
             public:
-                // Called when FRP server receives a successful connection acknowledgment
+                /** @brief Handles server-side connect-ok control packet. @param connection_id Connection identifier. @param error_code Protocol error code. @return True when handled successfully. @note Primarily used for TCP server sessions. */
                 bool                                                                        Server_OnFrpConnectOK(int connection_id, Byte error_code) noexcept;
-                // Called when FRP server receives a disconnect request
+                /** @brief Handles server-side disconnect control packet. @param connection_id Connection identifier. @return True when handled successfully. @note Missing connection ids are treated as no-op failures by implementation. */
                 bool                                                                        Server_OnFrpDisconnect(int connection_id) noexcept;
-                // Called when FRP server receives a data push from the client
+                /** @brief Handles server-side payload push. @param connection_id Connection identifier. @param packet Payload pointer. @param packet_length Payload length. @return True on successful dispatch. @note Data is forwarded to local FRP user socket/port. */
                 bool                                                                        Server_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept;
-                // Called when FRP server needs to send a UDP datagram to a remote endpoint
+                /** @brief Handles server-side UDP send-to request. @param packet Datagram payload pointer. @param packet_length Datagram payload length. @param sourceEP Source endpoint metadata. @return True on successful send. @note Used by UDP mapping mode. */
                 bool                                                                        Server_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
 
             public:
-                // Called when FRP client receives a disconnect request
+                /** @brief Handles client-side disconnect control packet. @param connection_id Connection identifier. @return True when handled successfully. @note Closes corresponding local destination session. */
                 bool                                                                        Client_OnFrpDisconnect(int connection_id) noexcept;
-                // Called when FRP client receives a data push from the server
+                /** @brief Handles client-side payload push. @param connection_id Connection identifier. @param packet Payload pointer. @param packet_length Payload length. @return True on successful dispatch. @note Data is forwarded to destination server/socket. */
                 bool                                                                        Client_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept;
-                // Called when FRP client receives a connection request
+                /** @brief Handles client-side connect request. @param connection_id Connection identifier. @return True when local connect sequence starts. @note Mainly used by TCP mapping mode. */
                 bool                                                                        Client_OnFrpConnect(int connection_id) noexcept;
-                // Called when FRP client needs to send a UDP datagram to a remote endpoint
+                /** @brief Handles client-side UDP send-to request. @param packet Datagram payload pointer. @param packet_length Datagram payload length. @param sourceEP Source endpoint metadata. @return True on successful send. @note Used by UDP mapping mode. */
                 bool                                                                        Client_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
 
             private:
-                // Inner class representing the server side (listening for incoming FRP connections)
+                /**
+                 * @brief Server runtime container for incoming FRP-side traffic.
+                 */
                 class Server final {
                 public:
-                    // Inner class representing a single TCP connection on the server side
+                    /**
+                     * @brief Represents one server-side TCP bridged connection.
+                     */
                     class Connection final : public ppp::net::asio::IAsynchronousWriteIoQueue {
                     public:
-                        // Constructor: initializes a server connection
+                        /** @brief Constructs server-side connection object. @param mapping_port Owning mapping port. @param server Owning server container. @param connection_id Connection identifier. @param socket Accepted user TCP socket. @return N/A. @note Socket ownership is shared. */
                         Connection(const std::shared_ptr<VirtualEthernetMappingPort>& mapping_port, const std::shared_ptr<Server>& server, int connection_id, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept;
-                        // Destructor: cleans up the connection
+                        /** @brief Destroys server-side connection object. @return N/A. @note Finalization can also occur through `Dispose()`. */
                         ~Connection() noexcept;
 
                     public:
-                        // Disposes the connection
+                        /** @brief Disposes this connection. @return void. @note Delegates to `Finalize(false)`. */
                         void                                                                Dispose() noexcept { Finalize(false); }
-                        // Initiates connection to the FRP client (remote side)
+                        /** @brief Sends connect request to FRP client side. @return True on successful request dispatch. @note Used after local user socket accept. */
                         bool                                                                ConnectToFrpClient() noexcept;
-                        // Sends data to the FRP user (local TCP client)
+                        /** @brief Writes data to local FRP user socket. @param packet Payload pointer. @param packet_size Payload length. @return True on async write queue acceptance. @note Data path: remote FRP client -> local user. */
                         bool                                                                SendToFrpUser(const void* packet, int packet_size) noexcept;
-                        // Sends data to the FRP client (remote side)
+                        /** @brief Writes data to remote FRP client channel. @param packet Payload pointer. @param packet_size Payload length. @return True on successful transmission write. @note Data path: local user -> remote FRP client. */
                         bool                                                                SendToFrpClient(const void* packet, int packet_size) noexcept;
-                        // Updates the timeout timestamp based on current state
+                        /** @brief Refreshes timeout deadline based on connection stage. @return void. @note Uses connect timeout before active state and inactive timeout afterwards. */
                         void                                                                Update() noexcept {
                             UInt64 now = ppp::threading::Executors::GetTickCount();
                             if (connection_stated_.load() < 3) {
@@ -138,21 +171,21 @@ namespace ppp {
                                 timeout_ = now + (UInt64)configuration_->tcp.inactive.timeout * 1000;  // established phase timeout
                             }
                         }
-                        // Checks if the connection has aged (timed out)
+                        /** @brief Checks whether connection is expired. @param now Current tick count. @return True when disposed stage reached or timeout elapsed. @note Lightweight state check. */
                         bool                                                                IsPortAging(UInt64 now) noexcept { return connection_stated_.load() > 3 || now >= timeout_; }
 
                     public:
-                        // Callback when connection to FRP client is successfully established
+                        /** @brief Handles FRP connect result callback. @param error_code Protocol error code. @return True on successful state transition. @note Called when peer acknowledges connect request. */
                         bool                                                                OnConnectOK(Byte error_code) noexcept;
-                        // Callback when disconnect occurs
+                        /** @brief Handles disconnect event. @return void. @note Delegates to `Finalize(true)`. */
                         void                                                                OnDisconnect() noexcept { Finalize(true); }
 
                     private:
-                        // Finalizes and releases resources, optionally notifying remote side
+                        /** @brief Finalizes connection resources. @param disconnect True to notify remote side about disconnect. @return void. @note Idempotent cleanup is expected by callers. */
                         void                                                                Finalize(bool disconnect) noexcept;
-                        // Starts forwarding data from FRP user (local TCP) to FRP client (remote)
+                        /** @brief Starts user-to-client forwarding loop. @return True when receive loop starts. @note Uses async reads from local socket. */
                         bool                                                                ForwardFrpUserToFrpClient() noexcept;
-                        // Implements asynchronous write operation for the IO queue
+                        /** @brief Queue write implementation for local socket. @param packet Managed buffer. @param offset Start offset. @param packet_length Number of bytes. @param cb Completion callback. @return True when async write starts. @note Called by `IAsynchronousWriteIoQueue`. */
                         virtual bool                                                        DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept;
 
                     private:
@@ -177,28 +210,32 @@ namespace ppp {
                     ppp::unordered_map<int, ConnectionPtr>                                  socket_connections_;         // Map from connection ID to connection object
 
                 public:
-                    // Constructor: initializes the server with the owning mapping port
+                    /** @brief Constructs server container. @param owner Raw owner pointer. @return N/A. @note Owner lifetime is controlled externally by shared mapping object. */
                     Server(VirtualEthernetMappingPort* owner) noexcept;
                 };
-                // Helper to retrieve a server-side connection by ID
+                /** @brief Gets server connection by id. @param connection_id Connection identifier. @return Connection shared pointer or null. @note Lookup is performed in server connection map. */
                 Server::ConnectionPtr                                                       Server_GetConnection(int connection_id) noexcept;
 
             private:
-                // Inner class representing the client side (connecting to local destination)
+                /**
+                 * @brief Client runtime container for local destination forwarding.
+                 */
                 class Client final {
                 public:
-                    // Inner class representing a single TCP connection on the client side
+                    /**
+                     * @brief Represents one client-side TCP bridged connection.
+                     */
                     class Connection final : public ppp::net::asio::IAsynchronousWriteIoQueue {
                     public:
-                        // Constructor: initializes a client connection
+                        /** @brief Constructs client-side connection object. @param mapping_port Owning mapping port. @param client Owning client container. @param connection_id Connection identifier. @return N/A. @note Socket is created during connect sequence. */
                         Connection(const std::shared_ptr<VirtualEthernetMappingPort>& mapping_port, const std::shared_ptr<Client>& client, int connection_id) noexcept;
-                        // Destructor: cleans up the connection
+                        /** @brief Destroys client-side connection object. @return N/A. @note Finalization can also occur through `Dispose()`. */
                         ~Connection() noexcept;
 
                     public:
-                        // Connects to the destination server (local TCP service)
+                        /** @brief Connects to local destination service. @return True when connect flow starts/succeeds. @note Called after FRP connect request arrives. */
                         bool                                                                ConnectToDestinationServer() noexcept;
-                        // Updates timeout timestamp based on state
+                        /** @brief Refreshes timeout deadline based on connection stage. @return void. @note Uses connect timeout before active state and inactive timeout afterwards. */
                         void                                                                Update() noexcept {
                             UInt64 now = ppp::threading::Executors::GetTickCount();
                             if (connection_stated_.load() < 3) {
@@ -208,25 +245,25 @@ namespace ppp {
                                 timeout_ = now + (UInt64)configuration_->tcp.inactive.timeout * 1000;
                             }
                         }
-                        // Checks if connection has aged
+                        /** @brief Checks whether connection is expired. @param now Current tick count. @return True when disposed stage reached or timeout elapsed. @note Lightweight state check. */
                         bool                                                                IsPortAging(UInt64 now) noexcept { return connection_stated_.load() > 3 || now >= timeout_; }
-                        // Disposes the connection
+                        /** @brief Disposes this connection. @return void. @note Delegates to `Finalize(false)`. */
                         void                                                                Dispose() noexcept { Finalize(false); }
-                        // Sends data to the destination server
+                        /** @brief Sends payload to local destination server. @param packet Payload pointer. @param packet_size Payload length. @return True on queue acceptance. @note Data path: remote FRP server -> local destination. */
                         bool                                                                SendToDestinationServer(const void* packet, int packet_size) noexcept;
 
                     public:
-                        // Callback when connection to destination server succeeds or fails
+                        /** @brief Handles local destination connect result. @param ok True when connect succeeded. @return True on successful protocol notification. @note Sends FRP connect-ok response. */
                         bool                                                                OnConnectedOK(bool ok) noexcept;
-                        // Callback when disconnect occurs
+                        /** @brief Handles disconnect event. @return void. @note Delegates to `Finalize(true)`. */
                         void                                                                OnDisconnect() noexcept { Finalize(true); }
 
                     private:
-                        // Finalizes and releases resources
+                        /** @brief Finalizes connection resources. @param disconnect True to notify peer about disconnect. @return void. @note Cleanup closes socket and updates maps/state. */
                         void                                                                Finalize(bool disconnect) noexcept;
-                        // Starts loopback reading from the destination server socket
+                        /** @brief Starts destination-to-peer forwarding loop. @return True when receive loop starts. @note Uses async reads from destination socket. */
                         bool                                                                Loopback() noexcept;
-                        // Implements asynchronous write operation
+                        /** @brief Queue write implementation for destination socket. @param packet Managed buffer. @param offset Start offset. @param packet_length Number of bytes. @param cb Completion callback. @return True when async write starts. @note Called by `IAsynchronousWriteIoQueue`. */
                         virtual bool                                                        DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept;
 
                     private:
@@ -244,33 +281,35 @@ namespace ppp {
                     typedef std::shared_ptr<Connection>                                     ConnectionPtr;
 
                 public:
-                    // Inner class representing a UDP NAT port (for datagram forwarding)
+                    /**
+                     * @brief Represents one UDP NAT datagram forwarding port.
+                     */
                     class DatagramPort final : public std::enable_shared_from_this<DatagramPort> {
                     public:
-                        // Constructor: initializes a datagram port for a specific NAT endpoint
+                        /** @brief Constructs datagram port object. @param mapping_port Owning mapping port. @param client Owning client container. @param natEP NAT endpoint key. @return N/A. @note Each NAT endpoint maps to one datagram port instance. */
                         DatagramPort(const std::shared_ptr<VirtualEthernetMappingPort>& mapping_port, const std::shared_ptr<Client>& client, const boost::asio::ip::udp::endpoint& natEP) noexcept;
-                        // Destructor: cleans up the datagram port
+                        /** @brief Destroys datagram port object. @return N/A. @note Ensures UDP socket is closed during cleanup. */
                         ~DatagramPort() noexcept;
 
                     public:
-                        // Sends a UDP packet to the remote endpoint (via FRP)
+                        /** @brief Sends UDP payload to peer/local destination path. @param packet Payload pointer. @param packet_length Payload length. @param sourceEP Source endpoint metadata. @return True on successful send dispatch. @note Direction depends on caller side. */
                         bool                                                                SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
-                        // Updates the timeout timestamp
+                        /** @brief Refreshes inactive timeout deadline. @return void. @note Uses UDP inactive timeout from configuration. */
                         void                                                                Update() noexcept {
                             UInt64 now = ppp::threading::Executors::GetTickCount();
                             timeout_ = now + (UInt64)configuration_->udp.inactive.timeout * 1000;
                         }
-                        // Opens the underlying UDP socket and starts loopback
+                        /** @brief Opens UDP socket and starts receive loop. @return True on success. @note Socket bind/open mode follows endpoint protocol family. */
                         bool                                                                Open() noexcept;
-                        // Checks if the port has aged
+                        /** @brief Checks whether datagram port is expired. @param now Current tick count. @return True when disposed or timeout elapsed. @note Lightweight state check. */
                         bool                                                                IsPortAging(UInt64 now) noexcept { return disposed_.load() != FALSE || now >= timeout_; }
-                        // Disposes the datagram port
+                        /** @brief Disposes datagram port resources. @return void. @note Safe to call repeatedly. */
                         void                                                                Dispose() noexcept;
 
                     private:
-                        // Starts the asynchronous receive loop on the UDP socket
+                        /** @brief Starts asynchronous UDP receive loop. @return True when loop is armed. @note Received datagrams are forwarded to peer path. */
                         bool                                                                Loopback() noexcept;
-                        // Forwards received UDP data to the destination server (via FRP)
+                        /** @brief Forwards UDP payload to destination side. @param packet Payload pointer. @param packet_length Payload length. @return True on successful forwarding dispatch. @note Called from receive loop callbacks. */
                         bool                                                                SendToDestinationServer(const void* packet, int packet_length) noexcept;
 
                     private:
@@ -295,28 +334,28 @@ namespace ppp {
                     ppp::unordered_map<boost::asio::ip::udp::endpoint, DatagramPortPtr>     socket_datagram_ports_;      // Map from NAT endpoint to datagram port
                     
                 public:
-                    // Constructor: initializes an empty client
+                    /** @brief Constructs client container. @return N/A. @note Maps/sockets are initialized empty. */
                     Client() noexcept;
                 };
-                // Helper to retrieve a client-side connection by ID
+                /** @brief Gets client connection by id. @param connection_id Connection identifier. @return Connection shared pointer or null. @note Lookup is performed in client connection map. */
                 Client::ConnectionPtr                                                       Client_GetConnection(int connection_id) noexcept;
-                // Helper to retrieve a datagram port by NAT endpoint
+                /** @brief Gets datagram port by NAT endpoint key. @param nat_key NAT endpoint key. @return Datagram port shared pointer or null. @note Lookup is performed in client UDP port map. */
                 Client::DatagramPortPtr                                                     Client_GetDatagramPort(const boost::asio::ip::udp::endpoint& nat_key) noexcept;
 
             private:
-                // Sends a UDP packet to the FRP client (remote side)
+                /** @brief Sends UDP payload from server side to FRP client. @param packet Payload pointer. @param packet_length Payload length. @param sourceEP Source endpoint metadata. @return True on successful send. @note Internal helper for server UDP mapping mode. */
                 bool                                                                        Server_SendToFrpClient(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
-                // Accepts a new incoming TCP connection from an FRP user
+                /** @brief Accepts an incoming local FRP user TCP socket. @param server Server container. @param context Asio context object. @param socket Accepted socket object. @return True when connection object is created and started. @note Internal helper for TCP mapping mode. */
                 bool                                                                        Server_AcceptFrpUserSocket(const std::shared_ptr<Server>& server, const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioTcpSocket& socket) noexcept;
 
             private:
-                // Finalizes the entire mapping port
+                /** @brief Finalizes whole mapping port state. @return void. @note Closes sockets, sessions, and clears runtime maps. */
                 void                                                                        Finalize() noexcept;
-                // Starts the UDP receive loop for the server (datagram mode)
+                /** @brief Starts UDP receive loop for server mode. @return True when loop is armed. @note Used only when mapping protocol is UDP. */
                 bool                                                                        LoopbackFrpServer() noexcept;
-                // Opens the TCP acceptor socket (stream mode)
+                /** @brief Opens TCP acceptor for server mode. @return True on successful open/bind/listen. @note Used only when mapping protocol is TCP. */
                 bool                                                                        OpenNetworkSocketStream() noexcept;
-                // Opens the UDP socket (datagram mode)
+                /** @brief Opens UDP socket for server mode. @return True on successful open/bind. @note Used only when mapping protocol is UDP. */
                 bool                                                                        OpenNetworkSocketDatagram() noexcept;
 
             private:

@@ -6,6 +6,12 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file VEthernetDatagramPort.cpp
+ * @brief Implements UDP datagram port lifecycle and forwarding behavior.
+ */
 
 typedef ppp::coroutines::YieldContext                   YieldContext;
 typedef ppp::net::IPEndPoint                            IPEndPoint;
@@ -15,6 +21,12 @@ typedef ppp::net::Ipep                                  Ipep;
 namespace ppp {
     namespace app {
         namespace client {
+            /**
+             * @brief Constructs a UDP datagram port mapped from a source endpoint.
+             * @param exchanger Shared exchanger that routes packets between local and remote paths.
+             * @param transmission Underlying transmission channel for tunneled sends.
+             * @param sourceEP Source UDP endpoint represented by this port mapping.
+             */
             VEthernetDatagramPort::VEthernetDatagramPort(const VEthernetExchangerPtr& exchanger, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept
                 : disposed_(false)
                 , onlydns_(true)
@@ -40,10 +52,17 @@ namespace ppp {
 #endif
             }
 
+            /**
+             * @brief Destroys the datagram port and finalizes resources.
+             */
             VEthernetDatagramPort::~VEthernetDatagramPort() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Finalizes this port mapping and releases associated transport resources.
+             * @note If packets were sent before finalization, a terminal notification send is attempted.
+             */
             void VEthernetDatagramPort::Finalize() noexcept {
                 std::shared_ptr<ITransmission> transmission = std::move(transmission_);
                 bool fin = false; 
@@ -66,6 +85,9 @@ namespace ppp {
                 }
 
                 exchanger_->ReleaseDatagramPort(sourceEP_);
+                /**
+                 * @brief Notify upstream path about closure when this mapping already transmitted data.
+                 */
                 if (fin && transmission) {
                     if (!exchanger_->DoSendTo(transmission, sourceEP_, sourceEP_, NULLPTR, 0, nullof<YieldContext>())) {
                         transmission->Dispose();
@@ -73,6 +95,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Schedules asynchronous disposal on the owning I/O context.
+             */
             void VEthernetDatagramPort::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -82,31 +107,43 @@ namespace ppp {
                     });
             }
 
+            /**
+             * @brief Sends one UDP payload through bypass socket or tunnel transmission.
+             * @param packet Pointer to payload bytes.
+             * @param packet_length Payload length in bytes.
+             * @param destinationEP Destination UDP endpoint.
+             * @return true if the payload is accepted for sending; otherwise false.
+             * @note Android bypass mode may queue packets until local UDP socket opening completes.
+             */
             bool VEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 int destinationPort = destinationEP.port();
                 if (destinationPort <= IPEndPoint::MinPort || destinationPort > IPEndPoint::MaxPort) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 boost::asio::ip::address address = destinationEP.address();
                 if (address.is_unspecified()) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
                 bool ok = false;
                 bool fin = false;
 
+                /**
+                 * @brief Select direct physical-network bypass or VPN tunnel forwarding.
+                 */
                 do {
                     std::shared_ptr<ITransmission> transmission = transmission_;
                     if (NULLPTR == transmission) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         fin = true;
                         break;
                     }
@@ -123,6 +160,10 @@ namespace ppp {
 
                             if (ec == boost::system::errc::success) {
                                 ok = true;
+                            }
+                            else {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
+                                fin = true;
                             }
                         }
                         else {
@@ -144,6 +185,7 @@ namespace ppp {
                                     opened_ = 1;
                                 }
                                 else {
+                                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                                     fin = true;
                                     break;
                                 }
@@ -152,6 +194,7 @@ namespace ppp {
                             // If you are currently trying to open the socket, cache the data and do not send it until it is opened.
                             std::shared_ptr<Byte> packet_managed = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, packet, packet_length);
                             if (NULLPTR == packet_managed) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 break;
                             }
 
@@ -170,6 +213,7 @@ namespace ppp {
                     // Send it to the VPN server for outgoing.
                     ok = exchanger_->DoSendTo(transmission, sourceEP_, destinationEP, (Byte*)packet, packet_length, nullof<YieldContext>());
                     if (!ok) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpSendFailed);
                         fin = true;
                         transmission->Dispose();
                     }
@@ -193,6 +237,12 @@ namespace ppp {
                 return ok;
             }
 
+            /**
+             * @brief Forwards a received UDP payload to switcher output processing.
+             * @param packet Payload buffer.
+             * @param packet_length Payload length in bytes.
+             * @param destinationEP Destination endpoint associated with the payload.
+             */
             void VEthernetDatagramPort::OnMessage(void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (exchanger) {
@@ -201,6 +251,11 @@ namespace ppp {
             }
 
 #if defined(_ANDROID)
+            /**
+             * @brief Opens bypass UDP socket, protects it, and replays buffered payloads.
+             * @param y Coroutine yield context for coordinated async operations.
+             * @return true when socket setup and receive loop start succeed.
+             */
             bool VEthernetDatagramPort::Open(ppp::coroutines::YieldContext& y) noexcept {
                 if (disposed_) {
                     return false;
@@ -226,6 +281,7 @@ namespace ppp {
                 // Suspend and wait for the udp socket to open.
                 y.Suspend();
                 if (!opened) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
                 else {
@@ -236,10 +292,14 @@ namespace ppp {
                 auto protector_network = ProtectorNetwork; 
                 if (NULLPTR != protector_network) {
                     if (!protector_network->Protect(socket_.native_handle(), y)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
                         return false;
                     }
                 }
 
+                /**
+                 * @brief Move queued payloads out of shared state, then flush them after socket readiness.
+                 */
                 // Send all unsent message data to the public network.
                 Messages messages; {
                     SynchronizedObjectScope scope(syncobj_);
@@ -253,19 +313,40 @@ namespace ppp {
                     SendTo(message.packet.get(), message.packet_length, message.destinationEP);
                 }
 
-                return Loopback();
+                bool ok = Loopback();
+                if (!ok && !disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
+                }
+
+                return ok;
             }
 
+            /**
+             * @brief Runs asynchronous receive loop on the bypass UDP socket.
+             * @return true if a receive operation is scheduled; otherwise false.
+             * @note The mutex is released before registering the async receive to avoid Pattern-D
+             *       deadlock: the completion callback calls Loopback() which re-acquires syncobj_.
+             *       Holding syncobj_ across async_receive_from is therefore illegal.
+             */
             bool VEthernetDatagramPort::Loopback() noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                if (disposed_) {
-                    return false;
+                // Validate invariants under lock, then release before scheduling async I/O.
+                for (;;) {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        return false;
+                    }
+
+                    if (!socket_.is_open()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                        return false;
+                    }
+
+                    break;
                 }
 
-                if (!socket_.is_open()) {
-                    return false;
-                }
-
+                // IMPORTANT: async_receive_from is intentionally called outside the syncobj_ scope.
+                // The completion callback re-enters Loopback() which re-acquires syncobj_; holding
+                // the mutex here would create a Pattern-D deadlock on the first callback dispatch.
                 auto self = shared_from_this();
                 socket_.async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), remoteEP_,
                     [self, this](const boost::system::error_code& ec, std::size_t sz) noexcept {
@@ -276,6 +357,10 @@ namespace ppp {
                             }
                         }
                         elif(ec == boost::system::errc::operation_canceled) {
+                            disposing = true;
+                        }
+                        else {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
                             disposing = true;
                         }
 

@@ -1,4 +1,10 @@
 #include <ppp/cryptography/ssea.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file ssea.cpp
+ * @brief Implements custom shuffle, delta, Base94, and XOR masking helpers.
+ */
 
 // -----------------------------------------------------------------------------
 // Constants for Base94 encoding/decoding.
@@ -16,6 +22,12 @@ namespace ppp
 {
     namespace cryptography
     {
+        /**
+         * @brief Permutes bytes in place using an index/key derived swap strategy.
+         * @param encoded_data Mutable target buffer.
+         * @param data_size Number of bytes in @p encoded_data.
+         * @param key Permutation key.
+         */
         // -----------------------------------------------------------------------------
         // Shuffles a character array using a key. This is a deterministic permutation
         // based on XOR of index and key, then modulo size. Used for obfuscation.
@@ -40,6 +52,12 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Reverses @ref shuffle_data using the same key and size.
+         * @param encoded_data Mutable target buffer.
+         * @param data_size Number of bytes in @p encoded_data.
+         * @param key Permutation key originally used for shuffling.
+         */
         // -----------------------------------------------------------------------------
         // Reverses the shuffle performed by shuffle_data. Since the shuffle is its own
         // inverse when the loop is run backwards, this restores the original order.
@@ -63,6 +81,15 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Encodes input bytes as deltas between adjacent elements.
+         * @param allocator Buffer allocator used for output storage.
+         * @param data Input byte sequence.
+         * @param data_size Input length in bytes.
+         * @param kf Initial adjustment for the first byte.
+         * @param output Receives the allocated output buffer.
+         * @return Encoded byte count on success; otherwise 0.
+         */
         // -----------------------------------------------------------------------------
         // Delta encoding: transforms a byte sequence into differences between consecutive
         // bytes, with the first byte adjusted by a constant kf. This can reduce entropy
@@ -81,6 +108,7 @@ namespace ppp
         {
             if (NULLPTR == data || data_size < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaDeltaEncodeInvalidInput);
                 return 0;
             }
 
@@ -88,6 +116,7 @@ namespace ppp
             output = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, data_size);
             if (NULLPTR == output)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return 0;
             }
 
@@ -108,6 +137,15 @@ namespace ppp
             return data_size;
         }
 
+        /**
+         * @brief Decodes data produced by @ref delta_encode.
+         * @param allocator Buffer allocator used for output storage.
+         * @param data Delta-encoded byte sequence.
+         * @param data_size Input length in bytes.
+         * @param kf Initial adjustment used at encode time.
+         * @param output Receives the allocated output buffer.
+         * @return Decoded byte count on success; otherwise 0.
+         */
         // -----------------------------------------------------------------------------
         // Delta decoding: reverses delta_encode by reconstructing the original bytes
         // from the differences.
@@ -125,12 +163,14 @@ namespace ppp
         {
             if (NULLPTR == data || data_size < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaDeltaDecodeInvalidInput);
                 return 0;
             }
 
             output = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, data_size);
             if (NULLPTR == output)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return 0;
             }
 
@@ -152,6 +192,15 @@ namespace ppp
             return data_size;
         }
 
+        /**
+         * @brief Encodes binary bytes with the project-specific Base94 mapping.
+         * @param allocator Buffer allocator used for output storage.
+         * @param data Input bytes.
+         * @param datalen Input length in bytes.
+         * @param kf Per-byte offset subtracted before mapping.
+         * @param outlen Receives encoded output length.
+         * @return Managed encoded buffer or NULLPTR on failure.
+         */
         // -----------------------------------------------------------------------------
         // Base94 encoding: maps arbitrary binary data to a string of 94 printable ASCII
         // characters (0x20–0x7E). Each input byte is first adjusted by subtracting kf,
@@ -178,6 +227,7 @@ namespace ppp
 
             if (NULLPTR == data || datalen < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94EncodeInvalidInput);
                 return NULLPTR;
             }
 
@@ -227,6 +277,15 @@ namespace ppp
             return bucket_managed;
         }
 
+        /**
+         * @brief Decodes bytes generated by @ref base94_encode.
+         * @param allocator Buffer allocator used for output storage.
+         * @param data Encoded Base94 byte sequence.
+         * @param datalen Input length in bytes.
+         * @param kf Per-byte offset added after decoding.
+         * @param outlen Receives decoded byte count.
+         * @return Managed decoded buffer or NULLPTR on failure.
+         */
         // -----------------------------------------------------------------------------
         // Base94 decoding: reverses base94_encode. It validates that all characters are
         // in the printable range (>=0x20) and that the encoding is consistent.
@@ -250,6 +309,7 @@ namespace ppp
 
             if (NULLPTR == data || datalen < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeInvalidInput);
                 return NULLPTR;
             }
 
@@ -260,12 +320,14 @@ namespace ppp
                 Byte b = bytes[i];
                 if (b < '\x20')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeCharBelowPrintable);
                     return NULLPTR;   // Character below printable range
                 }
 
                 b -= '\x20';
                 if (b > BASE94_RADIX)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeCharOutOfAlphabet);
                     return NULLPTR;   // Character beyond the 94 symbols
                 }
 
@@ -277,17 +339,20 @@ namespace ppp
                         b = bytes[i];
                         if (b < '\x20')
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeEscapeCharBelowPrintable);
                             return NULLPTR;
                         }
 
                         b -= '\x20';
                         if (b > BASE93_RADIX)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeEscapeCharOutOfRange);
                             return NULLPTR;
                         }
                     }
                     else
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeTruncatedEscape);
                         return NULLPTR;   // Unexpected end of string
                     }
 
@@ -310,6 +375,7 @@ namespace ppp
                         int v = (((b - BASE93_RADIX) + 1) * BASE93_RADIX) + (bytes[++i] - '\x20');
                         if (v > 0xff)
                         {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecodeValueOverflow);
                             return NULLPTR;   // Decoded value out of byte range
                         }
 
@@ -326,6 +392,11 @@ namespace ppp
             return bucket_managed;
         }
         
+        /**
+         * @brief Decodes a Base94 string to an unsigned integer.
+         * @param v Base94 text.
+         * @return Parsed integer value, or 0 for invalid input.
+         */
         // -----------------------------------------------------------------------------
         // Converts a Base94 string (std::string) into its numeric (uint64_t) value.
         // Useful for compact representation of small integers.
@@ -340,6 +411,12 @@ namespace ppp
             return base94_decimal(v.data(), v.size());
         }
 
+        /**
+         * @brief Decodes Base94 bytes to an unsigned integer.
+         * @param data Base94 byte sequence.
+         * @param datalen Number of bytes in @p data.
+         * @return Parsed integer value, or 0 for invalid input.
+         */
         // -----------------------------------------------------------------------------
         // Converts a Base94 string (raw data) into a uint64_t.
         // -----------------------------------------------------------------------------
@@ -354,6 +431,7 @@ namespace ppp
             uint8_t* p = (uint8_t*)data;
             if (NULLPTR == p || datalen < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecimalInvalidInput);
                 return 0;
             }
 
@@ -363,12 +441,14 @@ namespace ppp
                 uint8_t b = *p++;
                 if (b < '\x20')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecimalCharBelowPrintable);
                     return 0;
                 }
 
                 b -= '\x20';
                 if (b >= BASE94_SYMBOL_COUNT)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaBase94DecimalCharOutOfAlphabet);
                     return 0;
                 }
 
@@ -377,6 +457,11 @@ namespace ppp
             return n;
         }
 
+        /**
+         * @brief Encodes an unsigned integer as Base94 text.
+         * @param v Integer value.
+         * @return Minimal-length Base94 representation.
+         */
         // -----------------------------------------------------------------------------
         // Converts a uint64_t into its Base94 string representation.
         // The result uses the minimum number of characters.
@@ -413,6 +498,11 @@ namespace ppp
             return ppp::string(reinterpret_cast<char*>(base94), base94_size);
         }
 
+        /**
+         * @brief Produces a pseudo-random 31-bit integer and advances the seed.
+         * @param seed Seed pointer modified in place.
+         * @return Generated pseudo-random value.
+         */
         // -----------------------------------------------------------------------------
         // Simple pseudo‑random number generator (linear congruential).
         // Generates a 31‑bit random integer (0..0x7FFFFFFF) and updates the seed.
@@ -446,6 +536,13 @@ namespace ppp
             return result;
         }
 
+        /**
+         * @brief Produces a pseudo-random integer in the inclusive range [min, max].
+         * @param seed Seed pointer modified in place.
+         * @param min Lower inclusive bound.
+         * @param max Upper inclusive bound.
+         * @return Generated pseudo-random value inside the requested range.
+         */
         // -----------------------------------------------------------------------------
         // Returns a random integer in the range [min, max] (inclusive).
         // -----------------------------------------------------------------------------
@@ -462,6 +559,14 @@ namespace ppp
             return v % (max - min + 1) + min;
         }
 
+        /**
+         * @brief Shared implementation for fixed-key and evolving-key XOR masking.
+         * @tparam kf_random_next When true, updates the key between chunks.
+         * @param min Inclusive start address.
+         * @param max Exclusive end address.
+         * @param kf Initial XOR key.
+         * @return True when the range is valid and processed; otherwise false.
+         */
         // -----------------------------------------------------------------------------
         // Internal template implementing masked XOR over a memory region.
         // The template parameter controls whether the key (kf) is updated after each
@@ -485,9 +590,11 @@ namespace ppp
 
             if (length < 0) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SseaMaskedXorInvalidRange);
                 return false;
             }
 
+            /** @details Processes full 32-bit words before tail bytes for speed. */
             int count     = length >> 2;          // number of full 32-bit words
             int remainder = length & 3;            // remaining bytes (0..3)
 
@@ -533,6 +640,13 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Applies a fixed XOR key to a mutable memory range.
+         * @param min Inclusive start address.
+         * @param max Exclusive end address.
+         * @param kf Fixed XOR key.
+         * @return True on success; false for invalid ranges.
+         */
         // -----------------------------------------------------------------------------
         // Applies a fixed XOR mask (kf) to a memory region. The region is processed in
         // 32‑bit, 16‑bit, and 8‑bit chunks for efficiency. This is a simple obfuscation.
@@ -549,6 +663,13 @@ namespace ppp
             return masked_xor_implement<false>(min, max, kf);
         }
 
+        /**
+         * @brief Applies XOR masking with a key updated between processed chunks.
+         * @param min Inclusive start address.
+         * @param max Exclusive end address.
+         * @param kf Initial XOR key.
+         * @return True on success; false for invalid ranges.
+         */
         // -----------------------------------------------------------------------------
         // Applies a XOR mask that changes after each chunk using random_next.
         // The key evolves as the region is processed, increasing obfuscation.

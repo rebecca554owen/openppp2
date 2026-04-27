@@ -2,6 +2,8 @@
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/win32/Win32Variant.h>
 
+#include <ppp/diagnostics/Error.h>
+
 #include <Windows.h>
 #include <atlbase.h>
 #include <netfw.h>
@@ -20,33 +22,33 @@ namespace ppp
             {
                 if (!name || !executablePath)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 if (GetFileAttributes(executablePath) == INVALID_FILE_ATTRIBUTES)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 CComPtr<INetFwMgr> pNetFwMgr;
                 HRESULT hr = CoCreateInstance(__uuidof(NetFwMgr), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwMgr), (void**)&pNetFwMgr);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 CComPtr<INetFwPolicy> pNetFwPolicy;
                 hr = pNetFwMgr->get_LocalPolicy(&pNetFwPolicy);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 CComPtr<INetFwAuthorizedApplication> pApp;
                 hr = CoCreateInstance(__uuidof(NetFwAuthorizedApplication), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwAuthorizedApplication), (void**)&pApp);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 // 设置应用程序名称，供界面显示和识别。
@@ -67,20 +69,20 @@ namespace ppp
                 hr = pNetFwPolicy->GetProfileByType(netFwType, &pNetFwProfile);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 CComPtr<INetFwAuthorizedApplications> pApps;
                 hr = pNetFwProfile->get_AuthorizedApplications(&pApps);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pApps->Add(pApp);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
                 return true;
             }
@@ -94,7 +96,7 @@ namespace ppp
                 hr = CoCreateInstance(__uuidof(NetFwPolicy2), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwPolicy2), (void**)&pPolicy);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 // 获取 INetFwRules 集合。
@@ -103,7 +105,7 @@ namespace ppp
                 if (FAILED(hr))
                 {
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 // 创建防火墙规则对象。
@@ -113,7 +115,7 @@ namespace ppp
                 {
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 // 设置规则属性。
@@ -126,7 +128,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Description(bstrName);
@@ -135,7 +137,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_ApplicationName(bstrExecutablePath);
@@ -144,7 +146,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Direction(NET_FW_RULE_DIR_IN);
@@ -153,7 +155,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Action(NET_FW_ACTION_ALLOW);
@@ -162,7 +164,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Enabled(VARIANT_TRUE);
@@ -171,7 +173,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 // 检查是否已经存在同名且同路径的规则。
@@ -183,7 +185,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 IEnumVARIANT* pEnumerator = NULLPTR;
@@ -194,7 +196,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 VARIANT var;
@@ -249,7 +251,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
                 }
 
                 // 释放资源。

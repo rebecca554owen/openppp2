@@ -8,28 +8,112 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file VEthernetSocksProxyConnection.cpp
+ * @brief Implements SOCKS5 handshake and request processing for local proxy clients.
+ */
 
 namespace ppp {
     namespace app {
         namespace client {
             namespace proxys {
+                /**
+                 * @brief SOCKS5 protocol version.
+                 */
                 static constexpr int SOCKS_VER                  = 5;
+                /**
+                 * @brief SOCKS5 "no authentication" method id.
+                 */
                 static constexpr int SOCKS_METHOD_NONE          = 0;
+                /**
+                 * @brief SOCKS5 username/password authentication method id.
+                 */
                 static constexpr int SOCKS_METHOD_AUTH          = 2;
+                /**
+                 * @brief SOCKS5 "no acceptable methods" marker.
+                 */
                 static constexpr int SOCKS_METHOD_RSVD          = 255;
+                /**
+                 * @brief Internal error return code for transport failures.
+                 */
                 static constexpr int SOCKS_ERR_ER               = -1;
+                /**
+                 * @brief Success return code.
+                 */
                 static constexpr int SOCKS_ERR_OK               = 0;
+                /**
+                 * @brief Generic protocol rejection return code.
+                 */
                 static constexpr int SOCKS_ERR_NO               = 1;
+                /**
+                 * @brief SOCKS reply code for unsupported command.
+                 */
                 static constexpr int SOCKS_ERR_CMD              = 7;
+                /**
+                 * @brief SOCKS reply code for unsupported address type.
+                 */
                 static constexpr int SOCKS_ERR_ATYPE            = 8;
+                /**
+                 * @brief Username/password sub-protocol failure status.
+                 */
                 static constexpr int SOCKS_ERR_FF               = 255;
+                /**
+                 * @brief Username/password sub-protocol version.
+                 */
                 static constexpr int SOCKS_PROTO_AUTH           = 1;
+                /**
+                 * @brief SOCKS address type id for IPv4 addresses.
+                 */
                 static constexpr int SOCKS_ATYPE_IPV4           = 1;
+                /**
+                 * @brief SOCKS address type id for IPv6 addresses.
+                 */
                 static constexpr int SOCKS_ATYPE_IPV6           = 4;
+                /**
+                 * @brief SOCKS address type id for domain names.
+                 */
                 static constexpr int SOCKS_ATYPE_DOMAIN         = 3;
+                /**
+                 * @brief SOCKS command id for CONNECT.
+                 */
                 static constexpr int SOCKS_CMD_CONNECT          = 1;
+                /**
+                 * @brief SOCKS command id for UDP ASSOCIATE.
+                 */
                 static constexpr int SOCKS_CMD_UDP              = 3;
 
+                static int PublishSocketReadFailure(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+                    elif(socket->is_open()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
+                    }
+
+                    return SOCKS_ERR_ER;
+                }
+
+                static bool PublishSocketWriteFailure(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+                    elif(socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                    }
+
+                    return false;
+                }
+
+                /**
+                 * @brief Constructs a SOCKS proxy connection instance.
+                 * @param proxy Parent SOCKS switcher that owns this connection.
+                 * @param exchanger Shared exchanger used to establish remote bridge channels.
+                 * @param context I/O context used by asynchronous operations.
+                 * @param strand Strand that serializes callbacks.
+                 * @param socket Accepted client TCP socket.
+                 */
                 VEthernetSocksProxyConnection::VEthernetSocksProxyConnection(
                     const VEthernetSocksProxySwitcherPtr&                           proxy,
                     const VEthernetExchangerPtr&                                    exchanger, 
@@ -37,9 +121,73 @@ namespace ppp {
                     const ppp::threading::Executors::StrandPtr&                     strand,
                     const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket) noexcept 
                     : VEthernetLocalProxyConnection(proxy, exchanger, context, strand, socket) {
-                        
+                
                 }
                 
+                /**
+                 * @brief Sends a SOCKS5 request-reply packet containing local bind endpoint.
+                 * @param socket Connected client socket.
+                 * @param rep SOCKS reply code.
+                 * @param y Coroutine yield context.
+                 * @return true if the packet is written successfully; otherwise false.
+                 * @note The address in the reply is derived from the socket local endpoint.
+                 */
+                static bool SendSocksRequestReply(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, Byte rep, ppp::coroutines::YieldContext& y) noexcept {
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (!socket->is_open()) {
+                        return false;
+                    }
+
+                    Byte data[32];
+                    int packet_length = 0;
+                    data[packet_length++] = SOCKS_VER;
+                    data[packet_length++] = rep;
+                    data[packet_length++] = 0;
+
+                    boost::system::error_code ec;
+                    boost::asio::ip::tcp::endpoint local_endpoint = socket->local_endpoint(ec);
+                    if (ec) {
+                        local_endpoint = boost::asio::ip::tcp::endpoint(boost::asio::ip::address_v4::any(), 0);
+                    }
+                    else {
+                        local_endpoint = ppp::net::Ipep::V6ToV4(local_endpoint);
+                    }
+
+                    boost::asio::ip::address local_ip = local_endpoint.address();
+                    if (local_ip.is_v4()) {
+                        data[packet_length++] = SOCKS_ATYPE_IPV4;
+                        auto bytes = local_ip.to_v4().to_bytes();
+                        memcpy(data + packet_length, bytes.data(), bytes.size());
+                        packet_length += bytes.size();
+                    }
+                    elif(local_ip.is_v6()) {
+                        data[packet_length++] = SOCKS_ATYPE_IPV6;
+                        auto bytes = local_ip.to_v6().to_bytes();
+                        memcpy(data + packet_length, bytes.data(), bytes.size());
+                        packet_length += bytes.size();
+                    }
+                    else {
+                        data[packet_length++] = SOCKS_ATYPE_IPV4;
+                        memset(data + packet_length, 0, 4);
+                        packet_length += 4;
+                    }
+
+                    int local_port = local_endpoint.port();
+                    data[packet_length++] = (Byte)(local_port >> 8);
+                    data[packet_length++] = (Byte)(local_port);
+
+                    bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                    return ok ? true : PublishSocketWriteFailure(socket);
+                }
+
+                /**
+                 * @brief Executes the full SOCKS5 handshake and target bridge setup.
+                 * @param y Coroutine yield context.
+                 * @return true when handshake and bridge connection both succeed.
+                 */
                 bool VEthernetSocksProxyConnection::Handshake(YieldContext& y) noexcept {
                     int method = SOCKS_METHOD_NONE;
                     int status = SelectMethod(y, method); 
@@ -71,54 +219,90 @@ namespace ppp {
                     ppp::string host;
                     ppp::app::protocol::AddressType address_type = ppp::app::protocol::AddressType::Domain;
 
-                    if (!Requirement(y, host, port, address_type)) {
+                    int command_status = Requirement(y, host, port, address_type);
+                    if (command_status != SOCKS_ERR_OK) {
+                        if (command_status == SOCKS_ERR_ATYPE) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                        }
+                        elif(command_status == SOCKS_ERR_CMD) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                        }
+                        elif(command_status > SOCKS_ERR_OK) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                        }
+
+                        SendSocksRequestReply(GetSocket(), (Byte)command_status, y);
                         return false;
                     }
 
                     std::shared_ptr<ppp::app::protocol::AddressEndPoint> address_endpoint = make_shared_object<ppp::app::protocol::AddressEndPoint>();
                     if (NULLPTR == address_endpoint) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     }
 
                     address_endpoint->Type = address_type;
                     address_endpoint->Host = host;
                     address_endpoint->Port = port;
 
-                    return ConnectBridgeToPeer(address_endpoint, y);
+                    if (!ConnectBridgeToPeer(address_endpoint, y)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpConnectFailed);
+                        SendSocksRequestReply(GetSocket(), SOCKS_ERR_NO, y);
+                        return false;
+                    }
+
+                    return true;
                 }
 
+                /**
+                 * @brief Validates SOCKS username/password credentials.
+                 * @param y Coroutine yield context.
+                 * @return SOCKS_ERR_OK when credentials match configuration; otherwise an error code.
+                 * @note Credentials are read using SOCKS5 username/password sub-negotiation framing.
+                 */
                 int VEthernetSocksProxyConnection::Authentication(YieldContext& y) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
-                    if (NULLPTR == socket || !socket->is_open()) {
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return SOCKS_ERR_ER;
+                    }
+
+                    if (!socket->is_open()) {
                         return SOCKS_ERR_ER;
                     }
 
                     if (IsDisposed()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return SOCKS_ERR_ER;
                     }
 
                     AppConfigurationPtr& configuration = GetConfiguration();
+                    if (NULLPTR == configuration) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                        return SOCKS_ERR_ER;
+                    }
+
                     auto& socks_proxy = configuration->client.socks_proxy;
 
                     Byte data[256];
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                        return SOCKS_ERR_ER;
+                        return PublishSocketReadFailure(socket);
                     }
 
                     if (data[0] != SOCKS_PROTO_AUTH) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthChallengeFailed);
                         return SOCKS_ERR_NO;
                     }
 
                     ppp::string strings[2];
                     for (int i = 0; i < arraysizeof(strings); i++) {
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                            return SOCKS_ERR_ER;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         int string_size = data[0];
                         if (string_size > 0) {
                             if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, string_size), y)) {
-                                return SOCKS_ERR_ER;
+                                return PublishSocketReadFailure(socket);
                             }
 
                             data[string_size] = '\x0';
@@ -126,63 +310,98 @@ namespace ppp {
                         }
                     }
 
-                    if (socks_proxy.username != strings[0] && socks_proxy.password != strings[1]) {
+                    if (socks_proxy.username != strings[0] || socks_proxy.password != strings[1]) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialInvalid);
                         return SOCKS_ERR_NO;
                     }
 
                     return SOCKS_ERR_OK;
                 }
 
+                /**
+                 * @brief Sends a two-byte protocol reply message.
+                 * @param y Coroutine yield context.
+                 * @param k First reply byte.
+                 * @param v Second reply byte.
+                 * @return true if write succeeds; otherwise false.
+                 */
                 bool VEthernetSocksProxyConnection::Replay(YieldContext& y, int k, int v) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
-                    if (NULLPTR == socket || !socket->is_open()) {
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (!socket->is_open()) {
                         return false;
                     }
 
                     if (IsDisposed()) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                     }
 
                     Byte data[2] = { (Byte)k, (Byte)v };
-                    return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, sizeof(data)), y);
+                    bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, sizeof(data)), y);
+                    return ok ? true : PublishSocketWriteFailure(socket);
                 }
 
+                /**
+                 * @brief Negotiates SOCKS5 authentication method with the client.
+                 * @param y Coroutine yield context.
+                 * @param method Output negotiated method.
+                 * @return SOCKS status code for success, protocol rejection, or transport error.
+                 */
                 int VEthernetSocksProxyConnection::SelectMethod(YieldContext& y, int& method) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
                     method = SOCKS_METHOD_NONE;
 
-                    if (NULLPTR == socket || !socket->is_open()) {
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return SOCKS_ERR_ER;
+                    }
+
+                    if (!socket->is_open()) {
                         return SOCKS_ERR_ER;
                     }
 
                     if (IsDisposed()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return SOCKS_ERR_ER;
                     }
 
                     Byte data[256];
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 2), y)) {
-                        return SOCKS_ERR_ER;
+                        return PublishSocketReadFailure(socket);
                     }
 
                     int nver = data[0];
                     if (nver != SOCKS_VER) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                         return SOCKS_ERR_NO;
                     }
 
                     int nmethod = data[1];
                     AppConfigurationPtr& configuration = GetConfiguration();
+                    if (NULLPTR == configuration) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                        return SOCKS_ERR_ER;
+                    }
+
                     auto& socks_proxy = configuration->client.socks_proxy;
                     bool no_auth = socks_proxy.username.empty() && socks_proxy.password.empty();
 
                     if (nmethod == SOCKS_METHOD_NONE) {
+                        if (!no_auth) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialMissing);
+                        }
                         return no_auth ? SOCKS_ERR_OK : SOCKS_ERR_NO;
                     }
                     elif(nmethod < SOCKS_METHOD_NONE) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                         return SOCKS_ERR_NO;
                     }
 
                     if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, nmethod), y)) {
-                        return SOCKS_ERR_ER;
+                        return PublishSocketReadFailure(socket);
                     }
 
                     for (int i = 0; i < nmethod; i++) {
@@ -204,38 +423,63 @@ namespace ppp {
                         }
                     }
 
-                    return no_auth ? SOCKS_ERR_OK : SOCKS_ERR_NO;
+                    if (!no_auth) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialMissing);
+                        return SOCKS_ERR_NO;
+                    }
+
+                    return SOCKS_ERR_OK;
                 }
             
-                bool VEthernetSocksProxyConnection::Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept {
+                /**
+                 * @brief Parses SOCKS5 CONNECT request and replies with bind endpoint information.
+                 * @param y Coroutine yield context.
+                 * @param address Output destination host string.
+                 * @param port Output destination port in host order.
+                 * @param address_type Output parsed address type.
+                 * @return SOCKS status code indicating request parse and reply result.
+                 * @note This routine both parses input request and writes the required request reply.
+                 */
+                int VEthernetSocksProxyConnection::Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
                     address.clear();
 
                     port = ppp::net::IPEndPoint::MinPort;
                     address_type = ppp::app::protocol::AddressType::Domain;
 
-                    if (NULLPTR == socket || !socket->is_open()) {
-                        return false;
+                    if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return SOCKS_ERR_ER;
+                    }
+
+                    if (!socket->is_open()) {
+                        return SOCKS_ERR_ER;
                     }
 
                     if (IsDisposed()) {
-                        return false;
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        return SOCKS_ERR_ER;
                     }
                     
                     Byte cmd = SOCKS_ERR_CMD;
                     Byte data[256];
 
+                    /**
+                     * @brief Parse request header, destination address, and destination port.
+                     */
                     for (;;) {
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 4), y)) {
-                            return false;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         if (data[0] != SOCKS_VER) {
-                            break;
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            return SOCKS_ERR_CMD;
                         }
 
                         if (data[1] != SOCKS_CMD_CONNECT) {
-                            break;
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            return SOCKS_ERR_CMD;
                         }
 
                         int address_type = data[3];
@@ -250,7 +494,7 @@ namespace ppp {
                         }
                         elif(address_type == SOCKS_ATYPE_DOMAIN) {
                             if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 1), y)) {
-                                return false;
+                                return PublishSocketReadFailure(socket);
                             }
 
                             address_length = data[0];
@@ -258,15 +502,17 @@ namespace ppp {
                         }
                         else {
                             cmd = SOCKS_ERR_ATYPE;
-                            break;
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                            return SOCKS_ERR_ATYPE;
                         }
 
                         if (address_length < 1) {
-                            break;
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                            return SOCKS_ERR_ATYPE;
                         }
 
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, address_length), y)) {
-                            return false;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         switch (address_type) {
@@ -294,7 +540,7 @@ namespace ppp {
                         };
 
                         if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, 2), y)) {
-                            return false;
+                            return PublishSocketReadFailure(socket);
                         }
 
                         cmd = SOCKS_ERR_OK;
@@ -302,6 +548,9 @@ namespace ppp {
                         break;
                     }
 
+                    /**
+                     * @brief Build and send the SOCKS5 request-reply packet to acknowledge CONNECT.
+                     */
                     for (;;) {
                         int packet_length = 0;
                         data[packet_length++] = SOCKS_VER;
@@ -311,7 +560,8 @@ namespace ppp {
                         boost::system::error_code ec;
                         boost::asio::ip::tcp::endpoint local_endpoint = socket->local_endpoint(ec);
                         if (ec) {
-                            return false;
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                            return SOCKS_ERR_ER;
                         }
                         else {
                             local_endpoint = ppp::net::Ipep::V6ToV4(local_endpoint);
@@ -337,14 +587,21 @@ namespace ppp {
                             packet_length += bytes.size();
                         }
                         else {
-                            return false;
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                            return SOCKS_ERR_ER;
                         }
 
                         int local_port = local_endpoint.port();
                         data[packet_length++] = (Byte)(local_port >> 8);
                         data[packet_length++] = (Byte)(local_port);
 
-                        return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                        bool writed = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                        if (!writed) {
+                            PublishSocketWriteFailure(socket);
+                            return SOCKS_ERR_ER;
+                        }
+
+                        return SOCKS_ERR_OK;
                     }
                 }
             }

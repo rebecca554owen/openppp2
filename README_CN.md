@@ -1,1211 +1,1159 @@
-﻿# <img src="https://img.icons8.com/color/48/000000/vpn.png" width="30" height="30"> PPP PRIVATE NETWORK™ 2  
-**企业级虚拟以太网 VPN 解决方案**  
-下一代安全网络接入技术，提供高性能虚拟以太网隧道服务  
+# OPENPPP2
 
-<div align="right" style="margin-top:-40px;">
-  <kbd>
-    <a href="README.md">English</a>
-  </kbd>
-  <kbd style="background:#0366d6;">
-    <strong>简体中文</strong>
-  </kbd>
-</div>
+[English](README.md) | 简体中文
 
-## <img src="https://img.icons8.com/color/48/000000/features-list.png" width="30" height="30"> 核心技术特点
+OPENPPP2 是一套源码驱动、跨平台的网络运行时，围绕 C++ 主程序 `ppp` 构建，并提供一个可选的 Go 管理后端。它的真实实现边界分布在 `main.cpp`、`ppp/configurations`、`ppp/transmissions`、`ppp/app/protocol`、`ppp/app/client`、`ppp/app/server` 以及各平台宿主集成目录中。
 
-<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+它不能只被理解成 VPN client、VPN server 或 custom transport 中的某一种。代码实际组合的是一个分层系统：
 
-<div>
+| 层级 | 真实作用 | 主要代码区 |
+|------|----------|------------|
+| 受保护传输 | 负责分帧、加密、混淆与握手形态塑造 | `ppp/transmissions/*` |
+| 隧道协议 | 定义会话标识、link-layer opcode、包语义 | `ppp/app/protocol/*` |
+| 客户端运行时 | 对接虚拟网卡、路由、DNS、代理、MUX | `ppp/app/client/*` |
+| 服务端运行时 | 接入会话、交换、转发、IPv6、静态路径 | `ppp/app/server/*` |
+| 平台集成 | 绑定 Windows/Linux/macOS/Android 的宿主网络 API | `windows/*`、`linux/*`、`darwin/*`、`android/*` |
+| 管理后端 | 可选 Go 服务，用于 managed deployment | `go/*` |
 
-- <img src="https://img.icons8.com/color/24/000000/processor.png" width="20" height="20"> **同步超线程IO技术**  
-- <img src="https://media.istockphoto.com/id/1469980757/vector/cloud-multi-threading-icon-in-vector-logotype.jpg?s=612x612&w=0&k=20&c=SgJXI9dkgy1l__U4m4H7Y2SJuCEJk53VpZvwxYqQqDg=" width="20" height="20"> **全协程+多线程架构**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTIHdQXotRNOMUnypnmpRRAMGiTmgtnvmaEOw&s" width="20" height="20"> **支持可打印明文传输**  
-- <img src="https://img.ixintu.com/download/jpg/20201107/570f5ecbfba462cec0568a98693aa8cc_512_321.jpg!con" width="20" height="20"> **全双工/半双工隧道**  
-- <img src="https://img.icons8.com/color/24/000000/network.png" width="20" height="20"> **VPN虚拟子网**  
-- <img src="https://img.icons8.com/color/24/000000/port.png" width="20" height="20"> **端口映射到公网 P-NAT2**  
-- <img src="https://cdn-icons-png.flaticon.com/512/7349/7349720.png" width="20" height="20"> **正向代理支持**  
-- <img src="https://img.icons8.com/color/24/000000/firewall.png" width="20" height="20"> **虚拟防火墙**  
-- <img src="https://img.icons8.com/color/24/000000/route.png" width="20" height="20"> **虚拟BGP多线分流**  
-- <img src="https://img.icons8.com/color/24/000000/domain.png" width="20" height="20"> **域名查询分流**  
-- <img src="https://img.icons8.com/color/24/000000/router.png" width="20" height="20"> **天然支持软路由**  
-- <img src="https://img.icons8.com/color/24/000000/airplane-mode-on.png" width="20" height="20"> **PaperAirplane 分层技术**  
-</div>
-
-<div>
-
-- <img src="https://img.icons8.com/color/24/000000/network-card.png" width="20" height="20"> **双网络协议栈支持**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTjxlVdSXIeMvmISIN0dupsU60ISjdSyxN7xw&s" width="20" height="20"> **广播支持（非单播）**  
-- <img src="https://www.shutterstock.com/image-vector/tunnel-sign-multi-series-style-260nw-2440158425.jpg" width="20" height="20"> **多种隧道协议支持**  
-- <img src="https://img.icons8.com/color/24/000000/merge.png" width="20" height="20"> **MUX多路复用**  
-- <img src="https://img.icons8.com/color/24/000000/dns.png" width="20" height="20"> **DNS缓存**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSyLWW0UbSGujy4OkGa0oHvN1Ad1_YXmZGIgSHlpHz1K0-u6a_mYbw84I_aZJA8IzB-jLg&usqp=CAU" width="20" height="20"> **专用虚拟内存**  
-- <img src="https://cdn-icons-png.flaticon.com/512/10988/10988147.png" width="20" height="20"> **CDN转发支持**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS8vZjAno4KJAxr9K97IzoIGQiJ1ajH9FQOyA&s" width="20" height="20"> **VPN Turbo**  
-- <img src="https://img.icons8.com/color/24/000000/fast-forward.png" width="20" height="20"> **TCP Fast Open**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ2LHYDgAPNDQrrF-Es68XphlSUJ1XBbqKdpw&s" width="20" height="20"> **固定窗口大小设置**  
-- <img src="https://img.icons8.com/color/24/000000/forward.png" width="20" height="20"> **VPN服务器代理转发**  
-- <img src="https://play-lh.googleusercontent.com/Ac2LuYFUdHoiSZOVDwnlp0ozwCBMqBC7GALSUevSsQxEtq6eMVCSEGxa7FuEqXnjlw" width="20" height="20"> **UDP多线路宽频聚合**  
-
-</div>
-
-</div>
+文档采用从代码事实出发的写法，目标是解释系统为什么这样设计、每个层次实际负责什么、以及部署和继续开发时应该如何理解这些边界。
 
 ---
 
-## <img src="https://img.icons8.com/color/48/000000/globe.png" width="30" height="30"> 平台支持
-- <img src="https://img.icons8.com/color/24/000000/windows8.png" width="20" height="20"> Windows
-- <img src="https://img.icons8.com/color/24/000000/linux.png" width="20" height="20"> Linux
-- <img src="https://img.icons8.com/color/24/000000/mac-logo.png" width="20" height="20"> macOS
-- <img src="https://img.icons8.com/color/24/000000/android-os.png" width="20" height="20"> Android
+## 目录
 
-## <img src="https://img.icons8.com/color/48/000000/processor.png" width="30" height="30"> 支持的CPU架构
-- **x86系列**  
-  i386 · x86_64
-- **ARM系列**  
-  armv7l · armv7a · aarch64
-- **其他架构**  
-  s390x · mipsel · ppc64el · riscv64
+1. [系统架构总览](#系统架构总览)
+2. [从这里开始](#从这里开始)
+3. [推荐阅读路径](#推荐阅读路径)
+4. [文档总表](#文档总表)
+5. [仓库结构](#仓库结构)
+6. [构建说明](#构建说明)
+7. [快速开始](#快速开始)
+8. [配置概述](#配置概述)
+9. [协议与传输层概述](#协议与传输层概述)
+10. [客户端运行时概述](#客户端运行时概述)
+11. [服务端运行时概述](#服务端运行时概述)
+12. [平台集成概述](#平台集成概述)
+13. [并发与线程模型](#并发与线程模型)
+14. [错误处理概述](#错误处理概述)
+15. [管理后端](#管理后端)
+16. [安全机制概述](#安全机制概述)
+17. [代码事实决定的文档边界](#代码事实决定的文档边界)
+18. [边界说明](#边界说明)
+19. [快速参考](#快速参考)
+20. [说明](#说明)
 
 ---
 
-## <img src="https://img.icons8.com/color/48/000000/warning-shield.png" width="30" height="30"> 用户许可协议
-### ✅ 授权使用群体
-<details open>
-<summary>点击查看授权用户类别</summary>
+## 系统架构总览
 
-1. 🎓 学术研究人员  
-2. 💻 软件工程师  
-3. 🌐 网络工程师  
-4. 🏢 企业用户  
-5. 🔬 科研技术人员  
-6. 📦 外贸用户  
-7. 🏛️ 政企人员  
-8. 🎮 游戏玩家  
-9. 🏬 集团客户  
-10. 🏣 公共组织  
-11. ➰ 通信技术  
-12. ☁️ IT及互联网  
-13. 🔒 网络安全用户  
-14. 📝 健康内容创作者  
-15. 🌍 非中国大陆用户
-</details>
+以下图表展示了 OPENPPP2 运行时的顶层分层结构。每个方框对应实际源码目录。
 
-> ⚠️ **使用限制警告**  
-> <img src="https://static-00.iconduck.com/assets.00/user-2-account-icon-256x256-k637t3vb.png" width="20" height="20"> **其他用户使用均违反协议**  
-> <img src="https://img.icons8.com/color/24/000000/law.png" width="20" height="20"> 违规使用将承担法律责任</img>
-
-### ⚠️ 八类绝对禁止行为法律与技术详解  
-
-#### 🚫 禁止行为分类与法律依据  
-| 行为类型       | 具体场景                  | 法律依据                                                                 | 技术特征                     |  
-|----------------|--------------------------|--------------------------------------------------------------------------|------------------------------|  
-| **政治安全**   | 颠覆政权/煽动分裂        | 《刑法》第105条（颠覆国家政权罪）                                        | Tor暗网节点通信/加密政治频道 |  
-| **色情犯罪**   | 儿童色情/跨境网络招嫖    | 《刑法》第364条（传播淫秽物品罪） + 美国FOSTA法案                        | 哈希值匹配/特定支付模式      |  
-| **赌博运营**   | 虚拟货币赌场/赌资洗钱    | 《刑法》第303条（赌博罪） + 塞舌尔《赌博法》第45条                       | 高频小额转账/固定赔率接口    |  
-| **毒品交易**   | 暗网毒品商城/制毒教程    | 《刑法》第347条（毒品罪） + 美国《管制物质法》§841                       | I2P网络流量/比特币混合器     |  
-| **人口犯罪**   | 贩卖劳工/性剥削          | 《刑法》第240条（拐卖妇女儿童罪） + 联合国《巴勒莫议定书》               | 虚假招聘网站/跨国通讯群组    |  
-| **金融犯罪**   | 虚拟货币跑分/四件套贩卖  | 《刑法》第191条（洗钱罪） + 美国《银行保密法》                           | 分散聚合交易/多级空壳钱包    |  
-| **电信诈骗**   | 仿冒公检法/杀猪盘        | 《反电信诈骗法》第38条 + 美国FCC 47 CFR §64.1200                         | VOIP伪装/钓鱼页面指纹        |  
-| **非法交易**   | KYC伪造/用户隐私倒卖     | 《个人信息保护法》第66条 + 欧盟GDPR第83条                                | 撞库行为/批量身份认证请求    |  
-
-### ⚖️ 三国法律叠加追责机制（跨境司法执行框架）  
-
-| **司法管辖区** | **执法主体**               | **核心法律武器**                          | **量刑标准**                                                                 | **跨国协作机制**                  |  
-|----------------|----------------------------|------------------------------------------|-----------------------------------------------------------------------------|----------------------------------|  
-| **中国大陆**   | 公安部网安局               | 《刑法》第191条（洗钱罪）                 | - 洗钱罪：**10年徒刑+涉案金额5倍罚金**<br>- 危害国家安全罪：**无期徒刑**         | 通过国际刑警组织红色通缉令引渡    |  
-| **美国**       | FBI网络犯罪部              | 《计算机欺诈与滥用法》(CFAA 18 U.S.C. §1030) | - 金融犯罪：**20年监禁**<br>- 儿童色情犯罪：**最低25年监禁**（强制量刑）           | 依据CLOUD Act跨境调取云数据       |  
-| **塞舌尔**     | FIU金融情报中心            | 《反洗钱法2020》第15条                    | - 非法赌博：**5年监禁+10万美金罚金**<br>- 数据犯罪：**每日1万美金累进罚款**      | 英联邦司法互助条约自动执行裁决    |  
-
-#### 🌐 跨境追责技术取证流程（GitHub 兼容版）
-
-##### ⏱️ 取证时序流程
-| 步骤 | 发起方          | 接收方          | 行动内容                         | 法律依据                                   | 时限       |
-|------|----------------|----------------|--------------------------------|------------------------------------------|-----------|
-| 1    | 国安机关        | FBI            | 共享犯罪证据链                   | MLAT 司法互助协议                         | 72小时     |
-| 2    | FBI            | 塞舌尔FIU       | 签发加密资产冻结令               | 《反洗钱法2020》第15条                     | 立即生效   |
-| 3    | 塞舌尔FIU      | 云服务商        | 执行数据扣押令                   | 《塞舌尔刑事司法互助法》第8条               | 72小时生效 |
-| 4    | 云服务商        | 开发者          | 请求司法协助（仅限元数据）       | 18 U.S.C. § 2703(f)（存储通信法案）         | 15工作日   |
-| 5    | 开发者          | 国际刑警        | 提交 GitHub 提交日志             | GPL-3.0 第15-17条（无担保声明条款）         | 即时       |
-| 6    | 国际刑警        | 三国法庭        | 提交区块链取证联合公诉书         | 《联合国反腐败公约》第46条                 | 30日历日   |
-
-##### 🔗 关键证据移交节点
-```diff
-! 证据链1: 加密资产流向图
-+ 提交至: 塞舌尔金融情报中心(FIU)
-- 技术手段: Chainalysis 链上追踪
-# 法律效力: 《反洗钱法2020》附件3
-
-! 证据链2: GitHub 开发日志
-+ 提交至: INTERPOL 数字犯罪科
-- 技术验证: GPG 签名+时间戳
-# 法律效力: 海牙电子证据公约
+```mermaid
+graph TD
+    subgraph "进程: ppp"
+        A[main.cpp\nPppApplication::Run] --> B[AppConfiguration\nppp/configurations]
+        A --> C[平台初始化\nwindows/ linux/ darwin/ android/]
+        B --> D[ITransmission\nppp/transmissions]
+        D --> E[VirtualEthernetLinklayer\nppp/app/protocol]
+        E --> F[客户端运行时\nppp/app/client]
+        E --> G[服务端运行时\nppp/app/server]
+        F --> H[虚拟网卡 / TAP\nppp/tap]
+        G --> I[会话交换\nVirtualEthernetSwitcher]
+        H --> J[lwIP VNetstack\nppp/ethernet]
+        I --> K[管理后端\ngo/]
+    end
+    L[OS 网络栈] --> C
+    M[远端对等节点] -->|TCP / WS / WSS| D
 ```
 
-### ⚠️ 用户法律风险提示  
+### 启动流水线
 
-+ 中国用户：  
-   - 依据《反电信诈骗法》第38条，涉案账户**三代亲属银行卡连带冻结**  
-   - 危害国家安全行为适用《刑法》第113条，**最高可判处死刑**  
-   - 非法跨境数据传输触发《数据安全法》第45条，**处以500万以下罚金+吊销执照**
+```mermaid
+flowchart LR
+    A[PreparedArgumentEnvironment] --> B[LoadConfiguration]
+    B --> C[AppPrivilege 检查]
+    C --> D[prevent_rerun_ 锁]
+    D --> E[Windows_PreparedEthernetEnvironment\n仅客户端]
+    E --> F[PreparedLoopbackEnvironment]
+    F --> G[ConsoleUI::Start]
+    G --> H[NextTickAlwaysTimeout]
+    H --> I[io_context::run]
+    I --> J[OnTick 循环]
+```
 
-+ 美国用户：  
-   - FBI启动"无国界管辖权"（基于美元结算通道），**无需引渡直接起诉**  
-   - 涉及儿童色情按《18 U.S.C. §2251》**强制最低刑期25年**  
-   - 金融犯罪适用《RICO法案》，**可没收全部涉案资产**
+### 关机级联
 
-+ 塞舌尔用户：  
-   - 离岸公司实控人承担**个人无限责任**（Pierce Corporate Veil原则）  
-   - 违反《反洗钱法2020》第7条者，**每日追加1万美金累进罚款**  
-   - 涉暗网交易适用《ICT法案》第88条，**最低刑期10年不得假释**
+```mermaid
+sequenceDiagram
+    participant OS as OS 信号
+    participant App as PppApplication
+    participant UI as ConsoleUI
+    participant RT as 运行时
+    participant Lock as prevent_rerun_
 
-### ⚠️ 违法后果现实案例参照  
-
-#### 💼 虚拟货币洗钱类  
-| **司法管辖区** | **案例详情**               | **处罚结果**                                  | **技术取证手段**                  |  
-|----------------|--------------------------|---------------------------------------------|----------------------------------|  
-| **中国大陆**   | 赵东案（OTC商家）          | 罚金**2300万元** + **7年有期徒刑**           | 链上追踪混币器资金流向              |  
-| **美国**       | BitMEX交易所案            | CEO刑期**30个月** + 个人罚金**1000万美元**   | 分析Kraken交易所API日志            |  
-| **塞舌尔**     | OneCoin（维卡币）传销案    | **查封35个离岸账户** + 全球通缉实控人         | SWIFT跨境支付记录分析              |  
-
-#### 🎲 跨境赌博运营类  
-| **司法管辖区** | **案例详情**               | **处罚结果**                                  | **技术取证手段**                  |  
-|----------------|--------------------------|---------------------------------------------|----------------------------------|  
-| **中国大陆**   | 亚博体育平台案             | 追缴**38亿元** + 主犯**无期徒刑**            | 支付宝特约商户流水穿透分析          |  
-| **美国**       | Bovada赌博平台             | **没收1亿美元资产** + 域名永久关停            | Cloudflare日志匹配DDoS攻击模式     |  
-| **塞舌尔**     | Bet365塞舌尔分公司         | **吊销赌博牌照** + 罚金**300万美元**         | 服务器租赁合同溯源                 |  
-
-#### 📊 数据贩卖与隐私犯罪类  
-| **司法管辖区** | **案例详情**               | **处罚结果**                                  | **技术取证手段**                  |  
-|----------------|--------------------------|---------------------------------------------|----------------------------------|  
-| **中国大陆**   | 考拉征信案               | CEO判刑**3年** + 公司罚金**5000万元**        | 数据库权限日志审计                |  
-| **美国**       | Equifax数据泄露案        | **赔偿7亿美元** + 永久安全合规监管            | 漏洞利用流量包还原                |  
-| **塞舌尔**     | Seychelles Data Hub案    | **强制清算** + 高管引渡至美国受审             | AWS S3存储桶访问日志分析          |  
-
-#### ⚠️ 八类行为叠加处罚案例  
-| **案件名称**   | **犯罪行为组合**                              | **三国叠加处罚结果**                                                                 |  
-|----------------|---------------------------------------------|------------------------------------------------------------------------------------|  
-| 银河国际案     | 赌博+洗钱+跨境支付                           | 中国：**主犯死刑缓期**<br>美国：**没收纽约房产**<br>塞舌尔：**注销378家壳公司**          |  
-| DarkScandals案 | 儿童色情+比特币洗钱+VPN隐匿                  | 美国：**首犯175年监禁**<br>中国：**查封矿场**<br>塞舌尔：**冻结$120M加密资产**         |  
-
-### 📜 开发者免责条款
-/* 经三国司法实践验证的免责文本 */  
-1. **技术中立原则**  
-   本工具系网络协议纯技术实现（RFC 8446标准），开发者：  
-   - 不运营任何服务器  
-   - 不存储用户流量日志  
-   - 不提供商业支持服务  
-
-2. **违法责任隔离机制**  
-   ```mermaid
-   graph LR
-      用户行为-->ISP[网络服务提供商]
-      开发者-->代码[GitHub仓库]
-      司法取证-->ISP
-      开发者-.无权访问.->用户行为
-   ```
-
-### ⚖️ 司法配合限度声明  
-
-#### 📜 开发者合规配合框架  
-   ```mermaid
-   graph LR
-        A[执法请求] --> B{是否符合法定门槛}
-        B -->|是| C[提供限定材料]
-        B -->|否| D[书面拒绝并备案]
-        C --> E[材料交付记录]
-        D --> F[司法救济程序]
-        classDef green fill:#d6f5d6,stroke:#28a745
-        classDef red fill:#ffd6cc,stroke:#dc3545
-        class C,E green
-        class D,F red
-   ```
-
-### ⚖️ 三国司法配合细则  
-
-| **司法辖区**   | **法定取证门槛**                          | **可提供材料**                          | **材料交付时限** | **拒绝依据**                     |  
-|----------------|------------------------------------------|----------------------------------------|----------------|--------------------------------|  
-| **中国大陆**   | 省级网安部门《调取证据通知书》<br>+《协助调查函》 | 1. GitHub提交历史元数据<br>2. 代码数字签名证书<br>3. 开源协议副本 | 15工作日       | 《网络安全法》第28条            |  
-| **美国**       | FISA Court签发的Section 702指令<br>+ DoJ背书 | 1. PGP签名验证文件<br>2. CI/CD构建日志<br>3. 第三方审计报告 | 72小时         | 第四修正案+DMCA 512(f)         |  
-| **塞舌尔**     | 最高法院司法互助令<br>+ FIU反洗钱协查令     | 1. GPL-3.0许可证公证文本<br>2. 贡献者CLA协议<br>3. 版权登记证书 | 30日历日       | 《电子交易法》第41条           |  
-
-#### ⚠️ 绝对不配合情形  
-- 无正式司法文书的口头/邮件请求
-- 要求提供用户流量日志或通信内容
-- 索取非公开的代码设计文档
-- 跨境司法请求未经过海牙认证
-+ 合规应对：立即启动《司法抗辩预案》第7章流程
-
-### ⚔️ 司法配合预案  
-+ **司法冻结响应**  
-  收到取证请求后立即执行：  
-  ```bash
-  # 冻结GitHub仓库防止篡改
-  gh api repos/liulilittle/openppp2/actions/permissions --method PUT -f enabled=false
-  # 激活司法保护分支
-  git checkout -b legal_lockdown
-  git push origin --force legal_lockdown
-  ```
-
-### 🎣 反钓鱼验证流程 ###
-```diff
-+ Step1: 提取司法文书数字签名
-+ Step2: 连接CNNIC/GlobalSign根证书链验证
-- Step3: 若验证失败立即触发司法警报
-! Step4: 向EFF发送违规取证报告
+    OS->>App: SIGINT / CTRL+C
+    App->>App: 取消 tick 定时器
+    App->>UI: ConsoleUI::Stop()
+    App->>RT: Dispose()
+    RT->>RT: IPv6 回滚（服务端）
+    RT->>RT: 路由/DNS 回滚（客户端）
+    RT->>Lock: prevent_rerun_.Release()
+    App->>App: io_context::stop()
 ```
 
 ---
 
-## <img src="https://img.icons8.com/color/48/000000/command-line.png" width="30" height="30"> 命令行接口
-### ⚙️ 通用命令
+## 从这里开始
 
-| 命令 | 功能 | 格式 | 默认值 |
-|------|------|------|:------:|
-| `--rt` | 实时模式 | `--rt=[yes｜no]` | `yes` |
-| `--dns` | 设置DNS服务器 | `--dns <IP列表>` | `8.8.8.8,8.8.4.4` |
-| `--tun-flash` | 启用高级QoS策略控制 | `--tun-flash=[yes｜no]` | `no` |
-| `--pull-iplist` | 下载国家IP列表 | `--pull-iplist [文件]/[国家]` | `./ip.txt/CN` |
-| `--config` | 配置文件路径 | `--config <文件路径>` | `./appsettings.json` |
-| `--mode` | 运行模式 | `--mode=[client｜server]` | `server` |
-
-> 🔗 **IP列表数据源**: [APNIC 官方列表](http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest)
+| 文档 | 用途 |
+|------|------|
+| [`docs/README_CN.md`](docs/README_CN.md) | 文档总索引与阅读路径 |
+| [`docs/README.md`](docs/README.md) | English 文档总索引 |
+| [`docs/ARCHITECTURE_CN.md`](docs/ARCHITECTURE_CN.md) | 顶层架构地图 |
+| [`docs/USER_MANUAL_CN.md`](docs/USER_MANUAL_CN.md) | 用户快速开始与附录 |
+| [`docs/SOURCE_READING_GUIDE_CN.md`](docs/SOURCE_READING_GUIDE_CN.md) | 源码阅读顺序 |
 
 ---
 
-### 🖥️ 服务器命令
+## 推荐阅读路径
 
-| 命令 | 功能 | 格式 | 默认值 |
-|------|------|------|:------:|
-| `--firewall-rules` | 防火墙规则文件 | `--firewall-rules <文件>` | `./firewall-rules.txt` |
+### 想整体理解系统
 
----
+1. [`docs/ENGINEERING_CONCEPTS_CN.md`](docs/ENGINEERING_CONCEPTS_CN.md)
+2. [`docs/ARCHITECTURE_CN.md`](docs/ARCHITECTURE_CN.md)
+3. [`docs/STARTUP_AND_LIFECYCLE_CN.md`](docs/STARTUP_AND_LIFECYCLE_CN.md)
+4. [`docs/TRANSMISSION_CN.md`](docs/TRANSMISSION_CN.md)
+5. [`docs/HANDSHAKE_SEQUENCE_CN.md`](docs/HANDSHAKE_SEQUENCE_CN.md)
+6. [`docs/PACKET_FORMATS_CN.md`](docs/PACKET_FORMATS_CN.md)
+7. [`docs/CLIENT_ARCHITECTURE_CN.md`](docs/CLIENT_ARCHITECTURE_CN.md)
+8. [`docs/SERVER_ARCHITECTURE_CN.md`](docs/SERVER_ARCHITECTURE_CN.md)
+9. [`docs/ROUTING_AND_DNS_CN.md`](docs/ROUTING_AND_DNS_CN.md)
+10. [`docs/PLATFORMS_CN.md`](docs/PLATFORMS_CN.md)
+11. [`docs/DEPLOYMENT_CN.md`](docs/DEPLOYMENT_CN.md)
+12. [`docs/OPERATIONS_CN.md`](docs/OPERATIONS_CN.md)
 
-### 💻 客户端命令
+### 想高效阅读源码
 
-#### 核心设置
-| 命令 | 功能 | 格式 | 默认值 |
-|------|------|------|:------:|
-| `--lwip` | [协议栈选择](#network-protocol-static-guide) | `--lwip=[yes｜no]` | Win: `yes`<br>其他: `no` |
-| `--vbgp` | 智能路由分流 | `--vbgp=[yes｜no]` | `yes` |
-| `--nic` | 指定物理网卡 | `--nic <网卡名>` | 自动选择 |
-| `--ngw` | 强制网关地址 | `--ngw <IP>` | 自动获取 |
+1. [`docs/SOURCE_READING_GUIDE_CN.md`](docs/SOURCE_READING_GUIDE_CN.md)
+2. `main.cpp`
+3. `ppp/configurations/*`
+4. `ppp/transmissions/*`
+5. `ppp/app/protocol/*`
+6. `ppp/app/client/*`
+7. `ppp/app/server/*`
+8. 各平台目录
+9. 需要 managed deployment 时再看 `go/*`
 
-#### 虚拟网卡
-| 命令 | 功能 | 格式 | 默认值 |
-|------|------|------|:------:|
-| `--tun` | 网卡名称 | `--tun <名称>` | [平台相关](#network-card-name-default-guide) |
-| `--tun-ip` | IP地址 | `--tun-ip <IP>` | `10.0.0.2` |
-| `--tun-gw` | 网关地址 | `--tun-gw <IP>` | `10.0.0.1` |
-| `--tun-mask` | 子网掩码 | `--tun-mask <位数>` | `30` |
-| `--tun-host` | 首选网络 | `--tun-host=[yes｜no]` | `yes` |
+### 主要关心部署与运行
 
-#### 高级功能
-| 命令 | 功能 | 格式 | 默认值 |
-|------|------|------|:------:|
-| `--tun-mux` | MUX连接数 | `--tun-mux <`[连接数](#mux-connection-number-guide)`>` | `0` |
-| `--tun-mux-acceleration` | MUX加速 | `--tun-mux-acceleration <`[模式](#mux-acceleration-mode-guide)`>` | `0` |
-| `--tun-vnet` | 子网转发 | `--tun-vnet=[yes｜no]` | `yes` |
-| `--tun-ssmt` | 超线程优化 | `--tun-ssmt=[`[线程数](#ssmt-threading-number-guide)`]/[`[模式](#ssmt-threading-optimize-mode-guide)`]` | `4/st` |
-| `--tun-static` | [静态隧道](#udp-static-aggligator) | `--tun-static=[yes｜no]` | `no` |
-| `--link-restart` | 链路重连次数 | `--link-restart=[重连次数]` | `0` |
-| `--block-quic` | 阻止QUIC流量 | `--block-quic=[yes\|no]` | `no` |
-| `--auto-restart` | 自动重启程序 | `--auto-restart=[秒]` | `0` |
+1. [`docs/CONFIGURATION_CN.md`](docs/CONFIGURATION_CN.md)
+2. [`docs/CLI_REFERENCE_CN.md`](docs/CLI_REFERENCE_CN.md)
+3. [`docs/PLATFORMS_CN.md`](docs/PLATFORMS_CN.md)
+4. [`docs/ROUTING_AND_DNS_CN.md`](docs/ROUTING_AND_DNS_CN.md)
+5. [`docs/DEPLOYMENT_CN.md`](docs/DEPLOYMENT_CN.md)
+6. [`docs/OPERATIONS_CN.md`](docs/OPERATIONS_CN.md)
+7. [`docs/SECURITY_CN.md`](docs/SECURITY_CN.md)
 
-#### 路由设置
-| 命令 | 功能 | 格式 | 默认值 |
-|------|------|------|:------:|
-| `--bypass` | 绕过列表 | `--bypass <文件1\|文件2>` | `./ip.txt` |
-| `--bypass-nic` | 指定绕过列表的接口 | `--bypass-nic <网卡>` | |
-| `--bypass-ngw` | 指定绕过列表的网关 | `--bypass-ngw <IP>` | `0.0.0.0` |
-| `--virr` | 自动更新并生效 | `--virr [文件]/[国家]` | `./ip.txt/CN` |
-| `--dns-rules` | DNS规则 | `--dns-rules <文件>` | [./dns-rules.txt](#dns-rules-guide) |
+### 深入研究（进阶）
 
-#### 平台专用
-| 命令 | 平台 | 功能 | 格式 | 默认值 |
-|------|:----:|------|------|:------:|
-| `--tun-route` | <img src="https://img.icons8.com/color/24/000000/linux.png" width="20"> | 路由兼容 | `--tun-route=[yes｜no]` | `no` |
-| `--tun-protect` | <img src="https://img.icons8.com/color/24/000000/linux.png" width="20"> | 路由保护 | `--tun-protect=[yes｜no]` | `yes` |
-| `--tun-promisc` | <img src="https://img.icons8.com/color/24/000000/mac-logo.png" width="20"> <img src="https://img.icons8.com/color/24/000000/linux.png" width="20"> | 混杂模式 | `--tun-promisc=[yes｜no]` | `yes` |
+1. [`docs/CONCURRENCY_MODEL_CN.md`](docs/CONCURRENCY_MODEL_CN.md)
+2. [`docs/EDSM_STATE_MACHINES_CN.md`](docs/EDSM_STATE_MACHINES_CN.md)
+3. [`docs/PACKET_LIFECYCLE_CN.md`](docs/PACKET_LIFECYCLE_CN.md)
+4. [`docs/LINKLAYER_PROTOCOL_CN.md`](docs/LINKLAYER_PROTOCOL_CN.md)
+5. [`docs/TRANSMISSION_PACK_SESSIONID_CN.md`](docs/TRANSMISSION_PACK_SESSIONID_CN.md)
+6. [`docs/TUNNEL_DESIGN_CN.md`](docs/TUNNEL_DESIGN_CN.md)
+7. [`docs/ERROR_CODES_CN.md`](docs/ERROR_CODES_CN.md)
+8. [`docs/ERROR_HANDLING_API_CN.md`](docs/ERROR_HANDLING_API_CN.md)
+9. [`docs/DIAGNOSTICS_ERROR_SYSTEM_CN.md`](docs/DIAGNOSTICS_ERROR_SYSTEM_CN.md)
 
----
+### IPv6 子系统
 
-### 🪟 Windows 命令
-
-| 命令 | 功能 | 格式 |
-|------|------|------|
-| `--system-network-reset` | 网络重置 | `--system-network-reset` |
-| `--system-network-optimization` | 性能优化 | `--system-network-optimization` |
-| `--system-network-preferred-ipv4` | 设置IPV4网络优先 | `--system-network-preferred-ipv4` |
-| `--system-network-preferred-ipv6` | 设置IPV6网络优先 | `--system-network-preferred-ipv6` |
-| `--no-lsp` | 禁用LSP | `--no-lsp` |
+1. [`docs/IPV6_LEASE_MANAGEMENT_CN.md`](docs/IPV6_LEASE_MANAGEMENT_CN.md)
+2. [`docs/IPV6_TRANSIT_PLANE_CN.md`](docs/IPV6_TRANSIT_PLANE_CN.md)
+3. [`docs/IPV6_NDP_PROXY_CN.md`](docs/IPV6_NDP_PROXY_CN.md)
+4. [`docs/IPV6_CLIENT_ASSIGNMENT_CN.md`](docs/IPV6_CLIENT_ASSIGNMENT_CN.md)
 
 ---
 
-## 📚 全局参数
+## 文档总表
 
-<a id="mux-acceleration-mode-guide"></a>
+仓库中共有多组英中文档配对，加上根目录 README 双语对照。每一份中文文档都有一份一对一英文文档。
 
-### <img src="https://img.icons8.com/color/24/000000/merge.png" width="20" height="20"> MUX 加速模式
-| 值 | 模式 | 适用场景 |
-|:--:|------|----------|
-| 0 | 标准 | 常规使用 |
-| 1 | 服务器加速 | 下载密集型 |
-| 2 | 客户端加速 | 上传密集型 |
-| 3 | 双向加速 | 高性能需求 |
-
-<a id="network-card-name-default-guide"></a>
-
-### <img src="https://img.icons8.com/color/512w/network-card.png" width="20" height="20"> 虚拟网卡默认值
-| 平台 | 默认值 |
-|------|--------|
-| Windows | `PPP` |
-| Linux | `ppp` |
-| macOS | `utun0` |
-
-<a id="ssmt-threading-optimize-mode-guide"></a>
-
-### <img src="https://cdn2.iconfinder.com/data/icons/elastic-search-filled-outline-1/128/Elastic_Search_36_-_Filled_Outline_-_36-20-512.png" width="20" height="20"> SSMT 优化模式
-| 模式 | 优化方向 |
-|------|----------|
-| st | 单连接大流量 |
-| mq | 多连接高并发 |
-
-<a id="symbol-explanation-guide"></a>
-
-### 💾 符号说明
-| 符号 | 说明 |
-|:----:|------|
-| `[ ]` | 可选参数 |
-| `< >` | 必填参数 |
-| `｜` | 选项分隔 |
-| `!` | 不可用或禁用 |
-
-<a id="network-protocol-static-guide"></a>
-
-### 🌐 网络协议栈
-| 类型 | 说明 |
-|:--------:|---------|
-| `lwip` | 适用于 `Windows` |
-| `ctcp` | 适用于 [!](#symbol-explanation-guide)`Windows` |
-
-## <img src="https://img.icons8.com/color/48/000000/source-code.png" width="30" height="30"> 编译指南
-
-必须使用支持 C++17 的编译器，其余无特殊要求。按标准方式安装 C++17 开发环境即可。
-
-### 依赖要求
-#### 最小依赖  
-- **Boost** >= 1.70 and <= 1.8.6
-- **jemalloc** >= 5.30 (Android除外)  
-- **OpenSSL** >= 1.1.x  
-
-#### 完整依赖
-- Boost  
-- jemalloc  
-- OpenSSL  
-- cURL  
-
-#### 资源地址  
-- **cURL:** https://github.com/curl/curl
-- **jemalloc:** https://github.com/jemalloc/jemalloc
-- **openssl:** https://github.com/openssl/openssl
-- **Boost:** https://www.boost.org/releases/latest
-
-### 平台编译指南
-| 平台 | 工具链 | 推荐方式 | 注意事项 |
-|------|--------|----------|----------|
-| **Windows** | Visual Studio 2022 | [vcpkg](https://github.com/microsoft/vcpkg) | 使用静态编译 (`/MT`, `/MTd`) |
-| **Linux** | GCC/Clang | 手动编译 | [参考脚本](https://github.com/liulilittle/openppp2/blob/main/.github/workflows/build-openppp2-for-linux-using-ubuntu-latest.yml) |
-| **macOS** | LLVM-Clang | 手动编译 | [参考脚本](https://github.com/liulilittle/openppp2/blob/main/.github/workflows/build-openppp2-for-darwin-using-macos-latest.yml) |
-| **Android** | NDK r20b | 交叉编译 | [参考脚本](https://github.com/liulilittle/openppp2/blob/main/.github/workflows/build-openppp2-for-android-using-ubuntu-latest-cross.yml) |
-
-### 预编译库资源
-- **Linux**: [openppp2-ubuntu-3rd-environment](https://github.com/liulilittle/openppp2-ubuntu-3rd-environment)  
-- **macOS**: [openppp2-macos-amd64-environment](https://github.com/liulilittle/openppp2-macos-amd64-environment)  
-- **Android**: [openppp2-android-ndk-r20b-3rd-environment](https://github.com/liulilittle/openppp2-android-ndk-r20b-3rd-environment)  
-
-### 环境要求
-必须使用支持 C++17 的编译器，其余无特殊要求。按标准方式安装 C++17 开发环境即可。
+| 领域 | English | 中文 |
+|------|---------|------|
+| 基础 | `ENGINEERING_CONCEPTS.md` | `ENGINEERING_CONCEPTS_CN.md` |
+| 基础 | `ARCHITECTURE.md` | `ARCHITECTURE_CN.md` |
+| 基础 | `STARTUP_AND_LIFECYCLE.md` | `STARTUP_AND_LIFECYCLE_CN.md` |
+| 传输 | `TRANSMISSION.md` | `TRANSMISSION_CN.md` |
+| 传输 | `HANDSHAKE_SEQUENCE.md` | `HANDSHAKE_SEQUENCE_CN.md` |
+| 传输 | `PACKET_FORMATS.md` | `PACKET_FORMATS_CN.md` |
+| 传输 | `TRANSMISSION_PACK_SESSIONID.md` | `TRANSMISSION_PACK_SESSIONID_CN.md` |
+| 协议 | `LINKLAYER_PROTOCOL.md` | `LINKLAYER_PROTOCOL_CN.md` |
+| 运行时 | `CLIENT_ARCHITECTURE.md` | `CLIENT_ARCHITECTURE_CN.md` |
+| 运行时 | `SERVER_ARCHITECTURE.md` | `SERVER_ARCHITECTURE_CN.md` |
+| 运行时 | `ROUTING_AND_DNS.md` | `ROUTING_AND_DNS_CN.md` |
+| 运行时 | `PACKET_LIFECYCLE.md` | `PACKET_LIFECYCLE_CN.md` |
+| 平台 | `PLATFORMS.md` | `PLATFORMS_CN.md` |
+| 配置 | `CONFIGURATION.md` | `CONFIGURATION_CN.md` |
+| 配置 | `CLI_REFERENCE.md` | `CLI_REFERENCE_CN.md` |
+| 运维 | `DEPLOYMENT.md` | `DEPLOYMENT_CN.md` |
+| 运维 | `OPERATIONS.md` | `OPERATIONS_CN.md` |
+| 安全 | `SECURITY.md` | `SECURITY_CN.md` |
+| 管理 | `MANAGEMENT_BACKEND.md` | `MANAGEMENT_BACKEND_CN.md` |
+| 使用 | `USER_MANUAL.md` | `USER_MANUAL_CN.md` |
+| 阅读 | `SOURCE_READING_GUIDE.md` | `SOURCE_READING_GUIDE_CN.md` |
+| 并发 | `CONCURRENCY_MODEL.md` | `CONCURRENCY_MODEL_CN.md` |
+| 状态机 | `EDSM_STATE_MACHINES.md` | `EDSM_STATE_MACHINES_CN.md` |
+| 隧道 | `TUNNEL_DESIGN.md` | `TUNNEL_DESIGN_CN.md` |
+| 错误码 | `ERROR_CODES.md` | `ERROR_CODES_CN.md` |
+| 错误 API | `ERROR_HANDLING_API.md` | `ERROR_HANDLING_API_CN.md` |
+| 诊断 | `DIAGNOSTICS_ERROR_SYSTEM.md` | `DIAGNOSTICS_ERROR_SYSTEM_CN.md` |
+| IPv6 | `IPV6_LEASE_MANAGEMENT.md` | `IPV6_LEASE_MANAGEMENT_CN.md` |
+| IPv6 | `IPV6_TRANSIT_PLANE.md` | `IPV6_TRANSIT_PLANE_CN.md` |
+| IPv6 | `IPV6_NDP_PROXY.md` | `IPV6_NDP_PROXY_CN.md` |
+| IPv6 | `IPV6_CLIENT_ASSIGNMENT.md` | `IPV6_CLIENT_ASSIGNMENT_CN.md` |
+| TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
+| IPv6 修复说明 | `IPV6_FIXES.md` | _（仅英文）_ |
 
 ---
 
-### 编译命令
-1. **设置三方库路径**  
-   修改 `CMakeLists.txt` 中的依赖库目录：  
-   `SET(THIRD_PARTY_LIBRARY_DIR /your/actual/path)`
+## 仓库结构
 
-2. **编译与执行**  
-    ```bash
-    # Linux/macOS 编译流程
-    mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j$(nproc)  # Linux自动检测核心数
-    cd ../bin && ./ppp  # 运行程序
-    ```
-
-### 预编译宏
-ANCIL_FD_BUFFER_STRUCT  
-启用 sendfd/recvfd 共享文件描述符的父进程fd保护模式
-
-CURLINC_CURL  
-通过 cURL 库访问 HTTP/HTTPS 资源
-
-TRANSMISSION_O1  
-强制网络传输层使用 /O1 编译优化
-
-JEMALLOC  
-使用 jemalloc 内存分配器替代默认分配器
-
-BUDDY_ALLOC_IMPLEMENTATION  
-使用 buddy allocator 管理虚拟内存分配
-
-SYSNAT
-启用内核NAT / TC Network Driver (TC Hairpin NATs)
-
-__MUSL__  
-静态链接 musl-libc C++ 标准库（脱离 GNU/LIBC）
-
-_LARGEFILE64_SOURCE  
-确保 musl-libc 支持 64 位文件操作函数
-
-### IO_URING 版本编译
-1. 从 [liburing](https://github.com/axboe/liburing) 下载源码并编译安装
-2. 取消 `CMakeLists.txt` 中以下代码的注释：
-   ```cmake
-   # IF(PLATFORM_SYSTEM_LINUX) 
-   #     ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)
-   #     ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)
-   # ENDIF()
-3. 取消 TARGET_LINK_LIBRARIES 中 # liburing.a 的注释
-    ```cmake
-    TARGET_LINK_LIBRARIES(${NAME} 
-        libc.a
-        libssl.a 
-        libcrypto.a 
-        libjemalloc.a
-        # liburing.a
-
-        atomic
-        dl
-        pthread
-
-        libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a 
-        libboost_regex.a
-        libboost_filesystem.a) 
-    ```
-4. 按标准 Linux 流程编译
-
-## 🚀 SIMD + AES_NI 优化实现
-### 优化算法
-| 算法名称               | 实现文件路径                                                                                     |
-|------------------------|--------------------------------------------------------------------------------------------------|
-| `simd-aes-128-cfb`     | [simd_aes_128_cfb.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_128_cfb.cpp) |
-| `simd-aes-256-cfb`     | [simd_aes_256_cfb.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_256_cfb.cpp) |
-| `simd-aes-128-gcm`     | [simd_aes_128_gcm.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_128_gcm.cpp) |
-| `simd-aes-256-gcm`     | [simd_aes_256_gcm.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_256_gcm.cpp) |
-
-**前提条件**  
-1. 仅支持 i386/amd64 处理器平台  
-2. CPU 必须支持 AES-NI 指令集  
-   （PPP 将通过汇编指令自动检测 CPU 支持性）
-
-**编译步骤**  
-1. 修改 `CMakeLists.txt` 文件：
-   ```cmake
-   SET(__SIMD__ TRUE)  # 原值为 FALSE
-2. 按标准 Linux 流程编译：
-    ```bash
-    mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j $(nproc) 
-    ```
-
-**注意事项**  
-- 仅支持 i386/amd64 平台，其他平台启用将导致编译失败  
-- 需 CPU 硬件支持 AES-NI 指令集（PPP 自动检测）  
-- 仅优化以下算法：  
-  - `simd-aes-128-cfb`  
-  - `simd-aes-256-cfb`  
-  - `simd-aes-128-gcm`  
-  - `simd-aes-256-gcm`  
-- 修改 `CMakeLists.txt` 后需完整重编译：
-  ```bash
-  rm -rf build && mkdir build && cd build
-  cmake .. -DCMAKE_BUILD_TYPE=Release
-  make clean && make -j $(nproc)
-  ```
+```text
+.
+├── main.cpp                      # 进程入口：PppApplication::Run()
+├── ppp/
+│   ├── stdafx.h                  # 主头文件：所有宏、类型别名（阅读前必读）
+│   ├── configurations/
+│   │   ├── AppConfiguration.h    # 运行时配置模型
+│   │   └── AppConfiguration.cpp  # Loaded()：策略编译器与归一化器
+│   ├── transmissions/
+│   │   ├── ITransmission.h/.cpp  # 受保护传输 + 握手逻辑
+│   │   ├── ITcpipTransmission.h/.cpp  # TCP 载体实现
+│   │   └── IWebsocketTransmission.h/.cpp  # WS/WSS 载体实现
+│   ├── app/
+│   │   ├── protocol/
+│   │   │   ├── VirtualEthernetLinklayer.h/.cpp  # opcode 驱动的隧道动作
+│   │   │   ├── VirtualEthernetInformation.h/.cpp # 会话信封
+│   │   │   └── VirtualEthernetPacket.cpp  # 静态包打包/解包
+│   │   ├── client/
+│   │   │   ├── VEthernetExchanger.h/.cpp     # 客户端会话交换器
+│   │   │   └── VEthernetNetworkSwitcher.h/.cpp # 路由/DNS 管理
+│   │   ├── server/
+│   │   │   ├── VirtualEthernetSwitcher.h/.cpp   # 会话协调
+│   │   │   ├── VirtualEthernetExchanger.h/.cpp  # 单会话服务端处理器
+│   │   │   ├── VirtualEthernetManagedServer.h/.cpp # Go 后端桥接
+│   │   │   ├── VirtualEthernetDatagramPort.h    # 服务端 UDP 转发
+│   │   │   └── VirtualEthernetNamespaceCache.h  # DNS 缓存
+│   │   └── ConsoleUI.h/.cpp      # TUI：渲染线程 + 输入线程
+│   ├── diagnostics/
+│   │   ├── Error.h/.cpp          # 错误码定义与设置函数
+│   │   ├── ErrorCodes.def        # X-macro 源：542 个错误码
+│   │   └── ErrorHandler.h/.cpp   # 错误处理器注册与分发
+│   ├── tap/
+│   │   └── ITap.h/.cpp           # 虚拟网卡抽象接口
+│   ├── ethernet/
+│   │   ├── VEthernet.cpp         # TAP 帧分发，Output()
+│   │   └── VNetstack.cpp         # lwIP 集成：UDP/TCP/ICMP 钩子
+│   ├── threading/
+│   │   └── Executors.h/.cpp      # 线程池与 io_context 管理
+│   └── net/                      # 套接字、ASIO、HTTP 代理、ICMP、防火墙
+├── windows/
+│   └── ppp/tap/TapWindows.h/.cpp # Wintun / TAP-Windows 实现
+├── linux/
+│   └── ppp/tap/TapLinux.h/.cpp   # Linux TUN 实现
+├── darwin/
+│   └── ppp/tap/TapDarwin.h/.cpp  # macOS utun 实现
+├── android/
+│   └── libopenppp2.cpp           # Android JNI 桥接层
+├── builds/                        # 变体 CMakeLists.txt 文件集
+├── go/                            # 可选 Go 管理后端
+└── docs/                          # 配对 EN + _CN.md 文档
+    ├── *.md
+    └── *_CN.md
+```
 
 ---
 
-## 🌐 配置文件
-### 🌍 全局配置
+## 构建说明
 
-| 参数名      | 类型   | 默认值        | 说明                                   | 适用             |
-|-------------|--------|--------------|--------------------------------------|------------------|
-| concurrent  | int    | 1            | [并发线程数](#concurrent-number-guide) | `client｜server` |
-| cdn         | array  | [80, 443]    | 使用的CDN端口列表                   | `server`         |
+### Linux / macOS
 
-### 🔑 加密设置 (key)
-| 参数名          | 类型    | 值示例             | 说明                          | 一致性 | 适用             |
-|-----------------|---------|-------------------|------------------------------|--------|------------------|
-| kf              | int     | 154543927         | 密钥生成因子                 | 强制   | `client｜server`|
-| kx              | int     | 128               | 插花因子                     | 非强制 | `client｜server`|
-| kl              | int     | 10                | NOP最小位                    | 非强制 | `client｜server`|
-| kh              | int     | 12                | NOP最大位                    | 非强制 | `client｜server`|
-| sb              | int     | 1000              | 动态滑板大小(字节)           | 非强制 | `client｜server`|
-| protocol        | string  | aes-128-cfb       | 协议层加密算法               | 强制   | `client｜server`|
-| protocol-key    | string  | N6HMzdUs7IUnYHwq  | 协议层加密密钥               | 强制   | `client｜server`|
-| transport       | string  | aes-256-cfb       | 传输层加密算法               | 强制   | `client｜server`|
-| transport-key   | string  | HWFweXu2g5RVMEpy  | 传输层加密密钥               | 强制   | `client｜server`|
-| masked          | bool    | false             | 是否启用流量混淆             | 强制   | `client｜server`|
-| plaintext       | bool    | false             | 是否允许明文传输             | 强制   | `client｜server`|
-| delta-encode    | bool    | false             | 是否启用增量编码             | 强制   | `client｜server`|
-| shuffle-data    | bool    | false             | 是否启用数据随机化           | 强制   | `client｜server`|
-
-### 📡 网络接口 (ip)
-| 参数名      | 类型   | 值示例        | 说明                     | 适用             |
-|-------------|--------|--------------|------------------------|------------------|
-| public      | string | 192.168.0.24 | 公网IP地址              | `server`         |
-| interface   | string | 192.168.0.24 | 本地监听接口IP          | `server`         |
-
-### 💾 虚拟内存 (vmem)
-| 参数名 | 类型   | 值示例   | 说明                     | 适用             | 平台             |
-|--------|--------|----------|------------------------|------------------|------------------|
-| size   | int    | 4096     | 内存池大小(MB)          | `client｜server` | `all`            |
-| path   | string | "./{}"   | 内存文件存储路径         | `client｜server` | [!](#symbol-explanation-guide)`windows`       |
-
-### 🔌 TCP配置
-| 参数名               | 类型   | 值示例 | 说明                          | 适用             |
-|----------------------|--------|--------|------------------------------|------------------|
-| inactive.timeout     | int    | 300    | 连接空闲超时时间(秒)          | `client｜server` |
-| connect.timeout      | int    | 5      | 连接建立超时时间(秒)          | `client｜server` |
-| connect.nexcept      | int    | 4      | ​连接建立超时时间的随机扩展范围(秒)​​ | `client｜server` |
-| listen.port          | int    | 20000  | 监听端口                     | `client｜server` |
-| cwnd                 | int    | 0      | 拥塞窗口大小(自动调整)        | `client｜server` |
-| rwnd                 | int    | 0      | 接收窗口大小(自动调整)        | `client｜server` |
-| turbo                | bool   | true   | 启用TCP加速                 | `client｜server` |
-| backlog              | int    | 511    | 最大挂起连接数               | `client｜server` |
-| fast-open            | bool   | true   | 启用TCP Fast Open          | `client｜server` |
-
-### 📶 UDP配置
-| 参数名                      | 类型   | 值示例                     | 说明                          | 适用             |
-|-----------------------------|--------|----------------------------|-----------------------------|------------------|
-| cwnd                        | int    | 0                          | 拥塞窗口大小                 | `client｜server` |
-| rwnd                        | int    | 0                          | 接收窗口大小                 | `client｜server` |
-| inactive.timeout            | int    | 72                         | 连接空闲超时(秒)             | `client｜server` |
-| dns.timeout                 | int    | 4                          | DNS查询超时(秒)              | `client｜server` |
-| dns.ttl                     | int    | 60                         | DNS缓存TTL(秒)               | `client｜server` |
-| dns.cache                   | bool   | true                       | 启用DNS缓存                 | `client｜server` |
-| dns.turbo                   | bool   | false                      | 启用Turbo模式               | `client｜server` |
-| dns.redirect                | string | "0.0.0.0"                  | DNS重定向地址                | `server`         |
-| listen.port                 | int    | 20000                      | 监听端口                     | `server`         |
-| static.keep-alived          | array  | [1,5]                      | 保活间隔[最小值,最大值](秒)  | `client`         |
-| static.dns                  | bool   | true                       | 启用静态DNS服务             | `client`         |
-| static.quic                 | bool   | true                       | 启用QUIC支持                | `client`         |
-| static.icmp                 | bool   | true                       | 启用ICMP支持                | `client`         |
-| static.[aggligator](#udp-static-aggligator)           | int    | 4                          | 宽频聚合器链接数             | `client`         |
-| static.servers              | array  | ["1.0.0.1:20000", ...]     | 静态服务器地址列表           | `client`         |
-
-### 🔄 多路复用 (mux)
-| 参数名               | 类型   | 值示例 | 说明                          | 适用             |
-|----------------------|--------|--------|-----------------------------|------------------|
-| connect.timeout      | int    | 20     | 连接建立超时(秒)             | `client｜server` |
-| inactive.timeout     | int    | 60     | 流空闲超时(秒)               | `client｜server` |
-| congestions          | int    | 134217728 | 最大拥塞控制窗口(字节)      | `client｜server` |
-| keep-alived          | array  | [1,20] | 保活间隔[最小值,最大值](秒)  | `client｜server` |
-
-### 🌐 WebSocket配置
-| 参数名                          | 类型   | 值示例                                   | 说明                          | 适用             |
-|---------------------------------|--------|------------------------------------------|------------------------------|------------------|
-| host                            | string | starrylink.net                           | 服务器域名                   | `server`         |
-| path                            | string | /tun                                     | WebSocket路径                | `server`         |
-| listen.ws                       | int    | 20080                                    | HTTP监听端口                 | `server`         |
-| listen.wss                      | int    | 20443                                    | HTTPS监听端口                | `server`         |
-| ssl.certificate-file            | string | starrylink.net.pem                       | SSL证书文件                   | `server`         |
-| ssl.certificate-chain-file      | string | starrylink.net.pem                       | SSL证书链文件                 | `server`         |
-| ssl.certificate-key-file        | string | starrylink.net.key                       | SSL私钥文件                   | `server`         |
-| ssl.certificate-key-password    | string | test                                     | SSL私钥密码                   | `server`         |
-| ssl.ciphersuites                | string | TLS_AES_256_GCM_SHA384:...               | 加密套件列表                   | `client｜server` |
-| verify-peer                     | bool   | true                                     | 根证书验证                     | `client`         |
-| http.error                      | string | Status Code: 404; Not Found              | HTTP错误响应内容               | `server`         |
-| http.request                    | object | {Cache-Control: "no-cache", ...}        | 自定义HTTP请求头               | `client`         |
-| http.response                   | object | {Server: "Kestrel"}                     | 自定义HTTP响应头               | `server`         |
-
-### 🖥️ 服务器配置 (server)
-| 参数名       | 类型   | 值示例                               | 说明                          | 适用             |
-|--------------|--------|--------------------------------------|------------------------------|------------------|
-| log          | string | ./ppp.log                            | 日志文件路径                  | `server`         |
-| node         | int    | 1                                    | 服务器节点ID                  | `server`         |
-| subnet       | bool   | true                                 | 启用子网分配                  | `server`         |
-| mapping      | bool   | true                                 | 启用端口映射                  | `server`         |
-| backend      | string | ws://192.168.0.24/ppp/webhook        | 管理后台URL                   | `server`         |
-| backend-key  | string | HaEkTB55VcHovKtUPHmU9zn0NjFmC6tff   | 管理后台认证密钥              | `server`         |
-
-### 💻 客户端配置 (client)
-| 参数名                     | 类型   | 值示例                                   | 说明                          | 适用             |
-|----------------------------|--------|------------------------------------------|------------------------------|------------------|
-| guid                       | string | {F4569208-BB45-4DEB-B115-0FEA1D91B85B}   | 客户端唯一标识符             | `client`         |
-| server                     | string | ppp://192.168.0.24:20000/                | 服务器连接地址               | `client`         |
-| server-proxy               | string | [http\|socks]://user:pass@192.168.0.18:8080/      | 连接服务器的代理地址         | `client`         |
-| bandwidth                  | int    | 10000                                    | 带宽限制(Kbp/s)               | `client`         |
-| reconnections.timeout      | int    | 5                                        | 重连等待时间(秒)             | `client`         |
-| paper-airplane.tcp         | bool   | true                                     | 启用纸飞机TCP加速            | `client`         |
-| http-proxy.bind            | string | 192.168.0.24                             | HTTP代理绑定地址             | `client`         |
-| http-proxy.port            | int    | 8080                                     | HTTP代理端口                 | `client`         |
-| socks-proxy.bind           | string | 192.168.0.24                             | SOCKS代理绑定地址            | `client`         |
-| socks-proxy.port           | int    | 1080                                     | SOCKS代理端口                | `client`         |
-| socks-proxy.username       | string | test                                     | SOCKS认证用户名               | `client`         |
-| socks-proxy.password       | string | 123456                                   | SOCKS认证密码                 | `client`         |
-
-#### 📍 端口映射 (mappings)
-| 参数名       | 类型   | 值示例         | 说明                          | 适用      |
-|--------------|--------|----------------|------------------------------|-----------|
-| local-ip     | string | 192.168.0.24   | 本地IP地址                   | `client`  |
-| local-port   | int    | 80             | 本地端口                     | `client`  |
-| protocol     | string | tcp            | 协议类型(tcp/udp)            | `client`  |
-| remote-ip    | string | ::             | 远程IP(::表示任意)           | `client`  |
-| remote-port  | int    | 10001          | 远程端口                     | `client`  |
-
-#### 🛣️ 路由规则 (routes)
-| 参数名 | 类型   | 值示例                     | 说明                     | 适用      |
-|--------|--------|----------------------------|------------------------|-----------|
-| name   | string | CMNET                     | 路由规则名称           | `client`  |
-| nic    | string | eth1                      | 网络接口名称           | `client`  |
-| ngw    | string | 192.168.1.1               | 网关地址               | `client`  |
-| path   | string | ./cmcc_cidr.txt           | 本地CIDR文件路径       | `client`  |
-| vbgp   | string | `https://ispip.clang.cn/cmcc_cidr.txt` | 在线CIDR数据源URL | `client`  |
-
----
-
-## 💡 配置指南 ##
-<a id="mux-connection-number-guide"></a>
-
-### <img src="https://img.icons8.com/color/24/000000/merge.png" width="20" height="20"> MUX 连接数
-| 连接数 | 侧重方向 |
-|------|----------|
-| 4 | 低延迟 |
-| 8 | 中延迟 |
-| 12 | 高延迟 |
-| 16 | 极高延迟 |
-
-<a id="concurrent-number-guide"></a>
-
-### <img src="https://cdn2.iconfinder.com/data/icons/elastic-search-filled-outline-1/128/Elastic_Search_36_-_Filled_Outline_-_36-20-512.png" width="20" height="20"> VPN 线程数
-| 线程数   | 侧重方向 |
-|----------|----------|
-| 1        | 单核优化 |
-| CPU核心数 + 1 | 多核优化 |
-
-<a id="ssmt-threading-number-guide"></a>
-
-### <img src="https://img.icons8.com/color/24/000000/processor.png" width="20" height="20"/> SSMT 线程数  
-| 线程数        | 侧重方向               | 推荐场景                  |
-|---------------|------------------------|---------------------------|
-| 1             | 单核性能优化 | 单任务处理/低负载环境      |
-| CPU物理核心数 | 多核资源优化 | 高并发/多任务处理场景      |
-
----
-
-<a id="dns-rules-guide"></a>
-
-### <img src="https://img.icons8.com/color/24/000000/domain.png" width="20" height="20"/> DNS 规则列表  
-▶️ **中国大陆域名直连规则**（定期更新）：  
-[github.com/liulilittle/dns-rules.txt](https://github.com/liulilittle/dns-rules.txt)  
-`作用：绕过VPN进行DNS查询，加速本地域名解析`
-
----
-
-### <img src="https://cdn-icons-png.freepik.com/256/12054/12054582.png?semt=ais_hybrid" width="20" height="20"/> HTTPS 证书配置  
-**将根证书放入 VPN 运行目录：** `cacert.pem`  
-
-| 来源     | 下载链接 |
-|----------|----------|
-| 镜像仓库 | [github.com/liulilittle/cacert.pem](https://github.com/liulilittle/cacert.pem) |
-| CURL官方 | [curl.se/docs/caextract.html](https://curl.se/docs/caextract.html) |
-
-> 🔒 证书作用：确保 HTTPS 访问安全验证
-
----
-
-## 🚀 快速开始
-### 服务器部署
-
-#### 1. Ubuntu 18.04 LTS x86_64 快速启动
 ```bash
-sudo su
-screen -S openppp2
-mkdir -p openppp2 && cd openppp2
-wget https://github.com/liulilittle/openppp2/releases/latest/download/openppp2-linux-amd64-simd.zip
-unzip openppp2-linux-amd64-simd.zip  
-chmod a+x ppp
-rm -rf *.txt *.key *.pem *.zip
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
 ```
 
-##### 1.1. 配置后端
-编辑配置文件 `appsettings.json`，删除或清空 `server.backend` 字段：
-```json
-"server": {
-    "backend": "",  // 确保此值为空
-    // 其他配置保持不变...
-    "backend-key": "HaEkTB55VcHovKtUPHmU9zn0NjFmC6tff"
-}
-```
+输出：`bin/ppp`
 
-##### 1.1. 启动服务
+**三方库路径**：`THIRD_PARTY_LIBRARY_DIR` 默认为 `/root/dev`。非默认路径时需在构建前修改：
+
 ```bash
-./ppp
+sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR /your/path)|' CMakeLists.txt
+# macOS: sed -i '' '...' CMakeLists.txt
 ```
 
-### 💻 客户端部署
-#### 1. Windows 快速启动
+`THIRD_PARTY_LIBRARY_DIR` 下的预期目录结构：
 
-**1.1 创建目录**  
-以管理员身份运行 Powershell
-
-**1.2 创建目录**  
-```powershell
-mkdir C:\openppp2
+```text
+boost/        # 头文件 + stage/lib/*.a     (Boost 1.86.0)
+jemalloc/     # 头文件 + lib/libjemalloc.a (jemalloc 5.3.0)
+openssl/      # libssl.a, libcrypto.a, include/ (OpenSSL 3.0.13)
 ```
 
-**1.3 下载并清理**  
-1. 下载软件包至 `C:\openppp2`：  
-   [openppp2-windows-amd64.zip](https://github.com/liulilittle/openppp2/releases/download/1.0.0.25226/openppp2-windows-amd64.zip)  
-2. 解压后删除冗余文件：  
-   ```powershell
-   cd C:\openppp2
-   rm cmcc_cidr.txt, crtc_cidr.txt, firewall-rules.txt, ip.txt, starrylink.net.key, starrylink.net.pem, openppp2-windows-amd64.zip
-   ```
+可选 CMake 标志：
 
-**1.4 客户端配置**  
-编辑配置文件 `appsettings.json` 的以下部分：
-```json
-"client": {
-    "guid": "{新生成的GUID}",                // 每个客户端唯一，不可重复
-    "server": "ppp://192.168.0.24:20000/",  // 连接服务器地址和协议
-    "server-proxy": "",                     // 留空（不使用代理）
-    "bandwidth": 0                          // 0表示不限速
-},
-"static": {
-    "keep-alived": [              // 保活设置（默认）
-        1,
-        5
-    ],
-    "dns": true,                  // 允许DNS
-    "quic": true,                 // 允许QUIC
-    "icmp": true,                 // 允许ICMP
-    "aggligator": 0,              // 宽频聚合器链接数（0=禁用）
-    "servers": [                  // 清空转发服务器列表
+| 标志 | 用途 |
+|------|------|
+| `-DENABLE_SIMD=ON` | 启用 AES-NI 加速（仅 x86/x64） |
+| `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` | macOS 必须 |
 
-    ]
-}
+io_uring（Linux ≥ 5.10）：在 `CMakeLists.txt` 中取消注释 `BOOST_ASIO_HAS_IO_URING`，或使用 `builds/` 变体。
+
+### Windows
+
+```bat
+build_windows.bat                  # Release x64（默认）
+build_windows.bat Debug x64
+build_windows.bat Release x86
+build_windows.bat Release all      # x86 + x64 全平台
 ```
 
-**1.5 启动客户端**  
-   ```powershell
-    # 以管理员身份运行：
-    .\ppp --mode=client
-   ```
+使用 CMake + **Ninja**（非 MSBuild）。需要 vcpkg，使用静态三元组 `x86-windows-static` / `x64-windows-static`。
 
-### 🔗 连接协议列表
-| 协议前缀 | 传输方式              | 适用场景                     |
-|----------|-----------------------|------------------------------|
-| `ppp://` | 原生 TCP 直连         | 低延迟、高吞吐量直接连接      |
-| `ws://`  | WebSocket 明文传输    | CDN Forwarding       |
-| `wss://` | SSL 加密 WebSocket    | CDN Forwarding       |
+vcpkg 搜索顺序：
+1. 环境变量 `VCPKG_CMAKE_TOOLCHAIN_FILE`
+2. 环境变量 `VCPKG_ROOT`
+3. `%LOCALAPPDATA%\vcpkg\vcpkg.path.txt`
+4. 相对路径 `..\vcpkg`
+5. Visual Studio 集成 vcpkg
 
-### 协议使用示例
-```json
-"server": "ppp://vpn.example.com:20000"   // TCP直连
-"server": "ws://vpn.example.com:80"       // WebSocket
-"server": "wss://vpn.example.com:443"     // 加密WebSocket
+输出：`bin\Release\x64\ppp.exe`、`bin\Release\x86\ppp.exe`
+
+### Android
+
+```bash
+# 必须设置 NDK_ROOT（NDK r20b）
+cd android
+./build.sh all    # arm64-v8a, x86_64, armeabi-v7a, x86
+./build.sh arm64  # 单 ABI
 ```
 
-### ⚠️ 注意事项
+输出：`android/bin/android/<ABI>/libopenppp2.so`
 
-#### 1. 首次运行
-- 必须完成所有配置修改后再启动客户端  
-- 修改配置后需重启客户端生效  
+最低 API：23（Android 6.0）。Android 系统自带 jemalloc，应用层无需额外依赖。
 
-#### 2. GUID 生成
-| 生成方式          | 命令/方法                          |
-|-------------------|-----------------------------------|
-| PowerShell        | `[guid]::NewGuid()`               |
-| 在线生成器        | [guidgen.com](https://www.guidgen.com) |
-| CMD               | `powershell -Command "[guid]::NewGuid()"` |
+### 多变体构建（Linux amd64）
 
-#### 3. 带宽设置
-- 单位：**Kbp/s**  
-- `0` = 无限制  
-- 示例：`1024` = 128KB/s (≈1.0Mbps)  
+`builds/` 包含多个命名变体 `CMakeLists.txt`：
 
-#### 4. 网络要求
-| 协议     | 需开放端口 | 防火墙要求          |
-|----------|------------|---------------------|
-| `ppp://` | TCP 20000  | 允许入站/出站连接   |
-| `ws://`  | HTTP 80    | 允许HTTP流量        |
-| `wss://` | HTTPS 443  | 允许SSL加密流量     |
+| 变体 | 描述 |
+|------|------|
+| `io-uring` | Linux io_uring 后端 |
+| `simd` | AES-NI 加速 |
+| `tc` | 流量控制集成 |
+| 组合变体 | `io-uring+simd`、`io-uring+tc` 等 |
 
-### 🔧 故障排查
-1. **连接失败**  
-   - 检查服务器IP/端口是否正确  
-   - 验证防火墙是否放行对应协议端口  
+使用 `build-openppp2-by-builds.sh` 将所有变体编译输出到 `bin/<variant>.zip`。
 
-2. **GUID冲突**  
-   - 不同设备必须使用不同GUID  
-   - 复制客户端时需重新生成GUID  
+---
 
-3. **性能问题**  
-   - CDN加速 `ws://` 协议（不推荐）
-   - 优先使用 `ppp://` 协议（性能最佳）  
+## 快速开始
 
-## 附录1
-
-<a id="udp-static-aggligator"></a>
-
-### UDP 宽频聚合器设置
-
-`udp.static.aggligator` 值决定工作模式：
-- **> 0**：启用聚合器，必须配置 `servers`（Aggligator 服务器列表）
-- **≤ 0**：启用静态隧道，`servers` 为 `可选` 转发服务器列表
+### 最简服务端配置（`appsettings.json`）
 
 ```json
-"udp": {
-    "static": {
-        // ...其他配置
-        "aggligator": 2,           // 工作模式选择（>0启用聚合器）
-        "servers": [               // 服务器地址列表
-            "192.168.1.100:6000", 
-            "10.0.0.2:6000"
-        ]
+{
+    "concurrent": 4,
+    "cdn": [1, 2],
+    "key": {
+        "kf": 154543927,
+        "kx": 128,
+        "kl": 10,
+        "kh": 12,
+        "protocol": "aes-128-cfb",
+        "protocol-key": "TSAO_PPP",
+        "transport": "aes-256-cfb",
+        "transport-key": "TSAO_PPP",
+        "masked": false,
+        "plaintext": false,
+        "delta-encode": false,
+        "shuffle-data": false
+    },
+    "server": {
+        "bind": "0.0.0.0",
+        "port": 20000,
+        "subnet": true,
+        "dns": "8.8.8.8",
+        "ip": "10.0.0.0",
+        "mask": "255.255.0.0"
     }
 }
 ```
 
-### Aggligator 服务器要求
-1. **独立部署**：
-   - 需单独安装 [Aggligator](https://github.com/liulilittle/aggligator)  服务端
+启动：`./ppp --mode=server --config=./appsettings.json`
 
-2. **节点配置**：
-    ```bash
-    ./aggligator --mode=server --flash=yes --congestions=1024 --bind=10000,10001 --host=192.168.0.24:7000
-    ```
+### 最简客户端配置
 
-#### 参数说明表
-| 参数 | 值 | 含义 | 详细说明 |
-|------|----|------|----------|
-| `--mode` | `server` | 运行模式 | 作为服务器端运行，接收并转发数据 |
-| `--flash` | `yes` | QoS 策略控制 | 启用高级QoS策略控制 |
-| `--congestions` | `1024` | 窗口大小 | 最大拥塞1024个UDP数据包<br>- 内存占用 ≈ 1024 × MTU(1500字节) ≈ 1.5MB |
-| `--bind` | `10000,10001` | 监听端口 | 本地监听端口列表（逗号分隔）<br>- 接收这些端口的数据<br>- 支持多端口负载均衡 |
-| `--host` | `192.168.0.24:7000` | 转发目标 | 数据最终转发目标<br>- 必须是UDP服务<br>- 格式：`IP:端口`或`域名:端口` |
+```json
+{
+    "concurrent": 2,
+    "key": {
+        "kf": 154543927,
+        "kx": 128,
+        "kl": 10,
+        "kh": 12,
+        "protocol": "aes-128-cfb",
+        "protocol-key": "TSAO_PPP",
+        "transport": "aes-256-cfb",
+        "transport-key": "TSAO_PPP"
+    },
+    "client": {
+        "server": "ppp://your-server-ip:20000/",
+        "bandwidth": 0,
+        "reconnections": {
+            "timeout": 5
+        },
+        "paper-airplane": {
+            "tcp": true
+        }
+    }
+}
+```
+
+启动：`./ppp --mode=client --config=./appsettings.json`
+
+### `client.server` URI 格式
+
+| URI | 传输协议 |
+|-----|---------|
+| `ppp://host:port/` | 明文 TCP |
+| `ppp://ws/host:port/` | WebSocket |
+| `ppp://wss/host:port/` | TLS WebSocket |
 
 ---
 
-## 附录2
+## 配置概述
 
-<a id="linux-route-forwarding"></a>
+`AppConfiguration`（`ppp/configurations/AppConfiguration.h`）是中央配置模型。其 `Loaded()` 方法是**策略编译器**：将原始 JSON 输入归一化、夹紧、推导所有次级字段。
 
-### 1. Linux 开启路由转发
+```mermaid
+flowchart TD
+    A[原始 JSON] --> B[AppConfiguration::Load]
+    B --> C[AppConfiguration::Loaded]
+    C --> D{字段校验}
+    D -->|越界| E[夹紧到安全默认值]
+    D -->|无效组合| F[禁用该功能]
+    D -->|合法| G[推导次级字段]
+    E --> H[运行时就绪的 AppConfiguration]
+    F --> H
+    G --> H
+```
 
-1. 编辑 `/etc/sysctl.conf` 文件，并添加以下修改：
-    ```conf
-    net.ipv4.ip_forward = 1
-    net.ipv4.conf.all.forwarding = 1
-    net.ipv4.conf.default.forwarding = 1
-    net.ipv6.conf.all.forwarding = 1
-    net.ipv6.conf.default.forwarding = 1
-    net.ipv6.conf.lo.forwarding = 1
-    ```
+主要配置组：
 
-2. 执行 `sysctl -p` 生效
+| 组 | 关键字段 | 说明 |
+|----|---------|------|
+| `key` | `kf`, `kx`, `kl`, `kh`, `protocol`, `transport`, `masked`, `plaintext`, `delta-encode`, `shuffle-data` | 密码与混淆参数 |
+| `server` | `bind`, `port`, `subnet`, `dns`, `ip`, `mask` | 服务端监听与 IP 池 |
+| `client` | `server`, `bandwidth`, `reconnections`, `paper-airplane` | 客户端连接目标与 QoS |
+| `concurrent` | （整数） | io_context 线程数 |
+| `cdn` | （数组） | 混淆 CDN 端口模式 |
 
-### 2. Linux 设置 IPv4 网络优先
+完整参考：[`docs/CONFIGURATION_CN.md`](docs/CONFIGURATION_CN.md)
 
-1. 编辑配置文件 `/etc/gai.conf`
-2. 添加以下配置项：
-    ```conf
-    precedence ::ffff:0:0/96 100
-    ```
+---
 
-    > **说明**：  
-    > 此配置使系统优先选择 IPv4 地址进行网络连接
+## 协议与传输层概述
 
-### 3. Linux 双网卡路由转发
+### ITransmission：握手与分帧层
 
-#### 先决条件
-确保已完成 [Linux 开启路由转发](#linux-route-forwarding) 的配置
+`ITransmission`（`ppp/transmissions/ITransmission.h`）负责：
 
-#### 场景示例
-实现 `192.168.1.0/24` 与 `192.168.0.0/24` 网段互通：
+- **握手**：NOP 交换 → 会话 ID → ivv → nmux → 重建密码器
+- **分帧**：base94 帧头（首包 4+3 字节，后续 4 字节）
+- **掩码**：对载荷头部字节应用字节级掩码
+- **Delta 编码**：对载荷数据进行增量差分压缩
+- **双密码层**：协议密码（头部元数据）和传输密码（载荷），均从 `ivv + nmux + base_key` 推导
 
-<img src="https://i-blog.csdnimg.cn/direct/00a37d08d3804713994018f19e62fd74.png" width="500" height="400"></img>
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant S as 服务端
+
+    C->>S: NOP 包（数量 = f(key.kl, key.kh)）
+    S->>C: NOP 包
+    S->>C: 会话 ID (sid)
+    C->>S: ivv（初始化向量变体）
+    S->>C: nmux（低位为 mux 标志）
+    Note over C,S: 双方用 ivv+nmux+base_key 重建密码器
+    Note over C,S: handshaked_ = true
+    C->>S: 隧道流量（opcode 分帧）
+```
+
+载体实现：
+
+| 类 | 传输协议 | 源码 |
+|----|---------|------|
+| `ITcpipTransmission` | 明文 TCP | `ppp/transmissions/ITcpipTransmission.h` |
+| `IWebsocketTransmission` | WebSocket / TLS WS | `ppp/transmissions/IWebsocketTransmission.h` |
+
+### VirtualEthernetLinklayer：opcode 协议
+
+`VirtualEthernetLinklayer`（`ppp/app/protocol/VirtualEthernetLinklayer.h`）定义隧道协议。每个隧道包以 1 字节 opcode 开头。
 
 ```mermaid
 graph LR
-    A[192.168.0.0/24 设备] -->|网关 192.168.0.8| B[Linux 网关服务器]
-    B -->|网关 192.168.1.8| C[192.168.1.0/24 设备]
-    C --> B
-    B --> A
+    subgraph "出向（Do*）"
+        D1[DoLan] --> OUT[ITransmission::Write]
+        D2[DoFrpEntry] --> OUT
+        D3[DoEcho] --> OUT
+        D4[DoKeepAlived] --> OUT
+        D5[DoMux] --> OUT
+    end
+    subgraph "入向（On*）"
+        IN[PacketInput] --> O1[OnLan]
+        IN --> O2[OnFrpEntry]
+        IN --> O3[OnEcho]
+        IN --> O4[OnKeepAlived]
+        IN --> O5[OnMux]
+    end
 ```
 
-#### 路由配置命令
+关键 opcode：
+
+| Opcode | 值 | 方向 | 用途 |
+|--------|---|------|------|
+| `INFO` | `0x7E` | 双向 | 会话信息交换 |
+| `KEEPALIVED` | `0x7F` | 双向 | 保活心跳 |
+| `FRP_ENTRY` | `0x20` | C→S | 新建 TCP 连接请求 |
+| `FRP_CONNECT` | `0x21` | S→C | 连接已接受 |
+| `FRP_CONNECT_OK` | `0x22` | C→S | 客户端确认 |
+| `FRP_PUSH` | `0x23` | 双向 | TCP 数据推送 |
+| `FRP_DISCONNECT` | `0x24` | 双向 | TCP 连接关闭 |
+| `FRP_SENDTO` | `0x25` | 双向 | UDP 数据报 |
+| `LAN` | `0x28` | 双向 | 原始以太网/IP 帧 |
+| `PacketAction_NAT` | `0x29` | 双向 | NAT 路径包 |
+| `DoEcho` | `0x2F` | C→S | ICMP echo 请求代理 |
+| `PacketAction_STATIC` | `0x31` | 双向 | 静态路径包 |
+| `PacketAction_STATICACK` | `0x32` | 双向 | 静态路径确认 |
+| `PacketAction_MUX` | `0x35` | 双向 | MUX 通道数据 |
+| `PacketAction_MUXON` | `0x36` | 双向 | MUX 通道打开 |
+
+完整 opcode 参考：[`docs/LINKLAYER_PROTOCOL_CN.md`](docs/LINKLAYER_PROTOCOL_CN.md)
+
+---
+
+## 客户端运行时概述
+
+客户端运行时（`ppp/app/client/`）连接服务端并与宿主 OS 网络集成。
+
+```mermaid
+graph TD
+    A[VEthernetNetworkSwitcher] --> B[ITransmission]
+    A --> C[虚拟 TAP / 网卡]
+    A --> D[路由表\n修改]
+    A --> E[DNS 重定向]
+    C --> F[VEthernet / VNetstack\nlwIP]
+    F --> G[VEthernetExchanger]
+    G --> B
+    B -->|TCP/WS/WSS| H[服务端]
+```
+
+各组件职责：
+
+| 组件 | 职责 |
+|------|------|
+| `VEthernetNetworkSwitcher` | 客户端顶层控制器；管理重连、重启模式 |
+| `VEthernetExchanger` | 单会话隧道动作处理：FRP、UDP、ICMP、MUX、静态路径 |
+| 虚拟 TAP | 向 OS 提供虚拟以太网适配器 |
+| 路由管理 | 将流量重定向到隧道 |
+| DNS 重定向 | 将 OS DNS 指向隧道端点 |
+
+**重启模式：**
+
+| 模式 | 重建内容 | 保留内容 |
+|------|---------|---------|
+| `--auto-restart` | 完整运行时：TAP + Switcher | 无 |
+| `--link-restart` | 仅重建 ITransmission | Switcher、TAP、路由 |
+
+完整参考：[`docs/CLIENT_ARCHITECTURE_CN.md`](docs/CLIENT_ARCHITECTURE_CN.md)
+
+---
+
+## 服务端运行时概述
+
+服务端运行时（`ppp/app/server/`）接受连接并协调单会话状态。
+
+```mermaid
+graph TD
+    A[监听套接字] --> B[VirtualEthernetSwitcher\nAcceptor]
+    B --> C[VirtualEthernetExchanger\n单会话处理器]
+    C --> D[ITransmission\n单会话传输]
+    C --> E[UDP DatagramPort 池]
+    C --> F[TCP NAT 表\nconn_id 键]
+    C --> G[IPv6 租约管理]
+    B --> H[VirtualEthernetManagedServer\nGo 后端桥接]
+    H --> I[Go 管理服务\nWebSocket]
+```
+
+会话生命周期：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Accepting: listen()
+    Accepting --> Handshaking: accept()
+    Handshaking --> Active: handshaked_ = true
+    Active --> Disposing: 客户端断开 / 超时
+    Active --> Disposing: keepalive 超时
+    Disposing --> [*]: Dispose() 完成
+```
+
+关键事实：
+- TCP `conn_id`：32 位，单会话单调递增，客户端分配。服务端 NAT 表键 = `(session_id, conn_id)`。`OnDisconnect` 时释放。
+- QoS 令牌桶：单会话，补充速率来自 `bandwidth` 字段（bytes/sec）。耗尽时协程挂起。
+- `OnTick()` 任务：统计刷新、隧道存活检查、会话老化、IPv6 租约老化、TUI 脏标志发布。
+
+完整参考：[`docs/SERVER_ARCHITECTURE_CN.md`](docs/SERVER_ARCHITECTURE_CN.md)
+
+---
+
+## 平台集成概述
+
+虚拟网卡层由 `ITap`（`ppp/tap/ITap.h`）抽象。各平台实现差异显著。
+
+```mermaid
+graph TD
+    A[ITap 接口\nppp/tap/ITap.h] --> B[TapLinux\nlinux/ppp/tap]
+    A --> C[TapWindows\nwindows/ppp/tap]
+    A --> D[TapDarwin\ndarwin/ppp/tap]
+    A --> E[Android TapLinux 变体\nandroid/libopenppp2.cpp]
+    B --> B1[/dev/net/tun\nIFF_TUN 或 IFF_MULTI_QUEUE SSMT]
+    C --> C1[Wintun 环形缓冲区\n首选]
+    C --> C2[TAP-Windows 重叠 I/O\n回退]
+    D --> D1[/dev/utun*\n4 字节 AF 前缀去除/追加]
+    E --> E1[VpnService fd\n不直接打开 /dev/net/tun]
+```
+
+各平台行为对比：
+
+| 平台 | 虚拟网卡 | 路由管理 | 特殊说明 |
+|------|---------|---------|---------|
+| Linux | `/dev/net/tun`，`IFF_TUN` | `ip route` / netlink | SSMT：每个 io_context 一个 fd，通过 `TapLinux::Ssmt()` |
+| Windows | Wintun（首选）或 TAP-Windows | WinAPI 路由表 | `TapWindows::InstallDriver()` 需要管理员权限 |
+| macOS | `/dev/utun*` | BSD 路由套接字 | 所有帧需 4 字节 AF 前缀处理 |
+| Android | `VpnService` fd | VpnService 路由 | JNI：`__LIBOPENPPP2__` 宏；不直接打开 tun |
+
+完整参考：[`docs/PLATFORMS_CN.md`](docs/PLATFORMS_CN.md)
+
+---
+
+## 并发与线程模型
+
+OPENPPP2 使用 Boost.Asio `io_context` 作为事件循环，结合 `YieldContext` 实现 C++ 协程。
+
+```mermaid
+graph TD
+    subgraph "线程池（Executors）"
+        T1[io_context 线程 0]
+        T2[io_context 线程 1]
+        TN[io_context 线程 N]
+        TR[TUI 渲染线程]
+        TI[TUI 输入线程]
+    end
+    subgraph "每个 io_context"
+        T1 --> B1[64KB 共享缓冲区\nExecutors::Buffers]
+        T1 --> S1[asio::strand\n每会话一个]
+    end
+    subgraph "协程"
+        S1 --> Y[YieldContext\nasio::spawn]
+    end
+```
+
+**关键规则：**
+- 绝对不能阻塞 IO 线程。
+- 跨线程对象共享：`std::shared_ptr` / `std::weak_ptr` 管理生命周期。
+- 生命周期标志：`std::atomic<bool>` + `compare_exchange_strong(memory_order_acq_rel)`。
+- `Executors::Awaitable<T>`：OS 线程等待 IO 线程结果的桥接机制。`Await()` 绝对不能在 IO 线程上调用。
+- `nullof<YieldContext>()` 返回哨兵地址，用于非协程调用者。在 `DoKeepAlived()` 和 DNS 路径中有意使用。
+
+`YieldContext` 状态转移：
+
+```mermaid
+stateDiagram-v2
+    [*] --> RESUMED: spawn
+    RESUMED --> SUSPENDING: 请求挂起
+    SUSPENDING --> SUSPENDED: CAS 成功
+    SUSPENDED --> RESUMING: 完成回调
+    RESUMING --> RESUMED: CAS 成功
+```
+
+完整参考：[`docs/CONCURRENCY_MODEL_CN.md`](docs/CONCURRENCY_MODEL_CN.md)
+
+---
+
+## 错误处理概述
+
+错误用类型化错误码表示，定义在 `ppp/diagnostics/ErrorCodes.def`（X-macro 宏展开）。当前共有 **542 个错误码**。
+
+```mermaid
+flowchart LR
+    A[检测到失败] --> B[SetLastErrorCode\nError::XYZ]
+    B --> C[返回哨兵值\nnullptr / false / -1]
+    C --> D[调用方向上传递\n哨兵值]
+    D --> E[顶层处理器\n分发给 ErrorHandler]
+```
+
+错误码分类（部分）：
+
+| 类别 | 示例 |
+|------|------|
+| 应用启动 | `AppPrivilegeRequired`、`AppAlreadyRunning`、`TunnelOpenFailed` |
+| 协议 | `ProtocolKeepAliveTimeout`、`ProtocolCipherMismatch` |
+| 会话 | `SessionDisposed`、`ResourceExhaustedSessionSlots` |
+| 认证 | `AuthCredentialInvalid` |
+| IPv6 | `IPv6LeaseConflict`、`IPv6ServerPrepareFailed` |
+| 通用 | `GenericCanceled`、`GenericTimeout`、`SocketDisconnected` |
+| 内部 | `InternalLogicStateCorrupted` |
+
+**正常运行时的良性错误码**（高频出现，不代表问题）：
+- `GenericCanceled`、`GenericTimeout`、`SocketDisconnected`、`SessionDisposed`、`FirewallSegmentBlocked`
+
+**需要运维关注的错误码**：
+- `AppPrivilegeRequired`、`TunnelOpenFailed`、`ProtocolCipherMismatch`、`AuthCredentialInvalid`、`InternalLogicStateCorrupted`
+
+原子错误快照：高 32 位 = 截断毫秒时间戳；低 32 位 = 错误码值。
+
+完整参考：[`docs/ERROR_CODES_CN.md`](docs/ERROR_CODES_CN.md)、[`docs/ERROR_HANDLING_API_CN.md`](docs/ERROR_HANDLING_API_CN.md)
+
+---
+
+## 管理后端
+
+Go 后端（`go/`）是完全独立的可选进程，提供托管认证与 Webhook 能力，C++ 服务端通过 WebSocket 调用它。
+
+```mermaid
+sequenceDiagram
+    participant C as C++ 服务端
+    participant G as Go 管理服务
+    participant DB as 认证/策略数据库
+
+    C->>G: WebSocket 连接
+    G-->>C: 已连接
+    C->>G: 认证请求（session_id、凭据）
+    G->>DB: 凭据查询
+    DB-->>G: 策略记录
+    G-->>C: 认证结果 + 带宽策略
+    C->>C: 将策略应用到会话
+```
+
+独立构建与启动：
+
 ```bash
-# 配置双向路由转发
-iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j MASQUERADE
+cd go && go build -o ppp-go .
+./ppp-go --config=./management.json
 ```
 
-#### 关键注意事项
-##### ✅ 正确配置方式
-必须为每个子网单独配置路由规则：
-```bash
-iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j MASQUERADE
+C++ 服务端通过在 `appsettings.json` 中将 `server.managed` 设置为 Go 服务地址来启用托管模式。不启用 Go 后端时，服务端以独立模式运行，无外部认证。
+
+完整参考：[`docs/MANAGEMENT_BACKEND_CN.md`](docs/MANAGEMENT_BACKEND_CN.md)
+
+---
+
+## 安全机制概述
+
+安全机制在两个独立层次上运作：
+
+| 层次 | 保护对象 | 密码来源 |
+|------|---------|---------|
+| 协议密码层 | 头部元数据与会话分帧 | `ivv + nmux + base_key` |
+| 传输密码层 | 载荷数据 | `ivv + nmux + base_key`（不同推导路径） |
+
+附加混淆特性（通过 `key.*` 配置）：
+
+| 特性 | 配置字段 | 描述 |
+|------|---------|------|
+| 掩码 | `masked: true` | 对头部字节应用字节级掩码 |
+| Delta 编码 | `delta-encode: true` | 对载荷进行增量差分处理 |
+| 数据洗牌 | `shuffle-data: true` | 重排载荷字节顺序 |
+| 明文模式 | `plaintext: true` | 禁用所有加密（仅测试用途） |
+
+支持的密码算法：AES-128-CFB、AES-256-CFB 及变体。`key` 中的 `kf`、`kx`、`kl`、`kh` 字段控制 NOP 握手时序和分帧形态，大幅提高流量指纹识别难度。
+
+完整参考：[`docs/SECURITY_CN.md`](docs/SECURITY_CN.md)
+
+---
+
+## 代码事实决定的文档边界
+
+| 事实 | 文档必须说明的结果 |
+|------|--------------------|
+| `main.cpp` 负责启动、角色分流、生命周期和宿主环境准备 | 必须把启动/运行/关闭拆开写 |
+| `AppConfiguration` 会在加载后做归一化 | 必须说明默认值、纠偏、无效配置如何被修正 |
+| `ITransmission` 负责握手、分帧、mask、delta、cipher layering | 必须按实现讲传输，而不是按抽象名词讲传输 |
+| `VirtualEthernetLinklayer` 定义 opcode 驱动的隧道语义 | 必须说明每个动作的实际消息角色 |
+| 客户端与服务端共享词汇但职责不同 | 必须避免把两端写成对称 peer |
+| 平台代码会改变路由、DNS、适配器与防火墙 | 必须明确平台副作用是系统行为的一部分 |
+| Go 后端是可选项 | 必须单独描述 managed deployment |
+| `nullof<YieldContext>()` 是有意设计的哨兵，不是 UB | 并发文档必须解释协程与非协程调用路径的区别 |
+| `NULLPTR` 宏是强制要求（禁用 `nullptr`） | 所有代码示例必须使用 `NULLPTR` |
+| UDP 64KB 缓冲区是线程级共享（非套接字级） | 内存文档不能将此误描述为 UB |
+| `stdafx.h` 定义所有平台守卫和类型别名 | 新代码必须使用 `ppp::` 类型和 `_WIN32`/`_LINUX` 宏 |
+| 无自动化测试套件 | CI 仅验证编译；行为回归仅以文档描述 |
+
+---
+
+## 边界说明
+
+| 不是 | 实际情况 |
+|------|----------|
+| 消费级一键 VPN | 面向开发者的网络运行时 |
+| 对称的 client/server | 职责不同的双角色运行时 |
+| 纯传输库 | 带宿主系统集成的完整系统 |
+| 必须依赖 Go | Go 后端可选 |
+| 路由只是附加功能 | 路由和 DNS 是一级运行时行为 |
+| 单密码传输 | 两个独立密码层：协议层与传输层 |
+| 简单会话模型 | 会话有完整生命周期：握手、活跃、释放、重启 |
+| 平台代码是样板代码 | 平台代码在各 OS 上行为差异显著 |
+
+---
+
+## 快速参考
+
+| 命令 | 作用 |
+|------|------|
+| `ppp --help` | 查看真实 CLI 帮助 |
+| `ppp --mode=client` | 以 client 模式启动 |
+| `ppp --mode=server` | 以 server 模式启动 |
+| `ppp --config=./config.json` | 加载显式配置文件 |
+| `ppp --pull-iplist [file/country]` | 下载 IP list 后退出 |
+| `ppp --mode=client --auto-restart` | 断线后完整重启 |
+| `ppp --mode=client --link-restart` | 断线后仅重连传输层 |
+
+### 关键源码入口
+
+| 想理解的内容 | 从这里开始 |
+|-------------|-----------|
+| 进程启动 | `main.cpp` |
+| 配置加载 | `ppp/configurations/AppConfiguration.cpp` → `Loaded()` |
+| 握手机制 | `ppp/transmissions/ITransmission.cpp` |
+| 隧道 opcode | `ppp/app/protocol/VirtualEthernetLinklayer.h` |
+| 客户端会话逻辑 | `ppp/app/client/VEthernetExchanger.cpp` |
+| 服务端会话逻辑 | `ppp/app/server/VirtualEthernetExchanger.cpp` |
+| 虚拟网卡接口 | `ppp/tap/ITap.h` |
+| 错误码定义 | `ppp/diagnostics/ErrorCodes.def` |
+| 线程池与 io_context | `ppp/threading/Executors.h` |
+| lwIP 集成 | `ppp/ethernet/VNetstack.cpp` |
+
+---
+
+## 说明
+
+- 仓库中的示例配置值可能包含本地地址、端口或凭据，应视为示例而不是生产默认值。
+- Linux 是当前最完整的 server-side IPv6 data plane 目标。
+- 文档采用长篇双语写法，是因为系统本身实现重、边界多、术语密集。
+- `main.cpp` 是最快建立全局认知的入口。
+- 严格遵守 C++17——代码库中不使用任何 C++20 特性。
+- 所有代码使用 `ppp::` 类型别名（`ppp::string`、`ppp::vector<T>`、`ppp::Byte` 等），定义于 `ppp/stdafx.h`。
+- 内存分配通过 `ppp::Malloc` / `ppp::Mfree` 路由，当定义了 `JEMALLOC` 宏时使用 jemalloc。
+- 平台守卫只使用仓库宏：`_WIN32`、`_LINUX`、`_MACOS`、`_ANDROID`。`ppp/` 共享文件中禁止出现 `#ifdef __linux__` 或 `#ifdef _MSC_VER`。
+- 所有公共 API 使用 Doxygen 文档化（`@brief`、`@param`、`@return`、`@note`、`@warning`）。
+- 所有函数尽力声明为 `noexcept`。异常在边界处被捕获并转换为错误码。
+
+---
+
+## IPv6 子系统概述
+
+OPENPPP2 在服务端包含完整的 IPv6 租约管理和数据面转发系统，是较为复杂的子系统之一。
+
+```mermaid
+graph TD
+    A[客户端连接\n请求 IPv6] --> B[VirtualEthernetSwitcher\n租约分配器]
+    B --> C{地址池有余量？}
+    C -->|是| D[分配 /128 租约\n来自配置前缀]
+    C -->|否| E[IPv6LeaseConflict 错误]
+    D --> F[NDP 代理\n向上游宣告]
+    F --> G[IPv6 转发平面\n路由数据包]
+    G --> H[客户端虚拟网卡\n接收 IPv6]
+    B --> I[租约老化\nOnTick]
+    I -->|到期| J[释放租约\n撤销 NDP]
 ```
 
-##### ❌ 禁止使用的配置
-```bash
-# 错误：使用合并网段会导致路由混乱
-iptables -t nat -A POSTROUTING -s 192.168.0.0/23 -j MASQUERADE
+### IPv6 租约生命周期
+
+```mermaid
+stateDiagram-v2
+    [*] --> Requested: 客户端 DoIPv6 opcode
+    Requested --> Allocated: 地址池分配 /128
+    Allocated --> Active: NDP 代理已宣告
+    Active --> Renewing: 续期请求
+    Renewing --> Active: 续期成功
+    Active --> Expired: OnTick 老化检查
+    Expired --> Released: 撤销 NDP，释放地址池
+    Released --> [*]
 ```
 
-**原因说明**：  
-- 合并网段（/23）会使内核无法正确识别物理网卡出口
-- 导致源地址转换混乱，网络连接失败
-- 可能造成整个网络中断
+关键事实：
+- 服务端以 `(session_id, ipv6_address)` 为键维护租约表。
+- NDP 代理向上游路由器宣告已租出的地址，确保回程流量正确路由。
+- IPv6 租约老化在 `OnTick()` 中执行，不使用单独线程。
+- IPv6 数据面的主要平台是 Linux。Windows 和 Android 在此场景下支持有限。
 
-#### 客户端网关配置
-各子网设备需设置对应网关地址：
-| 子网段          | 网关地址      |
-|-----------------|--------------|
-| 192.168.0.0/24  | 192.168.0.8  |
-| 192.168.1.0/24  | 192.168.1.8  |
+完整参考：[`docs/IPV6_LEASE_MANAGEMENT_CN.md`](docs/IPV6_LEASE_MANAGEMENT_CN.md)、[`docs/IPV6_TRANSIT_PLANE_CN.md`](docs/IPV6_TRANSIT_PLANE_CN.md)、[`docs/IPV6_NDP_PROXY_CN.md`](docs/IPV6_NDP_PROXY_CN.md)、[`docs/IPV6_CLIENT_ASSIGNMENT_CN.md`](docs/IPV6_CLIENT_ASSIGNMENT_CN.md)
 
-#### 验证效果
-完成配置后：
-- 192.168.0.0/24 网段设备可访问 192.168.1.0/24 网段
-- 192.168.1.0/24 网段设备可访问 192.168.0.0/24 网段
-- 双向通信延迟低，数据传输稳定
+---
 
-## 🌐 4. Linux 局域网旁路由 S-NAT 配置
+## TUI 控制台界面
 
-### 📡 网络拓扑结构
+OPENPPP2 内置终端 UI（`ppp/app/ConsoleUI.h`），运行在两个独立线程上（渲染线程 + 输入线程），均在 Boost.Asio io_context 线程池之外。
+
 ```mermaid
 graph LR
-    A[主路由] -->|ASN| C[互联网]
-    B[旁路由] -->|转发流量| A
-    D[客户端] -->|网关指向| B
+    subgraph "ConsoleUI"
+        RI[渲染线程] --> RD{脏标志?}
+        RD -->|是| DRAW[重绘屏幕]
+        RD -->|否| WAIT[等待最多 100ms\nrender_cv_]
+        II[输入线程] --> READ[读取按键]
+        READ --> CMD[分发命令]
+        CMD --> DF[置脏标志\n通知 render_cv_]
+    end
+    subgraph "io_context 线程"
+        RT[运行时\nOnTick] --> DF2[发布脏标志]
+        DF2 --> DF
+    end
 ```
 
-### ⚙️ 设备配置
-| 设备类型       | IP 地址        | 子网掩码         | 网关          |
-|----------------|---------------|------------------|--------------|
-| **主路由**     | 192.168.0.1   | 255.255.255.0    | -            |
-| **旁路由**     | 192.168.0.20  | 255.255.255.0    | 192.168.0.1  |
+TUI 布局：
+- 固定 10 行头部（连接状态、会话统计、带宽）
+- 可滚动的 3 节主体：信息 / 命令输出 / 输入历史
+- 固定 5 行底部（输入提示符）
+- 交替屏幕缓冲区（进入时 `\x1b[?1049h`，退出时 `\x1b[?1049l`）
+- 全生命周期隐藏真实光标
+- 最小终端尺寸：40 列 × 20 行
 
-### 🛠️ 配置步骤
+完整参考：[`docs/TUI_DESIGN_CN.md`](docs/TUI_DESIGN_CN.md)
 
-1. **🌐 启用 IPv4 转发**  
-   临时生效方案（重启后失效）：
-   ```bash
-   # 方法一
-   echo 1 > /proc/sys/net/ipv4/ip_forward
-   
-   # 方法二（推荐）
-   sudo sysctl -w net.ipv4.ip_forward=1
-   
-   # 验证生效
-   sudo sysctl -p
-   ```
+---
 
-2. **🔧 配置 iptables 规则**  
-   ```bash
-   # 允许子网出站流量
-   sudo iptables -A FORWARD -s 192.168.0.0/24 -d 0.0.0.0/0 -j ACCEPT
-   
-   # 允许已建立连接的回包
-   sudo iptables -A FORWARD -s 0.0.0.0/0 -d 192.168.0.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT
-   
-   # 允许ICMP重定向（可选）
-   sudo iptables -A INPUT -p icmp --icmp-type 30 -j ACCEPT
-   sudo iptables -A OUTPUT -p icmp --icmp-type 30 -j ACCEPT
-   
-   # 配置SNAT源地址转换
-   sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j SNAT --to 192.168.0.20
-   ```
+## 静态路由与 NAT 路径
 
-3. **🔍 客户端测试配置**
-   ```bash
-   将客户端网关改为旁路由IP：192.168.0.20
-   执行连通性测试：
-   ping 8.8.8.8
-   traceroute google.com
-   ```
+除了隧道传输以太网帧之外，OPENPPP2 还支持两种特殊转发路径：**NAT** 和**静态路由**。
 
-### ⚠️ 常见问题 (FAQ)
-> ❗ **正确配置但无法上网？**
-> ```bash
-> # 检查Docker服务是否干扰
-> sudo systemctl status docker
->
-> # 若存在Docker，临时停止服务测试
-> sudo systemctl stop docker
->
-> # 确认问题后，建议卸载或配置Docker网络
-> sudo apt purge docker.io
-> ```
+```mermaid
+flowchart TD
+    A[客户端 TAP IP 包] --> B{路由决策}
+    B -->|默认路由| C[FRP 路径\n每连接 TCP/UDP]
+    B -->|静态路由匹配| D[静态路径\nmask_id 非零\nfsid 128 位]
+    B -->|NAT 规则匹配| E[NAT 路径\n服务端 NAT 表]
+    C --> F[服务端转发\n到真实目标]
+    D --> G[服务端静态\n转发表]
+    E --> H[服务端 NAT\n翻译 + 转发]
+```
 
-### 📝 配置要点说明
-| 关键配置项       | 作用说明                          | 推荐状态 |
-|------------------|----------------------------------|----------|
-| IP转发(net.ipv4.ip_forward) | 启用内核级数据包转发           | `=1`     |
-| FORWARD规则      | 控制经过旁路由的流量           | ACCEPT   |
-| SNAT转换         | 将客户端源IP替换为旁路由IP     | 必需     |
-| Docker服务       | 可能覆盖iptables规则           | 关闭     |
+静态包约束：
+- `mask_id` 必须非零（标识静态路由条目）。
+- `session_id` 符号编码地址族：正数 = UDP，负数 = IP。
+- `fsid` 是 128 位流标识符（`Int128`）。
+- 校验和覆盖所有变换后的头部+载荷。
+- 打包流水线共 14 步；解包精确逆序。
 
-> 💡 **专业提示**：永久生效配置需修改`/etc/sysctl.conf`并保存iptables规则（使用`iptables-persistent`）
+完整参考：[`docs/PACKET_FORMATS_CN.md`](docs/PACKET_FORMATS_CN.md)、[`docs/TUNNEL_DESIGN_CN.md`](docs/TUNNEL_DESIGN_CN.md)
 
-### 5. Windows 双网卡环境配置 IPv4 优先
+---
 
-1. 按下 `Win + R`，输入 `regedit` 打开注册表编辑器
-2. 导航至路径：
-    ```text
-    HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
-    ```
+## MUX 通道多路复用
 
-3. 在 `Parameters` 键下：
-- 查找或新建 `DisabledComponents` 项（DWORD 32位值）
-- 设置数值数据为 `0x20`（十六进制）
+MUX 子系统允许多个逻辑子连接共享单一 `ITransmission` 载体。
 
-    <img src="https://i-blog.csdnimg.cn/blog_migrate/704f0286d689047670b59d2dc74ab2ee.png" width="350" height="200"></img>
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant S as 服务端
 
-    > **数值说明**：
-    > | 值 (十六进制) | 功能描述               |
-    > |---------------|------------------------|
-    > | 0x00          | 启用 IPv6              |
-    > | 0x01          | 禁用 IPv4              |
-    > | **0x20**      | **优先 IPv4（推荐）**  |
-    > | 0xFFFFFFFF    | 完全禁用 IPv6          |
+    C->>S: PacketAction_MUXON（VLAN tag = channel_id）
+    S-->>C: MUX 通道打开 ACK
+    C->>S: PacketAction_MUX（数据，VLAN tag = channel_id）
+    S->>S: 按 VLAN tag 解复用
+    S->>S: 转发到子连接
+    C->>S: PacketAction_MUX（另一个通道）
+    Note over C,S: 多个通道共享同一 ITransmission
+```
 
-4. 点击「确定」保存更改
-5. 重启计算机
-6. 验证配置：
-- 访问 [test-ipv6.com](https://test-ipv6.com)
-- 检查 IPv6 连通状态
+关键事实：
+- MUX 包头中的 VLAN tag 标识逻辑通道。
+- 握手中的 `nmux` 低位启用 MUX 模式。
+- 所有子连接共享同一底层 TCP/WS 连接。
+- 当需要大量并发流时，减少连接建立开销。
 
-## 🖥️ 附录3：Windows 平台软路由转发
-### 📡 网络拓扑结构
+完整参考：[`docs/LINKLAYER_PROTOCOL_CN.md`](docs/LINKLAYER_PROTOCOL_CN.md)
+
+---
+
+## 数据包生命周期（摘要）
+
+从客户端应用到远程主机再返回的完整端到端包旅程：
+
+```mermaid
+sequenceDiagram
+    participant APP as 客户端应用
+    participant TAP as 虚拟 TAP
+    participant LWIP as lwIP VNetstack
+    participant EX as VEthernetExchanger
+    participant TX as ITransmission
+    participant SRV as 服务端
+    participant DST as 目标主机
+
+    APP->>TAP: 写入 IP 包
+    TAP->>LWIP: OnInput 帧
+    LWIP->>EX: TCP/UDP/ICMP 钩子
+    EX->>TX: DoFrpEntry / DoFrpPush / DoFrpSendTo
+    TX->>TX: 分帧 + 掩码 + delta + 加密
+    TX->>SRV: 加密字节流
+    SRV->>SRV: 解密 + 解码
+    SRV->>DST: 转发到真实主机
+    DST-->>SRV: 回复
+    SRV-->>TX: 重新加密 + 发送
+    TX-->>EX: 解密 + OnFrpPush
+    EX-->>LWIP: 注入回复
+    LWIP-->>TAP: Output 帧
+    TAP-->>APP: IP 回复包
+```
+
+完整参考：[`docs/PACKET_LIFECYCLE_CN.md`](docs/PACKET_LIFECYCLE_CN.md)
+
+---
+
+## EDSM 状态机
+
+OPENPPP2 在每个层次使用事件驱动状态机（EDSM）架构：单会话、单连接、单传输、应用生命周期。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Connecting: Connect()
+    Connecting --> Handshaking: 套接字已连接
+    Handshaking --> Running: handshaked_ = true
+    Running --> Reconnecting: 传输错误
+    Running --> Stopping: Dispose() 调用
+    Reconnecting --> Connecting: 重启延迟到期
+    Stopping --> [*]: 清理完成
+```
+
+每次状态转移由 Asio 完成回调或协程恢复驱动，而非轮询循环。状态机永远不会从阻塞的 OS 线程推进。
+
+状态机属性：
+- 所有转移发生在 `asio::strand` 上，避免并发状态修改。
+- `compare_exchange_strong` 保护生命周期标志转移。
+- `Dispose()` 是幂等的：多次调用是安全的。
+- 对象由 `std::shared_ptr` 引用计数保持存活，直到所有飞行中的协程完成。
+
+完整参考：[`docs/EDSM_STATE_MACHINES_CN.md`](docs/EDSM_STATE_MACHINES_CN.md)
+
+---
+
+## 传输包与会话 ID
+
+会话标识被打包进分帧传输流中。`TRANSMISSION_PACK_SESSIONID` 文档涵盖精确字节布局。
+
 ```mermaid
 graph LR
-    A[主路由] -->|ASN| C[互联网]
-    B[VGW] -->|转发流量| A
-    D[客户端] -->|网关指向| B
+    subgraph "首包（扩展头部）"
+        H1[4 字节：长度+标志] --> H2[3 字节：会话 ID 扩展]
+        H2 --> P[载荷]
+    end
+    subgraph "后续包（简单头部）"
+        S1[4 字节：长度+标志] --> SP[载荷]
+    end
+    H1 --> FT[frame_tn_ / frame_rn_ 计数器\n控制头部模式]
 ```
 
-### 🌐 所需工具
-[![VGW](https://img.shields.io/badge/PPP_PRIVATE_NETWORK™-VGW_Router-blue?logo=windows)](https://github.com/liulilittle/vgw-release)  
-专用软件路由器解决方案 - [VGW GitHub 发布版](https://github.com/liulilittle/vgw-release)
+扩展头部到简单头部的切换由 `frame_tn_`（发送）和 `frame_rn_`（接收）计数器控制。每个方向的第一个包使用扩展头部；后续包使用简单 4 字节头部。
+
+完整参考：[`docs/TRANSMISSION_PACK_SESSIONID_CN.md`](docs/TRANSMISSION_PACK_SESSIONID_CN.md)
 
 ---
 
-### 📥 安装步骤
+## 部署拓扑
 
-1. **以管理员身份启动 PowerShell**
-   ```powershell
-   cd C:/
-   git clone https://github.com/liulilittle/VGW-release.git vgw
-   ```
+### 独立服务端 + 直连客户端
 
-2. **安装网络驱动依赖（任选其一）**
-    ```powershell
-    cd C:/vgw/windows/
-    ```
-
-    | 选项 | 执行文件 | 推荐指数 | 说明 |
-    |------|----------|----------|------|
-    | 1️⃣ 脚本安装 | `.\Install_WinPcap.bat` | ⭐⭐ | 自动安装基础依赖 |
-    | 2️⃣ **WinPcap** | `.\WinPcap_4_1_3.exe` | ⭐⭐⭐ | 传统抓包驱动 |
-    | 3️⃣ **NPCAP** | `.\npcap-1.60.exe` | ⭐⭐⭐⭐ | **推荐选择**，支持最新Windows特性 |
-
-    > 💡 建议优先安装 **NPCAP**，提供更好的性能和兼容性
-
----
-
-### ⚙️ 配置并运行 VGW
-```powershell
-# 直接执行 run.bat 或自定义参数：
-.\vgw.exe --ip=192.168.0.40 --ngw=192.168.0.1 --mask=255.255.255.0
+```mermaid
+graph LR
+    C1[客户端 A] -->|ppp://server:20000/| S[ppp 服务端]
+    C2[客户端 B] -->|ppp://server:20000/| S
+    C3[客户端 C] -->|ppp://ws/server:20000/| S
+    S --> I[Internet]
 ```
 
-#### 参数说明：
-| 参数       | 作用                          | 示例值           | 必填 | 注意 |
-|------------|-------------------------------|------------------|------|------|
-| `--ip`     | 设置虚拟网关 IP               | 192.168.0.40    | ✅   | 必须同一网段未使用 |
-| `--ngw`    | 主路由网关地址                | 192.168.0.1     | ✅   | 指向主路由 IP |
-| `--mask`   | 子网掩码                      | 255.255.255.0   | ✅   | 与主路由一致 |
-| `--mac`    | 自定义虚拟 MAC 地址           | 30:fc:68:88:b4:a9 | ❌   | 缺省使用内置 MAC |
+### 带 Go 后端的托管部署
+
+```mermaid
+graph LR
+    C1[客户端 A] --> S[ppp 服务端]
+    C2[客户端 B] --> S
+    S -->|WebSocket 认证| G[ppp-go 管理服务]
+    G --> DB[(用户/策略数据库)]
+    S --> I[Internet]
+```
+
+### CDN / 反向代理前置
+
+```mermaid
+graph LR
+    C1[客户端] -->|HTTPS/WSS| CDN[CDN 或反向代理]
+    CDN -->|WS| S[ppp 服务端]
+    S --> I[Internet]
+```
+
+`appsettings.json` 中的 `cdn` 字段配置端口模式混淆，使流量对中间代理呈现为普通 HTTP/WebSocket。
+
+完整参考：[`docs/DEPLOYMENT_CN.md`](docs/DEPLOYMENT_CN.md)
 
 ---
 
-### ⚠️ 关键注意事项
-> 🔌 **网络类型限制**  
-> 仅支持**有线网络**，无线 WiFi 连接无法使用此方案
->
-> 🖧 **IP 配置原则**  
-> `--ip` 必须配置在局域网同一网段且未被占用的地址
->
-> 🔄 **旁路由模式要求**  
-> `--ngw` 必须指向主路由 IP，不可配置为自身或其他地址
->
-> 💻 **管理员权限**  
-> 所有操作必须在**管理员权限**的 PowerShell 中执行
+## 运维参考
+
+### 关键运行时指标
+
+| 指标 | 含义 |
+|------|------|
+| Keepalive 超时 | `ProtocolKeepAliveTimeout` 错误码；会话已释放 |
+| `GenericTimeout` 高频 | 网络拥塞或路径不稳定 |
+| `ResourceExhaustedSessionSlots` | 服务端会话数已达上限；提高 `concurrent` 或增加实例 |
+| `AuthCredentialInvalid` | 凭据不匹配；检查双端 `key.*` 字段是否一致 |
+| 启动时 `TunnelOpenFailed` | TAP 驱动未安装（Windows）或权限不足 |
+| `AppPrivilegeRequired` | 以 root（Linux/macOS）或 Administrator（Windows）运行 |
+
+### `OnTick()` 调度
+
+主运行时定时触发（默认约 1 秒）。每次 tick 执行：
+
+1. 刷新带宽 / 会话统计。
+2. 检查隧道存活状态（keepalive 超时检测）。
+3. 老化过期会话（服务端）。
+4. 老化过期 IPv6 租约（服务端）。
+5. 向 TUI 渲染线程发布脏标志。
+6. 通过 `NextTickAlwaysTimeout(false)` 重新调度。
+
+完整参考：[`docs/OPERATIONS_CN.md`](docs/OPERATIONS_CN.md)
 
 ---
 
-## ℹ️ 关于我们
+## 诊断与错误系统
 
-### 📬 联系我们  
-[![Telegram](https://img.shields.io/badge/Telegram-联系_PPP_PRIVATE_NETWORK-blue?logo=telegram)](https://t.me/supersocksr_group)  
-快速响应您的咨询与服务请求
+诊断子系统提供结构化错误报告，无需日志记录。
 
----
+```mermaid
+flowchart TD
+    A[任意子系统\n发生错误] --> B[SetLastErrorCode\nError::XYZ\n线程局部存储]
+    B --> C[原子快照\nhigh32=时间戳\nlow32=错误码]
+    C --> D[ErrorHandler::Dispatch\n已注册回调]
+    D --> E[TUI 错误显示]
+    D --> F[管理后端\n错误上报]
+    D --> G[调用方返回值\n哨兵传播]
+```
 
-### ©️ 版权声明
+错误快照是原子的：可从任意线程无锁读取。时间戳为截断毫秒，足以在会话内对事件排序。
 
-**双重实体持有版权：**
-
-| 国家        | 实体类型       | 公司名称          | 有效期         |
-|-------------|---------------|-------------------|---------------|
-| **🇺🇸 美国** | 纽约公司 (LLC) | `SupersocksR LLC` | 2017 ~ 2055   |
-| **🇸🇨 塞舌尔**| 国际组织 (ORG) | `SupersocksR ORG` | 2017 ~ 2055   |
-
-> 保留所有权利 | All Rights Reserved
-
-## 📦 关于仓库
-
-### 📊 基础统计
-
-| 指标        | 徽章                                                                                                  |
-|-------------|-------------------------------------------------------------------------------------------------------|
-| **Stars**   | [![Stars](https://img.shields.io/github/stars/liulilittle/openppp2?logo=github&style=flat-square)](https://github.com/liulilittle/openppp2)  |
-| **Forks**   | [![Forks](https://img.shields.io/github/forks/liulilittle/openppp2?logo=github&style=flat-square)](https://github.com/liulilittle/openppp2)  |
-| **Commits** | [![Commits](https://img.shields.io/github/commit-activity/t/liulilittle/openppp2?style=flat-square)](https://github.com/liulilittle/openppp2)|
-
-#### 🔍 仓库概览
-[![Repo Stats](https://github-readme-stats.vercel.app/api/pin?username=liulilittle&repo=openppp2&show_owner=true&show_icons=true&theme=vue)](https://github.com/liulilittle/openppp2)
-
-### 📈 增长曲线
-
-<div align="center">
-
-#### ⭐ Star & Fork 历史
-[![Star Fork History](https://starchart.cc/liulilittle/openppp2.svg)](https://starchart.cc/liulilittle/openppp2)
-
-#### 📝 提交活动热力图
-[![Contribution Graph](https://github-readme-activity-graph.vercel.app/graph?username=liulilittle&repo=openppp2&theme=github&area=true&hide_border=true)](https://github.com/liulilittle/openppp2)
-
-</div>
-
-<div align="center" style="margin-top: 30px;"> <img src="https://img.icons8.com/color/96/000000/security-checked.png" width="60"> <p><em>企业级安全网络解决方案</em></p> </div>
+完整参考：[`docs/DIAGNOSTICS_ERROR_SYSTEM_CN.md`](docs/DIAGNOSTICS_ERROR_SYSTEM_CN.md)、[`docs/ERROR_CODES_CN.md`](docs/ERROR_CODES_CN.md)

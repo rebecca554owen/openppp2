@@ -5,6 +5,14 @@
 #include <ppp/net/native/ip.h>
 #include <ppp/net/native/checksum.h>
 #include <ppp/cryptography/ssea.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file VirtualEthernetPacket.cpp
+ * @brief Implements virtual Ethernet packet encoding/decoding and helpers.
+ * @author ("OPENPPP2 Team")
+ * @license ("GPL-3.0")
+ */
 
 namespace ppp
 {
@@ -13,7 +21,9 @@ namespace ppp
         namespace protocol
         {
 #pragma pack(push, 1)
-            // Posedo structure for IP packet header (source/destination IP and port).
+            /**
+             * @brief Pseudo IP tuple persisted in packet headers.
+             */
             typedef struct
 #if defined(__GNUC__) || defined(__clang__)
                 __attribute__((packed))
@@ -25,7 +35,9 @@ namespace ppp
                 uint16_t    destination_port;   // Destination port (network order)
             } PACKET_IP_PACKET_POSEDO;
 
-            // Main virtual Ethernet packet header.
+            /**
+             * @brief Internal encoded packet header.
+             */
             typedef struct
 #if defined(__GNUC__) || defined(__clang__)
                 __attribute__((packed))
@@ -42,9 +54,14 @@ namespace ppp
             typedef ppp::net::IPEndPoint                                        IPEndPoint;
             typedef ppp::net::Socket                                            Socket;
 
-            // Computes the actual header length from the stored obfuscated value using a linear congruential mapping.
-            // N: stored header_length, kf: per-packet random key factor.
-            // Returns the real header length (always sizeof(PACKET_HEADER) in practice).
+            /**
+             * @brief Restores real header length from obfuscated value.
+             * @param configuration Runtime configuration.
+             * @param N Stored obfuscated header length.
+             * @param kf Per-packet random key factor.
+             * @return Real header length value.
+             * @note This is the inverse mapping used by pack side header length obfuscation.
+             */
             static int STATIC_header_length(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
                                             int N, int kf) noexcept {
                 // Obtain the modulus value from configuration (expected to be between 128 and 256).
@@ -61,7 +78,18 @@ namespace ppp
                 return (N - KF_MOD + VEP_HEADER_MSS_MOD) % VEP_HEADER_MSS_MOD;
             }
 
-            // Internal unpack routine after header has been decrypted and de-obfuscated.
+            /**
+             * @brief Final unpack stage after outer decode/deobfuscation.
+             * @param allocator Buffer allocator used for payload output.
+             * @param transport Transport ciphertext or null.
+             * @param h Decoded packet header pointer.
+             * @param proto Protocol id inferred from session sign.
+             * @param session_id Positive session identifier.
+             * @param packet_length Total packet length.
+             * @param out Receives unpacked packet fields.
+             * @return True on checksum/decrypt/validation success.
+             * @note For UDP packets, source/destination endpoint fields are strictly validated.
+             */
             static bool STATIC_Unpack(
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
                 const std::shared_ptr<ppp::cryptography::Ciphertext>&           transport,
@@ -73,6 +101,7 @@ namespace ppp
             {
                 // Session ID must be non-zero.
                 if (session_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return false;
                 }
 
@@ -84,6 +113,7 @@ namespace ppp
                 h->checksum = x_checksum;
                 
                 if (x_checksum != y_checksum) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -93,12 +123,14 @@ namespace ppp
                 if (NULLPTR != transport) {
                     payload = transport->Decrypt(allocator, (ppp::Byte*)(h + 1), payload_length, payload_length);
                     if (NULLPTR == payload) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                         return false;
                     }
                 } else {
                     // No encryption: copy payload as-is.
                     payload = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, payload_length);
                     if (NULLPTR == payload) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
 
@@ -122,25 +154,40 @@ namespace ppp
 
                 // UDP specific validation: destination and source must be valid.
                 if (out.DestinationIP == IPEndPoint::NoneAddress || out.DestinationIP == IPEndPoint::AnyAddress) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (out.DestinationPort <= IPEndPoint::MinPort || out.DestinationPort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (out.SourceIP == IPEndPoint::NoneAddress || out.SourceIP == IPEndPoint::AnyAddress) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 if (out.SourcePort <= IPEndPoint::MinPort || out.SourcePort > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return false;
                 }
 
                 return true;
             }
 
-            // Public unpack entry point.
+            /**
+             * @brief Decodes a raw virtual Ethernet packet into output object.
+             * @param configuration Runtime configuration.
+             * @param allocator Buffer allocator.
+             * @param protocol Protocol ciphertext resolver.
+             * @param transport Transport ciphertext resolver.
+             * @param packet Raw encoded packet.
+             * @param packet_length Packet byte length.
+             * @param out Receives decoded packet fields.
+             * @return True on success; otherwise false.
+             * @note This routine applies delta decode, unmasking, unshuffle, optional header decrypt and payload decode.
+             */
             bool VirtualEthernetPacket::UnpackBy(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
@@ -152,6 +199,7 @@ namespace ppp
             {
                 // Basic length validation.
                 if (NULLPTR == packet || packet_length <= sizeof(PACKET_HEADER)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return false;
                 }
 
@@ -160,6 +208,7 @@ namespace ppp
                 packet_length = ppp::cryptography::ssea::delta_decode(allocator, packet, packet_length,
                                                                       configuration->key.kf, output);
                 if (NULLPTR == output || packet_length <= sizeof(PACKET_HEADER)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
 
@@ -169,6 +218,7 @@ namespace ppp
                 ppp::Byte* p = (ppp::Byte*)packet;
                 PACKET_HEADER* h = (PACKET_HEADER*)p;
                 if (h->mask_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -178,6 +228,7 @@ namespace ppp
                 // Derive actual header length from stored obfuscated value.
                 int header_length = (ppp::Byte)STATIC_header_length(configuration, h->header_length, kf);
                 if (header_length < sizeof(PACKET_HEADER)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
 
@@ -209,6 +260,7 @@ namespace ppp
                     std::shared_ptr<Byte> header_body = protocol_ciphertext->Decrypt(allocator,
                                         reinterpret_cast<ppp::Byte*>(&h->checksum), header_length_raw, header_length_new);
                     if (NULLPTR == header_body) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                         return false;
                     }
 
@@ -243,7 +295,19 @@ namespace ppp
                 return STATIC_Unpack(allocator, transport_ciphertext, h, proto, session_id, packet_length, out);
             }
 
-            // Internal packing routine.
+            /**
+             * @brief Core pack routine after header field preparation.
+             * @param configuration Runtime configuration.
+             * @param allocator Buffer allocator.
+             * @param protocol Protocol ciphertext or null.
+             * @param h Mutable packet header.
+             * @param payload Payload bytes to embed.
+             * @param payload_length Payload size.
+             * @param message_length Header+payload size before optional header transform.
+             * @param out Receives final encoded packet length.
+             * @return Encoded packet buffer, or null on failure.
+             * @note Applies checksum, optional protocol-header encryption, shuffle/xor masking and final delta encode.
+             */
             static std::shared_ptr<ppp::Byte> STATIC_Pack(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
@@ -260,6 +324,7 @@ namespace ppp
 
                 // Defensive check: modulus should not be zero.
                 if (VEP_HEADER_MSS_MOD == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     out = 0;
                     return NULLPTR;
                 }
@@ -287,6 +352,7 @@ namespace ppp
                     std::shared_ptr<Byte> header_body = protocol->Encrypt(allocator,
                                         reinterpret_cast<ppp::Byte*>(&h->checksum), header_length_raw, header_length_new);
                     if (NULLPTR == header_body) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         out = 0;
                         return NULLPTR;
                     }
@@ -321,10 +387,32 @@ namespace ppp
 
                 // Final delta encoding before transmission.
                 out = ppp::cryptography::ssea::delta_encode(allocator, h, message_length, configuration->key.kf, output);
+                if (NULLPTR == output || out <= 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                    out = 0;
+                    return NULLPTR;
+                }
                 return output;
             }
 
-            // Public pack entry point (with origin ID).
+            /**
+             * @brief Packs payload with explicit origin/session id parameters.
+             * @param configuration Runtime configuration.
+             * @param allocator Buffer allocator.
+             * @param protocol Protocol ciphertext resolver.
+             * @param transport Transport ciphertext resolver.
+             * @param origin_id Id used for cipher selection.
+             * @param session_id Id encoded in packet header.
+             * @param source_ip Source IPv4 (host order).
+             * @param source_port Source port (host order).
+             * @param destination_ip Destination IPv4 (host order).
+             * @param destination_port Destination port (host order).
+             * @param payload Payload bytes.
+             * @param payload_length Payload length.
+             * @param out Receives final encoded packet length.
+             * @return Encoded packet buffer, or null on failure.
+             * @note If either protocol/transport cipher is unavailable, both are disabled for this packet.
+             */
             std::shared_ptr<ppp::Byte> VirtualEthernetPacket::PackBy(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
@@ -341,8 +429,14 @@ namespace ppp
                 int&                                                            out) noexcept
             {
                 out = 0;
+                
                 // Validate inputs.
-                if (NULLPTR == payload || payload_length < 1 || origin_id == 0) {
+                if (origin_id == 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
+                    return NULLPTR;
+                }
+
+                if (NULLPTR == payload || payload_length < 1) {
                     return NULLPTR;
                 }
 
@@ -359,6 +453,7 @@ namespace ppp
                 if (NULLPTR != transport_ciphertext) {
                     payload_managed = transport_ciphertext->Encrypt(allocator, (ppp::Byte*)payload, payload_length, payload_length);
                     if (NULLPTR == payload_managed) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         return NULLPTR;
                     }
                     payload = payload_managed.get();
@@ -368,6 +463,7 @@ namespace ppp
                 int message_length = sizeof(PACKET_HEADER) + payload_length;
                 std::shared_ptr<ppp::Byte> messages = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, message_length);
                 if (NULLPTR == messages) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
 
@@ -393,7 +489,17 @@ namespace ppp
                 return STATIC_Pack(configuration, allocator, protocol_ciphertext, h, payload, payload_length, message_length, out);
             }
 
-            // Helper to allocate and unpack into a new VirtualEthernetPacket object.
+            /**
+             * @brief Allocates and unpacks a packet object.
+             * @param configuration Runtime configuration.
+             * @param allocator Buffer allocator.
+             * @param protocol Protocol ciphertext resolver.
+             * @param transport Transport ciphertext resolver.
+             * @param packet Raw encoded packet bytes.
+             * @param packet_length Raw encoded packet length.
+             * @return Parsed packet object on success; otherwise null.
+             * @note Thin wrapper around `UnpackBy`.
+             */
             std::shared_ptr<VirtualEthernetPacket> VirtualEthernetPacket::Unpack(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
@@ -410,7 +516,12 @@ namespace ppp
                 return UnpackBy(configuration, allocator, protocol, transport, packet, packet_length, *result) ? result : NULLPTR;
             }
 
-            // Convert IP protocol packet to an IPFrame.
+            /**
+             * @brief Rebuilds an IPFrame view from this packet.
+             * @param allocator Buffer allocator.
+             * @return Parsed IP frame or null.
+             * @note Works only for packets tagged as `IP_PROTO_IP`.
+             */
             std::shared_ptr<ppp::net::packet::IPFrame> VirtualEthernetPacket::GetIPPacket(
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator) noexcept
             {
@@ -433,7 +544,13 @@ namespace ppp
                 return ppp::net::packet::IPFrame::Parse(allocator, buffer.get(), ms.GetPosition());
             }
 
-            // Extract ICMP packet from this virtual Ethernet packet.
+            /**
+             * @brief Extracts ICMP frame from this packet.
+             * @param allocator Buffer allocator.
+             * @param packet Receives parsed IP frame.
+             * @return Parsed ICMP frame or null.
+             * @note Returns null when inner protocol is not ICMP.
+             */
             std::shared_ptr<ppp::net::packet::IcmpFrame> VirtualEthernetPacket::GetIcmpPacket(
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
                 std::shared_ptr<ppp::net::packet::IPFrame>&                     packet) noexcept
@@ -454,7 +571,11 @@ namespace ppp
                 return ppp::net::packet::IcmpFrame::Parse(packet.get());
             }
 
-            // Extract UDP packet from this virtual Ethernet packet.
+            /**
+             * @brief Extracts UDP frame from this packet.
+             * @return Parsed UDP frame or null.
+             * @note Works only for packets tagged as `IP_PROTO_UDP`.
+             */
             std::shared_ptr<ppp::net::packet::UdpFrame> VirtualEthernetPacket::GetUdpPacket() noexcept
             {
                 if (Protocol != ppp::net::native::ip_hdr::IP_PROTO_UDP) {
@@ -478,7 +599,23 @@ namespace ppp
                 return packet;
             }
 
-            // Public pack overload for UDP raw data.
+            /**
+             * @brief Packs UDP tuple and payload into transport packet.
+             * @param configuration Runtime configuration.
+             * @param allocator Buffer allocator.
+             * @param protocol Protocol ciphertext resolver.
+             * @param transport Transport ciphertext resolver.
+             * @param session_id Positive UDP session id.
+             * @param source_ip Source IPv4 (host order).
+             * @param source_port Source port.
+             * @param destination_ip Destination IPv4 (host order).
+             * @param destination_port Destination port.
+             * @param payload Payload bytes.
+             * @param payload_length Payload length.
+             * @param out Receives encoded packet length.
+             * @return Encoded packet buffer, or null on validation/encoding failure.
+             * @note Enforces valid endpoint/port ranges for UDP mode.
+             */
             std::shared_ptr<ppp::Byte> VirtualEthernetPacket::Pack(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
@@ -495,19 +632,23 @@ namespace ppp
             {
                 // Session ID must be positive for UDP.
                 if (session_id < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return NULLPTR;
                 }
 
                 // Validate destination.
                 if (destination_ip == IPEndPoint::NoneAddress || destination_ip == IPEndPoint::AnyAddress) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
                 if (destination_port <= IPEndPoint::MinPort || destination_port > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
 
                 if (source_port <= IPEndPoint::MinPort || source_port > IPEndPoint::MaxPort) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     return NULLPTR;
                 }
                 
@@ -516,7 +657,18 @@ namespace ppp
                              payload, payload_length, out);
             }
 
-            // Public pack overload for IP frame.
+            /**
+             * @brief Packs an IP frame into transport packet.
+             * @param configuration Runtime configuration.
+             * @param allocator Buffer allocator.
+             * @param protocol Protocol ciphertext resolver.
+             * @param transport Transport ciphertext resolver.
+             * @param session_id Positive session id.
+             * @param packet Source IP frame.
+             * @param out Receives encoded packet length.
+             * @return Encoded packet buffer, or null on validation/encoding failure.
+             * @note Session id is bitwise-negated for inner IP mode tagging.
+             */
             std::shared_ptr<ppp::Byte> VirtualEthernetPacket::Pack(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const std::shared_ptr<ppp::threading::BufferswapAllocator>&     allocator,
@@ -526,7 +678,13 @@ namespace ppp
                 const ppp::net::packet::IPFrame*                                packet,
                 int&                                                            out) noexcept
             {
-                if (NULLPTR == packet || session_id < 1) {
+                // Validate inputs.
+                if (NULLPTR == packet) {
+                    return NULLPTR;
+                }
+
+                if (session_id < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     return NULLPTR;
                 }
 
@@ -534,12 +692,14 @@ namespace ppp
                 if (packet->ProtocolType != ppp::net::native::ip_hdr::IP_PROTO_ICMP &&
                     packet->ProtocolType != ppp::net::native::ip_hdr::IP_PROTO_UDP &&
                     packet->ProtocolType != ppp::net::native::ip_hdr::IP_PROTO_TCP) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;
                 }
 
                 // Convert IP frame to raw buffer.
                 std::shared_ptr<ppp::net::packet::BufferSegment> packet_buffers = constantof(packet)->ToArray(allocator);
                 if (NULLPTR == packet_buffers) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return NULLPTR;
                 }
 
@@ -551,7 +711,15 @@ namespace ppp
                               posedo + 1, packet_buffers->Length - sizeof(PACKET_IP_PACKET_POSEDO), out);
             }
 
-            // Open a UDP socket with fallback to ANY address.
+            /**
+             * @brief Opens UDP socket with preferred address then protocol fallback.
+             * @param socket UDP socket object.
+             * @param address Preferred bind address.
+             * @param port Bind port.
+             * @param sourceEP Endpoint used to infer fallback protocol family.
+             * @return True on success; otherwise false.
+             * @note If preferred bind fails, socket is closed and retried on v4/v6 ANY.
+             */
             bool VirtualEthernetPacket::OpenDatagramSocket(boost::asio::ip::udp::socket&            socket,
                                                            const boost::asio::ip::address&          address,
                                                            int                                      port,
@@ -582,7 +750,14 @@ namespace ppp
                 return ok;
             }
 
-            // Fill IP frame payload with random printable characters.
+            /**
+             * @brief Fills IP payload with random printable ASCII bytes.
+             * @param frame Target IP frame.
+             * @param min Minimum random payload length.
+             * @param max Maximum random payload length.
+             * @return True on success; otherwise false.
+             * @note Generated bytes range from `0x20` to `0x7e`.
+             */
             bool VirtualEthernetPacket::FillBytesToPayload(ppp::net::packet::IPFrame* frame, int min, int max) noexcept
             {
                 if (NULLPTR == frame) {
@@ -619,7 +794,17 @@ namespace ppp
                 return true;
             }
 
-            // Generate ciphertext instances for protocol and transport layers.
+            /**
+             * @brief Creates protocol and transport ciphertext objects.
+             * @param configuration Runtime configuration.
+             * @param guid Device/session guid.
+             * @param fsid Forward-session id.
+             * @param id Session id.
+             * @param protocol Receives protocol-layer ciphertext.
+             * @param transport Receives transport-layer ciphertext.
+             * @return void.
+             * @note Output pointers are reset to null when encryption is disabled or construction fails.
+             */
             void VirtualEthernetPacket::Ciphertext(
                 const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                 const Int128&                                                   guid,

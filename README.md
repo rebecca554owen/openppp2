@@ -1,1198 +1,1159 @@
-﻿# <img src="https://img.icons8.com/color/48/000000/vpn.png" width="30" height="30"> PPP PRIVATE NETWORK™ 2  
-**Enterprise-grade Virtual Ethernet VPN Solution**  
-Next-generation security network access technology, providing high-performance Virtual Ethernet tunneling service.
+# OPENPPP2
 
-<div align="right" style="margin-top:-40px;">
-  <kbd>
-    <a href="README_CN.md">简体中文</a>
-  </kbd>
-  <kbd style="background:#0366d6;">
-    <strong>English</strong>
-  </kbd>
-</div>
+English | [简体中文](README_CN.md)
 
-## <img src="https://img.icons8.com/color/48/000000/features-list.png" width="30" height="30"> Core Technology Features
+OPENPPP2 is a source-driven, cross-platform network runtime built around the C++ executable `ppp`, with an optional Go management backend. The real implementation boundary lives in `main.cpp`, `ppp/configurations`, `ppp/transmissions`, `ppp/app/protocol`, `ppp/app/client`, `ppp/app/server`, and the platform-specific integration directories.
 
-<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+It is not a single-purpose VPN app. The code implements a layered system:
 
-<div>
+| Layer | What it actually does | Main code areas |
+|-------|------------------------|-----------------|
+| Protected transport | Frames, encrypts, obfuscates, and shapes handshake traffic | `ppp/transmissions/*` |
+| Tunnel protocol | Defines session identity, link-layer opcodes, and packet meaning | `ppp/app/protocol/*` |
+| Client runtime | Attaches to a virtual adapter, steers routes, DNS, proxy, and MUX | `ppp/app/client/*` |
+| Server runtime | Accepts sessions, switches exchangers, forwards traffic, and manages IPv6/static paths | `ppp/app/server/*` |
+| Platform integration | Binds the runtime to Windows/Linux/macOS/Android networking APIs | `windows/*`, `linux/*`, `darwin/*`, `android/*` |
+| Management backend | Optional Go service for managed deployments | `go/*` |
 
-- <img src="https://img.icons8.com/color/24/000000/processor.png" width="20" height="20"> **Synchronous Hyper-threaded IO Technology**  
-- <img src="https://media.istockphoto.com/id/1469980757/vector/cloud-multi-threading-icon-in-vector-logotype.jpg?s=612x612&w=0&k=20&c=SgJXI9dkgy1l__U4m4H7Y2SJuCEJk53VpZvwxYqQqDg=" width="20" height="20"> **Full Coroutine + Multithread Architecture**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTIHdQXotRNOMUnypnmpRRAMGiTmgtnvmaEOw&s" width="20" height="20"> **Supports Printable Plain Text Transmission**  
-- <img src="https://img.ixintu.com/download/jpg/20201107/570f5ecbfba462cec0568a98693aa8cc_512_321.jpg!con" width="20" height="20"> **Full Duplex/Half Duplex Tunnels**  
-- <img src="https://img.icons8.com/color/24/000000/network.png" width="20" height="20"> **VPN Virtual Subnet**  
-- <img src="https://img.icons8.com/color/24/000000/port.png" width="20" height="20"> **Port Mapping to Public Network P-NAT2**  
-- <img src="https://cdn-icons-png.flaticon.com/512/7349/7349720.png" width="20" height="20"> **Forward Proxy Support**  
-- <img src="https://img.icons8.com/color/24/000000/firewall.png" width="20" height="20"> **Virtual Firewall**  
-- <img src="https://img.icons8.com/color/24/000000/route.png" width="20" height="20"> **Virtual BGP Multi-line Diversion**  
-- <img src="https://img.icons8.com/color/24/000000/domain.png" width="20" height="20"> **Domain Name Query Diversion**  
-- <img src="https://img.icons8.com/color/24/000000/router.png" width="20" height="20"> **Native Support for Soft Routers**  
-- <img src="https://img.icons8.com/color/24/000000/airplane-mode-on.png" width="20" height="20"> **PaperAirplane Layering Technology**  
-</div>
-
-<div>
-
-- <img src="https://img.icons8.com/color/24/000000/network-card.png" width="20" height="20"> **Dual Network Protocol Stack Support**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTjxlVdSXIeMvmISIN0dupsU60ISjdSyxN7xw&s" width="20" height="20"> **Broadcast Support (Non-Unicast)**  
-- <img src="https://www.shutterstock.com/image-vector/tunnel-sign-multi-series-style-260nw-2440158425.jpg" width="20" height="20"> **Support for Multiple Tunnel Protocols**  
-- <img src="https://img.icons8.com/color/24/000000/merge.png" width="20" height="20"> **MUX Multiplexing**  
-- <img src="https://img.icons8.com/color/24/000000/dns.png" width="20" height="20"> **DNS Caching**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSyLWW0UbSGujy4OkGa0oHvN1Ad1_YXmZGIgSHlpHz1K0-u6a_mYbw84I_aZJA8IzB-jLg&usqp=CAU" width="20" height="20"> **Dedicated Virtual Memory**  
-- <img src="https://cdn-icons-png.flaticon.com/512/10988/10988147.png" width="20" height="20"> **CDN Forwarding Support**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS8vZjAno4KJAxr9K97IzoIGQiJ1ajH9FQOyA&s" width="20" height="20"> **VPN Turbo**  
-- <img src="https://img.icons8.com/color/24/000000/fast-forward.png" width="20" height="20"> **TCP Fast Open**  
-- <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ2LHYDgAPNDQrrF-Es68XphlSUJ1XBbqKdpw&s" width="20" height="20"> **Fixed Window Size Setting**  
-- <img src="https://img.icons8.com/color/24/000000/forward.png" width="20" height="20"> **VPN Server Proxy Forwarding**  
-- <img src="https://play-lh.googleusercontent.com/Ac2LuYFUdHoiSZOVDwnlp0ozwCBMqBC7GALSUevSsQxEtq6eMVCSEGxa7FuEqXnjlw" width="20" height="20"> **UDP Multi-line Bandwidth Aggregation**  
-
-</div>
-
-</div>
+The documentation is written from code facts upward. It explains what the system does, why each layer exists, and where the implementation boundaries really are.
 
 ---
 
-## <img src="https://img.icons8.com/color/48/000000/globe.png" width="30" height="30"> Platform Support
-- <img src="https://img.icons8.com/color/24/000000/windows8.png" width="20" height="20"> Windows
-- <img src="https://img.icons8.com/color/24/000000/linux.png" width="20" height="20"> Linux
-- <img src="https://img.icons8.com/color/24/000000/mac-logo.png" width="20" height="20"> macOS
-- <img src="https://img.icons8.com/color/24/000000/android-os.png" width="20" height="20"> Android
+## Table of Contents
 
-## <img src="https://img.icons8.com/color/48/000000/processor.png" width="30" height="30"> Supported CPU Architectures
-- **x86 Series**  
-  i386 · x86_64
-- **ARM Series**  
-  armv7l · armv7a · aarch64
-- **Other Architectures**  
-  s390x · mipsel · ppc64el · riscv64
+1. [System Architecture Overview](#system-architecture-overview)
+2. [Start Here](#start-here)
+3. [Reading Paths](#reading-paths)
+4. [Documentation Set](#documentation-set)
+5. [Repository Layout](#repository-layout)
+6. [Build Instructions](#build-instructions)
+7. [Quick Start](#quick-start)
+8. [Configuration Overview](#configuration-overview)
+9. [Protocol and Transport Overview](#protocol-and-transport-overview)
+10. [Client Runtime Summary](#client-runtime-summary)
+11. [Server Runtime Summary](#server-runtime-summary)
+12. [Platform Integration Summary](#platform-integration-summary)
+13. [Concurrency and Threading Model](#concurrency-and-threading-model)
+14. [Error Handling Summary](#error-handling-summary)
+15. [Management Backend](#management-backend)
+16. [Security Summary](#security-summary)
+17. [Code Facts That Shape The Docs](#code-facts-that-shape-the-docs)
+18. [Boundaries](#boundaries)
+19. [Quick Reference](#quick-reference)
+20. [Notes](#notes)
 
 ---
 
-## <img src="https://img.icons8.com/color/48/000000/warning-shield.png" width="30" height="30"> User License Agreement
-### ✅ Authorized User Groups
-<details open>
-<summary>Click to view authorized user categories</summary>
+## System Architecture Overview
 
-1. 🎓 Academic Researchers  
-2. 💻 Software Engineers  
-3. 🌐 Network Engineers  
-4. 🏢 Enterprise Users  
-5. 🔬 Scientific and Technical Personnel  
-6. 📦 Foreign Trade Users  
-7. 🏛️ Government and Corporate Personnel  
-8. 🎮 Gamers  
-9. 🏬 Group Clients  
-10. 🏣 Public Organizations  
-11. ➰ Communication Technology  
-12. ☁️ IT and Internet Users  
-13. 🔒 Network Security Users  
-14. 📝 Health Content Creators  
-15. 🌍 Users outside Mainland China
-</details>
+The following diagram shows the top-level layering of the OPENPPP2 runtime. Each box corresponds to real source directories.
 
-> ⚠️ **Usage Restrictions Warning**  
-> <img src="https://static-00.iconduck.com/assets.00/user-2-account-icon-256x256-k637t3vb.png" width="20" height="20"> **Use by other users violates the agreement**  
-> <img src="https://img.icons8.com/color/24/000000/law.png" width="20" height="20"> Unauthorized use will bear legal responsibility</img>
-
-### ⚠️ Eight Categories of Prohibited Behaviors and Legal Details
-
-#### 🚫 Classification and Legal Basis of Prohibited Behaviors  
-| Behavior Type     | Specific Scenario                     | Legal Basis                                                                   | Technical Features                |  
-|-------------------|----------------------------------------|-------------------------------------------------------------------------------|----------------------------------|  
-| **Political Security** | Subverting the government/splitting | Article 105 of the Criminal Law (Subversion of State Power) | Communication via Tor dark web nodes/encrypted political channels |  
-| **Pornography Crimes** | Child pornography/cross-border prostitution | Article 364 of the Criminal Law (Dissemination of Obscene Materials) + US FOSTA Act | Hash value matching/specific payment patterns |  
-| **Gambling Operations** | Virtual currency casinos/money laundering | Article 303 of the Criminal Law (Gambling Crime) + Seychelles Gambling Act Article 45 | High-frequency small transfers/fixed odds interfaces |  
-| **Drug Trafficking** | Dark web drug markets/poison tutorials | Article 347 of the Criminal Law (Drug Crime) + US Controlled Substances Act §841 | I2P network traffic/Bitcoin mixers |  
-| **Human Trafficking** | Trafficking of labor/sexual exploitation | Article 240 of the Criminal Law (Trafficking in Women and Children) + UN Palermo Protocol | Fake recruitment websites/transnational communication groups |  
-| **Financial Crimes** | Virtual currency laundering/selling "Four Pieces" | Article 191 of the Criminal Law (Money Laundering) + US Bank Secrecy Act | Dispersed aggregate transactions/Multilevel shell wallets |  
-| **Telecom Fraud** | Impersonation of police/legal officers/scams | Article 38 of the Anti-Telecommunications Fraud Law + US FCC 47 CFR §64.1200 | VOIP spoofing/phishing page fingerprints |  
-| **Illegal Transactions** | Forgery of KYC/user privacy sale | Article 66 of the Personal Information Protection Law + EU GDPR Article 83 | Database breaches/batch identity authentication requests |  
-
-### ⚖️ Cross-Region Legal Supervision and Accountability Mechanism (Cross-border Judicial Enforcement Framework)
-
-| **Jurisdiction** | **Law Enforcement Body** | **Core Legal Tools** | **Sentencing Standards** | **Cross-national Cooperation Mechanism** |  
-|-------------------|--------------------------|-----------------------|------------------------|----------------------------------------|  
-| **Mainland China** | Public Security Department Cybersecurity Bureau | Article 191 of the Criminal Law (Money Laundering) | - Money Laundering: **10 years imprisonment + 5 times involved amount fine**<br>- Harm to State Security: **Life imprisonment** | Via Interpol Red Notices for extradition |  
-| **USA** | FBI Cyber Crime Division | Computer Fraud and Abuse Act (CFAA 18 U.S.C. §1030) | - Financial Crimes: **Up to 20 years imprisonment**<br>- Child Pornography: **Minimum 25 years mandatory** (mandatory sentencing) | Under the CLOUD Act for cross-border data requests |  
-| **Seychelles** | FIU Financial Intelligence Unit | Anti-Money Laundering Law 2020, Article 15 | - Illegal gambling: **5 years imprisonment + $100,000 fine**<br>- Data crimes: **Daily $10,000 progressive fines** | Commonwealth judicial mutual assistance treaties for automatic enforcement |  
-
-#### 🌐 Cross-border Investigation and Evidence Collection Process (GitHub Compatible Version)
-
-##### ⏱️ Forensics Timeline
-| Step | Initiator | Receiver | Action | Legal Basis | Time Limit |  
-|-------|------------|----------|---------|--------------|------------|  
-| 1 | National Security Authority | FBI | Share crime evidence chain | MLAT judicial assistance agreement | 72 hours |  
-| 2 | FBI | Seychelles FIU | Issue freezing order for encrypted assets | Anti-Money Laundering Law 2020, Article 15 | Immediate |  
-| 3 | Seychelles FIU | Cloud Service Provider | Execute data seizure order | Seychelles Criminal Justice Mutual Assistance Law, Article 8 | 72 hours |  
-| 4 | Cloud Service Provider | Developer | Request judicial assistance (metadata only) | 18 U.S.C. § 2703(f) (Stored Communications Act) | 15 working days |  
-| 5 | Developer | Interpol | Submit GitHub commit logs | GPL-3.0 Articles 15-17 (No Warrant Clause) | Immediate |  
-| 6 | Interpol | Cross-border Courts | Submit joint blockchain evidence prosecution | United Nations Convention against Corruption, Article 46 | 30 days |  
-
-##### 🔗 Key Evidence Handover Nodes
-```diff
-! Evidence Chain 1: Encrypted Asset Flow Map
-+ Submitted to: Seychelles FIU
-- Technical Means: Chainalysis on-chain tracing
-# Legal Validity: 《Anti-Money Laundering Law 2020》 Annex 3
-
-! Evidence Chain 2: GitHub Development Logs
-+ Submitted to: INTERPOL Digital Crime Division
-- Technical Verification: GPG signatures + Timestamps
-# Legal Validity: The Hague Electronic Evidence Convention
+```mermaid
+graph TD
+    subgraph "Process: ppp"
+        A[main.cpp\nPppApplication::Run] --> B[AppConfiguration\nppp/configurations]
+        A --> C[Platform Setup\nwindows/ linux/ darwin/ android/]
+        B --> D[ITransmission\nppp/transmissions]
+        D --> E[VirtualEthernetLinklayer\nppp/app/protocol]
+        E --> F[Client Runtime\nppp/app/client]
+        E --> G[Server Runtime\nppp/app/server]
+        F --> H[Virtual NIC / TAP\nppp/tap]
+        G --> I[Session Exchanger\nVirtualEthernetSwitcher]
+        H --> J[lwIP VNetstack\nppp/ethernet]
+        I --> K[Management Backend\ngo/]
+    end
+    L[OS Network Stack] --> C
+    M[Remote Peer] -->|TCP / WS / WSS| D
 ```
 
-### ⚠️ User Legal Risk Tips
+### Startup Pipeline
 
-+ **For Chinese Users:**  
-   - Under Article 38 of the Anti-Telecommunications Fraud Law, involved accounts are **jointly frozen with family members' bank cards**  
-   - Actions harming national security fall under Article 113 of the Criminal Law, **possible death penalty**  
-   - Illegal cross-border data transmission triggers Article 45 of the Data Security Law, **up to 5 million RMB fine + license revocation**  
+```mermaid
+flowchart LR
+    A[PreparedArgumentEnvironment] --> B[LoadConfiguration]
+    B --> C[AppPrivilege Check]
+    C --> D[prevent_rerun_ Lock]
+    D --> E[Windows_PreparedEthernetEnvironment\nclient only]
+    E --> F[PreparedLoopbackEnvironment]
+    F --> G[ConsoleUI::Start]
+    G --> H[NextTickAlwaysTimeout]
+    H --> I[io_context::run]
+    I --> J[OnTick loop]
+```
 
-+ **For US Users:**  
-   - The FBI initiates "Unilateral Jurisdiction" (based on USD settlement channels), **no extradition needed for direct prosecution**  
-   - Child pornography cases invoke 18 U.S.C. §2251, **minimum 25-year sentence**  
-   - Financial crimes apply the RICO Act, **asset confiscation**  
+### Shutdown Cascade
 
-+ **For Seychelles Users:**  
-   - Offshore company controllers are **personally unlimited liable** (Pierce Corporate Veil principle)  
-   - Violations of Article 7 of the Anti-Money Laundering Law 2020 result in **$10,000 daily progressive fines**  
-   - Dark web transactions under Article 88 of the ICT Law, **minimum 10-year sentence without parole**  
+```mermaid
+sequenceDiagram
+    participant OS as OS Signal
+    participant App as PppApplication
+    participant UI as ConsoleUI
+    participant RT as Runtime
+    participant Lock as prevent_rerun_
 
-#### ⚠️ Real Cases of Consequences for Violations  
-
-#### 💼 Virtual Currency Money Laundering Cases  
-| Jurisdiction | Case Details | Penalty Results | Technical Evidence Methods |  
-|----------------|----------------|------------------|------------------------------|  
-| **Mainland China** | Zhao Dong Case (OTC merchant) | Fine **¥23 million** + **7 years imprisonment** | Chain analysis of mixer funds |  
-| **USA** | BitMEX Exchange Case | CEO **30 months** imprisonment + $10 million personal fine | Analysis of Kraken exchange API logs |  
-| **Seychelles** | OneCoin (VICoin) Ponzi Scheme | **Seized 35 offshore accounts** + globally wanted principal | SWIFT cross-border payment records analysis |  
-
-#### 🎲 Cross-border Gambling Operations  
-| Jurisdiction | Case Details | Penalty Results | Evidence Methods |  
-|----------------|----------------|------------------|------------------|  
-| **Mainland China** | Yabo Sports Platform Case | Recovered **¥3.8 billion** + **Life imprisonment** for main offenders | Alipay merchant transaction analysis |  
-| **USA** | Bovada Gambling Platform | **Seized $100 million assets** + domain suspension | Cloudflare logs matching DDoS attack patterns |  
-| **Seychelles** | Bet365 Seychelles Branch | **License revoked** + fine of **$3 million** | Server leasing contract tracing |  
-
-#### 📊 Data Selling and Privacy Crimes  
-| Jurisdiction | Case Details | Penalty Results | Evidence Methods |  
-|----------------|----------------|------------------|------------------|  
-| **Mainland China** | Koala Credit Investigation | CEO **3 years** + company **¥50 million** fine | Database access logs audit |  
-| **USA** | Equifax Data Breach | **$700 million compensation** + permanent cybersecurity oversight | Exploit traffic analysis |  
-| **Seychelles** | Seychelles Data Hub Case | **Forced liquidation** + executives extradited to US | AWS S3 access logs analysis |  
-
-#### ⚠️ Compound Punishment Cases of Eight Types of Crimes  
-| Case Name | Crime Composition | Punishment Results Across Three Countries |  
-|-------------|---------------------|----------------------------------------------|  
-| Galaxy International Case | Gambling + Money Laundering + Cross-border Payments | China: **Death sentence with reprieve**<br>US: **Seized NYC property**<br>Seychelles: **Deregistered 378 shell companies** |  
-| DarkScandals Case | Child Pornography + Bitcoin Money Laundering + VPN Obfuscation | US: **175 years imprisonment for the first offender**<br>China: **Seized mining farms**<br>Seychelles: **Frozen $120M in crypto assets** |  
-
-### 📜 Developer Disclaimer  
-/* Validated by cross-jurisdictional judicial practice */  
-1. **Technology Neutral Principle**  
-   This tool is a network protocol pure technical implementation (RFC 8446 standard), developers:  
-   - Do not operate any servers  
-   - Do not store user traffic logs  
-   - Do not provide commercial support services  
-
-2. **Illegal Responsibility Separation Mechanism**  
-   ```mermaid
-   graph LR
-      User_Actions-->ISP[Network Service Provider]
-      Developer-->Code[GitHub Repository]
-      Judicial_Forensics-->ISP
-      Developer-.No_Access.->User_Actions
-   ```
-
-### ⚖️ Judicial Cooperation Limitation Statement  
-
-#### 📜 Developer Compliance Cooperation Framework  
-   ```mermaid
-   graph LR
-        A[Law Enforcement Request] --> B{Meets Legal Threshold}
-        B -->|Yes| C[Provide Limited Materials]
-        B -->|No| D[Written Rejection and Filing]
-        C --> E[Record Material Delivery]
-        D --> F[Judicial Remedy Procedures]
-        classDef green fill:#d6f5d6,stroke:#28a745
-        classDef red fill:#ffd6cc,stroke:#dc3545
-        class C,E green
-        class D,F red
-   ```
-
-### ⚖️ Cross-Jurisdiction Judicial Cooperation Details
-
-| Jurisdiction | Legal Collection Threshold | Provided Materials | Delivery Time Limit | Refusal Basis |  
-|----------------|------------------------------|----------------------|---------------------|--------------|  
-| **Mainland China** | Provincial Cybersecurity Department "Evidence Retrieval Notice" + "Assistance Investigation Letter" | 1. GitHub commit history metadata<br>2. Code digital signature certificates<br>3. Open source license copies | 15 working days | Article 28 of the Cybersecurity Law |  
-| **USA** | FISA Court Section 702 directive + DOJ endorsement | 1. PGP-signed files<br>2. CI/CD build logs<br>3. Third-party audit reports | 72 hours | Fourth Amendment + DMCA 512(f) |  
-| **Seychelles** | Supreme Court Mutual Assistance Order + FIU Anti-Money Laundering Letter | 1. GPL-3.0 notarization<br>2. Contributor CLA agreement<br>3. Copyright registration | 30 calendar days | Article 41 of the Electronic Transactions Law |  
-
-#### ⚠️ Non-cooperation Situations  
-- No formal judicial documents, only oral/email requests  
-- Requests for user traffic logs or communication content  
-- Requests for non-public code design documents  
-- Cross-border requests without Hague certification  
-+ **Compliance Response**: Immediately activate the "Judicial Defense Plan" Chapter 7 process
-
-### ⚔️ Judicial Cooperation Emergency Plan  
-+ **Judicial Freeze Response**  
-  Upon receiving forensic requests, execute immediately:  
-  ```bash
-  # Freeze GitHub repository to prevent modification
-  gh api repos/liulilittle/openppp2/actions/permissions --method PUT -f enabled=false
-  # Activate legal protection branch
-  git checkout -b legal_lockdown
-  git push origin --force legal_lockdown
-  ```
-
-### 🎣 Anti-Phishing Verification Process ###
-```diff
-+ Step1: Extract judicial document digital signature
-+ Step2: Verify with CNNIC/GlobalSign root certificates
-- Step3: If verification fails, immediately trigger judicial alert
-! Step4: Send violation report to EFF
+    OS->>App: SIGINT / CTRL+C
+    App->>App: cancel tick timer
+    App->>UI: ConsoleUI::Stop()
+    App->>RT: Dispose()
+    RT->>RT: IPv6 rollback (server)
+    RT->>RT: Route/DNS rollback (client)
+    RT->>Lock: prevent_rerun_.Release()
+    App->>App: io_context::stop()
 ```
 
 ---
 
-## <img src="https://img.icons8.com/color/48/000000/command-line.png" width="30" height="30"> Command Line Interface
-### ⚙️ General Commands
+## Start Here
 
-| Command | Function | Format | Default |
-|---------|----------|--------|---------|
-| `--rt` | Real-time mode | `--rt=[yes｜no]` | `yes` |
-| `--dns` | Set DNS servers | `--dns <IP list>` | `8.8.8.8,8.8.4.4` |
-| `--tun-flash` | Enable advanced QoS control | `--tun-flash=[yes｜no]` | `no` |
-| `--pull-iplist` | Download country IP list | `--pull-iplist [file]/[country]` | `./ip.txt/CN` |
-| `--config` | Configuration file path | `--config <file path>` | `./appsettings.json` |
-| `--mode` | Run mode | `--mode=[client｜server]` | `server` |
-
-> 🔗 **IP List Data Source**: [APNIC Official List](http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest)
+| Document | Purpose |
+|----------|---------|
+| [`docs/README.md`](docs/README.md) | Documentation index and reading paths |
+| [`docs/README_CN.md`](docs/README_CN.md) | Chinese documentation index |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Top-level architecture map |
+| [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) | End-user quick start and appendices |
+| [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md) | Source reading order |
 
 ---
 
-### 🖥️ Server Commands
+## Reading Paths
 
-| Command | Function | Format | Default |
-|---------|----------|--------|---------|
-| `--firewall-rules` | Firewall rules file | `--firewall-rules <file>` | `./firewall-rules.txt` |
+### Whole System
 
----
+1. [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
+2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+3. [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md)
+4. [`docs/TRANSMISSION.md`](docs/TRANSMISSION.md)
+5. [`docs/HANDSHAKE_SEQUENCE.md`](docs/HANDSHAKE_SEQUENCE.md)
+6. [`docs/PACKET_FORMATS.md`](docs/PACKET_FORMATS.md)
+7. [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
+8. [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
+9. [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
+10. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
+11. [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+12. [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 
-### 💻 Client Commands
+### Code Reading
 
-#### Core Settings
-| Command | Function | Format | Default |
-|---------|----------|--------|---------|
-| `--lwip` | [Protocol stack selection](#network-protocol-static-guide) | `--lwip=[yes｜no]` | Windows: `yes`<br>Others: `no` |
-| `--vbgp` | Intelligent routing diversion | `--vbgp=[yes｜no]` | `yes` |
-| `--nic` | Specify physical network card | `--nic <name>` | Auto |
-| `--ngw` | Force gateway address | `--ngw <IP>` | Auto |
+1. [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md)
+2. `main.cpp`
+3. `ppp/configurations/*`
+4. `ppp/transmissions/*`
+5. `ppp/app/protocol/*`
+6. `ppp/app/client/*`
+7. `ppp/app/server/*`
+8. Platform directories
+9. `go/*` when managed deployment is used
 
-#### Virtual Network Card
-| Command | Function | Format | Default |
-|---------|----------|--------|---------|
-| `--tun` | Network card name | `--tun <name>` | [Platform related](#network-card-name-default-guide) |
-| `--tun-ip` | IP address | `--tun-ip <IP>` | `10.0.0.2` |
-| `--tun-gw` | Gateway address | `--tun-gw <IP>` | `10.0.0.1` |
-| `--tun-mask` | Subnet mask | `--tun-mask <bits>` | `30` |
-| `--tun-mask` | Preferred network | `--tun-host=[yes｜no]` | `yes` |
+### Deployment And Operations
 
-#### Advanced Features
-| Command | Function | Format | Default |
-|---------|----------|--------|---------|
-| `--tun-mux` | MUX connection count | `--tun-mux <`[connections](#mux-connection-number-guide)`>` | `0` |
-| `--tun-mux-acceleration` | MUX acceleration | `--tun-mux-acceleration <`[mode](#mux-acceleration-mode-guide)`>` | `0` |
-| `--tun-vnet` | Subnet forwarding | `--tun-vnet=[yes｜no]` | `yes` |
-| `--tun-ssmt` | Hyper-threading optimization | `--tun-ssmt=[`[thread count](#ssmt-threading-number-guide)`]/[`[mode](#ssmt-threading-optimize-mode-guide)`]` | `4/st` |
-| `--tun-static` | [Static Tunnel](#udp-static-aggligator) | `--tun-static=[yes｜no]` | `no` |
-| `--link-restart` | Link reconnection times | `--link-restart=[times]` | `0` |
-| `--block-quic` | Block QUIC traffic | `--block-quic=[yes\|no]` | `no` |
-| `--auto-restart` | Auto-restart program | `--auto-restart=[seconds]` | `0` |
+1. [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+2. [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)
+3. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
+4. [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
+5. [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+6. [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+7. [`docs/SECURITY.md`](docs/SECURITY.md)
 
-#### Routing Settings
-| Command | Function | Format | Default Value |
-|---------|----------|--------|--------------|
-| `--bypass` | Bypass list | `<file1\|file2>` | `./ip.txt` |
-| `--bypass-nic` | Specify interface for bypass list | `<network interface>` | |
-| `--bypass-ngw` | Specify gateway for bypass list | `<IP>` | `0.0.0.0` |
-| `--virr` | Auto-update and take effect | `[file]/[country]` | `./ip.txt/CN` |
-| `--dns-rules` | DNS rules | `<file>` | [./dns-rules.txt](#dns-rules-guide) |
+### Deep Dives (Advanced)
 
-#### Platform Specific
-| Command | Platform | Function | Format | Default |
-|---------|---------|----------|--------|---------|
-| `--tun-route` | <img src="https://img.icons8.com/color/24/000000/linux.png" width="20"> | Routing compatibility | `--tun-route=[yes｜no]` | `no` |
-| `--tun-protect` | <img src="https://img.icons8.com/color/24/000000/linux.png" width="20"> | Routing protection | `--tun-protect=[yes｜no]` | `yes` |
-| `--tun-promisc` | <img src="https://img.icons8.com/color/24/000000/mac-logo.png" width="20"> <img src="https://img.icons8.com/color/24/000000/linux.png" width="20"> | Promiscuous mode | `--tun-promisc=[yes｜no]` | `yes` |
+1. [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md)
+2. [`docs/EDSM_STATE_MACHINES.md`](docs/EDSM_STATE_MACHINES.md)
+3. [`docs/PACKET_LIFECYCLE.md`](docs/PACKET_LIFECYCLE.md)
+4. [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
+5. [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/TRANSMISSION_PACK_SESSIONID.md)
+6. [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
+7. [`docs/ERROR_CODES.md`](docs/ERROR_CODES.md)
+8. [`docs/ERROR_HANDLING_API.md`](docs/ERROR_HANDLING_API.md)
+9. [`docs/DIAGNOSTICS_ERROR_SYSTEM.md`](docs/DIAGNOSTICS_ERROR_SYSTEM.md)
 
----
+### IPv6 Subsystem
 
-### 🪟 Windows Commands
-
-| Command | Function | Format |
-|---------|----------|--------|
-| `--system-network-reset` | Network reset | `--system-network-reset` |
-| `--system-network-optimization` | Performance optimization | `--system-network-optimization` |
-| `--system-network-preferred-ipv4` | Set IPv4 priority | `--system-network-preferred-ipv4` |
-| `--system-network-preferred-ipv6` | Set IPv6 priority | `--system-network-preferred-ipv6` |
-| `--no-lsp` | Disable LSP | `--no-lsp` |
+1. [`docs/IPV6_LEASE_MANAGEMENT.md`](docs/IPV6_LEASE_MANAGEMENT.md)
+2. [`docs/IPV6_TRANSIT_PLANE.md`](docs/IPV6_TRANSIT_PLANE.md)
+3. [`docs/IPV6_NDP_PROXY.md`](docs/IPV6_NDP_PROXY.md)
+4. [`docs/IPV6_CLIENT_ASSIGNMENT.md`](docs/IPV6_CLIENT_ASSIGNMENT.md)
 
 ---
 
-## 📚 Global Parameters
+## Documentation Set
 
-<a id="mux-acceleration-mode-guide"></a>
+The repository contains paired English/Chinese documents plus the root README pair. Each Chinese document has a one-to-one English counterpart.
 
-### <img src="https://img.icons8.com/color/24/000000/merge.png" width="20" height="20"> MUX Acceleration Mode
-| Value | Mode | Suitable Scene |
-|:--:|------|----------------|
-| 0 | Standard | General use |
-| 1 | Server Acceleration | Download-intensive |
-| 2 | Client Acceleration | Upload-intensive |
-| 3 | Bi-directional Acceleration | High-performance needs |
-
-<a id="network-card-name-default-guide"></a>
-
-### <img src="https://img.icons8.com/color/512w/network-card.png" width="20" height="20"> Virtual Network Card Default Values
-| Platform | Default Value |
-|----------|--------------|
-| Windows | `PPP` |
-| Linux | `ppp` |
-| macOS | `utun0` |
-
-<a id="ssmt-threading-optimize-mode-guide"></a>
-
-### <img src="https://cdn2.iconfinder.com/data/icons/elastic-search-filled-outline-1/128/Elastic_Search_36_-_Filled_Outline_-_36-20-512.png" width="20" height="20"> SSMT Optimization Mode
-| Mode | Optimization Direction |
-|:--:|------------------------|
-| st | Single connection large flow |
-| mq | Multi-connection high concurrency |
-
-<a id="symbol-explanation-guide"></a>
-
-### 💾 Symbol Explanation
-| Symbol | Description          |
-|:-------|:---------------------|
-| `[ ]`  | Optional parameter   |
-| `< >`  | Required parameter   |
-| `｜`   | Option separator     |
-| `!`    | Not available / Disabled |
-
-<a id="network-protocol-static-guide"></a>
-
-### 🌐 Network Protocol Stack
-| Type | Description |
-|:--------:|--------------|
-| `lwip` | Suitable for `Windows` |
-| `ctcp` | Suitable for [!](#symbol-explanation-guide)`Windows` |
-
-## <img src="https://img.icons8.com/color/48/000000/source-code.png" width="30" height="30"> Compilation Guide
-
-Must use a compiler that supports C++17, no other special requirements. Install a C++17 development environment in the standard way.
-
-### Dependency Requirements
-#### Minimum Dependencies  
-- **Boost** >= 1.70 and <= 1.8.6
-- **jemalloc** >= 5.30 (Android excluded)  
-- **OpenSSL** >= 1.1.x  
-
-#### Full Dependencies
-- Boost  
-- jemalloc  
-- OpenSSL  
-- cURL  
-
-#### Resource Addresses  
-- **cURL:** https://github.com/curl/curl  
-- **jemalloc:** https://github.com/jemalloc/jemalloc  
-- **openssl:** https://github.com/openssl/openssl  
-- **Boost:** https://www.boost.org/releases/latest
-
-### Platform Compilation Guide
-| Platform | Toolchain | Recommended Method | Notes |
-|----------|------------|----------------------|--------|
-| **Windows** | Visual Studio 2022 | [vcpkg](https://github.com/microsoft/vcpkg) | Use static compilation (`/MT`, `/MTd`) |
-| **Linux** | GCC/Clang | Manual compilation | [Reference script](https://github.com/liulilittle/openppp2/blob/main/.github/workflows/build-openppp2-for-linux-using-ubuntu-latest.yml) |
-| **macOS** | LLVM-Clang | Manual compilation | [Reference script](https://github.com/liulilittle/openppp2/blob/main/.github/workflows/build-openppp2-for-darwin-using-macos-latest.yml) |
-| **Android** | NDK r20b | Cross-compilation | [Reference script](https://github.com/liulilittle/openppp2/blob/main/.github/workflows/build-openppp2-for-android-using-ubuntu-latest-cross.yml) |
-
-### Precompiled Library Resources
-- **Linux**: [openppp2-ubuntu-3rd-environment](https://github.com/liulilittle/openppp2-ubuntu-3rd-environment)  
-- **macOS**: [openppp2-macos-amd64-environment](https://github.com/liulilittle/openppp2-macos-amd64-environment)  
-- **Android**: [openppp2-android-ndk-r20b-3rd-environment](https://github.com/liulilittle/openppp2-android-ndk-r20b-3rd-environment)  
-
-### Environment Requirements
-Must use a compiler supporting C++17, no other special requirements. Install a C++17 development environment in the standard way.
+| Area | English | Chinese |
+|------|---------|---------|
+| Foundation | `ENGINEERING_CONCEPTS.md` | `ENGINEERING_CONCEPTS_CN.md` |
+| Foundation | `ARCHITECTURE.md` | `ARCHITECTURE_CN.md` |
+| Foundation | `STARTUP_AND_LIFECYCLE.md` | `STARTUP_AND_LIFECYCLE_CN.md` |
+| Transport | `TRANSMISSION.md` | `TRANSMISSION_CN.md` |
+| Transport | `HANDSHAKE_SEQUENCE.md` | `HANDSHAKE_SEQUENCE_CN.md` |
+| Transport | `PACKET_FORMATS.md` | `PACKET_FORMATS_CN.md` |
+| Transport | `TRANSMISSION_PACK_SESSIONID.md` | `TRANSMISSION_PACK_SESSIONID_CN.md` |
+| Protocol | `LINKLAYER_PROTOCOL.md` | `LINKLAYER_PROTOCOL_CN.md` |
+| Runtime | `CLIENT_ARCHITECTURE.md` | `CLIENT_ARCHITECTURE_CN.md` |
+| Runtime | `SERVER_ARCHITECTURE.md` | `SERVER_ARCHITECTURE_CN.md` |
+| Runtime | `ROUTING_AND_DNS.md` | `ROUTING_AND_DNS_CN.md` |
+| Runtime | `PACKET_LIFECYCLE.md` | `PACKET_LIFECYCLE_CN.md` |
+| Platform | `PLATFORMS.md` | `PLATFORMS_CN.md` |
+| Configuration | `CONFIGURATION.md` | `CONFIGURATION_CN.md` |
+| Configuration | `CLI_REFERENCE.md` | `CLI_REFERENCE_CN.md` |
+| Operations | `DEPLOYMENT.md` | `DEPLOYMENT_CN.md` |
+| Operations | `OPERATIONS.md` | `OPERATIONS_CN.md` |
+| Security | `SECURITY.md` | `SECURITY_CN.md` |
+| Management | `MANAGEMENT_BACKEND.md` | `MANAGEMENT_BACKEND_CN.md` |
+| Usage | `USER_MANUAL.md` | `USER_MANUAL_CN.md` |
+| Reading | `SOURCE_READING_GUIDE.md` | `SOURCE_READING_GUIDE_CN.md` |
+| Concurrency | `CONCURRENCY_MODEL.md` | `CONCURRENCY_MODEL_CN.md` |
+| State Machines | `EDSM_STATE_MACHINES.md` | `EDSM_STATE_MACHINES_CN.md` |
+| Tunnel | `TUNNEL_DESIGN.md` | `TUNNEL_DESIGN_CN.md` |
+| Error Codes | `ERROR_CODES.md` | `ERROR_CODES_CN.md` |
+| Error API | `ERROR_HANDLING_API.md` | `ERROR_HANDLING_API_CN.md` |
+| Diagnostics | `DIAGNOSTICS_ERROR_SYSTEM.md` | `DIAGNOSTICS_ERROR_SYSTEM_CN.md` |
+| IPv6 | `IPV6_LEASE_MANAGEMENT.md` | `IPV6_LEASE_MANAGEMENT_CN.md` |
+| IPv6 | `IPV6_TRANSIT_PLANE.md` | `IPV6_TRANSIT_PLANE_CN.md` |
+| IPv6 | `IPV6_NDP_PROXY.md` | `IPV6_NDP_PROXY_CN.md` |
+| IPv6 | `IPV6_CLIENT_ASSIGNMENT.md` | `IPV6_CLIENT_ASSIGNMENT_CN.md` |
+| TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
+| IPv6 Fix Notes | `IPV6_FIXES.md` | _(English only)_ |
 
 ---
 
-### Compilation Commands
-1. **Set third-party library paths**  
-   Modify `CMakeLists.txt` to specify dependency library directories:  
-   `SET(THIRD_PARTY_LIBRARY_DIR /your/actual/path)`
+## Repository Layout
 
-2. **Compile and run**  
-    ```bash
-    # Linux/macOS compilation process
-    mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j$(nproc)  # Linux automatically detects cores
-    cd ../bin && ./ppp  # Run the program
-    ```
-
-### Preprocessor Macros
-ANCIL_FD_BUFFER_STRUCT  
-Enable sendfd/recvfd shared file descriptor parent fd protection mode
-
-CURLINC_CURL  
-Access HTTP/HTTPS resources via cURL library
-
-TRANSMISSION_O1  
-Force network transmission layer to use /O1 optimization
-
-JEMALLOC  
-Use jemalloc memory allocator instead of default
-
-BUDDY_ALLOC_IMPLEMENTATION  
-Use buddy allocator for virtual memory management
-
-SYSNAT
-Enable kernel NAT / TC Network Driver (TC Hairpin NATs)
-
-__MUSL__  
-Statically link musl-libc C++ standard library (detached from GNU/Linux libc)
-
-_LARGEFILE64_SOURCE  
-Ensure musl-libc supports 64-bit file functions
-
-### IO_URING Version Compilation
-1. Download [liburing](https://github.com/axboe/liburing) source code and install
-2. Uncomment the following in `CMakeLists.txt`:
-   ```cmake
-   # IF(PLATFORM_SYSTEM_LINUX) 
-   #     ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)
-   #     ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)
-   # ENDIF()
-   ```
-3. Uncomment the # liburing.a line in TARGET_LINK_LIBRARIES:
-   ```cmake
-   TARGET_LINK_LIBRARIES(${NAME} 
-       libc.a
-       libssl.a 
-       libcrypto.a 
-       libjemalloc.a
-       # liburing.a
-
-       atomic
-       dl
-       pthread
-
-       libboost_system.a
-       libboost_coroutine.a 
-       libboost_thread.a 
-       libboost_context.a 
-       libboost_regex.a
-       libboost_filesystem.a) 
-   ```
-4. Follow the standard Linux build process
-
-## 🚀 SIMD + AES_NI Optimization Implementation
-### Optimization Algorithms
-| Algorithm Name             | Implementation File Path                                                                                  |
-|----------------------------|-----------------------------------------------------------------------------------------------------------|
-| `simd-aes-128-cfb`     | [simd_aes_128_cfb.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_128_cfb.cpp) |
-| `simd-aes-256-cfb`     | [simd_aes_256_cfb.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_256_cfb.cpp) |
-| `simd-aes-128-gcm`     | [simd_aes_128_gcm.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_128_gcm.cpp) |
-| `simd-aes-256-gcm`     | [simd_aes_256_gcm.cpp](https://github.com/liulilittle/openppp2/blob/main/common/aesni/impl/simd_aes_256_gcm.cpp) |
-
-**Prerequisites**  
-1. Only support i386/amd64 platforms  
-2. CPU must support AES-NI instruction set  
-   (PPP automatically detects CPU support via assembly instructions)
-
-**Compilation Steps**  
-1. Modify `CMakeLists.txt`:  
-   ```cmake
-   SET(__SIMD__ TRUE)  # Original value FALSE
-   ```
-2. Follow standard Linux build process:
-    ```bash
-    mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j $(nproc) 
-    ```
-
-**Notes**  
-- Only support i386/amd64; other platforms will fail to compile when enabled  
-- CPU must support AES-NI instructions (PPP auto-detects)  
-- Only optimize the following algorithms:  
-  - `simd-aes-128-cfb`  
-  - `simd-aes-256-cfb`  
-  - `simd-aes-128-gcm`  
-  - `simd-aes-256-gcm`  
-- After modifying `CMakeLists.txt`, full recompile:
-  ```bash
-  rm -rf build && mkdir build && cd build
-  cmake .. -DCMAKE_BUILD_TYPE=Release
-  make clean && make -j $(nproc)
-  ```
+```text
+.
+├── main.cpp                      # Process entry point: PppApplication::Run()
+├── ppp/
+│   ├── stdafx.h                  # Master header: macros, type aliases (read first)
+│   ├── configurations/
+│   │   ├── AppConfiguration.h    # Runtime configuration model
+│   │   └── AppConfiguration.cpp  # Loaded(): policy compiler and normalizer
+│   ├── transmissions/
+│   │   ├── ITransmission.h/.cpp  # Protected transport + handshake
+│   │   ├── ITcpipTransmission.h/.cpp  # TCP carrier
+│   │   └── IWebsocketTransmission.h/.cpp  # WS/WSS carrier
+│   ├── app/
+│   │   ├── protocol/
+│   │   │   ├── VirtualEthernetLinklayer.h/.cpp  # Opcode-based tunnel actions
+│   │   │   ├── VirtualEthernetInformation.h/.cpp # Session envelope
+│   │   │   └── VirtualEthernetPacket.cpp  # Static packet pack/unpack
+│   │   ├── client/
+│   │   │   ├── VEthernetExchanger.h/.cpp     # Client session exchanger
+│   │   │   └── VEthernetNetworkSwitcher.h/.cpp # Route/DNS management
+│   │   ├── server/
+│   │   │   ├── VirtualEthernetSwitcher.h/.cpp   # Session coordination
+│   │   │   ├── VirtualEthernetExchanger.h/.cpp  # Per-session server handler
+│   │   │   ├── VirtualEthernetManagedServer.h/.cpp # Go backend bridge
+│   │   │   ├── VirtualEthernetDatagramPort.h    # Server UDP forwarding
+│   │   │   └── VirtualEthernetNamespaceCache.h  # DNS cache
+│   │   └── ConsoleUI.h/.cpp      # TUI: render + input threads
+│   ├── diagnostics/
+│   │   ├── Error.h/.cpp          # Error code definitions and setters
+│   │   ├── ErrorCodes.def        # X-macro source: 542 error codes
+│   │   └── ErrorHandler.h/.cpp   # Handler registration / dispatch
+│   ├── tap/
+│   │   └── ITap.h/.cpp           # Virtual NIC abstraction interface
+│   ├── ethernet/
+│   │   ├── VEthernet.cpp         # TAP frame dispatch, Output()
+│   │   └── VNetstack.cpp         # lwIP integration: UDP/TCP/ICMP hooks
+│   ├── threading/
+│   │   └── Executors.h/.cpp      # Thread pool and io_context management
+│   └── net/                      # Sockets, ASIO, HTTP proxy, ICMP, firewall
+├── windows/
+│   └── ppp/tap/TapWindows.h/.cpp # Wintun / TAP-Windows implementation
+├── linux/
+│   └── ppp/tap/TapLinux.h/.cpp   # Linux TUN implementation
+├── darwin/
+│   └── ppp/tap/TapDarwin.h/.cpp  # macOS utun implementation
+├── android/
+│   └── libopenppp2.cpp           # Android JNI bridge
+├── builds/                        # Named CMakeLists.txt variants
+├── go/                            # Optional Go management backend
+└── docs/                          # Paired EN + _CN.md documentation
+    ├── *.md
+    └── *_CN.md
+```
 
 ---
 
-## 🌐 Configuration Files
-### 🌍 Global Settings
+## Build Instructions
 
-| Parameter Name | Type   | Default Value | Description                                | Applicable             |
-|------------------|--------|-----------------|--------------------------------------------|------------------------|
-| concurrent       | int    | 1               | [Concurrency Thread Number](#concurrent-number-guide) | `client｜server`     |
-| cdn              | array  | [80, 443]       | List of CDN ports                          | `server`               |
+### Linux / macOS
 
-### 🔑 Encryption Settings (key)
-| Parameter Name  | Type    | Example Value       | Description                     | Consistency | Applicable          |
-|-----------------|---------|---------------------|---------------------------------|--------------|---------------------|
-| kf              | int     | 154543927           | Key generation factor           | Mandatory    | `client｜server`   |
-| kx              | int     | 128                 | Interleaving factor              | Optional     | `client｜server`   |
-| kl              | int     | 10                  | Minimum NOP bits                 | Optional     | `client｜server`   |
-| kh              | int     | 12                  | Maximum NOP bits                 | Optional     | `client｜server`   |
-| sb              | int     | 1000                | Dynamic sliding window size (bytes) | Optional | `client｜server`   |
-| protocol        | string  | aes-128-cfb         | Protocol layer encryption algorithm | Mandatory | `client｜server`   |
-| protocol-key    | string  | N6HMzdUs7IUnYHwq    | Protocol layer encryption key   | Mandatory    | `client｜server`   |
-| transport       | string  | aes-256-cfb         | Transport layer encryption algorithm | Mandatory | `client｜server`   |
-| transport-key   | string  | HWFweXu2g5RVMEpy    | Transport layer encryption key  | Mandatory    | `client｜server`   |
-| masked          | bool    | false               | Enable traffic obfuscation      | Mandatory    | `client｜server`   |
-| plaintext       | bool    | false               | Allow plaintext transmission    | Mandatory    | `client｜server`   |
-| delta-encode    | bool    | false               | Enable delta encoding           | Mandatory    | `client｜server`   |
-| shuffle-data    | bool    | false               | Enable data randomization       | Mandatory    | `client｜server`   |
-
-### 📡 Network Interfaces (ip)
-| Parameter Name | Type   | Example Value   | Description                       | Applicable             |
-|------------------|--------|-----------------|-----------------------------------|------------------------|
-| public           | string | 192.168.0.24    | Public IP Address                 | `server`               |
-| interface        | string | 192.168.0.24    | Local Listening Interface IP      | `server`               |
-
-### 💾 Virtual Memory (vmem)
-| Parameter | Type   | Example Value | Description                  | Applicable       | Platform           |
-|-------------|--------|----------------|------------------------------|------------------|--------------------|
-| size        | int    | 4096           | Memory pool size (MB)        | `client｜server` | `all`              |
-| path        | string | "./{}"        | Path for memory file storage | `client｜server` | [!](#symbol-explanation-guide)`windows`         |
-
-### 🔌 TCP Configuration
-| Parameter Name       | Type   | Example Value | Description                          | Applicable             |
-|----------------------|--------|----------------|--------------------------------------|------------------------|
-| inactive.timeout     | int    | 300            | Idle timeout for the connection (seconds) | `client｜server`     |
-| connect.timeout      | int    | 5              | Connection establishment timeout (seconds) | `client｜server`  |
-| connect.nexcept      | int    | 4              | Random extension range for connection timeout (seconds) | `client｜server` |
-| listen.port          | int    | 20000          | Listening port                       | `client｜server`       |
-| cwnd                 | int    | 0              | Congestion window size (auto-adjusted) | `client｜server`  |
-| rwnd                 | int    | 0              | Receive window size (auto-adjusted)  | `client｜server`       |
-| turbo                | bool   | true           | Enable TCP acceleration              | `client｜server`       |
-| backlog              | int    | 511            | Maximum pending connections          | `client｜server`       |
-| fast-open            | bool   | true           | Enable TCP Fast Open                 | `client｜server`       |
-
-### 📶 UDP Settings
-| Parameter Name      | Type   | Example Value                | Description                        | Applicable             |
-|---------------------|--------|------------------------------|------------------------------------|------------------------|
-| cwnd               | int    | 0                            | Congestion Window Size             | `client｜server`       |
-| rwnd               | int    | 0                            | Receive Window Size                | `client｜server`       |
-| inactive.timeout   | int    | 72                           | Connection Idle Timeout (seconds)  | `client｜server`       |
-| dns.timeout        | int    | 4                            | DNS Query Timeout (seconds)        | `client｜server`       |
-| dns.ttl            | int    | 60                           | DNS Cache TTL (seconds)            | `client｜server`       |
-| dns.cache          | bool   | true                         | Enable DNS Cache                   | `client｜server`       |
-| dns.turbo          | bool   | false                        | Enable Turbo Mode                  | `client｜server`       |
-| dns.redirect       | string | "0.0.0.0"                    | DNS Redirection Address            | `server`               |
-| listen.port        | int    | 20000                        | Listening Port                     | `server`               |
-| static.keep-alived | array  | [1,5]                        | Keep-Alive Interval [Min, Max] (seconds) | `client`       |
-| static.dns         | bool   | true                         | Enable Static DNS Service          | `client`               |
-| static.quic        | bool   | true                         | Enable QUIC Support                  | `client`               |
-| static.icmp        | bool   | true                         | Enable ICMP Support                  | `client`               |
-| static.[aggligator](#udp-static-aggligator)  | int    | 4                            | Bandwidth Aggregator Link Count    | `client`               |
-| static.servers     | array  | ["1.0.0.1:20000", ...]       | Static Server Address List         | `client`               |
-
-### 🔄 Multiplexing (mux)
-| Parameter Name      | Type   | Example Value | Description                        | Applicable             |
-|---------------------|--------|--------------|------------------------------------|------------------------|
-| connect.timeout     | int    | 20           | Connection Establishment Timeout (seconds) | `client｜server`   |
-| inactive.timeout    | int    | 60           | Idle Timeout (seconds)             | `client｜server`       |
-| congestions         | int    | 134217728    | Max Congestion Control Window (bytes) | `client｜server`   |
-| keep-alived         | array  | [1,20]       | Keep-Alive Interval [Min, Max] (seconds) | `client｜server`   |
-
-### 🌐 WebSocket Settings
-| Parameter Name                         | Type   | Example Value                          | Description                        | Applicable             |
-|----------------------------------------|--------|----------------------------------------|------------------------------------|------------------------|
-| host                                   | string | starrylink.net                         | Server Domain Name                 | `server`               |
-| path                                   | string | /tun                                   | WebSocket Path                     | `server`               |
-| listen.ws                              | int    | 20080                                  | HTTP Listening Port                | `server`               |
-| listen.wss                             | int    | 20443                                  | HTTPS Listening Port               | `server`               |
-| ssl.certificate-file                   | string | starrylink.net.pem                     | SSL Certificate File               | `server`               |
-| ssl.certificate-chain-file             | string | starrylink.net.pem                     | SSL Certificate Chain File         | `server`               |
-| ssl.certificate-key-file               | string | starrylink.net.key                     | SSL Private Key File                | `server`               |
-| ssl.certificate-key-password           | string | test                                   | SSL Private Key Password           | `server`               |
-| ssl.ciphersuites                       | string | TLS_AES_256_GCM_SHA384:...             | Cipher Suites List                 | `client｜server`       |
-| verify-peer                            | bool   | true                                   | Root Certificate Verification      | `client`               |
-| http.error                             | string | Status Code: 404; Not Found            | Custom HTTP Error Response Content | `server`               |
-| http.request                           | object | {Cache-Control: "no-cache", ...}      | Custom HTTP Request Headers        | `client`               |
-| http.response                          | object | {Server: "Kestrel"}                   | Custom HTTP Response Headers       | `server`               |
-
-### 🖥️ Server Configuration (server)
-| Parameter Name | Type   | Example Value                            | Description                          | Applicable             |
-|------------------|--------|-------------------------------------------|--------------------------------------|------------------------|
-| log              | string | ./ppp.log                                | Log File Path                        | `server`               |
-| node             | int    | 1                                         | Server Node ID                       | `server`               |
-| subnet           | bool   | true                                      | Enable Subnet Allocation             | `server`               |
-| mapping          | bool   | true                                      | Enable Port Mapping                  | `server`               |
-| backend          | string | ws://192.168.0.24/ppp/webhook             | Management Backend URL               | `server`               |
-| backend-key      | string | HaEkTB55VcHovKtUPHmU9zn0NjFmC6tff        | Management Backend Authentication Key | `server`            |
-
-### 💻 Client Configuration (client)
-| Parameter Name               | Type   | Example Value                            | Description                         | Applicable             |
-|------------------------------|--------|-------------------------------------------|-------------------------------------|------------------------|
-| guid                         | string | {F4569208-BB45-4DEB-B115-0FEA1D91B85B}   | Unique Client Identifier            | `client`               |
-| server                       | string | ppp://192.168.0.24:20000/                | Server Connection Address           | `client`               |
-| server-proxy                 | string | [http\|socks]://user:pass@192.168.0.18:8080/     | Proxy Address for Connecting to Server | `client`            |
-| bandwidth                    | int    | 10000                                    | Bandwidth Limit (Kbp/s)             | `client`               |
-| reconnections.timeout        | int    | 5                                        | Reconnection Wait Time (seconds)    | `client`               |
-| paper-airplane.tcp           | bool   | true                                     | Enable Paper Airplane TCP Acceleration | `client`            |
-| http-proxy.bind              | string | 192.168.0.24                              | HTTP Proxy Binding Address          | `client`               |
-| http-proxy.port              | int    | 8080                                     | HTTP Proxy Port                     | `client`               |
-| socks-proxy.bind             | string | 192.168.0.24                              | SOCKS Proxy Binding Address         | `client`               |
-| socks-proxy.port             | int    | 1080                                     | SOCKS Proxy Port                     | `client`               |
-| socks-proxy.username         | string | test                                    | SOCKS Authentication Username       | `client`               |
-| socks-proxy.password         | string | 123456                                  | SOCKS Authentication Password       | `client`               |
-
-#### 📍 Port Mappings
-| Parameter Name | Type   | Example Value      | Description                        | Applicable  |
-|------------------|--------|---------------------|------------------------------------|--------------|
-| local-ip         | string | 192.168.0.24        | Local IP Address                   | `client`     |
-| local-port       | int    | 80                  | Local Port                         | `client`     |
-| protocol         | string | tcp                 | Protocol Type (tcp/udp)              | `client`     |
-| remote-ip        | string | ::                  | Remote IP (:: indicates any)        | `client`     |
-| remote-port      | int    | 10001               | Remote Port                        | `client`     |
-
-#### 🛣️ Routing Rules
-| Parameter Name | Type   | Example Value                     | Description                         | Applicable  |
-|------------------|--------|-----------------------------------|-------------------------------------|--------------|
-| name             | string | CMNET                            | Routing Rule Name                   | `client`     |
-| nic              | string | eth1                             | Network Interface Name              | `client`     |
-| ngw              | string | 192.168.1.1                      | Gateway Address                     | `client`     |
-| path             | string | ./cmcc_cidr.txt                  | Local CIDR File Path                | `client`     |
-| vbgp             | string | `https://ispip.clang.cn/cmcc_cidr.txt` | Online CIDR Data Source URL  | `client`     |
-
----
-
-## 💡 Configuration Guide ##
-<a id="mux-connection-number-guide"></a>
-
-### <img src="https://img.icons8.com/color/24/000000/merge.png" width="20" height="20"> MUX Connection Count
-| Connections | Focus Area |
-|------|--------------|
-| 4 | Low latency |
-| 8 | Medium latency |
-| 12 | High latency |
-| 16 | Extreme high latency |
-
-<a id="concurrent-number-guide"></a>
-
-### <img src="https://cdn2.iconfinder.com/data/icons/elastic-search-filled-outline-1/128/Elastic_Search_36_-_Filled_Outline_-_36-20-512.png" width="20" height="20"> VPN Thread Count
-| Thread Count | Focus Area |
-|--------------|--------------|
-| 1 | Single-core optimization |
-| CPU cores + 1 | Multi-core optimization |
-
-<a id="ssmt-threading-number-guide"></a>
-
-### <img src="https://img.icons8.com/color/24/000000/processor.png" width="20" height="20"> SSMT Thread Count
-| Thread Count | Focus Area |
-|--------------|--------------|
-| 1 | Single-core optimization |
-| CPU cores | Multi-core optimization |
-
----
-
-<a id="dns-rules-guide"></a>
-
-### <img src="https://img.icons8.com/color/24/000000/domain.png" width="20" height="20"/> DNS Rules List  
-▶️ **Mainland China Domain Direct Connection Rules** (Regularly Updated):  
-[github.com/liulilittle/dns-rules.txt](https://github.com/liulilittle/dns-rules.txt)  
-`Function: Bypass VPN for DNS queries, accelerating local domain resolution`
-
----
-
-### <img src="https://cdn-icons-png.freepik.com/256/12054/12054582.png?semt=ais_hybrid" width="20" height="20"/> HTTPS Certificate Configuration  
-**Place the root certificate in the VPN runtime directory:** `cacert.pem`  
-
-| Source          | Download Link |
-|-----------------|---------------|
-| Mirror Repository | [github.com/liulilittle/cacert.pem](https://github.com/liulilittle/cacert.pem) |
-| CURL Official   | [curl.se/docs/caextract.html](https://curl.se/docs/caextract.html) |
-
-> 🔒 Certificate purpose: Ensure secure validation for HTTPS access
-
----
-
-## 🚀 Quick Start
-### Server Deployment
-
-#### 1. Ubuntu 18.04 LTS x86_64 Rapid Launch
 ```bash
-sudo su
-screen -S openppp2
-mkdir -p openppp2 && cd openppp2
-wget https://github.com/liulilittle/openppp2/releases/latest/download/openppp2-linux-amd64-simd.zip
-unzip openppp2-linux-amd64-simd.zip  
-chmod a+x ppp
-rm -rf *.txt *.key *.pem *.zip
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
 ```
 
-##### 1.1. Configure Backend
-Edit `appsettings.json`, clear or remove the `server.backend` field:
-```json
-"server": {
-    "backend": "",  // Ensure this is empty
-    // Other configurations remain unchanged...
-    "backend-key": "HaEkTB55VcHovKtUPHmU9zn0NjFmC6tff"
-}
-```
+Output: `bin/ppp`
 
-##### 1.2. Start Service
+**Third-party library path**: `THIRD_PARTY_LIBRARY_DIR` defaults to `/root/dev`. Override before building:
+
 ```bash
-./ppp
+sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR /your/path)|' CMakeLists.txt
+# macOS: sed -i '' '...' CMakeLists.txt
 ```
 
-### 💻 Client Deployment
-#### 1. Windows Rapid Setup
+Expected layout under `THIRD_PARTY_LIBRARY_DIR`:
 
-**1.1 Create Directory**  
-Run PowerShell as Administrator
-
-**1.2 Create Directory**  
-```powershell
-mkdir C:\openppp2
+```text
+boost/        # headers + stage/lib/*.a       (Boost 1.86.0)
+jemalloc/     # headers + lib/libjemalloc.a   (jemalloc 5.3.0)
+openssl/      # libssl.a, libcrypto.a, include/ (OpenSSL 3.0.13)
 ```
 
-**1.3 Download and Cleanup**  
-1. Download package to `C:\openppp2`:  
-   [openppp2-windows-amd64.zip](https://github.com/liulilittle/openppp2/releases/download/1.0.0.25226/openppp2-windows-amd64.zip)  
-2. Unzip and delete redundant files:  
-   ```powershell
-   cd C:\openppp2
-   rm cmcc_cidr.txt, crtc_cidr.txt, firewall-rules.txt, ip.txt, starrylink.net.key, starrylink.net.pem, openppp2-windows-amd64.zip
-   ```
+Optional CMake flags:
 
-**1.4 Client Configuration**  
-Edit the `appsettings.json` file:
-```json
-"client": {
-    "guid": "{Generate a new GUID}",        // Unique for each client, do not duplicate
-    "server": "ppp://192.168.0.24:20000/",  // Connection server address and protocol
-    "server-proxy": "",                     // Leave empty (no proxy)
-    "bandwidth": 0                          // 0 for unlimited
-},
-"static": {
-    "keep-alived": [              // Keep-alive settings (default)
-        1,
-        5
-    ],
-    "dns": true,                  // Enable DNS
-    "quic": true,                 // Enable QUIC
-    "icmp": true,                 // Enable ICMP
-    "aggligator": 0,              // Bandwidth aggregator links (0=disabled)
-    "servers": [                  // Clear forwarding server list
+| Flag | Purpose |
+|------|---------|
+| `-DENABLE_SIMD=ON` | AES-NI acceleration (x86/x64 only) |
+| `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` | Required on macOS |
 
-    ]
-}
+io_uring (Linux ≥ 5.10): uncomment `BOOST_ASIO_HAS_IO_URING` in `CMakeLists.txt` or use a `builds/` variant.
+
+### Windows
+
+```bat
+build_windows.bat                  # Release x64 (default)
+build_windows.bat Debug x64
+build_windows.bat Release x86
+build_windows.bat Release all      # Both x86 and x64
 ```
 
-**1.5 Launch Client**  
-   ```powershell
-    # Run as Administrator:
-    .\ppp --mode=client
-   ```
+Uses CMake + **Ninja** (not MSBuild). vcpkg is required with static triplets `x86-windows-static` / `x64-windows-static`.
 
-### 🔗 Protocol List
-| Protocol Prefix | Transport Mode | Use Case |
-|------------------|----------------|----------|
-| `ppp://` | Native TCP direct connection | Low latency, high throughput direct connection |
-| `ws://` | Plain WebSocket transmission | CDN Forwarding |
-| `wss://` | SSL-encrypted WebSocket | CDN Forwarding |
+vcpkg discovery order:
+1. `VCPKG_CMAKE_TOOLCHAIN_FILE` environment variable
+2. `VCPKG_ROOT` environment variable
+3. `%LOCALAPPDATA%\vcpkg\vcpkg.path.txt`
+4. `..\vcpkg` relative path
+5. Visual Studio integrated vcpkg
 
-### Usage Example
-```json
-"server": "ppp://vpn.example.com:20000"   // TCP direct
-"server": "ws://vpn.example.com:80"       // WebSocket
-"server": "wss://vpn.example.com:443"     // Encrypted WebSocket
+Output: `bin\Release\x64\ppp.exe`, `bin\Release\x86\ppp.exe`
+
+### Android
+
+```bash
+# NDK_ROOT must be set (NDK r20b)
+cd android
+./build.sh all    # arm64-v8a, x86_64, armeabi-v7a, x86
+./build.sh arm64  # single ABI
 ```
 
-### ⚠️ Notes
+Output: `android/bin/android/<ABI>/libopenppp2.so`
 
-#### 1. First Run
-- Must complete all configuration modifications before starting the client  
-- After configuration changes, restart the client for changes to take effect  
+Minimum API: 23 (Android 6.0). Android system provides jemalloc natively; no additional jemalloc dependency needed.
 
-#### 2. GUID Generation
-| Method | Command/Method |
-|---------|----------------|
-| PowerShell | `[guid]::NewGuid()` |
-| Online Generator | [guidgen.com](https://www.guidgen.com) |
-| CMD | `powershell -Command "[guid]::NewGuid()"` |
+### Multi-variant builds (Linux amd64)
 
-#### 3. Bandwidth Settings
-- Unit: **Kbp/s**  
-- `0` = No limit  
-- Example: `1024` = 128 KB/s (~1.0 Mbps)  
+`builds/` contains named `CMakeLists.txt` variants:
 
-#### 4. Network Requirements
-| Protocol | Port Needed | Firewall Requirements |
-|----------|--------------|-------------------------|
-| `ppp://` | TCP 20000 | Allow inbound/outbound connections |
-| `ws://` | HTTP 80 | Allow HTTP traffic |
-| `wss://` | HTTPS 443 | Allow SSL traffic |
+| Variant | Description |
+|---------|-------------|
+| `io-uring` | Linux io_uring backend |
+| `simd` | AES-NI acceleration |
+| `tc` | Traffic control integration |
+| Combinations | `io-uring+simd`, `io-uring+tc`, etc. |
 
-### 🔧 Troubleshooting
-1. **Connection failure**  
-   - Check if the server IP/port are correct  
-   - Verify if firewall allows corresponding protocol ports  
+Use `build-openppp2-by-builds.sh` to compile all variants into `bin/<variant>.zip`.
 
-2. **GUID conflicts**  
-   - Each device must use a different GUID  
-   - When copying clients, regenerate GUIDs  
+---
 
-3. **Performance issues**  
-   - Prefer `ppp://` protocol (best performance)  
-   - CDN acceleration `ws://` (not recommended)  
+## Quick Start
 
-## Appendix 1
-
-<a id="udp-static-aggligator"></a>
-
-### UDP Bandwidth Aggregator Settings
-
-The value of `udp.static.aggligator` determines the operating mode:
-- **> 0**: Enable aggregator, must configure `servers` (list of aggregator servers)
-- **≤ 0**: Enable static tunnel, `servers` is an `optional` list of forwarding servers
+### Minimal server configuration (`appsettings.json`)
 
 ```json
-"udp": {
-    "static": {
-        // ...other configurations
-        "aggligator": 2,           // Mode selection (>0 to enable aggregator)
-        "servers": [               // List of server addresses
-            "192.168.1.100:6000", 
-            "10.0.0.2:6000"
-        ]
+{
+    "concurrent": 4,
+    "cdn": [1, 2],
+    "key": {
+        "kf": 154543927,
+        "kx": 128,
+        "kl": 10,
+        "kh": 12,
+        "protocol": "aes-128-cfb",
+        "protocol-key": "TSAO_PPP",
+        "transport": "aes-256-cfb",
+        "transport-key": "TSAO_PPP",
+        "masked": false,
+        "plaintext": false,
+        "delta-encode": false,
+        "shuffle-data": false
+    },
+    "server": {
+        "bind": "0.0.0.0",
+        "port": 20000,
+        "subnet": true,
+        "dns": "8.8.8.8",
+        "ip": "10.0.0.0",
+        "mask": "255.255.0.0"
     }
 }
 ```
 
-### Requirements for Aggligator Server
-1. **Separate deployment**:  
-   - Install [Aggligator](https://github.com/liulilittle/aggligator) server separately
+Run: `./ppp --mode=server --config=./appsettings.json`
 
-2. **Node configuration**:
-    ```bash
-    ./aggligator --mode=server --flash=yes --congestions=1024 --bind=10000,10001 --host=192.168.0.24:7000
-    ```
+### Minimal client configuration
 
-#### Parameter Description Table
-| Parameter | Value | Explanation | Details |
-|------------|--------|--------------|---------|
-| `--mode` | `server` | Operation mode | Run as server, receive and forward data |
-| `--flash` | `yes` | QoS control | Enable advanced QoS policies |
-| `--congestions` | `1024` | Window size | Max congestion window, 1024 UDP packets<br>- Memory usage ≈ 1024 × MTU(1500 bytes) ≈ 1.5MB |
-| `--bind` | `10000,10001` | Listening ports | Local listening ports (comma-separated)<br>- Receive data on these ports<br>- Support load balancing over multiple ports |
-| `--host` | `192.168.0.24:7000` | Forward target | Final forwarding target<br>- Must be UDP service<br>- Format: `IP:port` or `domain:port` |
+```json
+{
+    "concurrent": 2,
+    "key": {
+        "kf": 154543927,
+        "kx": 128,
+        "kl": 10,
+        "kh": 12,
+        "protocol": "aes-128-cfb",
+        "protocol-key": "TSAO_PPP",
+        "transport": "aes-256-cfb",
+        "transport-key": "TSAO_PPP"
+    },
+    "client": {
+        "server": "ppp://your-server-ip:20000/",
+        "bandwidth": 0,
+        "reconnections": {
+            "timeout": 5
+        },
+        "paper-airplane": {
+            "tcp": true
+        }
+    }
+}
+```
+
+Run: `./ppp --mode=client --config=./appsettings.json`
+
+### URI schemes for `client.server`
+
+| URI | Transport |
+|-----|-----------|
+| `ppp://host:port/` | Plain TCP |
+| `ppp://ws/host:port/` | WebSocket |
+| `ppp://wss/host:port/` | TLS WebSocket |
 
 ---
 
-## Appendix 2
+## Configuration Overview
 
-<a id="linux-route-forwarding"></a>
+`AppConfiguration` (`ppp/configurations/AppConfiguration.h`) is the central configuration model. Its `Loaded()` method is a **policy compiler**: it clamps, validates, and derives all secondary values from the raw JSON input.
 
-### 1. Enable Linux Routing Forwarding
-
-1. Edit `/etc/sysctl.conf` and add:
-    ```conf
-    net.ipv4.ip_forward = 1
-    net.ipv4.conf.all.forwarding = 1
-    net.ipv4.conf.default.forwarding = 1
-    net.ipv6.conf.all.forwarding = 1
-    net.ipv6.conf.default.forwarding = 1
-    net.ipv6.conf.lo.forwarding = 1
-    ```
-
-2. Run `sysctl -p` to apply
-
-### 2. Set IPv4 Priority in Linux
-
-1. Edit `/etc/gai.conf`
-2. Add:
-    ```conf
-    precedence ::ffff:0:0/96 100
-    ```
-    > **Explanation**:  
-    > This makes the system prioritize IPv4 addresses for network connections
-
-### 3. Linux Dual-Network Card Routing Forwarding
-
-#### Prerequisite
-Ensure Linux routing forwarding is enabled as above.
-
-#### Example Scenario
-Implement communication between `192.168.1.0/24` and `192.168.0.0/24` subnets:
-
-<img src="https://i-blog.csdnimg.cn/direct/00a37d08d3804713994018f19e62fd74.png" width="500" height="400"></img>
-
-#### Routing Commands
-```bash
-# Configure bidirectional routing forwarding
-iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j MASQUERADE
+```mermaid
+flowchart TD
+    A[Raw JSON] --> B[AppConfiguration::Load]
+    B --> C[AppConfiguration::Loaded]
+    C --> D{Field validation}
+    D -->|out-of-range| E[Clamp to safe default]
+    D -->|invalid combination| F[Disable feature]
+    D -->|ok| G[Derive secondary values]
+    E --> H[Runtime-ready AppConfiguration]
+    F --> H
+    G --> H
 ```
 
-#### Key Points
-##### ✅ Correct Configuration
-- Configure separate rules for each subnet:
-```bash
-iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j MASQUERADE
+Key configuration groups:
+
+| Group | Key fields | Notes |
+|-------|------------|-------|
+| `key` | `kf`, `kx`, `kl`, `kh`, `protocol`, `transport`, `masked`, `plaintext`, `delta-encode`, `shuffle-data` | Cipher and obfuscation parameters |
+| `server` | `bind`, `port`, `subnet`, `dns`, `ip`, `mask` | Server listen and IP pool |
+| `client` | `server`, `bandwidth`, `reconnections`, `paper-airplane` | Client connection target and QoS |
+| `concurrent` | (integer) | Number of io_context threads |
+| `cdn` | (array) | Obfuscation CDN port modes |
+
+Full reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+
+---
+
+## Protocol and Transport Overview
+
+### ITransmission: the handshake and framing layer
+
+`ITransmission` (`ppp/transmissions/ITransmission.h`) owns:
+
+- **Handshake**: NOP exchange → session ID → ivv → nmux → cipher rebuild
+- **Framing**: base94 frame header (first packet: 4+3 bytes, later: 4 bytes)
+- **Masking**: byte-level mask applied to payload header bytes
+- **Delta encoding**: incremental delta compression on payload data
+- **Two cipher layers**: protocol cipher (header metadata) and transport cipher (payload), both derived from `ivv + nmux + base_key`
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: NOP packets (count = f(key.kl, key.kh))
+    S->>C: NOP packets
+    S->>C: Session ID (sid)
+    C->>S: ivv (initialization vector variant)
+    S->>C: nmux (mux flag in low bit)
+    Note over C,S: Both sides rebuild cipher from ivv+nmux+base_key
+    Note over C,S: handshaked_ = true
+    C->>S: Tunnel traffic (opcode-framed)
 ```
 
-##### ❌ Incorrect Configuration
-```bash
-# Merging subnets (/23) causes routing confusion
-iptables -t nat -A POSTROUTING -s 192.168.0.0/23 -j MASQUERADE
-```
+Carrier implementations:
 
-**Reason**:  
-- Merging subnets (e.g., `/23`) prevents the kernel from correctly recognizing physical NIC egress  
-- Causes source address translation errors, connection failures  
-- Can disrupt entire network
+| Class | Transport | Source |
+|-------|-----------|--------|
+| `ITcpipTransmission` | Plain TCP | `ppp/transmissions/ITcpipTransmission.h` |
+| `IWebsocketTransmission` | WebSocket / TLS WS | `ppp/transmissions/IWebsocketTransmission.h` |
 
-#### Client Gateway Configuration
-Each subnet device must set its gateway accordingly:
-| Subnet | Gateway Address |
-|---------|-----------------|
-| 192.168.0.0/24 | 192.168.0.8 |
-| 192.168.1.0/24 | 192.168.1.8 |
+### VirtualEthernetLinklayer: the opcode protocol
 
-#### Verification
-After configuration:
-- Devices in `192.168.0.0/24` can access `192.168.1.0/24` and vice versa
-- Latency is low, data transfer stable
+`VirtualEthernetLinklayer` (`ppp/app/protocol/VirtualEthernetLinklayer.h`) defines the tunnel protocol. Every tunnel packet begins with a 1-byte opcode.
 
-## 🌐 4. Linux LAN Bypass Routing S-NAT Configuration
-
-### Network Topology
 ```mermaid
 graph LR
-    A[Main Router] -->|ASN| C[Internet]
-    B[Bypass Router] -->|Forward Traffic| A
-    D[Client] -->|Gateway Pointing To| B
+    subgraph "Outbound (Do*)"
+        D1[DoLan] --> OUT[ITransmission::Write]
+        D2[DoFrpEntry] --> OUT
+        D3[DoEcho] --> OUT
+        D4[DoKeepAlived] --> OUT
+        D5[DoMux] --> OUT
+    end
+    subgraph "Inbound (On*)"
+        IN[PacketInput] --> O1[OnLan]
+        IN --> O2[OnFrpEntry]
+        IN --> O3[OnEcho]
+        IN --> O4[OnKeepAlived]
+        IN --> O5[OnMux]
+    end
 ```
 
-### Device Configuration
-| Device Type | IP Address | Subnet Mask | Gateway |
-|--------------|--------------|--------------|---------|
-| **Main Router** | 192.168.0.1 | 255.255.255.0 | - |
-| **Bypass Router** | 192.168.0.20 | 255.255.255.0 | 192.168.0.1 |
+Key opcodes:
 
-### ⚙️ Configuration Steps
+| Opcode | Value | Direction | Purpose |
+|--------|-------|-----------|---------|
+| `INFO` | `0x7E` | Both | Session info exchange |
+| `KEEPALIVED` | `0x7F` | Both | Keep-alive heartbeat |
+| `FRP_ENTRY` | `0x20` | C→S | New TCP connection request |
+| `FRP_CONNECT` | `0x21` | S→C | Connection accepted |
+| `FRP_CONNECT_OK` | `0x22` | C→S | Client acknowledged |
+| `FRP_PUSH` | `0x23` | Both | TCP data push |
+| `FRP_DISCONNECT` | `0x24` | Both | TCP connection close |
+| `FRP_SENDTO` | `0x25` | Both | UDP datagram |
+| `LAN` | `0x28` | Both | Raw Ethernet/IP frame |
+| `PacketAction_NAT` | `0x29` | Both | NAT path packet |
+| `DoEcho` | `0x2F` | C→S | ICMP echo request proxy |
+| `PacketAction_STATIC` | `0x31` | Both | Static path packet |
+| `PacketAction_STATICACK` | `0x32` | Both | Static path acknowledgment |
+| `PacketAction_MUX` | `0x35` | Both | MUX channel data |
+| `PacketAction_MUXON` | `0x36` | Both | MUX channel open |
 
-1. **🌐 Enable IPv4 Forwarding**  
-   Temporary:
-   ```bash
-   echo 1 > /proc/sys/net/ipv4/ip_forward
-   ```
-   Permanent:
-   ```bash
-   sudo sysctl -w net.ipv4.ip_forward=1
-   ```
-   Verify:
-   ```bash
-   sudo sysctl -p
-   ```
+Full opcode reference: [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
 
-2. **🔧 Configure iptables Rules**  
-   ```bash
-   # Allow outbound traffic from subnet
-   sudo iptables -A FORWARD -s 192.168.0.0/24 -d 0.0.0.0/0 -j ACCEPT
-   
-   # Allow established return packets
-   sudo iptables -A FORWARD -s 0.0.0.0/0 -d 192.168.0.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT
-   
-   # Allow ICMP redirect (optional)
-   sudo iptables -A INPUT -p icmp --icmp-type 30 -j ACCEPT
-   sudo iptables -A OUTPUT -p icmp --icmp-type 30 -j ACCEPT
-   
-   # Configure SNAT source address translation
-   sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j SNAT --to 192.168.0.20
-   ```
+---
 
-3. **🔍 Client Testing**  
-   Change client gateway to `192.168.0.20`:
-   ```bash
-   ping 8.8.8.8
-   traceroute google.com
-   ```
+## Client Runtime Summary
 
-### ⚠️ Common Issues (FAQ)
-> ❗ **Configured but cannot access the internet?**  
-> ```bash
-> # Check if Docker service interferes
-> sudo systemctl status docker
->
-> # If present, temporarily stop for testing
-> sudo systemctl stop docker
->
-> # After confirming, consider uninstalling or reconfiguring Docker network
-> sudo apt purge docker.io
-> ```
+The client runtime (`ppp/app/client/`) connects to the server and integrates with the host OS networking.
 
-### Key Points Explanation
-| Configuration Item | Function Explanation | Recommended Status |
-|----------------------|----------------------|--------------------|
-| IP forwarding (net.ipv4.ip_forward) | Enable kernel packet forwarding | `=1` |
-| FORWARD rules | Control traffic passing through the bypass router | ACCEPT |
-| SNAT translation | Replace client source IP with bypass router IP | Necessary |
-| Docker Service | May override iptables rules | Disable |
+```mermaid
+graph TD
+    A[VEthernetNetworkSwitcher] --> B[ITransmission]
+    A --> C[Virtual TAP / NIC]
+    A --> D[Route Table\nmodification]
+    A --> E[DNS redirect]
+    C --> F[VEthernet / VNetstack\nlwIP]
+    F --> G[VEthernetExchanger]
+    G --> B
+    B -->|TCP/WS/WSS| H[Server]
+```
 
-> 💡 **Pro Tip**: Make permanent by editing `/etc/sysctl.conf` and saving iptables with `iptables-persistent`.
+Responsibilities:
 
-### 5. Windows Dual Network Card Environment Configuration IPv4 Priority
+| Component | Responsibility |
+|-----------|---------------|
+| `VEthernetNetworkSwitcher` | Top-level client controller; manages reconnection, restart modes |
+| `VEthernetExchanger` | Per-session tunnel action handler: FRP, UDP, ICMP, MUX, static |
+| Virtual TAP | Provides a virtual Ethernet adapter to the OS |
+| Route management | Redirects traffic through the tunnel |
+| DNS redirect | Points OS DNS to tunnel endpoint |
 
-1. Open Registry Editor (`regedit`)
-2. Navigate to:
-    ```text
-    HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
-    ```
+**Restart modes:**
 
-3. Find or create `DisabledComponents` DWORD (32-bit)
-4. Set value data to `0x20` (hexadecimal)
+| Mode | What is rebuilt | What is preserved |
+|------|----------------|-------------------|
+| `--auto-restart` | Full runtime: TAP + Switcher | Nothing |
+| `--link-restart` | ITransmission only | Switcher, TAP, routes |
 
-    <img src="https://i-blog.csdnimg.cn/blog_migrate/704f0286d689047670b59d2dc74ab2ee.png" width="350" height="200"></img>
+Full reference: [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
 
-    > **Value Explanation**:
-    > | Hex Value | Functionality |
-    > |------------|--------------|
-    > | 0x00 | Enable IPv6 |
-    > | 0x01 | Disable IPv4 |
-    > | **0x20** | **Prioritize IPv4 (recommended)** |
-    > | 0xFFFFFFFF | Fully disable IPv6 |
+---
 
-5. Click OK and restart
-6. Verify:
-   - Visit [test-ipv6.com](https://test-ipv6.com)
-   - Check IPv6 connectivity status
+## Server Runtime Summary
 
-## 🖥️ Appendix 3: Windows Soft Router Forwarding
-### 📡 Network Topology
+The server runtime (`ppp/app/server/`) accepts connections and coordinates per-session state.
+
+```mermaid
+graph TD
+    A[Listen Socket] --> B[VirtualEthernetSwitcher\nAcceptor]
+    B --> C[VirtualEthernetExchanger\nPer session handler]
+    C --> D[ITransmission\nPer session transport]
+    C --> E[UDP DatagramPort pool]
+    C --> F[TCP NAT table\nconn_id keyed]
+    C --> G[IPv6 lease manager]
+    B --> H[VirtualEthernetManagedServer\nGo backend bridge]
+    H --> I[Go management service\nWebSocket]
+```
+
+Session lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Accepting: listen()
+    Accepting --> Handshaking: accept()
+    Handshaking --> Active: handshaked_ = true
+    Active --> Disposing: client disconnect / timeout
+    Active --> Disposing: keepalive timeout
+    Disposing --> [*]: Dispose() complete
+```
+
+Key facts:
+- TCP `conn_id`: 32-bit, monotonically increasing per session, client-assigned. Server NAT table key = `(session_id, conn_id)`. Released on `OnDisconnect`.
+- QoS token bucket: per-session, refill rate from `bandwidth` field (bytes/sec). Coroutine suspends on exhaustion.
+- `OnTick()` tasks: stats refresh, tunnel liveness check, session aging, IPv6 lease aging, TUI dirty-flag publish.
+
+Full reference: [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
+
+---
+
+## Platform Integration Summary
+
+The virtual NIC layer is abstracted by `ITap` (`ppp/tap/ITap.h`). Platform implementations differ significantly.
+
+```mermaid
+graph TD
+    A[ITap interface\nppp/tap/ITap.h] --> B[TapLinux\nlinux/ppp/tap]
+    A --> C[TapWindows\nwindows/ppp/tap]
+    A --> D[TapDarwin\ndarwin/ppp/tap]
+    A --> E[Android TapLinux variant\nandroid/libopenppp2.cpp]
+    B --> B1[/dev/net/tun\nIFF_TUN or IFF_MULTI_QUEUE SSMT]
+    C --> C1[Wintun ring-buffer\npreferred]
+    C --> C2[TAP-Windows overlapped I/O\nfallback]
+    D --> D1[/dev/utun*\n4-byte AF prefix strip/prepend]
+    E --> E1[VpnService fd\nno /dev/net/tun open]
+```
+
+Platform-specific behaviors:
+
+| Platform | Virtual NIC | Route management | Notes |
+|----------|------------|-----------------|-------|
+| Linux | `/dev/net/tun`, `IFF_TUN` | `ip route` / netlink | SSMT: one fd per io_context via `TapLinux::Ssmt()` |
+| Windows | Wintun (preferred) or TAP-Windows | WinAPI routing table | `TapWindows::InstallDriver()` requires admin |
+| macOS | `/dev/utun*` | BSD routing socket | 4-byte AF prefix on all frames |
+| Android | `VpnService` fd | VpnService routing | JNI: `__LIBOPENPPP2__` macro; no direct tun open |
+
+Full reference: [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
+
+---
+
+## Concurrency and Threading Model
+
+OPENPPP2 uses Boost.Asio `io_context` as its event loop, combined with C++ coroutines via `YieldContext`.
+
+```mermaid
+graph TD
+    subgraph "Thread Pool (Executors)"
+        T1[io_context thread 0]
+        T2[io_context thread 1]
+        TN[io_context thread N]
+        TR[TUI render thread]
+        TI[TUI input thread]
+    end
+    subgraph "Per io_context"
+        T1 --> B1[64KB shared buffer\nExecutors::Buffers]
+        T1 --> S1[asio::strand\nper session]
+    end
+    subgraph "Coroutines"
+        S1 --> Y[YieldContext\nasio::spawn]
+    end
+```
+
+**Critical rules:**
+- Never block the IO thread.
+- Cross-thread shared state: `std::shared_ptr` / `std::weak_ptr` for object lifetime.
+- Lifecycle flags: `std::atomic<bool>` with `compare_exchange_strong(memory_order_acq_rel)`.
+- `Executors::Awaitable<T>`: bridge for OS-thread callers waiting on IO-thread results. `Await()` must never be called from an IO thread.
+- `nullof<YieldContext>()` returns a sentinel address for non-coroutine callers. Used deliberately in `DoKeepAlived()` and DNS paths.
+
+`YieldContext` state transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> RESUMED: spawn
+    RESUMED --> SUSPENDING: yield requested
+    SUSPENDING --> SUSPENDED: CAS success
+    SUSPENDED --> RESUMING: completion handler
+    RESUMING --> RESUMED: CAS success
+```
+
+Full reference: [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md)
+
+---
+
+## Error Handling Summary
+
+Errors are represented as typed error codes defined in `ppp/diagnostics/ErrorCodes.def` via X-macro. There are **542 error codes**.
+
+```mermaid
+flowchart LR
+    A[Failure detected] --> B[SetLastErrorCode\nError::XYZ]
+    B --> C[Return sentinel\nnullptr / false / -1]
+    C --> D[Caller propagates\nsentinel upward]
+    D --> E[Top-level handler\ndispatches to ErrorHandler]
+```
+
+Error code categories (partial):
+
+| Category | Examples |
+|----------|---------|
+| App startup | `AppPrivilegeRequired`, `AppAlreadyRunning`, `TunnelOpenFailed` |
+| Protocol | `ProtocolKeepAliveTimeout`, `ProtocolCipherMismatch` |
+| Session | `SessionDisposed`, `ResourceExhaustedSessionSlots` |
+| Auth | `AuthCredentialInvalid` |
+| IPv6 | `IPv6LeaseConflict`, `IPv6ServerPrepareFailed` |
+| Generic | `GenericCanceled`, `GenericTimeout`, `SocketDisconnected` |
+| Internal | `InternalLogicStateCorrupted` |
+
+**Normal-operation benign codes** (high frequency, not problems):
+- `GenericCanceled`, `GenericTimeout`, `SocketDisconnected`, `SessionDisposed`, `FirewallSegmentBlocked`
+
+**Problem-indicating codes** (require operator attention):
+- `AppPrivilegeRequired`, `TunnelOpenFailed`, `ProtocolCipherMismatch`, `AuthCredentialInvalid`, `InternalLogicStateCorrupted`
+
+Atomic error snapshot: high 32 bits = truncated millisecond timestamp; low 32 bits = error code value.
+
+Full reference: [`docs/ERROR_CODES.md`](docs/ERROR_CODES.md), [`docs/ERROR_HANDLING_API.md`](docs/ERROR_HANDLING_API.md)
+
+---
+
+## Management Backend
+
+The Go backend (`go/`) is a completely separate optional process. It provides managed authentication and webhook capability that the C++ server calls over WebSocket.
+
+```mermaid
+sequenceDiagram
+    participant C as C++ Server
+    participant G as Go Management Service
+    participant DB as Auth/Policy Database
+
+    C->>G: WebSocket connect
+    G-->>C: Connected
+    C->>G: Auth request (session_id, credentials)
+    G->>DB: Credential lookup
+    DB-->>G: Policy record
+    G-->>C: Auth result + bandwidth policy
+    C->>C: Apply policy to session
+```
+
+Build and run independently:
+
+```bash
+cd go && go build -o ppp-go .
+./ppp-go --config=./management.json
+```
+
+The C++ server enables managed mode by setting `server.managed` to the Go service address in `appsettings.json`. Without the Go backend, the server runs in standalone mode with no external auth.
+
+Full reference: [`docs/MANAGEMENT_BACKEND.md`](docs/MANAGEMENT_BACKEND.md)
+
+---
+
+## Security Summary
+
+Security operates at two independent layers:
+
+| Layer | What it protects | Cipher source |
+|-------|-----------------|---------------|
+| Protocol cipher | Header metadata and session framing | `ivv + nmux + base_key` |
+| Transport cipher | Payload data | `ivv + nmux + base_key` (different derivation) |
+
+Additional obfuscation features (configured via `key.*`):
+
+| Feature | Config field | Description |
+|---------|-------------|-------------|
+| Masking | `masked: true` | Byte-level mask on header bytes |
+| Delta encoding | `delta-encode: true` | Incremental delta on payload |
+| Data shuffling | `shuffle-data: true` | Reorders bytes in payload |
+| Plaintext mode | `plaintext: true` | Disables all encryption (test only) |
+
+Supported cipher algorithms: AES-128-CFB, AES-256-CFB, and variants. The `kf`, `kx`, `kl`, `kh` fields in `key` control the NOP handshake timing and framing shape, making traffic fingerprinting significantly harder.
+
+Full reference: [`docs/SECURITY.md`](docs/SECURITY.md)
+
+---
+
+## Code Facts That Shape The Docs
+
+| Fact | Consequence |
+|------|-------------|
+| `main.cpp` owns startup, role selection, lifecycle, and host setup | The documentation separates bootstrap from runtime behavior |
+| `AppConfiguration` normalizes many fields after load | The configuration docs must explain defaults and invalid-state cleanup |
+| `ITransmission` performs handshake, framing, masking, delta encoding, and cipher layering | The transport docs must be implementation-driven, not abstract |
+| `VirtualEthernetLinklayer` defines opcode-based tunnel actions | The protocol docs must explain actual opcodes and message flow |
+| Client and server runtimes are different roles | The architecture docs must not treat them as symmetric peers |
+| Platform code changes route, DNS, adapter, and firewall behavior | Platform docs must be explicit about side effects |
+| The Go backend is optional | Managed deployment must be documented separately |
+| `nullof<YieldContext>()` is intentional sentinel design, not UB | Concurrency docs must explain coroutine vs non-coroutine call paths |
+| `NULLPTR` macro is mandatory (never `nullptr`) | All code examples use `NULLPTR` |
+| UDP 64KB buffer is per-thread shared (not per-socket) | Memory docs must not mischaracterize this as UB |
+| `stdafx.h` defines all platform guards and type aliases | New code must use `ppp::` types, `_WIN32`/`_LINUX` macros |
+| No automated test suite | CI verifies compilation only; behavioral regressions are prose-only in docs |
+
+---
+
+## Boundaries
+
+| Not true | True |
+|---------|------|
+| Consumer one-click VPN | Developer-oriented network runtime |
+| Symmetric client/server peers | Role-specific runtimes with different responsibilities |
+| Pure transport library | End-to-end system with host integration |
+| Go is required | Go backend is optional |
+| Routing is incidental | Routing and DNS are first-class runtime behavior |
+| Single-cipher transport | Two independent cipher layers: protocol and transport |
+| Simple session model | Sessions have full lifecycle: handshake, active, dispose, restart |
+| Platform code is boilerplate | Platform code has significant behavioral differences per OS |
+
+---
+
+## Quick Reference
+
+| Command | Purpose |
+|---------|---------|
+| `ppp --help` | Show the real CLI help |
+| `ppp --mode=client` | Start in client mode |
+| `ppp --mode=server` | Start in server mode |
+| `ppp --config=./config.json` | Load an explicit config file |
+| `ppp --pull-iplist [file/country]` | Download an IP list and exit |
+| `ppp --mode=client --auto-restart` | Full restart on disconnect |
+| `ppp --mode=client --link-restart` | Reconnect transport only on disconnect |
+
+### Key source entry points
+
+| What you want to understand | Start here |
+|-----------------------------|-----------|
+| Process startup | `main.cpp` |
+| Configuration loading | `ppp/configurations/AppConfiguration.cpp` → `Loaded()` |
+| Handshake mechanics | `ppp/transmissions/ITransmission.cpp` |
+| Tunnel opcodes | `ppp/app/protocol/VirtualEthernetLinklayer.h` |
+| Client session logic | `ppp/app/client/VEthernetExchanger.cpp` |
+| Server session logic | `ppp/app/server/VirtualEthernetExchanger.cpp` |
+| Virtual NIC interface | `ppp/tap/ITap.h` |
+| Error code definitions | `ppp/diagnostics/ErrorCodes.def` |
+| Thread pool and io_context | `ppp/threading/Executors.h` |
+| lwIP integration | `ppp/ethernet/VNetstack.cpp` |
+
+---
+
+## Notes
+
+- Example configuration values are examples, not production defaults.
+- Linux is the most complete server-side IPv6 data-plane target.
+- The documentation uses long-form bilingual writing because the system is implementation-heavy.
+- `main.cpp` is the fastest entry point for understanding how the pieces connect.
+- C++17 strictly — no C++20 features anywhere in the codebase.
+- All code uses `ppp::` type aliases (`ppp::string`, `ppp::vector<T>`, `ppp::Byte`, etc.) defined in `ppp/stdafx.h`.
+- Memory allocation routes through `ppp::Malloc` / `ppp::Mfree`, which use jemalloc when `JEMALLOC` is defined.
+- Platform guards use repo macros only: `_WIN32`, `_LINUX`, `_MACOS`, `_ANDROID`. Never use `#ifdef __linux__` or `#ifdef _MSC_VER` in `ppp/` shared files.
+- All public APIs are documented with Doxygen (`@brief`, `@param`, `@return`, `@note`, `@warning`).
+- All functions aim to be `noexcept`. Exceptions are caught and converted to error codes at the boundary.
+
+---
+
+## IPv6 Subsystem Overview
+
+OPENPPP2 includes a full IPv6 lease management and data-plane forwarding system on the server side. This is one of the more complex subsystems.
+
+```mermaid
+graph TD
+    A[Client connects\nrequests IPv6] --> B[VirtualEthernetSwitcher\nLease allocator]
+    B --> C{Pool available?}
+    C -->|yes| D[Assign /128 lease\nfrom configured prefix]
+    C -->|no| E[IPv6LeaseConflict error]
+    D --> F[NDP Proxy\nannounce to upstream]
+    F --> G[IPv6 Transit Plane\nroute packets]
+    G --> H[Client virtual NIC\nreceives IPv6]
+    B --> I[Lease aging\nOnTick]
+    I -->|expired| J[Release lease\nrevoke NDP]
+```
+
+### IPv6 lease lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Requested: client DoIPv6 opcode
+    Requested --> Allocated: pool assigns /128
+    Allocated --> Active: NDP proxy announced
+    Active --> Renewing: renewal request
+    Renewing --> Active: renewed
+    Active --> Expired: OnTick aging check
+    Expired --> Released: NDP revoked, pool freed
+    Released --> [*]
+```
+
+Key facts:
+- Server maintains a lease table keyed by `(session_id, ipv6_address)`.
+- NDP proxy announces leased addresses to the upstream router so return traffic is routed correctly.
+- IPv6 lease aging runs in `OnTick()` — not in a separate thread.
+- Linux is the primary platform for IPv6 data-plane. Windows and Android have limited IPv6 support in this context.
+
+Full reference: [`docs/IPV6_LEASE_MANAGEMENT.md`](docs/IPV6_LEASE_MANAGEMENT.md), [`docs/IPV6_TRANSIT_PLANE.md`](docs/IPV6_TRANSIT_PLANE.md), [`docs/IPV6_NDP_PROXY.md`](docs/IPV6_NDP_PROXY.md), [`docs/IPV6_CLIENT_ASSIGNMENT.md`](docs/IPV6_CLIENT_ASSIGNMENT.md)
+
+---
+
+## TUI Console Interface
+
+OPENPPP2 includes a built-in terminal UI (`ppp/app/ConsoleUI.h`). It runs on two dedicated threads (render and input), both outside the Boost.Asio io_context pool.
+
 ```mermaid
 graph LR
-    A[Main Router] -->|ASN| C[Internet]
-    B[VGW] -->|Forward Traffic| A
-    D[Client] -->|Gateway pointing to| B
+    subgraph "ConsoleUI"
+        RI[render thread] --> RD{dirty flag?}
+        RD -->|yes| DRAW[redraw screen]
+        RD -->|no| WAIT[wait up to 100ms\nrender_cv_]
+        II[input thread] --> READ[read keystroke]
+        READ --> CMD[dispatch command]
+        CMD --> DF[set dirty flag\nnotify render_cv_]
+    end
+    subgraph "io_context threads"
+        RT[Runtime\nOnTick] --> DF2[publish dirty flag]
+        DF2 --> DF
+    end
 ```
 
-### 🌐 Required Tool
-[![VGW](https://img.shields.io/badge/PPP_PRIVATE_NETWORK™-VGW_Router-blue?logo=windows)](https://github.com/liulilittle/vgw-release)  
-Dedicated Software Router Solution - [VGW GitHub Release](https://github.com/liulilittle/vgw-release)
+TUI layout:
+- Fixed 10-row header (connection status, session stats, bandwidth)
+- Scrollable 3-section body: info / command output / input history
+- Fixed 5-row footer (input prompt)
+- Alternate screen buffer (`\x1b[?1049h` on enter, `\x1b[?1049l` on exit)
+- Real cursor hidden for full TUI lifetime
+- Minimum terminal size: 40 columns × 20 rows
+
+Full reference: [`docs/TUI_DESIGN.md`](docs/TUI_DESIGN.md)
 
 ---
 
-### 📥 Installation Steps
+## Static Routes and NAT Paths
 
-1. **Run PowerShell as Administrator**
-   ```powershell
-   cd C:/
-   git clone https://github.com/liulilittle/VGW-release.git vgw
-   ```
+Beyond tunneling Ethernet frames, OPENPPP2 supports two special forwarding paths: **NAT** and **Static**.
 
-2. **Install Network Driver Dependencies (Choose one)**  
-    ```powershell
-    cd C:/vgw/windows/
-    ```
-
-    | Option | Executable | Recommendation | Notes |
-    |--------|--------------|----------------|--------|
-    | 1️⃣ Script Install | `.\Install_WinPcap.bat` | ⭐⭐ | Automatic dependency installation |
-    | 2️⃣ **WinPcap** | `.\WinPcap_4_1_3.exe` | ⭐⭐⭐ | Traditional driver |
-    | 3️⃣ **NPCAP** | `.\npcap-1.60.exe` | ⭐⭐⭐⭐ | **Recommended**, supports latest Windows features |
-
-    > 💡 It is recommended to install **NPCAP** for better performance and compatibility
-
----
-
-### ⚙️ Configure and Run VGW
-```powershell
-# Execute run.bat or with custom parameters:
-.\vgw.exe --ip=192.168.0.40 --ngw=192.168.0.1 --mask=255.255.255.0
+```mermaid
+flowchart TD
+    A[IP packet from client TAP] --> B{Routing decision}
+    B -->|default route| C[FRP path\nTCP/UDP per-connection]
+    B -->|static route match| D[Static path\nmask_id non-zero\nfsid 128-bit]
+    B -->|NAT rule match| E[NAT path\nserver-side NAT table]
+    C --> F[Server forwards\nto real destination]
+    D --> G[Server static\nforwarding table]
+    E --> H[Server NAT\ntranslation + forward]
 ```
 
-#### Parameter Explanation:
-| Parameter | Function | Example | Required | Notes |
-|------------|----------|---------|---------|--------|
-| `--ip` | Set virtual gateway IP | 192.168.0.40 | ✅ | Must be in LAN subnet and unused |
-| `--ngw` | Main router gateway | 192.168.0.1 | ✅ | Points to main router IP |
-| `--mask` | Subnet mask | 255.255.255.0 | ✅ | Same as main router |
-| `--mac` | Custom virtual MAC | 30:fc:68:88:b4:a9 | ❌ | Defaults to internal MAC |
+Static packet constraints:
+- `mask_id` must be non-zero (identifies the static route entry).
+- `session_id` sign encodes address family: positive = UDP, negative = IP.
+- `fsid` is a 128-bit identifier (`Int128`) for the flow.
+- Checksum covers header + payload after all transforms.
+- Pack pipeline has 14 steps; unpack exactly reverses them.
+
+Full reference: [`docs/PACKET_FORMATS.md`](docs/PACKET_FORMATS.md), [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
 
 ---
 
-### ⚠️ Key Notes
-> 🔌 **Network Type Restriction**  
-> Supports only **wired networks**, WiFi cannot use this mode  
->
-> 🖧 **IP Configuration Principle**  
-> `--ip` must be in LAN segment and unused  
->
-> 🔄 **Admin Rights**  
-> All operations require **Administrator** privileges in PowerShell
+## MUX Channel Multiplexing
+
+The MUX subsystem allows multiple logical sub-connections to share a single `ITransmission` carrier.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: PacketAction_MUXON (VLAN tag = channel_id)
+    S-->>C: MUX channel open ACK
+    C->>S: PacketAction_MUX (data, VLAN tag = channel_id)
+    S->>S: Demux by VLAN tag
+    S->>S: Forward to sub-connection
+    C->>S: PacketAction_MUX (another channel)
+    Note over C,S: Multiple channels share one ITransmission
+```
+
+Key facts:
+- VLAN tag in the MUX packet header identifies the logical channel.
+- `nmux` low bit in the handshake enables MUX mode.
+- All sub-connections share the same underlying TCP/WS connection.
+- Reduces connection setup overhead when many concurrent streams are needed.
+
+Full reference: [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
 
 ---
 
-## ℹ️ About Us
+## Packet Lifecycle (Summary)
 
-### 📬 Contact Us  
-[![Telegram](https://img.shields.io/badge/Telegram-Contact_PPP_PRIVATE_NETWORK-blue?logo=telegram)](https://t.me/supersocksr_group)  
-Quick response to your inquiries and service requests
+A full end-to-end packet journey from client application to remote host and back:
+
+```mermaid
+sequenceDiagram
+    participant APP as Client App
+    participant TAP as Virtual TAP
+    participant LWIP as lwIP VNetstack
+    participant EX as VEthernetExchanger
+    participant TX as ITransmission
+    participant SRV as Server
+    participant DST as Destination
+
+    APP->>TAP: write IP packet
+    TAP->>LWIP: OnInput frame
+    LWIP->>EX: TCP/UDP/ICMP hook
+    EX->>TX: DoFrpEntry / DoFrpPush / DoFrpSendTo
+    TX->>TX: frame + mask + delta + cipher
+    TX->>SRV: encrypted bytes
+    SRV->>SRV: decipher + decode
+    SRV->>DST: forward to real host
+    DST-->>SRV: reply
+    SRV-->>TX: re-encrypt + send
+    TX-->>EX: decipher + OnFrpPush
+    EX-->>LWIP: inject reply
+    LWIP-->>TAP: Output frame
+    TAP-->>APP: IP reply packet
+```
+
+Full reference: [`docs/PACKET_LIFECYCLE.md`](docs/PACKET_LIFECYCLE.md)
 
 ---
 
-### ©️ Copyright Statement
+## EDSM State Machines
 
-**Dual Entity Ownership**:
+OPENPPP2 uses an event-driven state machine (EDSM) architecture at every level: per-session, per-connection, per-transmission, and at the application lifecycle level.
 
-| Country | Entity Type | Company Name | Validity |
-|---------|--------------|----------------|----------|
-| **🇺🇸 USA** | LLC | `SupersocksR LLC` | 2017 ~ 2055 |
-| **🇸🇨 Seychelles** | Organization (ORG) | `SupersocksR ORG` | 2017 ~ 2055 |
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Connecting: Connect()
+    Connecting --> Handshaking: socket connected
+    Handshaking --> Running: handshaked_ = true
+    Running --> Reconnecting: transport error
+    Running --> Stopping: Dispose() called
+    Reconnecting --> Connecting: restart delay elapsed
+    Stopping --> [*]: cleanup complete
+```
 
-> All rights reserved | 保留所有权利
+Each state transition is driven by an Asio completion handler or a coroutine resume, not by a polling loop. The state machine never advances from a blocked OS thread.
 
-## 📦 About the Repository
+State machine properties:
+- All transitions happen on an `asio::strand` to avoid concurrent state mutations.
+- `compare_exchange_strong` guards lifecycle flag transitions.
+- `Dispose()` is idempotent: calling it multiple times is safe.
+- Objects are kept alive by `std::shared_ptr` reference counting until all in-flight coroutines complete.
 
-### 📊 Basic Statistics
+Full reference: [`docs/EDSM_STATE_MACHINES.md`](docs/EDSM_STATE_MACHINES.md)
 
-| Metric      | Badge                                                                                                    |
-|-------------|----------------------------------------------------------------------------------------------------------|
-| **Stars**   | [![Stars](https://img.shields.io/github/stars/liulilittle/openppp2?logo=github&style=flat-square)](https://github.com/liulilittle/openppp2)  |
-| **Forks**   | [![Forks](https://img.shields.io/github/forks/liulilittle/openppp2?logo=github&style=flat-square)](https://github.com/liulilittle/openppp2)  |
-| **Commits** | [![Commits](https://img.shields.io/github/commit-activity/t/liulilittle/openppp2?style=flat-square)](https://github.com/liulilittle/openppp2)|
+---
 
-#### 🔍 Repository Overview
-[![Repo Stats](https://github-readme-stats.vercel.app/api/pin?username=liulilittle&repo=openppp2&show_owner=true&show_icons=true&theme=vue)](https://github.com/liulilittle/openppp2)
+## Transmission Pack / Session ID
 
-### 📈 Growth Chart
+Session identity is packed into the framed transmission stream. The `TRANSMISSION_PACK_SESSIONID` document covers the exact byte layout.
 
-<div align="center">
+```mermaid
+graph LR
+    subgraph "First packet (extended header)"
+        H1[4 bytes: length+flags] --> H2[3 bytes: session ID extension]
+        H2 --> P[payload]
+    end
+    subgraph "Subsequent packets (simple header)"
+        S1[4 bytes: length+flags] --> SP[payload]
+    end
+    H1 --> FT[frame_tn_ / frame_rn_ counter\ncontrols header mode]
+```
 
-#### ⭐ Star & Fork History
-[![Star Fork History](https://starchart.cc/liulilittle/openppp2.svg)](https://starchart.cc/liulilittle/openppp2)
+The transition from extended to simple header is controlled by `frame_tn_` (transmit) and `frame_rn_` (receive) counters. The first packet in each direction uses the extended header; all subsequent packets use the simple 4-byte header.
 
-#### 📝 Contribution Activity Heatmap
-[![Contribution Graph](https://github-readme-activity-graph.vercel.app/graph?username=liulilittle&repo=openppp2&theme=github&area=true&hide_border=true)](https://github.com/liulilittle/openppp2)
+Full reference: [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/TRANSMISSION_PACK_SESSIONID.md)
 
-</div>
+---
 
-<div align="center" style="margin-top: 30px;"> <img src="https://img.icons8.com/color/96/000000/security-checked.png" width="60"> <p><em>Enterprise-level Secure Network Solution</em></p> </div>
+## Deployment Topologies
+
+### Standalone server with direct clients
+
+```mermaid
+graph LR
+    C1[Client A] -->|ppp://server:20000/| S[ppp server]
+    C2[Client B] -->|ppp://server:20000/| S
+    C3[Client C] -->|ppp://ws/server:20000/| S
+    S --> I[Internet]
+```
+
+### Managed deployment with Go backend
+
+```mermaid
+graph LR
+    C1[Client A] --> S[ppp server]
+    C2[Client B] --> S
+    S -->|WebSocket auth| G[ppp-go management]
+    G --> DB[(User/Policy DB)]
+    S --> I[Internet]
+```
+
+### CDN / reverse proxy fronted
+
+```mermaid
+graph LR
+    C1[Client] -->|HTTPS/WSS| CDN[CDN or reverse proxy]
+    CDN -->|WS| S[ppp server]
+    S --> I[Internet]
+```
+
+The `cdn` field in `appsettings.json` configures port-mode obfuscation to make the traffic appear as regular HTTP/WebSocket to intermediate proxies.
+
+Full reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+
+---
+
+## Operations Reference
+
+### Key runtime indicators
+
+| Indicator | What it means |
+|-----------|--------------|
+| Keepalive timeout | `ProtocolKeepAliveTimeout` error code; session disposed |
+| High `GenericTimeout` rate | Network congestion or path instability |
+| `ResourceExhaustedSessionSlots` | Server session limit reached; increase `concurrent` or add instances |
+| `AuthCredentialInvalid` | Credential mismatch; check `key.*` fields on both sides |
+| `TunnelOpenFailed` at startup | TAP driver not installed (Windows) or insufficient privilege |
+| `AppPrivilegeRequired` | Run as root (Linux/macOS) or Administrator (Windows) |
+
+### `OnTick()` schedule
+
+The main runtime tick fires on a configurable interval (default ~1 second). Each tick:
+
+1. Refresh bandwidth / session statistics.
+2. Check tunnel liveness (keepalive timeout detection).
+3. Age out stale sessions (server).
+4. Age out expired IPv6 leases (server).
+5. Publish dirty flag to TUI render thread.
+6. Reschedule via `NextTickAlwaysTimeout(false)`.
+
+Full reference: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+
+---
+
+## Diagnostics and Error System
+
+The diagnostics subsystem provides structured error reporting without logging.
+
+```mermaid
+flowchart TD
+    A[Error occurs\nin any subsystem] --> B[SetLastErrorCode\nError::XYZ\nthread-local]
+    B --> C[Atomic snapshot\nhigh32=timestamp\nlow32=error_code]
+    C --> D[ErrorHandler::Dispatch\nregistered callbacks]
+    D --> E[TUI error display]
+    D --> F[Management backend\nerror reporting]
+    D --> G[Caller return value\nsentinel propagation]
+```
+
+The error snapshot is atomic: it can be read from any thread without locking. The timestamp is truncated milliseconds, sufficient for ordering events within a session.
+
+Full reference: [`docs/DIAGNOSTICS_ERROR_SYSTEM.md`](docs/DIAGNOSTICS_ERROR_SYSTEM.md), [`docs/ERROR_CODES.md`](docs/ERROR_CODES.md)

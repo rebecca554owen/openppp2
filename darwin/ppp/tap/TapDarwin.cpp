@@ -1,5 +1,6 @@
 #include <darwin/ppp/tap/TapDarwin.h>
 #include <darwin/ppp/tun/utun.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <ppp/tap/ITap.h>
 #include <ppp/net/Ipep.h>
@@ -52,6 +53,7 @@ namespace ppp
         {
             if (NULLPTR == predicate)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapDarwinFetchRouteNullPredicate);
                 return -1;
             }
 
@@ -59,18 +61,21 @@ namespace ppp
             size_t needed = 0;
             if (sysctl(mib, arraysizeof(mib), NULLPTR, &needed, NULLPTR, 0) < 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteQueryFailed);
                 return -1;
             }
 
             std::shared_ptr<Byte> buffer_managed = ppp::make_shared_alloc<Byte>(needed);
             if (NULLPTR == buffer_managed)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return -1;
             }
 
             char* buffer = (char*)buffer_managed.get();
             if (sysctl(mib, arraysizeof(mib), buffer, &needed, NULLPTR, 0) < 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteQueryFailed);
                 return -1;
             }
 
@@ -160,6 +165,7 @@ namespace ppp
             struct ifaddrs* ifList = NULLPTR;
             if (getifaddrs(&ifList))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
@@ -188,6 +194,7 @@ namespace ppp
                 NetworkInterfacePtr ni = ppp::make_shared_object<NetworkInterface>();
                 if (NULLPTR == ni)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     break;
                 }
 
@@ -441,6 +448,7 @@ namespace ppp
             std::shared_ptr<TapDarwin::RouteInformationTable> rib = make_shared_object<TapDarwin::RouteInformationTable>();
             if (NULLPTR == rib) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -502,12 +510,14 @@ namespace ppp
         {
             if (ifrName.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return -1;
             }
 
             int interface_index = (int)if_nametoindex(ifrName.data());
             if (interface_index == 0 || interface_index == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return -1;
             }
 
@@ -519,6 +529,7 @@ namespace ppp
             ifrName.clear();
             if (interface_index == 0 || interface_index == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
@@ -528,6 +539,7 @@ namespace ppp
                 char ch = *buf;
                 if (ch == '\x0')
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                     return false;
                 }
 
@@ -536,6 +548,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
         }
@@ -551,29 +564,34 @@ namespace ppp
         {
             if (NULLPTR == context)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return NULLPTR;
             }
 
             if (dev.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return NULLPTR;
             }
 
             IPEndPoint ipEP(ip, 0);
             if (IPEndPoint::IsInvalid(ipEP))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 return NULLPTR;
             }
 
             IPEndPoint gwEP(ip, 0);
             if (IPEndPoint::IsInvalid(gwEP))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                 return NULLPTR;
             }
 
             IPEndPoint maskEP(ip, 0);
             if (IPEndPoint::IsInvalid(maskEP))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                 return NULLPTR;
             }
 
@@ -604,6 +622,7 @@ namespace ppp
                 // The vnic still cannot be opened, indicating that the current OS X system may not have the Apple driver for utun.
                 if (tun == -1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                     return NULLPTR;
                 }
             }
@@ -618,6 +637,7 @@ namespace ppp
             if (!utun_get_if_name(tun, interface_name))
             {
                 close(tun);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return NULLPTR;
             }
 
@@ -630,6 +650,7 @@ namespace ppp
             if (interface_index == -1)
             {
                 ::close(tun);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return NULLPTR;
             }
 
@@ -637,6 +658,7 @@ namespace ppp
             if (NULLPTR == tap)
             {
                 ::close(tun);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -660,13 +682,25 @@ namespace ppp
             // Can reduce a memory allocation and replication, improve throughput efficiency.
             if (NULLPTR == packet || packet_size < 1 || NULLPTR == stream)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelPacketInjectFailed);
                 return false;
             }
 
-            // Check whether the IP packet protocol output by the VPN protocol stack is AF_INET.
             struct ip_hdr* iphdr = (struct ip_hdr*)packet;
-            if (ip_hdr::IPH_V(iphdr) != ip_hdr::IP_VER)
+            int ip_version = ip_hdr::IPH_V(iphdr);
+
+            int address_family = AF_UNSPEC;
+            if (ip_version == ip_hdr::IP_VER)
             {
+                address_family = AF_INET;
+            }
+            else if (ip_version == 6)
+            {
+                address_family = AF_INET6;
+            }
+            else
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                 return false;
             }
 
@@ -675,6 +709,7 @@ namespace ppp
             int tun = (int)reinterpret_cast<std::intptr_t>(my->GetHandle());
             if (packet_size > ITap::Mtu)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketTooLarge);
                 return false;
             }
             else
@@ -682,11 +717,17 @@ namespace ppp
                 Byte chunk[ITap::Mtu + sizeof(uint32_t)];
                 size_t chunk_size = packet_size + sizeof(uint32_t);
 
-                *(uint32_t*)chunk = htonl(AF_INET);
+                *(uint32_t*)chunk = htonl(address_family);
                 memcpy(chunk + sizeof(uint32_t), packet, packet_size);
 
                 ssize_t bytes_transferred = ::write(tun, chunk, chunk_size);
-                return bytes_transferred > -1;
+                if (bytes_transferred > -1)
+                {
+                    return true;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                return false;
             }
         }
 
@@ -708,8 +749,8 @@ namespace ppp
             if (packet_length > sizeof(uint32_t))
             {
                 Byte* packet = (Byte*)e.Packet;
-                Byte protocol = (Byte)ntohl(*(uint32_t*)packet);
-                if (protocol == AF_INET)
+                uint32_t protocol = ntohl(*(uint32_t*)packet);
+                if (protocol == AF_INET || protocol == AF_INET6)
                 {
                     e.Packet = packet + sizeof(uint32_t);
                     e.PacketLength = packet_length - sizeof(uint32_t);
@@ -722,6 +763,7 @@ namespace ppp
         {
             if (NULLPTR == rib)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableUnavailable);
                 return false;
             }
 

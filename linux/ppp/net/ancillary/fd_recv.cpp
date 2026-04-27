@@ -33,6 +33,7 @@
 #endif
 
 #include "ancillary.h"
+#include <ppp/diagnostics/Error.h>
 
 int ancil_recv_fds_with_buffer(int sock, int* fds, unsigned n_fds, void* buffer) noexcept
 {
@@ -64,6 +65,7 @@ int ancil_recv_fds_with_buffer(int sock, int* fds, unsigned n_fds, void* buffer)
 
     if (recvmsg(sock, &msghdr, 0) < 0)
     {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
         return (-1);
     }
 

@@ -1,4 +1,10 @@
 #include <ppp/transmissions/ITransmission.h>
+#include <ppp/diagnostics/Error.h>
+
+/**
+ * @file ITransmission.cpp
+ * @brief Implements encrypted packet framing, handshake, and transmission I/O helpers.
+ */
 
 // Cryptographic and I/O utilities.
 #include <ppp/cryptography/ssea.h>
@@ -49,14 +55,29 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // ITransmissionBridge – encapsulates all low‑level I/O and encryption logic.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Internal bridge for unified read/write, encoding, and decoding workflows.
+         */
         class ITransmissionBridge final {
         public:
-            // Read raw bytes (no decryption) – delegates to derived class.
+            /**
+             * @brief Reads raw bytes from the transport implementation.
+             * @param transmission Active transmission instance.
+             * @param y Coroutine yield context.
+             * @param length Number of bytes to read.
+             * @return Raw bytes on success; null on failure.
+             */
             static std::shared_ptr<Byte> ReadBytes(ITransmission* transmission, YieldContext& y, int length) noexcept {
                 return transmission->DoReadBytes(y, length);
             }
 
-            // Read binary message, applying full packet decryption if ciphers present.
+            /**
+             * @brief Reads a binary packet and decrypts it when ciphers are configured.
+             * @param transmission Active transmission instance.
+             * @param y Coroutine yield context.
+             * @param outlen Output plaintext length.
+             * @return Decrypted payload on success; null on failure.
+             */
             static std::shared_ptr<Byte> ReadBinary(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 bool safest = !transmission->handshaked_;      // Pre‑handshake: use safest mode.
                 CiphertextPtr EVP_protocol = transmission->protocol_;
@@ -76,13 +97,19 @@ namespace ppp {
                 }
             }
 
-            // Encrypt binary data without base94 (used internally after handshake).
+            /**
+             * @brief Encrypts binary payload using packet-level framing.
+             */
             static std::shared_ptr<Byte> EncryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept;
 
-            // Decrypt binary data without base94.
+            /**
+             * @brief Decrypts binary payload produced by packet-level framing.
+             */
             static std::shared_ptr<Byte> DecryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept;
 
-            // High‑level encrypt: optionally applies base94 encoding.
+            /**
+             * @brief Encrypts payload and conditionally applies base94 envelope.
+             */
             static std::shared_ptr<Byte> Encrypt(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
                 std::shared_ptr<Byte> packet = EncryptBinary(transmission, data, datalen, outlen);
                 if (NULLPTR != packet) {
@@ -103,7 +130,9 @@ namespace ppp {
                 }
             }
 
-            // High‑level decrypt: optionally strips base94 encoding.
+            /**
+             * @brief Decodes optional base94 envelope and decrypts payload.
+             */
             static std::shared_ptr<Byte> Decrypt(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
                 std::shared_ptr<Byte> packet;
                 AppConfigurationPtr& cfg = transmission->configuration_;
@@ -111,6 +140,13 @@ namespace ppp {
                     // Base94 decode first, then binary decrypt.
                     packet = base94_decode(cfg, transmission->BufferAllocator,
                         data, datalen, cfg->key.kf, outlen);
+
+                    // Guard: if base94 decoding failed, do not pass null to DecryptBinary.
+                    if (NULLPTR == packet || outlen < 1) {
+                        return ppp::diagnostics::SetLastError(
+                            ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, packet);
+                    }
+
                     packet = DecryptBinary(transmission, packet.get(), outlen, outlen);
                 }
                 else {
@@ -127,7 +163,9 @@ namespace ppp {
                 }
             }
 
-            // High‑level read: selects base94 or binary path based on handshake state.
+            /**
+             * @brief Reads one message using pre/post-handshake decode strategy.
+             */
             static std::shared_ptr<Byte> Read(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 outlen = 0;
                 if (transmission->disposed_) {
@@ -183,20 +221,30 @@ namespace ppp {
                 YieldContext* co = y.GetPtr();
                 if (NULLPTR != co) {
                     // Inside a coroutine: use the yielding version.
-                    return transmission->DoWriteYield<AsynchronousWriteCallback>(
+                    bool ok = transmission->DoWriteYield<AsynchronousWriteCallback>(
                         *co, packet, packet_length,
                         [transmission](const void* p, int len, const AsynchronousWriteCallback& cb) noexcept {
                             return ITransmissionBridge::Write(transmission, p, len, cb);
                         });
+                    if (!ok && !transmission->disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                    }
+
+                    return ok;
                 }
                 else {
                     // Not in a coroutine: direct callback‑based write.
-                    return ITransmissionBridge::Write(transmission, packet, packet_length,
+                    bool ok = ITransmissionBridge::Write(transmission, packet, packet_length,
                         [transmission](bool ok) noexcept {
                             if (!ok) {
                                 transmission->Dispose();
                             }
                         });
+                    if (!ok && !transmission->disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                    }
+
+                    return ok;
                 }
             }
 #if defined(_WIN32)
@@ -209,13 +257,17 @@ namespace ppp {
 #endif
 #endif
 
-            // Low‑level write: encrypts the packet then calls WriteBytes on the transmission.
+            /**
+             * @brief Encrypts packet bytes and dispatches asynchronous transport write.
+             */
             static bool Write(ITransmission* transmission, const void* packet, int packet_length, const ITransmission::AsynchronousWriteBytesCallback& cb) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionBridgeWriteInvalidPacket);
                     return false;
                 }
 
                 if (NULLPTR == cb) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionBridgeWriteNullCallback);
                     return false;
                 }
 
@@ -226,16 +278,24 @@ namespace ppp {
                 int messages_size = 0;
                 std::shared_ptr<Byte> messages = Encrypt(transmission, (Byte*)packet, packet_length, messages_size);
                 if (NULLPTR == messages) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     return false;
                 }
 
-                return transmission->WriteBytes(messages, messages_size, cb);
+                if (!transmission->WriteBytes(messages, messages_size, cb)) {
+                    if (!transmission->disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                    }
+                    return false;
+                }
+
+                return true;
             }
 
         private:
-            // -------------------------------------------------------------------------
-            // Base94 header encoding/decoding helpers.
-            // -------------------------------------------------------------------------
+            /**
+             * @brief Encodes payload length into randomized base94 framing header bytes.
+             */
             static ppp::string base94_encode_length(ITransmission* transmission, const AppConfigurationPtr& configuration, int length, int kf) noexcept {
                 const int MOD = configuration->Lcgmod(ITransmission::AppConfiguration::LCGMOD_TYPE_TRANSMISSION);
                 const int KF_MOD = abs(kf % MOD);
@@ -265,7 +325,7 @@ namespace ppp {
 
                     f = RandomNext('\x20', '\x7e');
                 }
-                else if ((k & '\x01') == '\x00') {
+                elif ((k & '\x01') == '\x00') {
                     if (++k > '\x7e') {
                         k = '\x21';
                     }
@@ -302,6 +362,9 @@ namespace ppp {
                 return (N - KF_MOD + MOD) % MOD;   // reverse obfuscation
             }
 
+            /**
+             * @brief Restores obfuscated base94 header bytes to canonical form.
+             */
             static void base94_decode_kf(Byte* h) noexcept {
                 Byte& k = h[0];
                 Byte& f = h[1];
@@ -324,19 +387,19 @@ namespace ppp {
 
                 std::shared_ptr<Byte> payload = ssea::base94_encode(allocator, data, datalen, kf, outlen);
                 if (NULLPTR == payload) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
                 }
 
                 ppp::string k = base94_encode_length(transmission, configuration, outlen, kf);
                 if (k.size() < EVP_HEADER_XSS) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
                 }
 
                 int k_size = k.size();
                 int packet_length = outlen + k_size;
                 std::shared_ptr<Byte> packet = BufferswapAllocator::MakeByteArray(allocator, packet_length);
                 if (NULLPTR == packet) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionBase94EncodePacketAllocFailed, NULLPTR);
                 }
 
                 Byte* memory = packet.get();
@@ -357,27 +420,38 @@ namespace ppp {
                     
                 outlen = 0;
                 if (NULLPTR == data || datalen < EVP_HEADER_XSS) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
                 }
 
                 base94_decode_kf(data);
                 
                 int payload_length = base94_decode_length(configuration, data + 1, kf);
                 if (payload_length < 1) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
                 }
 
                 if ((payload_length + EVP_HEADER_XSS) != datalen) {
-                    return NULLPTR;   // integrity check
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);   // integrity check
                 }
 
                 Byte* payload = data + EVP_HEADER_XSS;
-                return ssea::base94_decode(allocator, payload, payload_length, kf, outlen);
+                std::shared_ptr<Byte> decoded = ssea::base94_decode(allocator, payload, payload_length, kf, outlen);
+                if (NULLPTR == decoded) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
+                }
+
+                return decoded;
             }
 
+            /**
+             * @brief Reads compact base94 header and extracts payload length.
+             */
             static int base94_decode_length_rn(ITransmission* transmission, YieldContext& y) noexcept {
                 std::shared_ptr<Byte> packet = ReadBytes(transmission, y, EVP_HEADER_XSS);
                 if (NULLPTR == packet) {
+                    if (!transmission->disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                    }
                     return -1;
                 }
 
@@ -386,12 +460,23 @@ namespace ppp {
                 base94_decode_kf(data);
 
                 int len = base94_decode_length(cfg, data + 1, cfg->key.kf);
-                return len > 0 ? len : -1;
+                if (len > 0) {
+                    return len;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                return -1;
             }
 
+            /**
+             * @brief Reads extended base94 header and validates checksum payload length.
+             */
             static int base94_decode_length_r1(ITransmission* transmission, YieldContext& y) noexcept {
                 std::shared_ptr<Byte> packet = ReadBytes(transmission, y, EVP_HEADER_XSS + EVP_HEADER_MSS);
                 if (NULLPTR == packet) {
+                    if (!transmission->disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                    }
                     return -1;
                 }
 
@@ -403,6 +488,7 @@ namespace ppp {
 
                 int payload_length = base94_decode_length(cfg, data + 1, cfg->key.kf);
                 if (payload_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return -1;
                 }
 
@@ -412,6 +498,7 @@ namespace ppp {
                 int N = base94_decode_length(cfg, pbc, cfg->key.kf);
                 K = K ^ payload_length;
                 if (N != K) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return -1;   // checksum mismatch – tampering detected
                 }
 
@@ -419,6 +506,9 @@ namespace ppp {
                 return payload_length;
             }
 
+            /**
+             * @brief Selects base94 header parser according to negotiated frame mode.
+             */
             static int base94_decode_length(ITransmission* transmission, YieldContext& y) noexcept {
                 if (transmission->frame_rn_) {
                     return base94_decode_length_rn(transmission, y);
@@ -427,28 +517,45 @@ namespace ppp {
                 return base94_decode_length_r1(transmission, y);
             }
 
+            /**
+             * @brief Reads and decodes one base94-framed payload from the transport.
+             */
             static std::shared_ptr<Byte> base94_decode(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 outlen = 0;
                 int payload_length = base94_decode_length(transmission, y);
                 if (payload_length < 1) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                    }
                     return NULLPTR;
                 }
 
                 std::shared_ptr<Byte> packet = ReadBytes(transmission, y, payload_length);
                 if (NULLPTR == packet) {
+                    if (!transmission->disposed_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                    }
                     return NULLPTR;
                 }
 
                 AppConfigurationPtr& cfg = transmission->configuration_;
-                return ssea::base94_decode(transmission->BufferAllocator,
+                std::shared_ptr<Byte> decoded = ssea::base94_decode(transmission->BufferAllocator,
                     packet.get(), payload_length,
                     cfg->key.kf, outlen);
+                if (NULLPTR == decoded) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
+                }
+
+                return decoded;
             }
         };
 
         // -----------------------------------------------------------------------------
         // Packet encryption/decryption helpers.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Builds and encrypts packet header containing payload length metadata.
+         */
         static std::shared_ptr<Byte> Transmission_Header_Encrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -459,7 +566,7 @@ namespace ppp {
 
             // Adjust length: 65536 → 65535 (avoid zero‑length packets).
             if (--EVP_payload_length < 0) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionHeaderEncryptInvalidPayloadLength, NULLPTR);
             }
 
             // Header array: [seed_byte, high_byte, low_byte]
@@ -477,7 +584,7 @@ namespace ppp {
                 std::shared_ptr<Byte> EVP_header_length_buff = EVP_protocol->Encrypt(
                     allocator, EVP_payload_length_array + 1, EVP_HEADER_TSS, EVP_header_length);
                 if (NULLPTR == EVP_header_length_buff || EVP_header_length != EVP_HEADER_TSS) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
                 }
 
                 memcpy(EVP_payload_length_array + 1, EVP_header_length_buff.get(), EVP_HEADER_TSS);
@@ -492,10 +599,17 @@ namespace ppp {
             ssea::shuffle_data(reinterpret_cast<char*>(EVP_payload_length_array + 1), EVP_HEADER_TSS, EVP_header_kf);
 
             std::shared_ptr<Byte> output;
-            return ssea::delta_encode(allocator, EVP_payload_length_array, EVP_header_datalen,
-                APP->key.kf, output) != EVP_header_length ? NULLPTR : output;
+            if (ssea::delta_encode(allocator, EVP_payload_length_array, EVP_header_datalen,
+                APP->key.kf, output) != EVP_header_length) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
+            }
+
+            return output;
         }
 
+        /**
+         * @brief Decrypts packet header and returns decoded payload length.
+         */
         static int Transmission_Header_Decrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -506,6 +620,7 @@ namespace ppp {
             std::shared_ptr<Byte> decoded;
             if (ssea::delta_decode(allocator, EVP_header_array, EVP_HEADER_MSS,
                 APP->key.kf, decoded) != EVP_HEADER_MSS) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                 return 0;
             }
 
@@ -521,6 +636,7 @@ namespace ppp {
             if (EVP_protocol) {
                 std::shared_ptr<Byte> dec = EVP_protocol->Decrypt(allocator, array + 1, EVP_HEADER_TSS, len);
                 if (NULLPTR == dec || len != EVP_HEADER_TSS) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return 0;
                 }
 
@@ -531,6 +647,9 @@ namespace ppp {
             return len + 1;   // add back the adjustment
         }
 
+        /**
+         * @brief Applies optional masked/shuffle payload transforms before framing.
+         */
         static void Transmission_Payload_Encrypt_Partial(
             const AppConfigurationPtr&                  APP,
             int                                         kf,
@@ -547,6 +666,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Encrypts payload transform stage and optional delta encoding.
+         */
         static std::shared_ptr<Byte> Transmission_Payload_Encrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -561,12 +683,16 @@ namespace ppp {
 
             std::shared_ptr<Byte> output;
             if (safest || APP->key.delta_encode) {
-                return ssea::delta_encode(allocator, data, datalen, APP->key.kf, output) != datalen ? NULLPTR : output;
+                if (ssea::delta_encode(allocator, data, datalen, APP->key.kf, output) != datalen) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
+                }
+
+                return output;
             }
             else {
                 output = BufferswapAllocator::MakeByteArray(allocator, datalen);
                 if (NULLPTR == output) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionPayloadEncryptCopyAllocFailed, NULLPTR);
                 }
 
                 memcpy(output.get(), data, datalen);
@@ -574,6 +700,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Reverses optional masked/shuffle transforms on payload bytes.
+         */
         static void Transmission_Payload_Decrypt_Partial(
             const AppConfigurationPtr&                  APP,
             int                                         kf,
@@ -590,6 +719,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Decrypts framed payload and reverses transport obfuscation layers.
+         */
         static std::shared_ptr<Byte> Transmission_Payload_Decrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -603,7 +735,7 @@ namespace ppp {
             if (safest || APP->key.delta_encode) {
                 std::shared_ptr<Byte> decoded;
                 if (ssea::delta_decode(allocator, data.get(), datalen, APP->key.kf, decoded) != datalen) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
                 }
 
                 Transmission_Payload_Decrypt_Partial(APP, kf, decoded.get(), datalen, safest);
@@ -615,6 +747,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Concatenates encrypted header and payload into one packet buffer.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Pack(
             const std::shared_ptr<BufferswapAllocator>& allocator,
             const std::shared_ptr<Byte>&                EVP_header,
@@ -637,6 +772,9 @@ namespace ppp {
             return packet;
         }
 
+        /**
+         * @brief Encrypts plaintext payload and assembles transmission packet bytes.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Encrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -654,7 +792,7 @@ namespace ppp {
                 // Layer 1: transport cipher.
                 auto payload = EVP_transport->Encrypt(allocator, data, datalen, payload_len);
                 if (NULLPTR == payload || payload_len != datalen) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
                 }
 
                 // Layer 2: header encryption (protocol cipher).
@@ -693,6 +831,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Decrypts full transmission packet into plaintext payload bytes.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Decrypt(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -707,22 +848,22 @@ namespace ppp {
             outlen = 0;
 
             if (datalen <= EVP_HEADER_MSS) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
             }
 
             int payload_len = Transmission_Header_Decrypt(APP, allocator, EVP_protocol, data, header_kf);
             if (payload_len < 1) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
             }
 
             int expected_len = payload_len + EVP_HEADER_MSS;
             if (expected_len != datalen) {
-                return NULLPTR;   // size mismatch – possible truncation attack
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);   // size mismatch – possible truncation attack
             }
 
             auto payload = BufferswapAllocator::MakeByteArray(allocator, payload_len);
             if (NULLPTR == payload) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionPacketDecryptPayloadAllocFailed, NULLPTR);
             }
 
             memcpy(payload.get(), data + EVP_HEADER_MSS, payload_len);
@@ -735,13 +876,16 @@ namespace ppp {
             if (EVP_protocol && EVP_transport) {
                 payload = EVP_transport->Decrypt(allocator, payload.get(), payload_len, outlen);
                 if (NULLPTR == payload || payload_len != outlen) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
                 }
             }
 
             return payload;
         }
 
+        /**
+         * @brief Reads header and payload from transport and decrypts to plaintext.
+         */
         static std::shared_ptr<Byte> Transmission_Packet_Read(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -757,16 +901,22 @@ namespace ppp {
 
             auto header = ITransmissionBridge::ReadBytes(transmission, y, EVP_HEADER_MSS);
             if (NULLPTR == header) {
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                }
                 return NULLPTR;
             }
 
             int payload_len = Transmission_Header_Decrypt(APP, allocator, EVP_protocol, header.get(), header_kf);
             if (payload_len < 1) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
             }
 
             auto payload = ITransmissionBridge::ReadBytes(transmission, y, payload_len);
             if (NULLPTR == payload) {
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                }
                 return NULLPTR;
             }
 
@@ -779,7 +929,7 @@ namespace ppp {
             if (EVP_protocol && EVP_transport) {
                 payload = EVP_transport->Decrypt(allocator, payload.get(), payload_len, outlen);
                 if (NULLPTR == payload || payload_len != outlen) {
-                    return NULLPTR;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
                 }
             }
 
@@ -789,6 +939,9 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // Handshake helpers.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Packs handshake session identifier into obfuscated transport payload.
+         */
         static std::shared_ptr<Byte> Transmission_Handshake_Pack_SessionId(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<BufferswapAllocator>& allocator,
@@ -852,7 +1005,7 @@ namespace ppp {
 
             auto msg = BufferswapAllocator::MakeByteArray(allocator, packet_length += sizeof(kfs));
             if (NULLPTR == msg) {
-                return NULLPTR;
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TransmissionHandshakePackBufferAllocFailed, NULLPTR);
             }
 
             Byte* mem = msg.get();
@@ -861,6 +1014,9 @@ namespace ppp {
             return msg;
         }
 
+        /**
+         * @brief Unpacks handshake session identifier and filters dummy packets.
+         */
         static Int128 Transmission_Handshake_Unpack_SessionId(
             const AppConfigurationPtr&                  APP,
             const std::shared_ptr<Byte>&                packet_managed,
@@ -869,6 +1025,7 @@ namespace ppp {
 
             eagin = false;
             if (NULLPTR == packet_managed || packet_length < 4) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                 return 0;
             }
 
@@ -883,6 +1040,7 @@ namespace ppp {
 
             packet_length -= sizeof(kfs);
             if (packet_length < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                 return 0;
             }
 
@@ -894,9 +1052,17 @@ namespace ppp {
                 }
             }
 
-            return stl::to_number<Int128>(std::string_view(reinterpret_cast<char*>(p), packet_length), 10);
+            Int128 sid = ppp::Int128FromString(std::string_view(reinterpret_cast<char*>(p), packet_length), 10);
+            if (0 == sid) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
+            }
+
+            return sid;
         }
 
+        /**
+         * @brief Sends one handshake session identifier packet.
+         */
         static bool Transmission_Handshake_SessionId(
             const AppConfigurationPtr&                  APP,
             ITransmission*                              transmission,
@@ -906,12 +1072,18 @@ namespace ppp {
             int len = 0;
             auto pkt = Transmission_Handshake_Pack_SessionId(APP, transmission->BufferAllocator, session_id, len);
             if (NULLPTR == pkt) {
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                }
                 return false;
             }
 
             return ITransmissionBridge::Write(transmission, y, pkt.get(), len);
         }
 
+        /**
+         * @brief Receives handshake session identifier, skipping dummy handshake frames.
+         */
         static Int128 Transmission_Handshake_SessionId(
             const AppConfigurationPtr&                  APP,
             ITransmission*                              transmission,
@@ -934,6 +1106,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Exchanges randomized handshake noise packets before real handshake values.
+         */
         bool Transmission_Handshake_Nop(
             const AppConfigurationPtr&                  APP,
             ITransmission*                              transmission,
@@ -961,6 +1136,9 @@ namespace ppp {
         // -----------------------------------------------------------------------------
         // ITransmission implementation.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Initializes transmission state and optional protocol/transport ciphers.
+         */
         ITransmission::ITransmission(const ContextPtr& context, const StrandPtr& strand,
             const AppConfigurationPtr& configuration) noexcept
             : IAsynchronousWriteIoQueue(NULLPTR != configuration ? configuration->GetBufferAllocator() : NULLPTR)
@@ -975,11 +1153,23 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Destroys transmission and finalizes internal resources.
+         */
         ITransmission::~ITransmission() noexcept {
             Finalize();
         }
 
+        /**
+         * @brief Finalizes runtime state, cancels timers, and clears optional helpers.
+         */
         void ITransmission::Finalize() noexcept {
+            // One-shot guard: only the first caller proceeds; subsequent calls are no-ops.
+            bool expected = false;
+            if (!finalized_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                return;
+            }
+
             DeadlineTimerPtr t = std::move(timeout_);
             disposed_ = true;
             handshaked_ = false;
@@ -990,46 +1180,115 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Reads one message using bridge decode workflow.
+         */
         std::shared_ptr<Byte> ITransmission::Read(YieldContext& y, int& outlen) noexcept {
-            return ITransmissionBridge::Read(this, y, outlen);
+            std::shared_ptr<Byte> result = ITransmissionBridge::Read(this, y, outlen);
+            if (NULLPTR == result) {
+                // Distinguish disposed state from a normal I/O failure.
+                if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                }
+            }
+
+            return result;
         }
 
+        /**
+         * @brief Writes one message using coroutine-aware bridge workflow.
+         */
         bool ITransmission::Write(YieldContext& y, const void* packet, int packet_length) noexcept {
-            return ITransmissionBridge::Write(this, y, packet, packet_length);
+            bool ok = ITransmissionBridge::Write(this, y, packet, packet_length);
+            if (!ok) {
+                if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                }
+            }
+
+            return ok;
         }
 
+        /**
+         * @brief Writes one message using callback-based bridge workflow.
+         */
         bool ITransmission::Write(const void* packet, int packet_length, const AsynchronousWriteCallback& cb) noexcept {
-            return ITransmissionBridge::Write(this, packet, packet_length, cb);
+            bool ok = ITransmissionBridge::Write(this, packet, packet_length, cb);
+            if (!ok) {
+                if (disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+                elif (NULLPTR == packet || packet_length < 1) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionWriteAsyncInvalidPacket);
+                }
+                elif (NULLPTR == cb) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionWriteAsyncNullCallback);
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                }
+            }
+
+            return ok;
         }
 
+        /**
+         * @brief Encrypts caller-provided buffer into framed transmission bytes.
+         */
         std::shared_ptr<Byte> ITransmission::Encrypt(Byte* data, int datalen, int& outlen) noexcept {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionEncryptInvalidArguments);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionEncryptZeroLengthInput);
                 return NULLPTR;
             }
 
-            return ITransmissionBridge::Encrypt(this, data, datalen, outlen);
+            std::shared_ptr<Byte> result = ITransmissionBridge::Encrypt(this, data, datalen, outlen);
+            if (NULLPTR == result) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+            }
+
+            return result;
         }
 
+        /**
+         * @brief Decrypts framed transmission bytes into plaintext payload.
+         */
         std::shared_ptr<Byte> ITransmission::Decrypt(Byte* data, int datalen, int& outlen) noexcept {
             outlen = 0;
             if (datalen < 0 || (NULLPTR == data && datalen != 0)) {
                 outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionDecryptInvalidArguments);
                 return NULLPTR;
             }
 
             if (datalen == 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TransmissionDecryptZeroLengthInput);
                 return NULLPTR;
             }
 
-            return ITransmissionBridge::Decrypt(this, data, datalen, outlen);
+            std::shared_ptr<Byte> result = ITransmissionBridge::Decrypt(this, data, datalen, outlen);
+            if (NULLPTR == result) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+            }
+
+            return result;
         }
 
+        /**
+         * @brief Posts asynchronous cleanup of transmission and write queue resources.
+         */
         void ITransmission::Dispose() noexcept {
             auto self = shared_from_this();
             auto ctx = GetContext();
@@ -1041,6 +1300,9 @@ namespace ppp {
                 });
         }
 
+        /**
+         * @brief Runs client-side handshake state machine and negotiates mux mode.
+         */
         Int128 ITransmission::InternalHandshakeClient(YieldContext& y, bool& mux) noexcept {
             if (!Transmission_Handshake_Nop(configuration_, this, y)) {
                 return 0;
@@ -1078,6 +1340,9 @@ namespace ppp {
             return 0;
         }
 
+        /**
+         * @brief Runs server-side handshake state machine and validates peer state.
+         */
         bool ITransmission::InternalHandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
             if (!Transmission_Handshake_Nop(configuration_, this, y)) {
                 return false;
@@ -1087,10 +1352,11 @@ namespace ppp {
                 return false;
             }
             
-            Int128 nmux = (Int128)RandomNext() << 32 |
-                (Int128)RandomNext() << 64 |
-                (Int128)RandomNext() << 96 |
-                (Int128)RandomNext();
+            uint64_t nmux_low = (static_cast<uint64_t>(RandomNext()) << 32) |
+                                static_cast<uint32_t>(RandomNext());
+            uint64_t nmux_high = (static_cast<uint64_t>(RandomNext()) << 32) |
+                                 static_cast<uint32_t>(RandomNext());
+            Int128 nmux = MAKE_OWORD(nmux_low, nmux_high);
             if (mux) {
                 while ((nmux & 1) == 0) ++nmux;
             }
@@ -1122,6 +1388,9 @@ namespace ppp {
             return handshaked_;
         }
 
+        /**
+         * @brief Clears and cancels active handshake timeout timer.
+         */
         void ITransmission::InternalHandshakeTimeoutClear() noexcept {
             DeadlineTimerPtr t = std::move(timeout_);
             if (NULLPTR != t) {
@@ -1129,23 +1398,30 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Creates and arms handshake timeout timer with configuration jitter.
+         */
         bool ITransmission::InternalHandshakeTimeoutSet() noexcept {
             if (disposed_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 return false;
             }
 
             if (NULLPTR != timeout_) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
 
             auto st = strand_;
             auto ctx = context_;
             if (NULLPTR == st && NULLPTR == ctx)  {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                 return false;
             }
 
             auto timer = st ? make_shared_object<DeadlineTimer>(*st) : make_shared_object<DeadlineTimer>(*ctx);
             if (NULLPTR == timer) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                 return false;
             }
 
@@ -1155,34 +1431,37 @@ namespace ppp {
                 expire_ms = RandomNext(expire_ms, expire_ms + (int64_t)cfg.nexcept * 1000);
             }
 
-            auto self = shared_from_this();
-            timer->expires_from_now(boost::posix_time::milliseconds(expire_ms));
+            // static_pointer_cast is required: ITransmission::shared_from_this() returns
+            // shared_ptr<IAsynchronousWriteIoQueue> (the enable_shared_from_this base),
+            // so we cast to the concrete type to access ITransmission members in the lambda.
+            std::shared_ptr<ITransmission> self =
+                std::static_pointer_cast<ITransmission>(shared_from_this());
+            timer->expires_from_now(std::chrono::milliseconds(expire_ms));
 
-            // FIXED: async_wait handler must return void.
             timer->async_wait(
-                [self, this](boost::system::error_code ec) noexcept {
+                [self](boost::system::error_code ec) noexcept {
                     if (ec == boost::system::errc::operation_canceled) {
                         return;   // cancelled normally
                     }
 
-                    auto ctx = context_;
+                    auto ctx = self->context_;
                     if (NULLPTR == ctx) {
-                        Dispose();
+                        self->Dispose();
                         return;
                     }
 
-                    auto cfg = configuration_;
+                    auto cfg = self->configuration_;
                     if (NULLPTR == cfg) {
-                        Dispose();
+                        self->Dispose();
                         return;
                     }
 
-                    auto st = strand_;
+                    auto st = self->strand_;
                     // Spawn a coroutine to send final NOPs and dispose.
                     YieldContext::Spawn(NULLPTR, *ctx, st.get(),
-                        [self, this, st, cfg](YieldContext& y) noexcept {
-                            Transmission_Handshake_Nop(cfg, this, y);
-                            Dispose();
+                        [self, st, cfg](YieldContext& y) noexcept {
+                            Transmission_Handshake_Nop(cfg, self.get(), y);
+                            self->Dispose();
                         });
                 });
 
@@ -1190,6 +1469,9 @@ namespace ppp {
             return true;
         }
 
+        /**
+         * @brief Executes client handshake with timeout protection.
+         */
         Int128 ITransmission::HandshakeClient(YieldContext& y, bool& mux) noexcept {
             mux = false;
             if (!InternalHandshakeTimeoutSet()) {
@@ -1198,11 +1480,20 @@ namespace ppp {
 
             Int128 sid = InternalHandshakeClient(y, mux);
             InternalHandshakeTimeoutClear();
+
+            if (!sid) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+            }
+
             return sid;
         }
 
+        /**
+         * @brief Executes server handshake with timeout protection.
+         */
         bool ITransmission::HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
             if (session_id == 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                 return false;
             }
 
@@ -1212,12 +1503,20 @@ namespace ppp {
             
             bool ok = InternalHandshakeServer(y, session_id, mux);
             InternalHandshakeTimeoutClear();
+
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+            }
+
             return ok;
         }
 
         // -----------------------------------------------------------------------------
         // ITransmissionBridge binary encrypt/decrypt implementations.
         // -----------------------------------------------------------------------------
+        /**
+         * @brief Encrypts payload via packet encryption path selected by cipher state.
+         */
         std::shared_ptr<Byte> ITransmissionBridge::EncryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
             bool safest = !transmission->handshaked_;
             auto& cfg = transmission->configuration_;
@@ -1232,6 +1531,9 @@ namespace ppp {
             }
         }
 
+        /**
+         * @brief Decrypts payload via packet decryption path selected by cipher state.
+         */
         std::shared_ptr<Byte> ITransmissionBridge::DecryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
             bool safest = !transmission->handshaked_;
             auto& cfg = transmission->configuration_;

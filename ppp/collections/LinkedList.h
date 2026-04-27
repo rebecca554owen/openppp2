@@ -2,6 +2,11 @@
 
 #include <ppp/stdafx.h>
 
+/**
+ * @file LinkedList.h
+ * @brief Lightweight doubly-linked list implementation.
+ */
+
 namespace ppp 
 {
     namespace collections 
@@ -9,16 +14,24 @@ namespace ppp
         template <typename T>
         class LinkedList;
 
+        /**
+         * @brief Node type used by @ref LinkedList.
+         * @tparam T Stored value type.
+         */
         template <typename T>
         struct LinkedListNode
         {
         public:
-        	std::shared_ptr<LinkedListNode<T> > Previous;
-        	std::shared_ptr<LinkedListNode<T> > Next;
-        	T                                   Value;
-        	LinkedList<T>*                      LinkedList_;
+            std::shared_ptr<LinkedListNode<T> > Previous;  ///< Pointer to the preceding node; null for the head node.
+            std::shared_ptr<LinkedListNode<T> > Next;      ///< Pointer to the following node; null for the tail node.
+            T                                   Value;     ///< User-supplied value stored in this node.
+            LinkedList<T>*                      LinkedList_; ///< Raw back-pointer to the owning list; null when detached.
         };
 
+        /**
+         * @brief Doubly-linked list with shared node ownership.
+         * @tparam T Stored value type.
+         */
         template <typename T>
         class LinkedList final
         {
@@ -28,31 +41,50 @@ namespace ppp
         	int 								m_count;
 
         public:
-        	LinkedList() noexcept
-        	{
-        		this->m_count = 0;
-        		this->m_first = NULLPTR;
-        		this->m_last = NULLPTR;
-        	}
+	        /**
+	         * @brief Initializes an empty list.
+	         */
+         	LinkedList() noexcept
+         	{
+         		this->m_count = 0;
+         		this->m_first = NULLPTR;
+         		this->m_last = NULLPTR;
+         	}
+			/**
+			 * @brief Destroys the list and detaches all nodes.
+			 */
 			~LinkedList() noexcept
 			{
 				Clear();
 			}
 
 		public:
-        	std::shared_ptr<LinkedListNode<T> > First() noexcept;
-        	std::shared_ptr<LinkedListNode<T> > Last() noexcept;
-        	int                                 Count() noexcept;
-        	bool                                IsEmpty() noexcept;
-        	bool                                AddFirst(std::shared_ptr<LinkedListNode<T> > value) noexcept;
-        	bool                                AddLast(std::shared_ptr<LinkedListNode<T> > value) noexcept;
-        	bool                                AddAfter(std::shared_ptr<LinkedListNode<T> > node, std::shared_ptr<LinkedListNode<T> > value) noexcept;
-        	bool                                AddBefore(std::shared_ptr<LinkedListNode<T> > node, std::shared_ptr<LinkedListNode<T> > value) noexcept;
-        	bool                                RemoveFirst() noexcept;
-        	bool                                RemoveLast() noexcept;
-        	bool                                Remove(std::shared_ptr<LinkedListNode<T> > node) noexcept;
-        	std::shared_ptr<LinkedListNode<T> > Find(T value) noexcept;
-        	void                                Clear() noexcept;
+	        /** @brief Returns the first node. */
+         	std::shared_ptr<LinkedListNode<T> > First() noexcept;
+	        /** @brief Returns the last node. */
+         	std::shared_ptr<LinkedListNode<T> > Last() noexcept;
+	        /** @brief Returns the current node count. */
+         	int                                 Count() noexcept;
+	        /** @brief Indicates whether the list is empty. */
+         	bool                                IsEmpty() noexcept;
+	        /** @brief Inserts a node at the beginning of the list. */
+         	bool                                AddFirst(std::shared_ptr<LinkedListNode<T> > value) noexcept;
+	        /** @brief Inserts a node at the end of the list. */
+         	bool                                AddLast(std::shared_ptr<LinkedListNode<T> > value) noexcept;
+	        /** @brief Inserts a node after an existing node. */
+         	bool                                AddAfter(std::shared_ptr<LinkedListNode<T> > node, std::shared_ptr<LinkedListNode<T> > value) noexcept;
+	        /** @brief Inserts a node before an existing node. */
+         	bool                                AddBefore(std::shared_ptr<LinkedListNode<T> > node, std::shared_ptr<LinkedListNode<T> > value) noexcept;
+	        /** @brief Removes the first node. */
+         	bool                                RemoveFirst() noexcept;
+	        /** @brief Removes the last node. */
+         	bool                                RemoveLast() noexcept;
+	        /** @brief Removes a specific node. */
+         	bool                                Remove(std::shared_ptr<LinkedListNode<T> > node) noexcept;
+	        /** @brief Finds the first node with a matching value. */
+         	std::shared_ptr<LinkedListNode<T> > Find(T value) noexcept;
+	        /** @brief Detaches all nodes and resets the list. */
+         	void                                Clear() noexcept;
         };
 
         template <typename T>
