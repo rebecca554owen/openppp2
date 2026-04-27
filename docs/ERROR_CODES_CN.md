@@ -25,6 +25,8 @@ ErrorCode   ppp::diagnostics::GetLastErrorCode();           // 线程本地值
 ErrorCode   ppp::diagnostics::GetLastErrorCodeSnapshot();   // 最后原子发布值
 uint64_t    ppp::diagnostics::GetLastErrorTimestamp();      // 最后发布错误的毫秒时间戳
 const char* ppp::diagnostics::FormatErrorString(ErrorCode); // 可读文本描述
+ppp::string ppp::diagnostics::FormatErrorTriplet(ErrorCode); // "<id> <name>: <message>"
+bool ppp::diagnostics::IsValidErrorCodeValue(int);           // 原始整数校验
 ```
 
 ---

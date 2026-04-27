@@ -258,7 +258,7 @@ namespace ppp {
              */
             bool VEthernetDatagramPort::Open(ppp::coroutines::YieldContext& y) noexcept {
                 if (disposed_) {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
                 bool opened = false;
@@ -333,7 +333,7 @@ namespace ppp {
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     if (disposed_) {
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                     }
 
                     if (!socket_.is_open()) {

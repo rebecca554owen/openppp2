@@ -44,9 +44,9 @@ The design is single-source: every failure path sets diagnostics once, and all p
  * @brief Set the thread-local last error code.
  * @param code  The ErrorCode value to record.
  * @note  Also updates the process-wide snapshot and timestamp.
- *        Dispatches to all registered error handlers.
+ *        Dispatches to all registered error handlers in-place on the caller thread.
  */
-void SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+ppp::diagnostics::ErrorCode SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
 ```
 
 This is the primary entry point for recording a failure.
@@ -117,9 +117,9 @@ ppp::diagnostics::ErrorCode GetLastErrorCodeSnapshot() noexcept;
 ```cpp
 /**
  * @brief Get the timestamp of the most recent process-wide error.
- * @return Unix timestamp (seconds) of the last SetLastErrorCode call.
+ * @return Monotonic tick timestamp in milliseconds of the last SetLastErrorCode call.
  */
-int64_t GetLastErrorTimestamp() noexcept;
+uint64_t GetLastErrorTimestamp() noexcept;
 ```
 
 ---
@@ -134,10 +134,30 @@ int64_t GetLastErrorTimestamp() noexcept;
  * @param code  The ErrorCode to format.
  * @return      A descriptive string for the error code.
  */
-ppp::string FormatErrorString(ppp::diagnostics::ErrorCode code) noexcept;
+const char* FormatErrorString(ppp::diagnostics::ErrorCode code) noexcept;
 ```
 
 Used by Console UI and log surfaces to convert error codes to displayable text.
+
+Additional metadata helpers:
+
+```cpp
+ErrorSeverity GetErrorSeverity(ppp::diagnostics::ErrorCode code) noexcept;
+const char*   GetErrorSeverityName(ErrorSeverity severity) noexcept;
+ppp::string   FormatErrorTriplet(ppp::diagnostics::ErrorCode code) noexcept;
+
+static constexpr uint32_t kErrorCodeMax = kErrorCodeCount;
+bool IsValidErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+bool IsValidErrorCodeValue(int code) noexcept;
+```
+
+Callers that receive raw integers can perform an O(1) range check with:
+
+```cpp
+if (code < 0 || static_cast<uint32_t>(code) >= ppp::diagnostics::kErrorCodeMax) {
+    // invalid raw error code
+}
+```
 
 ---
 
@@ -166,13 +186,13 @@ When `SetLastErrorCode` is called:
 
 1. The thread-local ErrorCode is updated.
 2. The process-wide snapshot is updated.
-3. The handler registry is **copied under lock**.
-4. Handlers are **invoked outside the lock**.
+3. The handler registry is traversed **in-place without lock or container copy**.
+4. Handlers are invoked synchronously on the caller thread.
 
-This guarantees:
-- No deadlock between dispatch and registration.
-- Handlers see consistent state.
-- A slow handler does not block other threads from setting errors.
+This means:
+- Registration must finish before worker threads start.
+- Handlers see the thread-local and process snapshot immediately.
+- A slow handler delays the caller that publishes the error.
 
 ---
 
@@ -260,11 +280,11 @@ sequenceDiagram
 
     FailSite->>TL: SetLastErrorCode(code)
     TL->>PS: Update process-wide snapshot + timestamp
-    TL->>Handlers: Copy registry under lock
-    Handlers->>Handlers: Invoke callbacks outside lock
+    TL->>Handlers: Iterate handler registry in place
+    Handlers->>Handlers: Invoke callbacks on caller thread
     UI->>PS: GetLastErrorCodeSnapshot()
     UI->>PS: GetLastErrorTimestamp()
-    UI->>UI: FormatErrorString(code) → display
+    UI->>UI: FormatErrorTriplet(code) + severity → display
 ```
 
 Diagnostics flow is single-source:
@@ -371,8 +391,9 @@ bool OpenSocket(const IPEndPoint& endpoint) noexcept {
 void InitDiagnostics() {
     RegisterErrorHandler("console-ui", [](int err) {
         auto code = static_cast<ppp::diagnostics::ErrorCode>(err);
-        ppp::string msg = FormatErrorString(code);
-        ConsoleUI::Instance().ShowError(msg);
+        ppp::string msg = FormatErrorTriplet(code);
+        const char* level = GetErrorSeverityName(GetErrorSeverity(code));
+        ConsoleUI::Instance().ShowError(ppp::string("[") + level + "] " + msg);
     });
 
     RegisterErrorHandler("log-sink", [](int err) {
@@ -388,12 +409,13 @@ void InitDiagnostics() {
 void DisplayStatus() {
     auto code      = GetLastErrorCodeSnapshot();
     auto timestamp = GetLastErrorTimestamp();
-    auto message   = FormatErrorString(code);
+    auto message   = FormatErrorTriplet(code);
+    auto severity  = GetErrorSeverityName(GetErrorSeverity(code));
 
-    printf("[%lld] Last error: %s (%d)\n",
-           (long long)timestamp,
+    printf("[%s] %s (%llu)\n",
+           severity,
            message.c_str(),
-           static_cast<int>(code));
+           (unsigned long long)timestamp);
 }
 ```
 
@@ -413,10 +435,9 @@ void ShutdownDiagnostics() {
 
 - Thread-local storage for `ErrorCode` avoids contention between worker threads.
 - The process-wide snapshot uses `std::atomic` operations for lock-free reads.
-- Handler dispatch copies the registry under `std::mutex` then invokes outside.
-  This prevents handlers from deadlocking on re-entrant error calls.
-- `FormatErrorString` returns a static or pool-allocated string.
-  It is safe to call from signal handlers.
+- Handler dispatch iterates the initialization-time registry in place without lock/copy.
+- `FormatErrorString` returns static descriptor text and `FormatErrorTriplet` builds
+  `<numeric_id> <name>: <message>` strings for UI surfaces.
 
 ---
 

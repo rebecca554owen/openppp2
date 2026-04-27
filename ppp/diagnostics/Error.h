@@ -14,19 +14,21 @@ namespace ppp {
         /**
          * @brief Severity classification for diagnostic error codes.
          *
-         * @details Severity levels are used to classify the urgency and
-         *          recoverability of a diagnostic condition:
-         *          - kInfo    : Normal informational state (no error).
-         *          - kWarning : Recoverable condition; degraded service is possible.
-         *          - kError   : Non-recoverable for the affected session or operation.
-         *          - kFatal   : Unrecoverable; the process must halt or restart.
+         * @details The live catalog currently uses `kInfo`, `kWarning`, `kError`,
+         *          and `kFatal`; `kTrace` and `kDebug` are available for future
+         *          low-noise diagnostics without introducing a parallel severity system.
+         *          Existing `kInfo`/`kWarn`/`kError`/`kFatal` numeric values are
+         *          preserved to avoid unintended downstream integer drift.
          */
         enum class ErrorSeverity : uint8_t
         {
             kInfo    = 0, ///< Informational; normal operation with no error condition.
-            kWarning = 1, ///< Recoverable; degraded service may continue.
+            kWarn    = 1, ///< Recoverable; degraded service may continue.
+            kWarning = kWarn, ///< Backward-compatible alias used by existing X-macro entries.
             kError   = 2, ///< Non-recoverable for the affected session or operation.
             kFatal   = 3, ///< Unrecoverable; process must halt or restart.
+            kTrace   = 4, ///< Fine-grained tracing for low-impact diagnostic events.
+            kDebug   = 5, ///< Debug-only conditions useful during detailed investigation.
         };
 
         /**
@@ -37,6 +39,39 @@ namespace ppp {
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
         };
+
+        /**
+         * @brief Compile-time number of diagnostic error codes defined in ErrorCodes.def.
+         */
+        static constexpr uint32_t                                               kErrorCodeCount = 0
+#define X(name, text, severity) + 1
+#include <ppp/diagnostics/ErrorCodes.def>
+#undef X
+        ;
+
+        /**
+         * @brief Exclusive upper bound for raw integer error-code validation.
+         * @note Callers can validate a raw code with: `code < 0 || code >= kErrorCodeMax`.
+         */
+        static constexpr uint32_t                                               kErrorCodeMax = kErrorCodeCount;
+
+        /**
+         * @brief Tests whether an ErrorCode value is within the valid contiguous catalog range.
+         * @param code Error code to validate.
+         * @return true when code maps to a descriptor entry; otherwise false.
+         */
+        inline bool                                                             IsValidErrorCode(ErrorCode code) noexcept {
+            return static_cast<uint32_t>(code) < kErrorCodeCount;
+        }
+
+        /**
+         * @brief Tests whether a raw integer can be converted to a valid ErrorCode.
+         * @param code Raw integer error value.
+         * @return true when 0 <= code < kErrorCodeCount; otherwise false.
+         */
+        inline bool                                                             IsValidErrorCodeValue(int code) noexcept {
+            return 0 <= code && static_cast<uint32_t>(code) < kErrorCodeCount;
+        }
 
         /**
          * @brief Gets the current thread's last diagnostic error code.
@@ -128,7 +163,8 @@ namespace ppp {
         /**
          * @brief Returns a short human-readable name for a severity level.
          * @param severity  The severity level to name.
-         * @return          A null-terminated ASCII string: "INFO", "WARNING", "ERROR", or "FATAL".
+         * @return          A null-terminated ASCII string: "TRACE", "DEBUG", "INFO",
+         *                  "WARN", "ERROR", or "FATAL".
          *                  Returns "UNKNOWN" for out-of-range values.
          */
         const char*                                                         GetErrorSeverityName(ErrorSeverity severity) noexcept;

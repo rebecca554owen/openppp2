@@ -456,9 +456,9 @@ See `TUI_DESIGN.md` for the complete layout specification.
 The status bar shows a single diagnostics line generated from the process-wide error
 snapshot:
 
-- `No errors` when `ErrorCode::Success` is active.
-- `Error: <message> (<age>)` for the most recent non-success error, where `<age>` is
-  derived from `GetLastErrorTimestamp()` and rendered as `Ns ago`.
+- `[INFO] 0 Success: Success` when `ErrorCode::Success` is active.
+- `[%LEVEL%] <numeric_id> <CodeName>: <message> (<age>)` for the most recent non-success
+  error, where `<age>` is derived from `GetLastErrorTimestamp()` and rendered as `Ns ago`.
 
 VPN state and throughput are still updated internally for command/info output, but they are
 not rendered in the bottom status bar.

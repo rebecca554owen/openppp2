@@ -26,6 +26,8 @@ ErrorCode   ppp::diagnostics::GetLastErrorCode();           // thread-local
 ErrorCode   ppp::diagnostics::GetLastErrorCodeSnapshot();   // last atomically published
 uint64_t    ppp::diagnostics::GetLastErrorTimestamp();      // ms of last published error
 const char* ppp::diagnostics::FormatErrorString(ErrorCode); // human-readable text
+ppp::string ppp::diagnostics::FormatErrorTriplet(ErrorCode); // "<id> <name>: <message>"
+bool ppp::diagnostics::IsValidErrorCodeValue(int);           // raw integer validation
 ```
 
 ---

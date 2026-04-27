@@ -4,6 +4,48 @@
 
 namespace ppp {
     namespace diagnostics {
+        namespace {
+            /**
+             * @brief Immutable descriptor row generated from ErrorCodes.def.
+             */
+            struct ErrorDescriptor final {
+                const char*                                                     name;      ///< Symbolic enum name.
+                const char*                                                     text;      ///< Human-readable message text.
+                ErrorSeverity                                                   severity;  ///< Severity classification.
+            };
+
+            /** @brief Fallback descriptor used for invalid raw code values. */
+            static constexpr ErrorDescriptor                                    kUnknownErrorDescriptor = {
+                "Unknown",
+                "Unknown error",
+                ErrorSeverity::kError,
+            };
+
+            /** @brief Contiguous descriptor table indexed by the raw ErrorCode value. */
+            static constexpr ErrorDescriptor                                    kErrorDescriptors[] = {
+#define X(name, text, severity) {#name, text, severity},
+#include <ppp/diagnostics/ErrorCodes.def>
+#undef X
+            };
+
+            static_assert(kErrorCodeCount == (sizeof(kErrorDescriptors) / sizeof(kErrorDescriptors[0])),
+                "Error descriptor table must remain aligned with ErrorCodes.def.");
+
+            /**
+             * @brief Resolves an ErrorCode into a descriptor row using direct table indexing.
+             * @param code Error code to resolve.
+             * @return Descriptor row for the code, or a static unknown row when out of range.
+             */
+            inline const ErrorDescriptor& ResolveErrorDescriptor(ErrorCode code) noexcept {
+                uint32_t index = static_cast<uint32_t>(code);
+                if (index >= kErrorCodeCount) {
+                    return kUnknownErrorDescriptor;
+                }
+
+                return kErrorDescriptors[index];
+            }
+        }
+
         ErrorCode& ErrorHandler::ThreadLastErrorCode() noexcept {
             static thread_local ErrorCode tls_last_error_code = ErrorCode::Success;
             return tls_last_error_code;
@@ -79,31 +121,23 @@ namespace ppp {
         }
 
         const char* ErrorHandler::FormatErrorString(ErrorCode code) noexcept {
-            switch (code) {
-#define X(name, text, severity) case ErrorCode::name: return text;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-            default:
-                return "Unknown error";
-            }
+            return ResolveErrorDescriptor(code).text;
         }
 
         ErrorSeverity ErrorHandler::GetErrorSeverity(ErrorCode code) noexcept {
-            switch (code) {
-#define X(name, text, severity) case ErrorCode::name: return severity;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-            default:
-                return ErrorSeverity::kError;
-            }
+            return ResolveErrorDescriptor(code).severity;
         }
 
         const char* ErrorHandler::GetErrorSeverityName(ErrorSeverity severity) noexcept {
             switch (severity) {
+            case ErrorSeverity::kTrace:
+                return "TRACE";
+            case ErrorSeverity::kDebug:
+                return "DEBUG";
             case ErrorSeverity::kInfo:
                 return "INFO";
-            case ErrorSeverity::kWarning:
-                return "WARNING";
+            case ErrorSeverity::kWarn:
+                return "WARN";
             case ErrorSeverity::kError:
                 return "ERROR";
             case ErrorSeverity::kFatal:
@@ -114,19 +148,8 @@ namespace ppp {
         }
 
         ppp::string ErrorHandler::FormatErrorTriplet(ErrorCode code) noexcept {
-            // Retrieve the numeric ID, code name, and message for the given code.
-            uint32_t    numeric_id   = static_cast<uint32_t>(code);
-            const char* code_name    = "Unknown";
-            const char* code_message = "Unknown error";
-
-            // Use X-macro expansion to map code → name string and message string.
-            switch (code) {
-#define X(name, text, severity) case ErrorCode::name: code_name = #name; code_message = text; break;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-            default:
-                break;
-            }
+            const ErrorDescriptor& descriptor = ResolveErrorDescriptor(code);
+            uint32_t numeric_id = static_cast<uint32_t>(code);
 
             // Build the triplet: "<uint32_id> <CodeName>: <message>"
             ppp::string result;
@@ -135,10 +158,10 @@ namespace ppp {
             // append via const char* overload, which is compatible with ppp::string.
             result += std::to_string(numeric_id).c_str();
             result += ' ';
-            result += code_name;
+            result += descriptor.name;
             result += ':';
             result += ' ';
-            result += code_message;
+            result += descriptor.text;
             return result;
         }
 

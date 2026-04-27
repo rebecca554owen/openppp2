@@ -75,6 +75,18 @@ static constexpr const char kClearScreen[] = "\x1b[2J\x1b[H";
 static constexpr const char kColorGray[]   = "\x1b[90m";
 /** @brief ANSI bold bright-white foreground (for PPP2 in art). */
 static constexpr const char kColorWhite[]  = "\x1b[1;97m";
+/** @brief ANSI dim gray foreground for TRACE diagnostics. */
+static constexpr const char kColorTrace[]  = "\x1b[2;37m";
+/** @brief ANSI cyan foreground for DEBUG diagnostics. */
+static constexpr const char kColorDebug[]  = "\x1b[36m";
+/** @brief ANSI green foreground for INFO diagnostics. */
+static constexpr const char kColorInfo[]   = "\x1b[32m";
+/** @brief ANSI yellow foreground for WARN diagnostics. */
+static constexpr const char kColorWarn[]   = "\x1b[33m";
+/** @brief ANSI red foreground for ERROR diagnostics. */
+static constexpr const char kColorError[]  = "\x1b[31m";
+/** @brief ANSI bright red foreground for FATAL diagnostics. */
+static constexpr const char kColorFatal[]  = "\x1b[1;31m";
 /** @brief ANSI attribute reset. */
 static constexpr const char kColorReset[]  = "\x1b[0m";
 /** @brief ANSI dim/dark gray (for placeholder text). */
@@ -1106,25 +1118,72 @@ void ConsoleUI::RenderFrame() noexcept {
 
     // --- Status bar (error only) ---
     {
+        auto select_status_color = [](ppp::diagnostics::ErrorSeverity severity) noexcept -> const char* {
+            switch (severity) {
+            case ppp::diagnostics::ErrorSeverity::kTrace:
+                return kColorTrace;
+            case ppp::diagnostics::ErrorSeverity::kDebug:
+                return kColorDebug;
+            case ppp::diagnostics::ErrorSeverity::kInfo:
+                return kColorInfo;
+            case ppp::diagnostics::ErrorSeverity::kWarn:
+                return kColorWarn;
+            case ppp::diagnostics::ErrorSeverity::kError:
+                return kColorError;
+            case ppp::diagnostics::ErrorSeverity::kFatal:
+                return kColorFatal;
+            default:
+                return NULLPTR;
+            }
+        };
+
+        auto build_status_row = [&](const ppp::string& plain_text, const char* color_code) noexcept -> ppp::string {
+            if (2 > width) {
+                return ppp::string();
+            }
+
+            int inner = width - 2;
+            ppp::string fitted = FitWidth(plain_text, inner - 1);
+            ppp::string row;
+            row.reserve(static_cast<std::size_t>(width) + fitted.size() + 32u);
+            row += kVV;
+
+            if (vt_enabled_ && NULLPTR != color_code && '\0' != color_code[0]) {
+                row += color_code;
+                row += fitted;
+                row += kColorReset;
+            } else {
+                row += fitted;
+            }
+
+            row += ' ';
+            row += kVV;
+            row += "\n";
+            return row;
+        };
+
         ppp::string status_text;
+        const char* status_color = NULLPTR;
         {
             ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCodeSnapshot();
-            const char* err_str = ppp::diagnostics::FormatErrorString(code);
+            ppp::diagnostics::ErrorSeverity severity = ppp::diagnostics::GetErrorSeverity(code);
+            
+            const char* severity_name = ppp::diagnostics::GetErrorSeverityName(severity);
             uint64_t err_ts     = ppp::diagnostics::GetLastErrorTimestamp();
             uint64_t now_ms     = ppp::threading::Executors::GetTickCount();
 
-            if (ppp::diagnostics::ErrorCode::Success == code) {
-                status_text = " No errors";
-            } else {
-                status_text  = " Error: ";
-                status_text += (NULLPTR == err_str) ? "Unknown" : err_str;
-                if (0u < err_ts) {
-                    status_text += " (" + FormatAge(now_ms, err_ts) + ")";
-                }
+            status_color  = select_status_color(severity);
+            status_text   = "[";
+            status_text  += (NULLPTR == severity_name) ? "UNKNOWN" : severity_name;
+            status_text  += "] ";
+            status_text  += ppp::diagnostics::FormatErrorTriplet(code);
+
+            if (ppp::diagnostics::ErrorCode::Success != code && 0u < err_ts) {
+                status_text += " (" + FormatAge(now_ms, err_ts) + ")";
             }
         }
 
-        frame += BoxContentRow(status_text, width);
+        frame += build_status_row(status_text, status_color);
     }
 
     // --- Bottom border ---

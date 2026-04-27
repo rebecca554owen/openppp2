@@ -52,7 +52,7 @@ graph TD
 ├──────────────────────────────────────────────────────────────────────┤
 │  > [input line or dim placeholder, white-background block as caret]   │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Error: description (Ns ago) / No errors                             │
+│  [WARN] 118 SocketDisconnected: Socket disconnected (5s ago)         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -562,8 +562,9 @@ from any thread including the IO thread at high frequency.
 
 The bottom status row displays only diagnostics snapshot text:
 
-- `No errors` when `ErrorCode::Success` is active.
-- `Error: <message> (<age>)` for the last non-success error.
+- `[INFO] 0 Success: Success` when `ErrorCode::Success` is active.
+- `[%LEVEL%] <numeric_id> <CodeName>: <message> (<age>)` for the last non-success error.
+- ANSI color follows severity: info=green, warn=yellow, error=red, fatal=bright red.
 
 VPN state and throughput are still maintained for other UI paths, but they are not shown
 in the bottom status row.
@@ -588,11 +589,8 @@ TUI subsystem error codes (from `ppp/diagnostics/Error.h`):
 
 | ErrorCode                | Description                                               |
 |--------------------------|-----------------------------------------------------------|
-| `TuiStartFailed`         | `ConsoleUI::Start()` initialization failed                |
-| `TuiRenderThreadFailed`  | Render thread failed to launch                            |
-| `TuiInputThreadFailed`   | Input thread failed to launch                             |
-| `TuiTerminalSetupFailed` | Terminal raw mode configuration failed                    |
-| `TuiVtProcessingFailed`  | VT100 processing enable failed (Windows only)             |
+| `RuntimeEnvironmentInvalid` | Terminal setup or VT initialization failed           |
+| `RuntimeThreadStartFailed`  | Render/input worker thread failed to launch          |
 
 ---
 

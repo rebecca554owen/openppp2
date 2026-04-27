@@ -2,7 +2,7 @@
 
 > **Subsystem:** `ppp::diagnostics`  
 > **Files:**  
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (542 entries)  
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (542 live entries)  
 > - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum  
 > - `ppp/diagnostics/Error.cpp` — Free function delegations  
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration  
@@ -45,7 +45,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 | **Single source of truth** | All 542 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
 | **No exceptions for error reporting** | `SetLastErrorCode` is `noexcept`. Error conditions are communicated via return values. |
 | **Observer pattern** | Named handlers registered via `RegisterErrorHandler` are called synchronously on error. |
-| **Severity awareness** | Each error code carries a `kInfo`/`kWarning`/`kError`/`kFatal` classification. |
+| **Severity awareness** | Each error code carries a `kTrace`/`kDebug`/`kInfo`/`kWarn`/`kError`/`kFatal` classification. |
 
 ---
 
@@ -127,33 +127,34 @@ enum class ErrorCode : uint32_t {
 
 The enum values are assigned sequentially starting from 0, matching their line order in `ErrorCodes.def`. This numeric ID is used in `FormatErrorTriplet` output and in `last_error_code_snapshot_`.
 
-### Expansion 2: `FormatErrorString` (`ErrorHandler.cpp`, line 55)
+### Expansion 2: descriptor table (`ErrorHandler.cpp`)
 
 ```cpp
-const char* ErrorHandler::FormatErrorString(ErrorCode code) noexcept {
-    switch (code) {
-#define X(name, text, severity) case ErrorCode::name: return text;
+static constexpr ErrorDescriptor kErrorDescriptors[] = {
+#define X(name, text, severity) {#name, text, severity},
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
-    default: return "Unknown error";
-    }
-}
+};
 ```
 
-### Expansion 3: `GetErrorSeverity` (`ErrorHandler.cpp`, line 64)
+`FormatErrorString`, `GetErrorSeverity`, and `FormatErrorTriplet` now all resolve
+metadata through one contiguous descriptor array indexed by the raw `ErrorCode` value.
+
+### Expansion 3: `kErrorCodeCount` / `kErrorCodeMax` (`Error.h`)
 
 ```cpp
-ErrorSeverity ErrorHandler::GetErrorSeverity(ErrorCode code) noexcept {
-    switch (code) {
-#define X(name, text, severity) case ErrorCode::name: return severity;
+static constexpr uint32_t kErrorCodeCount = 0
+#define X(name, text, severity) + 1
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
-    default: return ErrorSeverity::kError;
-    }
-}
+;
+static constexpr uint32_t kErrorCodeMax = kErrorCodeCount;
 ```
 
-### Expansion 4: `FormatErrorTriplet` (`ErrorHandler.cpp`, line 97)
+This lets raw integer callers validate the range with `code < 0 || code >= kErrorCodeMax`
+before converting into `ErrorCode`.
+
+### Expansion 4: `FormatErrorTriplet` (`ErrorHandler.cpp`)
 
 ```cpp
 switch (code) {
@@ -175,9 +176,9 @@ X-macros provide a single authoritative source for all error metadata. The alter
 ```mermaid
 graph LR
     Def[ErrorCodes.def\nOne line per error] -->|#include| E1[ErrorCode enum]
-    Def -->|#include| E2[FormatErrorString switch]
-    Def -->|#include| E3[GetErrorSeverity switch]
-    Def -->|#include| E4[FormatErrorTriplet switch]
+    Def -->|#include| E2[Descriptor table]
+    Def -->|#include| E3[kErrorCodeCount / kErrorCodeMax]
+    Def -->|#include| E4[FormatErrorTriplet output]
 ```
 
 ---
@@ -188,10 +189,13 @@ graph LR
 
 ```cpp
 enum class ErrorSeverity : uint8_t {
-    kInfo    = 0, ///< Informational; normal operation with no error condition.
-    kWarning = 1, ///< Recoverable; degraded service may continue.
-    kError   = 2, ///< Non-recoverable for the affected session or operation.
-    kFatal   = 3, ///< Unrecoverable; process must halt or restart.
+    kInfo    = 0,
+    kWarn    = 1,
+    kWarning = kWarn,
+    kError   = 2,
+    kFatal   = 3,
+    kTrace   = 4,
+    kDebug   = 5,
 };
 ```
 
@@ -199,10 +203,12 @@ enum class ErrorSeverity : uint8_t {
 
 | Level | Value | Meaning | Example Codes |
 |---|---|---|---|
-| `kInfo` | 0 | Normal; not an error. Only `Success` has this level. | `Success` |
-| `kWarning` | 1 | Degraded service; operation retried or skipped gracefully. | `SocketTimeout`, `TcpConnectTimeout`, `IPv6LeaseUnavailable` |
+| `kInfo` | 0 | Normal; not an error. Only `Success` currently uses this level. | `Success` |
+| `kWarn` / `kWarning` | 1 | Degraded service; operation retried or skipped gracefully. | `SocketTimeout`, `TcpConnectTimeout`, `IPv6LeaseUnavailable` |
 | `kError` | 2 | Operation failed; session may be terminated but process continues. | Most network, socket, and IPv6 errors |
 | `kFatal` | 3 | Unrecoverable; process should exit and restart. | `RuntimeInitializationFailed`, `IPv6Unsupported`, `PlatformNotSupportGUAMode` |
+| `kTrace` | 4 | Reserved for low-noise tracing. The current live catalog does not assign it yet. | None today |
+| `kDebug` | 5 | Reserved for debug-only diagnostics. The current live catalog does not assign it yet. | None today |
 
 ### Severity Distribution (from ErrorCodes.def)
 
@@ -228,7 +234,7 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` is a strongly-typed `uint32_t` enum with 542 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`.
+`ErrorCode` is a strongly-typed `uint32_t` enum with 542 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`, and `kErrorCodeMax` is the exclusive upper bound for raw integer validation.
 
 ### Category Structure of `ErrorCodes.def`
 
@@ -473,7 +479,7 @@ Returns the most recent error set across **all threads** (last-writer-wins). Use
 
 ## 11. `FormatErrorTriplet`
 
-**Location:** `ErrorHandler.cpp`, lines 89–116
+**Location:** `ErrorHandler.cpp`
 
 Produces a human-readable diagnostic string of the form:
 
@@ -488,30 +494,21 @@ Examples:
 293 IPv6NeighborProxyEnableFailed: IPv6 neighbor proxy enable failed
 ```
 
-### Implementation
+### Implementation shape
 
 ```cpp
 ppp::string ErrorHandler::FormatErrorTriplet(ErrorCode code) noexcept {
-    uint32_t    numeric_id   = static_cast<uint32_t>(code);
-    const char* code_name    = "Unknown";
-    const char* code_message = "Unknown error";
-
-    switch (code) {
-#define X(name, text, severity) \
-    case ErrorCode::name: code_name = #name; code_message = text; break;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-    default: break;
-    }
+    const ErrorDescriptor& descriptor = ResolveErrorDescriptor(code);
+    uint32_t numeric_id = static_cast<uint32_t>(code);
 
     ppp::string result;
     result.reserve(128);
     result += std::to_string(numeric_id).c_str();
     result += ' ';
-    result += code_name;
+    result += descriptor.name;
     result += ':';
     result += ' ';
-    result += code_message;
+    result += descriptor.text;
     return result;
 }
 ```

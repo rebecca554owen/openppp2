@@ -2,7 +2,7 @@
 
 > **子系统：** `ppp::diagnostics`
 > **相关文件：**
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（542 条）
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（542 条实时条目）
 > - `ppp/diagnostics/Error.h` — 公共 API、`ErrorCode` 枚举、`ErrorSeverity` 枚举
 > - `ppp/diagnostics/Error.cpp` — 自由函数委托实现
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` 单例声明
@@ -45,7 +45,7 @@
 | **单一信息源** | 所有 542 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
 | **错误报告不抛异常** | `SetLastErrorCode` 声明为 `noexcept`；错误条件通过返回值传递 |
 | **观察者模式** | 通过 `RegisterErrorHandler` 注册具名回调，错误发生时同步调用 |
-| **严重级别感知** | 每个错误码携带 `kInfo`/`kWarning`/`kError`/`kFatal` 分级 |
+| **严重级别感知** | 每个错误码携带 `kTrace`/`kDebug`/`kInfo`/`kWarn`/`kError`/`kFatal` 分级 |
 
 ---
 
@@ -127,33 +127,34 @@ enum class ErrorCode : uint32_t {
 
 枚举值从 0 开始按 `ErrorCodes.def` 中的行序依次递增。该数值用于 `FormatErrorTriplet` 输出和 `last_error_code_snapshot_`。
 
-### 展开 2：`FormatErrorString`（`ErrorHandler.cpp` 第 55 行）
+### 展开 2：描述符数组（`ErrorHandler.cpp`）
 
 ```cpp
-const char* ErrorHandler::FormatErrorString(ErrorCode code) noexcept {
-    switch (code) {
-#define X(name, text, severity) case ErrorCode::name: return text;
+static constexpr ErrorDescriptor kErrorDescriptors[] = {
+#define X(name, text, severity) {#name, text, severity},
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
-    default: return "Unknown error";
-    }
-}
+};
 ```
 
-### 展开 3：`GetErrorSeverity`（`ErrorHandler.cpp` 第 64 行）
+`FormatErrorString`、`GetErrorSeverity` 与 `FormatErrorTriplet` 现在都通过同一个
+连续描述符数组，按原始 `ErrorCode` 数值直接索引访问。
+
+### 展开 3：`kErrorCodeCount` / `kErrorCodeMax`（`Error.h`）
 
 ```cpp
-ErrorSeverity ErrorHandler::GetErrorSeverity(ErrorCode code) noexcept {
-    switch (code) {
-#define X(name, text, severity) case ErrorCode::name: return severity;
+static constexpr uint32_t kErrorCodeCount = 0
+#define X(name, text, severity) + 1
 #include <ppp/diagnostics/ErrorCodes.def>
 #undef X
-    default: return ErrorSeverity::kError;
-    }
-}
+;
+static constexpr uint32_t kErrorCodeMax = kErrorCodeCount;
 ```
 
-### 展开 4：`FormatErrorTriplet`（`ErrorHandler.cpp` 第 97 行）
+这样一来，持有原始整数错误值的调用方就可以用 `code < 0 || code >= kErrorCodeMax`
+做 O(1) 边界校验。
+
+### 展开 4：`FormatErrorTriplet`（`ErrorHandler.cpp`）
 
 ```cpp
 switch (code) {
@@ -174,9 +175,9 @@ X-macro 为所有错误元数据提供了唯一权威来源。若改用分离的
 ```mermaid
 graph LR
     Def[ErrorCodes.def\n每个错误一行] -->|#include| E1[ErrorCode 枚举]
-    Def -->|#include| E2[FormatErrorString switch]
-    Def -->|#include| E3[GetErrorSeverity switch]
-    Def -->|#include| E4[FormatErrorTriplet switch]
+    Def -->|#include| E2[描述符数组]
+    Def -->|#include| E3[kErrorCodeCount / kErrorCodeMax]
+    Def -->|#include| E4[FormatErrorTriplet 输出]
 ```
 
 ---
@@ -187,10 +188,13 @@ graph LR
 
 ```cpp
 enum class ErrorSeverity : uint8_t {
-    kInfo    = 0, ///< 仅供参考；正常运行，无错误条件。
-    kWarning = 1, ///< 可恢复；服务降级后可继续运行。
-    kError   = 2, ///< 本次操作或会话不可恢复。
-    kFatal   = 3, ///< 不可恢复；进程必须停止或重启。
+    kInfo    = 0,
+    kWarn    = 1,
+    kWarning = kWarn,
+    kError   = 2,
+    kFatal   = 3,
+    kTrace   = 4,
+    kDebug   = 5,
 };
 ```
 
@@ -198,10 +202,12 @@ enum class ErrorSeverity : uint8_t {
 
 | 级别 | 值 | 含义 | 示例码 |
 |---|---|---|---|
-| `kInfo` | 0 | 正常；仅 `Success` 使用此级别 | `Success` |
-| `kWarning` | 1 | 服务降级；操作可重试或跳过 | `SocketTimeout`、`TcpConnectTimeout`、`IPv6LeaseUnavailable` |
-| `kError` | 2 | 操作失败；会话可能终止，进程继续运行 | 大多数 IPv6 及会话错误 |
+| `kInfo` | 0 | 正常；当前仅 `Success` 使用此级别 | `Success` |
+| `kWarn` / `kWarning` | 1 | 服务降级；操作可重试或跳过 | `SocketTimeout`、`TcpConnectTimeout`、`IPv6LeaseUnavailable` |
+| `kError` | 2 | 操作失败；会话可能终止，进程继续运行 | 大多数 IPv6 与会话错误 |
 | `kFatal` | 3 | 不可恢复；进程应退出并重启 | `RuntimeInitializationFailed`、`IPv6Unsupported`、`PlatformNotSupportGUAMode` |
+| `kTrace` | 4 | 预留给低噪声 tracing；当前实时目录尚未使用 | 当前无 |
+| `kDebug` | 5 | 预留给调试级诊断；当前实时目录尚未使用 | 当前无 |
 
 ### 严重级别分布（来自 ErrorCodes.def）
 
@@ -227,7 +233,7 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 542 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配。
+`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 542 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配，`kErrorCodeMax` 则是原始整数校验时使用的独占上界。
 
 ### `ErrorCodes.def` 的分类结构
 
@@ -472,7 +478,7 @@ ErrorCode ErrorHandler::GetLastErrorCodeSnapshot() noexcept {
 
 ## 11. `FormatErrorTriplet`
 
-**位置：** `ErrorHandler.cpp` 第 89–116 行
+**位置：** `ErrorHandler.cpp`
 
 生成如下格式的可读诊断字符串：
 
@@ -487,30 +493,21 @@ ErrorCode ErrorHandler::GetLastErrorCodeSnapshot() noexcept {
 293 IPv6NeighborProxyEnableFailed: IPv6 neighbor proxy enable failed
 ```
 
-### 实现
+### 实现形态
 
 ```cpp
 ppp::string ErrorHandler::FormatErrorTriplet(ErrorCode code) noexcept {
-    uint32_t    numeric_id   = static_cast<uint32_t>(code);
-    const char* code_name    = "Unknown";
-    const char* code_message = "Unknown error";
-
-    switch (code) {
-#define X(name, text, severity) \
-    case ErrorCode::name: code_name = #name; code_message = text; break;
-#include <ppp/diagnostics/ErrorCodes.def>
-#undef X
-    default: break;
-    }
+    const ErrorDescriptor& descriptor = ResolveErrorDescriptor(code);
+    uint32_t numeric_id = static_cast<uint32_t>(code);
 
     ppp::string result;
     result.reserve(128);
     result += std::to_string(numeric_id).c_str();
     result += ' ';
-    result += code_name;
+    result += descriptor.name;
     result += ':';
     result += ' ';
-    result += code_message;
+    result += descriptor.text;
     return result;
 }
 ```

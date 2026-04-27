@@ -169,12 +169,22 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
             auto process = [&]() noexcept {
                 ppp::set<ppp::string> ips;
                 if (chnroutes2_getiplist(ips, nation, response_text) < 1) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                    }
+
                     return -1;
                 }
 
                 auto bypass = GLOBAL_.bypass;
                 if (NULL == bypass || bypass->find(path) == bypass->end()) {
-                    chnroutes2_saveiplist(path, ips);
+                    if (!chnroutes2_saveiplist(path, ips)) {
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                        }
+                        return -1;
+                    }
+
                     return 0;
                 }
 
@@ -187,6 +197,10 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
 
                 ppp::string news = chnroutes2_toiplist(ips);
                 if (!File::WriteAllBytes(path.data(), news.data(), news.size())) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                    }
+                    
                     return -1;
                 }
 
@@ -206,10 +220,18 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
         ppp::set<ppp::string> ips;
         if (chnroutes2_getiplist(ips, nation) > 0) {
             ok = chnroutes2_saveiplist(path, ips);
+            if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+            }
+        }
+        else {
+            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+            }
         }
     }
 
-    if (!virr && !ok) {
+    if (!virr && !ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
     }
 }

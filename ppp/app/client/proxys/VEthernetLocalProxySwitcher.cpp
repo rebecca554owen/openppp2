@@ -232,7 +232,11 @@ namespace ppp {
                     bool bok = CreateAlwaysTimeout();
                     if (!bok) {
                         acceptor->Dispose();
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTimerStartFailed);
+                        }
+
                         return false;
                     }
 
@@ -313,7 +317,12 @@ namespace ppp {
                     }
                     
                     SynchronizedObjectScope scope(syncobj_);
-                    return ppp::collections::Dictionary::TryAdd(connections_, connection.get(), connection);
+                    bool added = ppp::collections::Dictionary::TryAdd(connections_, connection.get(), connection);
+                    if (!added) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
+                    }
+                    
+                    return added;
                 }
 
                 /**
@@ -369,7 +378,9 @@ namespace ppp {
                             connection->Dispose(); 
                         }
 
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
+                        }
                     }
 
                     return bok;
@@ -399,13 +410,22 @@ namespace ppp {
                         return false;
                     }
 
-                    timeout_ = timeout;
                     timeout->TickEvent = 
                         [self, this](ppp::threading::Timer* sender, ppp::threading::Timer::TickEventArgs& e) noexcept {
                             UInt64 now = ppp::threading::Executors::GetTickCount();
                             Update(now);
                         };
-                    return timeout->SetInterval(1000) && timeout->Start();
+
+                    if (!timeout->SetInterval(1000)) {
+                        return false;
+                    }
+
+                    if (!timeout->Start()) {
+                        return false;
+                    }
+
+                    timeout_ = timeout;
+                    return true;
                 }
 
                 /**
