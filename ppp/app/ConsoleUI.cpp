@@ -547,6 +547,14 @@ bool ConsoleUI::Start() noexcept {
     EnterAlternateScreen();
     ppp::HideConsoleCursor(true);
 
+    std::atexit([]() noexcept {
+        ConsoleUI& self = ConsoleUI::GetInstance();
+        if (self.altscreen_entered_) {
+            ppp::HideConsoleCursor(false);
+            self.LeaveAlternateScreen();
+        }
+    });
+
     force_redraw_.store(true, std::memory_order_release);
     dirty_.store(true, std::memory_order_release);
 
@@ -1712,6 +1720,9 @@ void ConsoleUI::InputLoop() noexcept {
                     break;
                 }
                 char c = seq[seq_len];
+                if (seq_len == 0 && 'O' == c) {
+                    continue;
+                }
                 if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || '~' == c) {
                     ++seq_len;
                     break;
