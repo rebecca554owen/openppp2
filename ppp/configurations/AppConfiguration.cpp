@@ -309,6 +309,9 @@ namespace ppp {
             config.telemetry.span = false;
             config.telemetry.endpoint = "";
             config.telemetry.log_file = "";
+            config.telemetry.console_log = true;
+            config.telemetry.console_metric = true;
+            config.telemetry.console_span = true;
 
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
@@ -1239,6 +1242,9 @@ namespace ppp {
             AssignBoolIfPresent(config.telemetry.span, json["telemetry"]["span"]);
             AssignIfPresent(config.telemetry.endpoint, json["telemetry"]["endpoint"]);
             AssignIfPresent(config.telemetry.log_file, json["telemetry"]["log-file"]);
+            AssignBoolIfPresent(config.telemetry.console_log, json["telemetry"]["console-log"]);
+            AssignBoolIfPresent(config.telemetry.console_metric, json["telemetry"]["console-metric"]);
+            AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
 
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
@@ -1464,6 +1470,9 @@ namespace ppp {
             telemetry["span"] = config.telemetry.span;
             telemetry["endpoint"] = config.telemetry.endpoint;
             telemetry["log-file"] = config.telemetry.log_file;
+            telemetry["console-log"] = config.telemetry.console_log;
+            telemetry["console-metric"] = config.telemetry.console_metric;
+            telemetry["console-span"] = config.telemetry.console_span;
             root["telemetry"] = telemetry;
 
             return root;

@@ -72,6 +72,9 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     ppp::telemetry::SetMinLevel(configuration->telemetry.level);
     ppp::telemetry::SetCountEnabled(configuration->telemetry.count);
     ppp::telemetry::SetSpanEnabled(configuration->telemetry.span);
+    ppp::telemetry::SetConsoleLogEnabled(configuration->telemetry.console_log);
+    ppp::telemetry::SetConsoleMetricEnabled(configuration->telemetry.console_metric);
+    ppp::telemetry::SetConsoleSpanEnabled(configuration->telemetry.console_span);
     ppp::telemetry::Configure(configuration->telemetry.endpoint.c_str());
     ppp::telemetry::SetLogFile(configuration->telemetry.log_file.c_str());
 #endif

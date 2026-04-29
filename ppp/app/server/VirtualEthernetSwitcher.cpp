@@ -1343,6 +1343,7 @@ namespace ppp {
              * @return true if at least one acceptor starts successfully.
              */
              bool VirtualEthernetSwitcher::Run() noexcept {
+                ppp::telemetry::SpanScope span("server.acceptors.start");
                 // Snapshot the acceptor list under the lock, then start accept loops
                 // outside the lock to avoid holding syncobj_ across socket operations.
                 std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptors_snapshot[NetworkAcceptorCategories_Max];
@@ -1360,6 +1361,7 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 bool bany = false;
+                auto started_at = std::chrono::steady_clock::now();
                 for (int categories = NetworkAcceptorCategories_Min; categories < NetworkAcceptorCategories_Max; categories++) {
                     std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor = acceptors_snapshot[categories];
                     if (NULLPTR == acceptor) {
@@ -1385,6 +1387,8 @@ namespace ppp {
                         acceptors_[categories] = NULLPTR;
                     }
                 }
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("server.acceptors.start.us", elapsed);
                 if (bany) {
                     ppp::telemetry::Log(Level::kInfo, "server", "server acceptors running");
                 }

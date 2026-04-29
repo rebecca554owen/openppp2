@@ -374,6 +374,7 @@ namespace ppp {
         }
 
         bool TapLinux::EnableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
+            ppp::telemetry::SpanScope span("tap.ipv6.neighbor.proxy.enable");
             if (!IsSafeShellToken(ifrName)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
@@ -381,7 +382,11 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "sysctl -w net.ipv6.conf.%s.proxy_ndp=1 > /dev/null 2>&1", ifrName.data());
-            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            auto started_at = std::chrono::steady_clock::now();
+            bool ok = ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+            ppp::telemetry::Histogram("tap.ipv6.neighbor.proxy.enable.us", elapsed);
+            return ok;
         }
 
         bool TapLinux::QueryIPv6NeighborProxy(const ppp::string& ifrName, bool& enabled) noexcept {
@@ -430,6 +435,7 @@ namespace ppp {
         }
 
         bool TapLinux::DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept {
+            ppp::telemetry::SpanScope span("tap.ipv6.neighbor.proxy.disable");
             if (!IsSafeShellToken(ifrName)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
@@ -437,7 +443,11 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "sysctl -w net.ipv6.conf.%s.proxy_ndp=0 > /dev/null 2>&1", ifrName.data());
-            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            auto started_at = std::chrono::steady_clock::now();
+            bool ok = ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+            ppp::telemetry::Histogram("tap.ipv6.neighbor.proxy.disable.us", elapsed);
+            return ok;
         }
 
         bool TapLinux::AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {

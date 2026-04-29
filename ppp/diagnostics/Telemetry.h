@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstdarg>
+#include <cstddef>
 
 #ifndef PPP_TELEMETRY
 # define PPP_TELEMETRY 0
@@ -27,6 +28,11 @@ namespace ppp {
             kVerb   = 1, ///< Branch decisions, policy hits.
             kDebug  = 2, ///< Handshake, mux, transit tun details.
             kTrace  = 3, ///< Per-packet or per-event (most verbose, highest cost).
+        };
+
+        struct Attribute final {
+            const char* key;
+            const char* value;
         };
 
         /**
@@ -68,6 +74,7 @@ namespace ppp {
 #if PPP_TELEMETRY
 
         void Log(Level level, const char* component, const char* fmt, ...) noexcept;
+        void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept;
         void Count(const char* metric, int64_t delta) noexcept;
         void Gauge(const char* metric, int64_t value) noexcept;
         void Histogram(const char* metric, int64_t value) noexcept;
@@ -75,6 +82,13 @@ namespace ppp {
         void SetEnabled(bool enabled) noexcept;
         void SetCountEnabled(bool enabled) noexcept;
         void SetSpanEnabled(bool enabled) noexcept;
+        void SetConsoleLogEnabled(bool enabled) noexcept;
+        void SetConsoleMetricEnabled(bool enabled) noexcept;
+        void SetConsoleSpanEnabled(bool enabled) noexcept;
+        bool IsConsoleLogEnabled() noexcept;
+        bool IsConsoleMetricEnabled() noexcept;
+        bool IsConsoleSpanEnabled() noexcept;
+        int  GetMinLevel() noexcept;
         void SetMinLevel(int level) noexcept;
         void Configure(const char* endpoint) noexcept;
         void SetLogFile(const char* path) noexcept;
@@ -83,6 +97,7 @@ namespace ppp {
 #else
 
         inline void Log(Level, const char*, const char*, ...) noexcept {}
+        inline void LogWithAttributes(Level, const char*, const Attribute*, size_t, const char*, ...) noexcept {}
         inline void Count(const char*, int64_t) noexcept {}
         inline void Gauge(const char*, int64_t) noexcept {}
         inline void Histogram(const char*, int64_t) noexcept {}
@@ -90,6 +105,13 @@ namespace ppp {
         inline void SetEnabled(bool) noexcept {}
         inline void SetCountEnabled(bool) noexcept {}
         inline void SetSpanEnabled(bool) noexcept {}
+        inline void SetConsoleLogEnabled(bool) noexcept {}
+        inline void SetConsoleMetricEnabled(bool) noexcept {}
+        inline void SetConsoleSpanEnabled(bool) noexcept {}
+        inline bool IsConsoleLogEnabled() noexcept { return false; }
+        inline bool IsConsoleMetricEnabled() noexcept { return false; }
+        inline bool IsConsoleSpanEnabled() noexcept { return false; }
+        inline int  GetMinLevel() noexcept { return 0; }
         inline void SetMinLevel(int) noexcept {}
         inline void Configure(const char*) noexcept {}
         inline void SetLogFile(const char*) noexcept {}

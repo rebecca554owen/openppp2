@@ -216,6 +216,9 @@ namespace ppp {
                 bool                                                        span;           ///< Enable trace spans when true.
                 ppp::string                                                 endpoint;       ///< Optional OTLP/gRPC endpoint; empty uses built-in stderr backend.
                 ppp::string                                                 log_file;       ///< Optional local log file path; empty disables file output.
+                bool                                                        console_log;    ///< Show log events on local console/file sink.
+                bool                                                        console_metric; ///< Show counter/gauge/histogram events on local console/file sink.
+                bool                                                        console_span;   ///< Show span events on local console/file sink.
             }                                                               telemetry;       ///< Optional telemetry/observability configuration.
         public:
             /**

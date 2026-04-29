@@ -823,6 +823,7 @@ namespace ppp {
 
             /** @brief Restores previous IPv6 configuration captured before apply. */
             void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
+                ppp::telemetry::SpanScope span("client.ipv6.restore");
                 if (!ipv6_applied_) {
                     return;
                 }
@@ -852,7 +853,10 @@ namespace ppp {
                 ipv6_context.InterfaceName = tun_ni->Name;
 
                 bool nat_mode = information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                auto started_at = std::chrono::steady_clock::now();
                 ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, information_extensions_.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("client.ipv6.restore.us", elapsed);
 
                 ipv6_applied_ = false;
                 ipv6_state_.Clear();

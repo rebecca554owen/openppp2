@@ -19,12 +19,14 @@
 #include <vector>
 #include <memory>
 #include <sstream>
+#include <ctime>
 
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <process.h>
 #include <windows.h>
+#include <io.h>
 #pragma comment(lib, "ws2_32.lib")
 using socklen_t = int;
 using ssize_t = int;
@@ -33,6 +35,7 @@ using ssize_t = int;
 #include <netdb.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
 #define closesocket close
 #define INVALID_SOCKET (-1)
 using SOCKET = int;
@@ -45,6 +48,9 @@ namespace ppp {
         std::atomic<bool> g_enabled{false};
         std::atomic<bool> g_enabled_count{false};
         std::atomic<bool> g_enabled_span{false};
+        std::atomic<bool> g_console_log{true};
+        std::atomic<bool> g_console_metric{true};
+        std::atomic<bool> g_console_span{true};
         std::string       g_endpoint;
         std::string       g_log_file;
 
@@ -107,6 +113,50 @@ namespace ppp {
 #endif
             }
 
+            bool IsStderrTerminal() noexcept {
+#if defined(_WIN32)
+                return _isatty(_fileno(stderr)) != 0;
+#else
+                return isatty(fileno(stderr)) != 0;
+#endif
+            }
+
+            std::string ShortHex64(uint64_t value) {
+                std::string full = Hex64(value);
+                return full.size() > 8 ? full.substr(0, 8) : full;
+            }
+
+            std::string FormatWallClock(uint64_t unix_ns) {
+                const std::time_t seconds = (std::time_t)(unix_ns / 1000000000ULL);
+                const uint64_t micros = (unix_ns / 1000ULL) % 1000000ULL;
+                std::tm tmv{};
+#if defined(_WIN32)
+                localtime_s(&tmv, &seconds);
+#else
+                localtime_r(&seconds, &tmv);
+#endif
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%06llu",
+                    tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                    tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
+                    (unsigned long long)micros);
+                return buf;
+            }
+
+            const char* LevelColor(Level level) noexcept {
+                switch (level) {
+                    case Level::kInfo:  return "\x1b[32m";
+                    case Level::kVerb:  return "\x1b[36m";
+                    case Level::kDebug: return "\x1b[33m";
+                    case Level::kTrace: return "\x1b[35m";
+                }
+                return "\x1b[0m";
+            }
+
+            const char* ResetColor() noexcept {
+                return "\x1b[0m";
+            }
+
             std::string Hex64(uint64_t value) {
                 std::ostringstream oss;
                 oss << std::hex << std::nouppercase;
@@ -131,6 +181,34 @@ namespace ppp {
 
         void SetSpanEnabled(bool enabled) noexcept {
             g_enabled_span.store(enabled, std::memory_order_relaxed);
+        }
+
+        void SetConsoleLogEnabled(bool enabled) noexcept {
+            g_console_log.store(enabled, std::memory_order_relaxed);
+        }
+
+        void SetConsoleMetricEnabled(bool enabled) noexcept {
+            g_console_metric.store(enabled, std::memory_order_relaxed);
+        }
+
+        void SetConsoleSpanEnabled(bool enabled) noexcept {
+            g_console_span.store(enabled, std::memory_order_relaxed);
+        }
+
+        bool IsConsoleLogEnabled() noexcept {
+            return g_console_log.load(std::memory_order_relaxed);
+        }
+
+        bool IsConsoleMetricEnabled() noexcept {
+            return g_console_metric.load(std::memory_order_relaxed);
+        }
+
+        bool IsConsoleSpanEnabled() noexcept {
+            return g_console_span.load(std::memory_order_relaxed);
+        }
+
+        int GetMinLevel() noexcept {
+            return g_min_level.load(std::memory_order_relaxed);
         }
 
         void Configure(const char* endpoint) noexcept {
@@ -162,6 +240,7 @@ namespace ppp {
                 Level                                 level;
                 std::string                           component;
                 std::string                           message;
+                std::vector<std::pair<std::string, std::string>> attributes;
             };
 
             struct CounterEvent {
@@ -282,6 +361,15 @@ namespace ppp {
                 }
 
             private:
+                static std::string BuildAttributeJson(const std::vector<std::pair<std::string, std::string>>& attributes) noexcept {
+                    std::string json;
+                    for (size_t i = 0; i < attributes.size(); ++i) {
+                        if (i > 0) json += ",";
+                        json += "{\"key\":\"" + JsonEscape(attributes[i].first) + "\",\"value\":{\"stringValue\":\"" + JsonEscape(attributes[i].second) + "\"}}";
+                    }
+                    return json;
+                }
+
                 void PostHttp(const std::string& body) noexcept {
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (host_.empty()) return;
@@ -356,7 +444,11 @@ namespace ppp {
                         json += "\"attributes\":[";
                         json += "{\"key\":\"component\",\"value\":{\"stringValue\":\"" + JsonEscape(events[i].component) + "\"}},";
                         json += "{\"key\":\"log.level\",\"value\":{\"stringValue\":\"" + LevelName(events[i].level) + "\"}},";
-                        json += "{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}]}";
+                        json += "{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}";
+                        if (!events[i].attributes.empty()) {
+                            json += "," + BuildAttributeJson(events[i].attributes);
+                        }
+                        json += "]}";
                     }
                     json += "]}]}]}";
                     return json;
@@ -480,13 +572,22 @@ namespace ppp {
                 TelemetryBackend() { worker_ = std::thread(&TelemetryBackend::Run, this); }
                 ~TelemetryBackend() { Stop(); }
 
-                void EnqueueLog(Level level, const char* component, const char* message) {
+                void EnqueueLog(Level level, const char* component, const char* message, const Attribute* attrs = nullptr, size_t attr_count = 0) {
                     if (!running_.load()) return;
                     TraceContext ctx{};
                     const bool has_ctx = TryGetCurrentTraceContext(ctx);
+                    std::vector<std::pair<std::string, std::string>> copied_attrs;
+                    copied_attrs.reserve(attr_count);
+                    for (size_t i = 0; i < attr_count; ++i) {
+                        const Attribute& attr = attrs[i];
+                        if (!attr.key || !attr.value) {
+                            continue;
+                        }
+                        copied_attrs.emplace_back(attr.key, attr.value);
+                    }
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (log_queue_.size() >= kMaxQueueSize) { dropped_logs_++; return; }
-                    log_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, level, component, message});
+                    log_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, level, component, message, std::move(copied_attrs)});
                     cv_.notify_one();
                 }
 
@@ -681,6 +782,9 @@ namespace ppp {
                 }
 
                 void PrintLog(const LogEvent& ev) noexcept {
+                    if (!g_console_log.load(std::memory_order_relaxed)) {
+                        return;
+                    }
                     const char* level_str = "INFO";
                     switch (ev.level) {
                         case Level::kVerb:  level_str = "VERB";  break;
@@ -688,38 +792,101 @@ namespace ppp {
                         case Level::kTrace: level_str = "TRACE"; break;
                         default: break;
                     }
-                    char line[1536];
-                    std::snprintf(line, sizeof(line), "[TELEMETRY][%s][%s] %s\n", level_str, ev.component.c_str(), ev.message.c_str());
-                    std::fputs(line, stderr);
-                    file_sink_.Write(line);
+                    const bool tty = IsStderrTerminal();
+                    std::string line;
+                    line += "[" + FormatWallClock(ev.timestamp_ns) + "] ";
+                    if (tty) line += LevelColor(ev.level);
+                    line += level_str;
+                    if (tty) line += ResetColor();
+                    line += " [";
+                    line += ev.component;
+                    line += "]";
+                    if (ev.has_trace_context) {
+                        line += " trace=" + ShortHex64(ev.trace_id_hi) + ShortHex64(ev.trace_id_lo);
+                        line += " span=" + ShortHex64(ev.span_id);
+                    }
+                    line += " tid=" + std::to_string(ev.thread_id);
+                    line += " :: ";
+                    line += ev.message;
+                    if (!ev.attributes.empty()) {
+                        line += " attrs={";
+                        for (size_t i = 0; i < ev.attributes.size(); ++i) {
+                            if (i > 0) line += ", ";
+                            line += ev.attributes[i].first;
+                            line += "=";
+                            line += ev.attributes[i].second;
+                        }
+                        line += "}";
+                    }
+                    line += "\n";
+                    std::fputs(line.c_str(), stderr);
+                    file_sink_.Write(line.c_str());
                 }
 
                 void PrintCounter(const CounterEvent& ev) noexcept {
-                    char line[512];
-                    std::snprintf(line, sizeof(line), "[TELEMETRY][COUNT][%s] delta=%" PRId64 "\n", ev.metric.c_str(), ev.delta);
-                    std::fputs(line, stderr);
-                    file_sink_.Write(line);
+                    if (!g_console_metric.load(std::memory_order_relaxed)) {
+                        return;
+                    }
+                    std::string line;
+                    line += "[" + FormatWallClock(ev.timestamp_ns) + "] COUNT [" + ev.metric + "]";
+                    if (ev.has_trace_context) {
+                        line += " trace=" + ShortHex64(ev.trace_id_hi) + ShortHex64(ev.trace_id_lo);
+                        line += " span=" + ShortHex64(ev.span_id);
+                    }
+                    line += " tid=" + std::to_string(ev.thread_id);
+                    line += " delta=" + std::to_string(ev.delta) + "\n";
+                    std::fputs(line.c_str(), stderr);
+                    file_sink_.Write(line.c_str());
                 }
 
                 void PrintSpan(const SpanEvent& ev) noexcept {
-                    char line[512];
-                    std::snprintf(line, sizeof(line), "[TELEMETRY][SPAN][%s] session=%s\n", ev.name.c_str(), ev.session_id.c_str());
-                    std::fputs(line, stderr);
-                    file_sink_.Write(line);
+                    if (!g_console_span.load(std::memory_order_relaxed)) {
+                        return;
+                    }
+                    std::string line;
+                    line += "[" + FormatWallClock(ev.end_time_ns) + "] SPAN [" + ev.name + "]";
+                    line += " trace=" + ShortHex64(ev.trace_id_hi) + ShortHex64(ev.trace_id_lo);
+                    line += " span=" + ShortHex64(ev.span_id);
+                    if (ev.parent_span_id != 0) {
+                        line += " parent=" + ShortHex64(ev.parent_span_id);
+                    }
+                    if (!ev.session_id.empty()) {
+                        line += " session=" + ev.session_id;
+                    }
+                    line += " dur=" + std::to_string((ev.end_time_ns - ev.start_time_ns) / 1000ULL) + "us\n";
+                    std::fputs(line.c_str(), stderr);
+                    file_sink_.Write(line.c_str());
                 }
 
                 void PrintGauge(const GaugeEvent& ev) noexcept {
-                    char line[512];
-                    std::snprintf(line, sizeof(line), "[TELEMETRY][GAUGE][%s] value=%" PRId64 "\n", ev.metric.c_str(), ev.value);
-                    std::fputs(line, stderr);
-                    file_sink_.Write(line);
+                    if (!g_console_metric.load(std::memory_order_relaxed)) {
+                        return;
+                    }
+                    std::string line;
+                    line += "[" + FormatWallClock(ev.timestamp_ns) + "] GAUGE [" + ev.metric + "]";
+                    if (ev.has_trace_context) {
+                        line += " trace=" + ShortHex64(ev.trace_id_hi) + ShortHex64(ev.trace_id_lo);
+                        line += " span=" + ShortHex64(ev.span_id);
+                    }
+                    line += " tid=" + std::to_string(ev.thread_id);
+                    line += " value=" + std::to_string(ev.value) + "\n";
+                    std::fputs(line.c_str(), stderr);
+                    file_sink_.Write(line.c_str());
                 }
 
                 void PrintHistogram(const HistogramEvent& ev) noexcept {
-                    char line[512];
-                    std::snprintf(line, sizeof(line), "[TELEMETRY][HISTOGRAM][%s] sample=%" PRId64 "\n", ev.metric.c_str(), ev.value);
-                    std::fputs(line, stderr);
-                    file_sink_.Write(line);
+                    if (!g_console_metric.load(std::memory_order_relaxed)) {
+                        return;
+                    }
+                    std::string line;
+                    line += "[" + FormatWallClock(ev.timestamp_ns) + "] HIST [" + ev.metric + "]";
+                    if (ev.has_trace_context) {
+                        line += " trace=" + ShortHex64(ev.trace_id_hi) + ShortHex64(ev.trace_id_lo);
+                        line += " span=" + ShortHex64(ev.span_id);
+                    }
+                    line += " v=" + std::to_string(ev.value) + "\n";
+                    std::fputs(line.c_str(), stderr);
+                    file_sink_.Write(line.c_str());
                 }
 
                 void Stop() {
@@ -763,6 +930,18 @@ namespace ppp {
             va_end(args);
             buffer[sizeof(buffer) - 1] = '\0';
             GetBackend().EnqueueLog(level, component ? component : "", buffer);
+        }
+
+        void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept {
+            if (!g_enabled.load(std::memory_order_relaxed)) return;
+            if (static_cast<int>(level) > g_min_level.load(std::memory_order_relaxed)) return;
+            char buffer[1024];
+            va_list args;
+            va_start(args, fmt);
+            std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+            va_end(args);
+            buffer[sizeof(buffer) - 1] = '\0';
+            GetBackend().EnqueueLog(level, component ? component : "", buffer, attrs, attr_count);
         }
 
         void Count(const char* metric, int64_t delta) noexcept {

@@ -252,12 +252,16 @@ namespace ppp {
          * @brief Mounts SYSNAT and attaches it to current TAP interface.
          */
         static bool SysnatAttachDriver(const std::shared_ptr<ITap>& tap, ppp::string& interface_name) noexcept {
+            ppp::telemetry::SpanScope span("vnetstack.sysnat.attach");
             if (NULLPTR == tap) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             VNetstack::SynchronizedObjectScope __SCOPE__(openppp2_sysnat_syncobj()); 
+            auto started_at = std::chrono::steady_clock::now();
             if (0 != openppp2_sysnat_mount()) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("vnetstack.sysnat.attach.us", elapsed);
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
             }
 
@@ -273,10 +277,14 @@ namespace ppp {
 
             int attach_status = openppp2_sysnat_attach(interface_name.data());
             if (0 != attach_status) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("vnetstack.sysnat.attach.us", elapsed);
                 openppp2_sysnat_publish_error(attach_status);
                 return false;
             }
 
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+            ppp::telemetry::Histogram("vnetstack.sysnat.attach.us", elapsed);
             return true;
         }
 #endif
