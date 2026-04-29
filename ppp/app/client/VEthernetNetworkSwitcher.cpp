@@ -723,6 +723,16 @@ namespace ppp {
                     return false;
                 }
 
+                ppp::telemetry::SpanScope span("client.ipv6.apply");
+                struct ScopedIPv6ApplyHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedIPv6ApplyHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("client.ipv6.apply.us", elapsed);
+                    }
+                } ipv6_apply_histogram;
+
 
                 bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                 bool gua_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;

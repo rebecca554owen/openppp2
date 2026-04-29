@@ -264,6 +264,8 @@ namespace ppp {
         }
 
         bool TapLinux::SetIPv6Address(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
+            ppp::telemetry::SpanScope span("tap.ipv6.address.set");
+
             if (!IsSafeShellToken(ifrName) || !IsSafeShellToken(addressIP)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
                 return false;
@@ -271,7 +273,13 @@ namespace ppp {
 
             char command[1200];
             snprintf(command, sizeof(command), "ip -6 addr replace %s/%d dev %s > /dev/null 2>&1", addressIP.data(), std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length)), ifrName.data());
-            return ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::TunnelAddressConfigureFailed);
+            auto started_at = std::chrono::steady_clock::now();
+            bool ok = ExecuteIpCommand(command, ppp::diagnostics::ErrorCode::TunnelAddressConfigureFailed);
+            if (ok) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("tap.ipv6.address.set.us", elapsed);
+            }
+            return ok;
         }
 
         bool TapLinux::SetMtu(const ppp::string& ifrName, int mtu) noexcept {

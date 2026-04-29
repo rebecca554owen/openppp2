@@ -23,6 +23,8 @@
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <process.h>
+#include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
 using socklen_t = int;
 using ssize_t = int;
@@ -69,6 +71,40 @@ namespace ppp {
 
             uint64_t CurrentThreadId() noexcept {
                 return (uint64_t)std::hash<std::thread::id>{}(std::this_thread::get_id());
+            }
+
+            bool TryGetCurrentTraceContext(TraceContext& out) noexcept {
+                if (g_trace_stack.empty()) {
+                    return false;
+                }
+                out = g_trace_stack.back();
+                return true;
+            }
+
+            const char* ServiceVersion() noexcept {
+                return PPP_APPLICATION_VERSION;
+            }
+
+            const char* PlatformName() noexcept {
+#if defined(_WIN32)
+                return "windows";
+#elif defined(__APPLE__)
+                return "macos";
+#elif defined(__ANDROID__)
+                return "android";
+#elif defined(__linux__)
+                return "linux";
+#else
+                return "unknown";
+#endif
+            }
+
+            uint64_t ProcessId() noexcept {
+#if defined(_WIN32)
+                return (uint64_t)GetCurrentProcessId();
+#else
+                return (uint64_t)getpid();
+#endif
             }
 
             std::string Hex64(uint64_t value) {
@@ -119,6 +155,10 @@ namespace ppp {
             struct LogEvent {
                 uint64_t                               timestamp_ns;
                 uint64_t                               thread_id;
+                uint64_t                               trace_id_hi;
+                uint64_t                               trace_id_lo;
+                uint64_t                               span_id;
+                bool                                  has_trace_context;
                 Level                                 level;
                 std::string                           component;
                 std::string                           message;
@@ -127,6 +167,10 @@ namespace ppp {
             struct CounterEvent {
                 uint64_t                               timestamp_ns;
                 uint64_t                               thread_id;
+                uint64_t                               trace_id_hi;
+                uint64_t                               trace_id_lo;
+                uint64_t                               span_id;
+                bool                                  has_trace_context;
                 std::string                           metric;
                 int64_t                               delta;
             };
@@ -146,6 +190,10 @@ namespace ppp {
             struct GaugeEvent {
                 uint64_t                               timestamp_ns;
                 uint64_t                               thread_id;
+                uint64_t                               trace_id_hi;
+                uint64_t                               trace_id_lo;
+                uint64_t                               span_id;
+                bool                                  has_trace_context;
                 std::string                           metric;
                 int64_t                               value;
             };
@@ -153,6 +201,10 @@ namespace ppp {
             struct HistogramEvent {
                 uint64_t                               timestamp_ns;
                 uint64_t                               thread_id;
+                uint64_t                               trace_id_hi;
+                uint64_t                               trace_id_lo;
+                uint64_t                               span_id;
+                bool                                  has_trace_context;
                 std::string                           metric;
                 int64_t                               value;
             };
@@ -280,11 +332,25 @@ namespace ppp {
                     else       { port = "4318"; }
                 }
 
+                static std::string BuildResourceJson() noexcept {
+                    std::string json = "{\"attributes\":[";
+                    json += "{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}},";
+                    json += "{\"key\":\"service.version\",\"value\":{\"stringValue\":\"" + JsonEscape(ServiceVersion()) + "\"}},";
+                    json += "{\"key\":\"platform\",\"value\":{\"stringValue\":\"" + JsonEscape(PlatformName()) + "\"}},";
+                    json += "{\"key\":\"process.pid\",\"value\":{\"intValue\":\"" + std::to_string(ProcessId()) + "\"}}";
+                    json += "]}";
+                    return json;
+                }
+
                 static std::string BuildLogJson(const std::vector<LogEvent>& events) noexcept {
-                    std::string json = "{\"resourceLogs\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeLogs\":[{\"scope\":{},\"logRecords\":[";
+                    std::string json = "{\"resourceLogs\":[{\"resource\":" + BuildResourceJson() + ",\"scopeLogs\":[{\"scope\":{},\"logRecords\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
+                        if (events[i].has_trace_context) {
+                            json += "\"traceId\":\"" + Hex64(events[i].trace_id_hi) + Hex64(events[i].trace_id_lo) + "\",";
+                            json += "\"spanId\":\"" + Hex64(events[i].span_id) + "\",";
+                        }
                         json += "\"severityText\":\"" + LevelName(events[i].level) + "\",";
                         json += "\"body\":{\"stringValue\":\"" + JsonEscape(events[i].message) + "\"},";
                         json += "\"attributes\":[";
@@ -297,12 +363,17 @@ namespace ppp {
                 }
 
                 static std::string BuildCounterJson(const std::vector<CounterEvent>& events) noexcept {
-                    std::string json = "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
+                    std::string json = "{\"resourceMetrics\":[{\"resource\":" + BuildResourceJson() + ",\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"name\":\"" + JsonEscape(events[i].metric) + "\",";
                         json += "\"sum\":{\"dataPoints\":[{\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
-                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}],";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}";
+                        if (events[i].has_trace_context) {
+                            json += ",{\"key\":\"trace.id\",\"value\":{\"stringValue\":\"" + Hex64(events[i].trace_id_hi) + Hex64(events[i].trace_id_lo) + "\"}}";
+                            json += ",{\"key\":\"span.id\",\"value\":{\"stringValue\":\"" + Hex64(events[i].span_id) + "\"}}";
+                        }
+                        json += "],";
                         json += "\"asInt\":\"" + std::to_string(events[i].delta) + "\"}],\"aggregationTemporality\":2,\"isMonotonic\":true}}";
                     }
                     json += "]}]}]}";
@@ -310,7 +381,7 @@ namespace ppp {
                 }
 
                 static std::string BuildSpanJson(const std::vector<SpanEvent>& events) noexcept {
-                    std::string json = "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeSpans\":[{\"scope\":{},\"spans\":[";
+                    std::string json = "{\"resourceSpans\":[{\"resource\":" + BuildResourceJson() + ",\"scopeSpans\":[{\"scope\":{},\"spans\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"traceId\":\"" + Hex64(events[i].trace_id_hi) + Hex64(events[i].trace_id_lo) + "\",";
@@ -332,12 +403,17 @@ namespace ppp {
                 }
 
                 static std::string BuildGaugeJson(const std::vector<GaugeEvent>& events) noexcept {
-                    std::string json = "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
+                    std::string json = "{\"resourceMetrics\":[{\"resource\":" + BuildResourceJson() + ",\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"name\":\"" + JsonEscape(events[i].metric) + "\",";
                         json += "\"gauge\":{\"dataPoints\":[{\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
-                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}],";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}";
+                        if (events[i].has_trace_context) {
+                            json += ",{\"key\":\"trace.id\",\"value\":{\"stringValue\":\"" + Hex64(events[i].trace_id_hi) + Hex64(events[i].trace_id_lo) + "\"}}";
+                            json += ",{\"key\":\"span.id\",\"value\":{\"stringValue\":\"" + Hex64(events[i].span_id) + "\"}}";
+                        }
+                        json += "],";
                         json += "\"asInt\":\"" + std::to_string(events[i].value) + "\"}]}}";
                     }
                     json += "]}]}]}";
@@ -345,13 +421,18 @@ namespace ppp {
                 }
 
                 static std::string BuildHistogramJson(const std::vector<HistogramEvent>& events) noexcept {
-                    std::string json = "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
+                    std::string json = "{\"resourceMetrics\":[{\"resource\":" + BuildResourceJson() + ",\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"name\":\"" + JsonEscape(events[i].metric) + "\",";
                         json += "\"histogram\":{\"dataPoints\":[{";
                         json += "\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
-                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}],";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}";
+                        if (events[i].has_trace_context) {
+                            json += ",{\"key\":\"trace.id\",\"value\":{\"stringValue\":\"" + Hex64(events[i].trace_id_hi) + Hex64(events[i].trace_id_lo) + "\"}}";
+                            json += ",{\"key\":\"span.id\",\"value\":{\"stringValue\":\"" + Hex64(events[i].span_id) + "\"}}";
+                        }
+                        json += "],";
                         json += "\"count\":\"1\",";
                         json += "\"sum\":\"" + std::to_string(events[i].value) + "\",";
                         json += "\"bucketCounts\":[\"0\",\"0\",\"0\",\"0\",\"0\",\"1\"],";
@@ -401,17 +482,21 @@ namespace ppp {
 
                 void EnqueueLog(Level level, const char* component, const char* message) {
                     if (!running_.load()) return;
+                    TraceContext ctx{};
+                    const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (log_queue_.size() >= kMaxQueueSize) { dropped_logs_++; return; }
-                    log_queue_.push({NowUnixNano(), CurrentThreadId(), level, component, message});
+                    log_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, level, component, message});
                     cv_.notify_one();
                 }
 
                 void EnqueueCount(const char* metric, int64_t delta) {
                     if (!running_.load()) return;
+                    TraceContext ctx{};
+                    const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (counter_queue_.size() >= kMaxQueueSize) { dropped_counters_++; return; }
-                    counter_queue_.push({NowUnixNano(), CurrentThreadId(), metric, delta});
+                    counter_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, metric, delta});
                     cv_.notify_one();
                 }
 
@@ -425,17 +510,21 @@ namespace ppp {
 
                 void EnqueueGauge(const char* metric, int64_t value) {
                     if (!running_.load()) return;
+                    TraceContext ctx{};
+                    const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (gauge_queue_.size() >= kMaxQueueSize) { dropped_gauges_++; return; }
-                    gauge_queue_.push({NowUnixNano(), CurrentThreadId(), metric, value});
+                    gauge_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, metric, value});
                     cv_.notify_one();
                 }
 
                 void EnqueueHistogram(const char* metric, int64_t value) {
                     if (!running_.load()) return;
+                    TraceContext ctx{};
+                    const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (histogram_queue_.size() >= kMaxQueueSize) { dropped_histograms_++; return; }
-                    histogram_queue_.push({NowUnixNano(), CurrentThreadId(), metric, value});
+                    histogram_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, metric, value});
                     cv_.notify_one();
                 }
 

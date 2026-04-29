@@ -760,6 +760,16 @@ namespace ppp {
 
             /** @brief Establishes websocket then performs protocol connect handshake. */
             VirtualEthernetManagedServer::IWebScoketPtr VirtualEthernetManagedServer::NewWebSocketConnectToManagedServer2(const ppp::string& url, YieldContext& y) noexcept {
+                ppp::telemetry::SpanScope span("managed.websocket.connect");
+                struct ScopedManagedWebSocketConnectHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedManagedWebSocketConnectHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("managed.websocket.connect.us", elapsed);
+                    }
+                } managed_websocket_connect_histogram;
+
                 IWebScoketPtr websocket = NewWebSocketConnectToManagedServer(url, y);
                 if (NULLPTR == websocket) {
                     if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
