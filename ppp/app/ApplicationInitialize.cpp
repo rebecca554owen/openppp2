@@ -169,7 +169,16 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 #endif
             }
 
-            ethernet->LoadAllDnsRules(network_interface->DNSRules, true);
+            if (!network_interface->DNSRules.empty()) {
+                ppp::string dns_rules_path = File::GetFullPath(File::RewritePath(network_interface->DNSRules.data()).data());
+                if (!dns_rules_path.empty() && File::Exists(dns_rules_path.data())) {
+                    ppp::string dns_rules_text = File::ReadAllText(dns_rules_path.data());
+                    dns_rules_text = ppp::LTrim(ppp::RTrim(dns_rules_text));
+                    if (!dns_rules_text.empty()) {
+                        ethernet->LoadAllDnsRules(dns_rules_path, true);
+                    }
+                }
+            }
             if (!ethernet->Open(tap)) {
                 auto ni = ethernet->GetUnderlyingNetworkInterface();
                 if (NULLPTR != ni) {

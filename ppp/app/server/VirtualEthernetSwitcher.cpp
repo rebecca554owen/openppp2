@@ -3123,7 +3123,18 @@ namespace ppp {
                 }
 
                 firewall_ = firewall;
-                firewall->LoadWithFile(firewall_rules);
+
+                if (!firewall_rules.empty()) {
+                    ppp::string firewall_path = ppp::io::File::GetFullPath(ppp::io::File::RewritePath(firewall_rules.data()).data());
+                    if (!firewall_path.empty() && ppp::io::File::Exists(firewall_path.data())) {
+                        ppp::string firewall_text = ppp::io::File::ReadAllText(firewall_path.data());
+                        firewall_text = ppp::LTrim(ppp::RTrim(firewall_text));
+                        if (!firewall_text.empty()) {
+                            firewall->LoadWithRules(firewall_text);
+                        }
+                    }
+                }
+
                 return true;
             }
 
