@@ -105,6 +105,11 @@ namespace ppp
                     return false;
                 }
 
+                if (packet_length < static_cast<int>(sizeof(PACKET_HEADER))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
+                    return false;
+                }
+
                 // Validate checksum: store original, zero it, compute, compare.
                 uint16_t x_checksum = h->checksum;
                 h->checksum = 0;

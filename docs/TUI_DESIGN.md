@@ -52,7 +52,7 @@ graph TD
 ├──────────────────────────────────────────────────────────────────────┤
 │  > [input line or dim placeholder, white-background block as caret]   │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Error: description (Ns ago) / No errors                             │
+│  [WARN] 118 SocketDisconnected: Socket disconnected (5s ago)         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -348,6 +348,11 @@ When `ShouldEnable()` returns `false`:
 
 This ensures log capture via `./ppp > log.txt` or piped output works without interference.
 
+If `ShouldEnable()` returns `true` but `ConsoleUI::Start()` later fails during terminal
+preparation or optional thread startup, the process now degrades to the same plain-text
+path and publishes `RuntimeOptionalUiStartFailed` as a warning-level diagnostic rather
+than treating optional UI setup as a fatal runtime failure.
+
 ```mermaid
 flowchart TD
     A["PppApplication::Main()"] --> B["ConsoleUI::ShouldEnable()"]
@@ -508,9 +513,9 @@ the render and input threads.
 
 **Returns:** `true` on success; `false` if initialization failed at any step.
 
-**Note:** This method is not `noexcept`. Any exception during thread creation will
-propagate to the caller. `Stop()` must be called even if `Start()` returned `false` to
-clean up any partial initialization.
+**Note:** This method is `noexcept`. Internal startup exceptions are caught, partial state
+is rolled back, and the caller can continue in plain-text mode. Failed optional TUI startup
+publishes `RuntimeOptionalUiStartFailed`.
 
 ---
 
@@ -562,8 +567,9 @@ from any thread including the IO thread at high frequency.
 
 The bottom status row displays only diagnostics snapshot text:
 
-- `No errors` when `ErrorCode::Success` is active.
-- `Error: <message> (<age>)` for the last non-success error.
+- `[INFO] 0 Success: Success` when `ErrorCode::Success` is active.
+- `[%LEVEL%] <numeric_id> <CodeName>: <message> (<age>)` for the last non-success error.
+- ANSI color follows severity: info=green, warn=yellow, error=red, fatal=bright red.
 
 VPN state and throughput are still maintained for other UI paths, but they are not shown
 in the bottom status row.
@@ -588,11 +594,8 @@ TUI subsystem error codes (from `ppp/diagnostics/Error.h`):
 
 | ErrorCode                | Description                                               |
 |--------------------------|-----------------------------------------------------------|
-| `TuiStartFailed`         | `ConsoleUI::Start()` initialization failed                |
-| `TuiRenderThreadFailed`  | Render thread failed to launch                            |
-| `TuiInputThreadFailed`   | Input thread failed to launch                             |
-| `TuiTerminalSetupFailed` | Terminal raw mode configuration failed                    |
-| `TuiVtProcessingFailed`  | VT100 processing enable failed (Windows only)             |
+| `RuntimeEnvironmentInvalid` | Terminal setup or VT initialization failed           |
+| `RuntimeThreadStartFailed`  | Render/input worker thread failed to launch          |
 
 ---
 

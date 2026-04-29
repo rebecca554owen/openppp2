@@ -254,11 +254,12 @@ sequenceDiagram
 `PreparedLoopbackEnvironment()` 成功后：
 
 1. **TUI 检测**：`ConsoleUI::ShouldEnable()` 检查 `isatty(stdout)`；若 stdout 为管道或重定向文件，跳过全屏 TUI，改为打印纯文本启动摘要。
-2. **统计重置**：`stopwatch_.Restart()` 和 `transmission_statistics_.Clear()` 标记运行时计量起点。
-3. **QUIC 切换**（仅 Windows 客户端）：根据 `--blockQUIC` 配置调用 `HttpProxy::SetSupportExperimentalQuicProtocol()`。
-4. **VIRR / VBGP 标志**：从 CLI 参数 `--virr`、`--vbgp` 读取并存入全局原子变量，供路由子系统使用。
-5. **自动重启**：`--auto-restart` 和 `--link-restart` 解析并存入 `GLOBAL_`。
-6. **Tick 定时器**：`NextTickAlwaysTimeout(false)` 激活周期性维护定时器；失败时设置 `RuntimeTimerStartFailed` 并调用 `Dispose()`。
+2. **TUI 启动**：`ConsoleUI::Start()` 尝试启动渲染线程和输入线程；若在 tty 已通过检测后仍启动失败，则退回纯文本模式，并发布 `RuntimeOptionalUiStartFailed`。
+3. **统计重置**：`stopwatch_.Restart()` 和 `transmission_statistics_.Clear()` 标记运行时计量起点。
+4. **QUIC 切换**（仅 Windows 客户端）：根据 `--blockQUIC` 配置调用 `HttpProxy::SetSupportExperimentalQuicProtocol()`。
+5. **VIRR / VBGP 标志**：从 CLI 参数 `--virr`、`--vbgp` 读取并存入全局原子变量，供路由子系统使用。
+6. **自动重启**：`--auto-restart` 和 `--link-restart` 解析并存入 `GLOBAL_`。
+7. **Tick 定时器**：`NextTickAlwaysTimeout(false)` 激活周期性维护定时器；失败时设置 `RuntimeTimerStartFailed` 并调用 `Dispose()`。
 
 ---
 

@@ -127,7 +127,7 @@ namespace ppp
                 ULONG dwBuildNumber;
                 if (!Win32Native::RtlGetNtVersionNumbers(&dwMajor, &dwMinor, &dwBuildNumber))
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32VersionQueryFailed);
                     return false;
                 }
 
@@ -147,7 +147,7 @@ namespace ppp
                 bool b = 0 != reinterpret_cast<INT_PTR>(ShellExecute(NULLPTR, TEXT("open"), TEXT("rundll32"), TEXT("shell32.dll,Control_RunDLL inetcpl.cpl"), NULLPTR, SW_SHOWNORMAL));
                 if (!b)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxySettingsUiOpenFailed);
                 }
                 return b;
             }
@@ -169,7 +169,7 @@ namespace ppp
                 bool b = 0 != reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "open", "rundll32", cmd.data(), NULLPTR, SW_SHOWNORMAL));
                 if (!b)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxySettingsUiOpenFailed);
                 }
                 return b;
             }

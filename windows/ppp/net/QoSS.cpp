@@ -119,8 +119,7 @@ namespace ppp
             // This will fail if we're not admin, but we ignore it
             if (!QOSSetFlow(qos->h_, qos->f_, QOSSetOutgoingDSCPValue, sizeof(DWORD), &dscp, 0, NULLPTR))
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
-                return NULLPTR;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::QosDscpApplyFailed);
             }
 
             return qos;

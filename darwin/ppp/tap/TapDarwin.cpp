@@ -694,7 +694,7 @@ namespace ppp
             {
                 address_family = AF_INET;
             }
-            else if (ip_version == 6)
+            elif (ip_version == 6)
             {
                 address_family = AF_INET6;
             }

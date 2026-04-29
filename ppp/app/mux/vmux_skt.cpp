@@ -764,7 +764,7 @@ namespace vmux {
      */
     template <class T1, class T2, class T3>
     static inline void vmux_skt_async_write(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
-        if (socket == NULLPTR) {
+        if (NULLPTR == socket) {
             return;
         }
 
@@ -782,7 +782,7 @@ namespace vmux {
      */
     template <class T1, class T2, class T3>
     static inline void vmux_skt_async_read_some(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
-        if (socket == NULLPTR) {
+        if (NULLPTR == socket) {
             return;
         }
 

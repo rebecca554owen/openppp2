@@ -102,7 +102,9 @@ namespace ppp {
                 auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
                 ppp::telemetry::Histogram("websocket.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
                     ppp::telemetry::Count("websocket.upgrade.failure", 1);
                     ppp::telemetry::Log(Level::kInfo, "websocket", "handshake failed role=%s", role);
                 }
@@ -127,7 +129,9 @@ namespace ppp {
                 auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
                 ppp::telemetry::Histogram("websocket.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
                     ppp::telemetry::Count("websocket.upgrade.failure", 1);
                     ppp::telemetry::Log(Level::kInfo, "websocket", "handshake failed role=%s", role);
                 }
@@ -218,7 +222,9 @@ namespace ppp {
                 auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
                 ppp::telemetry::Histogram("websocket.wss.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
                     ppp::telemetry::Count("websocket.upgrade.failure", 1);
                     ppp::telemetry::Log(Level::kInfo, "websocket", "wss handshake failed role=%s", role);
                 }
@@ -252,7 +258,9 @@ namespace ppp {
                 auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
                 ppp::telemetry::Histogram("websocket.wss.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
                     ppp::telemetry::Count("websocket.upgrade.failure", 1);
                     ppp::telemetry::Log(Level::kInfo, "websocket", "wss handshake failed role=%s", role);
                 }

@@ -44,9 +44,9 @@ flowchart TD
  * @brief 设置线程局部最后一个错误码。
  * @param code  要记录的 ErrorCode 值。
  * @note  同时更新进程级快照和时间戳。
- *        向所有已注册的错误 handler 派发。
+ *        在调用线程上原地向所有已注册的错误 handler 派发。
  */
-void SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+ppp::diagnostics::ErrorCode SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
 ```
 
 这是记录失败的主要入口点。
@@ -117,9 +117,9 @@ ppp::diagnostics::ErrorCode GetLastErrorCodeSnapshot() noexcept;
 ```cpp
 /**
  * @brief 获取进程级最近一次错误的时间戳。
- * @return 最后一次 SetLastErrorCode 调用时的 Unix 时间戳（秒）。
+ * @return 最后一次 SetLastErrorCode 调用时的单调毫秒 tick 时间戳。
  */
-int64_t GetLastErrorTimestamp() noexcept;
+uint64_t GetLastErrorTimestamp() noexcept;
 ```
 
 ---
@@ -134,10 +134,30 @@ int64_t GetLastErrorTimestamp() noexcept;
  * @param code  要格式化的 ErrorCode。
  * @return      该错误码的描述字符串。
  */
-ppp::string FormatErrorString(ppp::diagnostics::ErrorCode code) noexcept;
+const char* FormatErrorString(ppp::diagnostics::ErrorCode code) noexcept;
 ```
 
 由 Console UI 和日志面用于将错误码转换为可显示文本。
+
+补充元数据接口：
+
+```cpp
+ErrorSeverity GetErrorSeverity(ppp::diagnostics::ErrorCode code) noexcept;
+const char*   GetErrorSeverityName(ErrorSeverity severity) noexcept;
+ppp::string   FormatErrorTriplet(ppp::diagnostics::ErrorCode code) noexcept;
+
+static constexpr uint32_t kErrorCodeMax = kErrorCodeCount;
+bool IsValidErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+bool IsValidErrorCodeValue(int code) noexcept;
+```
+
+当调用者持有原始整数错误值时，可用如下 O(1) 边界检查：
+
+```cpp
+if (code < 0 || static_cast<uint32_t>(code) >= ppp::diagnostics::kErrorCodeMax) {
+    // 原始错误码无效
+}
+```
 
 ---
 
@@ -166,13 +186,13 @@ void RegisterErrorHandler(
 
 1. 线程局部 ErrorCode 被更新。
 2. 进程级快照被更新。
-3. handler 注册表在**锁内被复制**。
-4. handler 在**锁外被调用**。
+3. handler 注册表被**原地遍历**，不做锁和容器复制。
+4. handler 在调用线程上同步执行。
 
-这保证了：
-- 派发和注册之间不会死锁。
-- handler 看到一致的状态。
-- 慢 handler 不会阻塞其他线程设置错误。
+这意味着：
+- 注册必须在 worker 线程启动前完成。
+- handler 能立即看到线程本地值和进程快照。
+- 慢 handler 会直接拖慢发布错误的调用方。
 
 ---
 
@@ -260,11 +280,11 @@ sequenceDiagram
 
     FailSite->>TL: SetLastErrorCode(code)
     TL->>PS: 更新进程级快照 + 时间戳
-    TL->>Handlers: 锁内复制注册表
-    Handlers->>Handlers: 锁外调用回调
+    TL->>Handlers: 原地遍历 handler 注册表
+    Handlers->>Handlers: 在调用线程上同步执行回调
     UI->>PS: GetLastErrorCodeSnapshot()
     UI->>PS: GetLastErrorTimestamp()
-    UI->>UI: FormatErrorString(code) → 显示
+    UI->>UI: FormatErrorTriplet(code) + 严重级别 → 显示
 ```
 
 诊断链路保持单一事实源：
@@ -371,8 +391,9 @@ bool OpenSocket(const IPEndPoint& endpoint) noexcept {
 void InitDiagnostics() {
     RegisterErrorHandler("console-ui", [](int err) {
         auto code = static_cast<ppp::diagnostics::ErrorCode>(err);
-        ppp::string msg = FormatErrorString(code);
-        ConsoleUI::Instance().ShowError(msg);
+        ppp::string msg = FormatErrorTriplet(code);
+        const char* level = GetErrorSeverityName(GetErrorSeverity(code));
+        ConsoleUI::Instance().ShowError(ppp::string("[") + level + "] " + msg);
     });
 
     RegisterErrorHandler("log-sink", [](int err) {
@@ -388,12 +409,13 @@ void InitDiagnostics() {
 void DisplayStatus() {
     auto code      = GetLastErrorCodeSnapshot();
     auto timestamp = GetLastErrorTimestamp();
-    auto message   = FormatErrorString(code);
+    auto message   = FormatErrorTriplet(code);
+    auto severity  = GetErrorSeverityName(GetErrorSeverity(code));
 
-    printf("[%lld] 最后错误: %s (%d)\n",
-           (long long)timestamp,
+    printf("[%s] %s (%llu)\n",
+           severity,
            message.c_str(),
-           static_cast<int>(code));
+           (unsigned long long)timestamp);
 }
 ```
 
@@ -413,9 +435,9 @@ void ShutdownDiagnostics() {
 
 - `ErrorCode` 的线程局部存储避免了 worker 线程之间的竞争。
 - 进程级快照使用 `std::atomic` 操作实现无锁读取。
-- handler 派发在 `std::mutex` 内复制注册表，然后在锁外调用。
-  这防止了 handler 在重入错误调用时死锁。
-- `FormatErrorString` 返回静态或池分配的字符串，可以在信号 handler 中安全调用。
+- handler 派发直接原地遍历初始化期注册表，不做锁内复制。
+- `FormatErrorString` 返回静态描述文本，`FormatErrorTriplet` 用于生成
+  `<数值ID> <名称>: <消息>` 的展示字符串。
 
 ---
 
@@ -425,9 +447,11 @@ void ShutdownDiagnostics() {
 
 - [ ] 在返回失败值前调用 `SetLastErrorCode(...)` 或 `SetLastError(...)`。
 - [ ] 选择最具体的 `ErrorCode`，不要默认使用宽泛通用码。
-- [ ] 如果没有合适的码，在 `ppp/diagnostics/Error.h` 中添加，并加上清晰注释。
+- [ ] 如果没有合适的码，在 `ppp/diagnostics/ErrorCodes.def` 末尾追加一行，并写清晰的消息与严重级别。
 - [ ] 验证新码在 `FormatErrorString` 中有有意义的消息。
 - [ ] 如果新增了错误码，同步更新 `ERROR_CODES.md` 和 `ERROR_CODES_CN.md`。
+- [ ] 包装层如果下层已经发布了更具体的错误码，就不要覆盖；只有当前错误仍为 `Success` 时才写入兜底码。
+- [ ] 除非明确接受后续数值 ID 重排，否则新错误码应追加到 `ppp/diagnostics/ErrorCodes.def` 尾部。
 
 入口兜底约束：
 

@@ -314,7 +314,7 @@ namespace ppp
             {
                 env->ExceptionClear();
             }
-            else if (NULLPTR != method)
+            elif (NULLPTR != method)
             {
                 result = env->CallStaticBooleanMethod(clazz, method, fd);
                 if (env->ExceptionCheck())

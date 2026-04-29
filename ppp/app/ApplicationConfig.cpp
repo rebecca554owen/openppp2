@@ -31,7 +31,7 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     Socket::SetDefaultFlashTypeOfService(ppp::ToBoolean(ppp::GetCommandArgument("--tun-flash", argc, argv).data()));
 
     if (ppp::IsInputHelpCommand(argc, argv)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppHelpRequested);
         return -1;
     }
 

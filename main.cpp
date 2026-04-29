@@ -19,7 +19,11 @@ int main(int argc, char** argv) {
         if (ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppMainRunFailedWithoutSpecificError);
         }
-        fprintf(stderr, "%s\n", ppp::diagnostics::FormatErrorString(ppp::diagnostics::GetLastErrorCode()));
+
+        ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCode();
+        const char* severity_name = ppp::diagnostics::GetErrorSeverityName(ppp::diagnostics::GetErrorSeverity(code));
+        ppp::string error_triplet = ppp::diagnostics::FormatErrorTriplet(code);
+        fprintf(stderr, "[%s] %s\n", severity_name, error_triplet.data());
     }
     return result;
 }

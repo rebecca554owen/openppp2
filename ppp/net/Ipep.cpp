@@ -723,7 +723,7 @@ namespace ppp {
                 return false;
             }
 
-            ppp::string address_string = cidr_ip_string.substr(index);
+            ppp::string address_string = cidr_ip_string.substr(0, index);
             if (address_string.empty()) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepParseCidrAddressPartEmpty);
                 return false;
@@ -967,7 +967,7 @@ namespace ppp {
             }
 
             if (destinationEP.Port != PPP_HTTPS_SYS_PORT && destinationEP.Port != PPP_HTTP_SYS_PORT) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpepQuicPacketPortNotApplicable);
                 return false;
             }
 

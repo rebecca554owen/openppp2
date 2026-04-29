@@ -198,7 +198,7 @@ namespace ppp {
                 protocol_type = ProtocolType_Socks;
             }
             else {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported, ppp::string());
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UriAuxiliaryParseProtocolUnsupported, ppp::string());
             }
 
             ppp::string host_string;

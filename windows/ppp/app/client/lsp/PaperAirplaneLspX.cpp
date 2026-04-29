@@ -180,7 +180,7 @@ namespace ppp
                         WSAPROTOCOL_INFOW LayeredProtocolInfo;
                         if (nArrayCount < 1)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspBaseProtocolMissing);
                             return FALSE;
                         }
                         else
@@ -197,7 +197,7 @@ namespace ppp
                         if (::WSCInstallProvider(&providerGuid,
                             pwszPathName, &LayeredProtocolInfo, 1, &nError) == SOCKET_ERROR)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspInstallProviderFailed);
                             return FALSE;
                         }
 
@@ -227,7 +227,7 @@ namespace ppp
                             {
                                 swprintf(wszChainName, L"%ws %ws", wszLSPName, L"Tcpip [TCP/IP]");
                             }
-                            else if (OriginalProtocolInfo[i].iProtocol == IPPROTO_UDP)
+                            elif (OriginalProtocolInfo[i].iProtocol == IPPROTO_UDP)
                             {
                                 swprintf(wszChainName, L"%ws %ws", wszLSPName, L"Tcpip [UDP/IP]");
                             }

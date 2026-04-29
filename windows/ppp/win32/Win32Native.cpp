@@ -272,7 +272,7 @@ namespace ppp
                 hModule = LoadLibraryA(moduleName);
                 if (NULLPTR == hModule)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeLoadLibraryFailed);
                     return NULLPTR;
                 }
             }
@@ -434,7 +434,7 @@ namespace ppp
 
             if (!ShellExecuteExA(&sei))
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeShellExecuteFailed);
                 return false;
             }
 
@@ -464,7 +464,7 @@ namespace ppp
                 INT_PTR ret = reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "runas", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL));
                 if (ret <= 32)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeShellExecuteFailed);
                     return false;
                 }
             }
@@ -473,7 +473,7 @@ namespace ppp
                 INT_PTR ret = reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "open", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL));
                 if (ret <= 32)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeShellExecuteFailed);
                     return false;
                 }
             }
@@ -486,7 +486,7 @@ namespace ppp
             HANDLE hToken = NULLPTR;
             if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32PrivilegeQueryFailed);
                 return false;
             }
 
@@ -495,7 +495,7 @@ namespace ppp
 
             if (!LookupPrivilegeValue(NULLPTR, SE_DEBUG_NAME, &tkp.Privileges[0].Luid))
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32DebugPrivilegeAdjustFailed);
                 CloseHandle(hToken);
                 return false;
             }
@@ -513,13 +513,13 @@ namespace ppp
                     ok = lastError != ERROR_NOT_ALL_ASSIGNED;
                     if (!ok)
                     {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32DebugPrivilegeNotAssigned);
                     }
                 }
             }
             else
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32DebugPrivilegeAdjustFailed);
             }
 
             CloseHandle(hToken);
@@ -946,14 +946,14 @@ namespace ppp
             HANDLE hProcess = ::GetCurrentProcess();
             if (NULLPTR == hProcess) 
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
                 return false;
             }
 
             BOOL ok = ::SetProcessWorkingSetSize(hProcess, INFINITE, INFINITE);
             if (!ok)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32WorkingSetTrimFailed);
             }
 
             return ok != FALSE;
@@ -1029,7 +1029,7 @@ namespace ppp
             bool ok = CreateProcessA(NULLPTR, (LPSTR)command.data(), NULLPTR, NULLPTR, TRUE, 0, NULLPTR, NULLPTR, &si, &pi);
             if (!ok)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCreateProcessFailed);
                 CloseHandle(hStdin);
                 CloseHandle(hStdout);
                 return "";
@@ -1326,7 +1326,7 @@ namespace ppp
             HRESULT hr = __SetThreadDescription__(GetCurrentThread(), name_wstr.data());
             if (FAILED(hr))
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
 

@@ -132,7 +132,7 @@ namespace ppp
              * @param v Atomic variable.
              * @return Value returned by the current implementation.
              */
-            template <typename T>            
+            template <typename T>
             static T                                                        VolatileWrite(std::atomic<T>& v) noexcept
             {
                 return v.load(std::memory_order_release);

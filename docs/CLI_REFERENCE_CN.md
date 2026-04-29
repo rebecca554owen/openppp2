@@ -435,9 +435,9 @@ TUI 帧分为以下区域：
 
 状态栏展示单一诊断行，基于进程级错误快照生成：
 
-- `No errors`：当前错误码为 `ErrorCode::Success`。
-- `Error: <message> (<age>)`：最近一次非成功错误，其中 `<age>` 基于
-  `GetLastErrorTimestamp()` 计算并显示为 `Ns ago`。
+- `[INFO] 0 Success: Success`：当前错误码为 `ErrorCode::Success`。
+- `[%LEVEL%] <数值ID> <CodeName>: <message> (<age>)`：最近一次非成功错误，其中
+  `<age>` 基于 `GetLastErrorTimestamp()` 计算并显示为 `Ns ago`。
 
 VPN 状态和吞吐仍在内部更新用于命令/信息输出，但不再显示在底部状态栏。
 

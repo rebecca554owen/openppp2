@@ -187,32 +187,33 @@ void PppApplication::ClearTickAlwaysTimeout() noexcept {
 int RunPreparedApplication(const std::shared_ptr<PppApplication>& app, int prepared_status, int argc, const char* argv[]) noexcept {
     if (ppp::HasCommandArgument("--pull-iplist", argc, argv)) {
         app->PullIPList(ppp::GetCommandArgument("--pull-iplist", argc, argv), false);
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
-        return -1;
+        return ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
     }
 
 #if defined(_WIN32)
     if (Windows_PreferredNetwork(argc, argv)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
-        return -1;
+        return ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
     }
 
     if (Windows_NoLsp(argc, argv)) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
-        return -1;
+        return ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
     }
 
     if (ppp::HasCommandArgument("--system-network-optimization", argc, argv)) {
         if (!ppp::win32::Win32Native::OptimizationSystemNetworkSettings()) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+            }
         }
-        return -1;
+        return ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
     }
 #endif
 
     if (prepared_status != 0) {
         app->PrintHelpInformation();
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppInvalidCommandLine);
+        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppInvalidCommandLine);
+        }
         return -1;
     }
 
