@@ -520,6 +520,9 @@ namespace ppp {
 
             /** @brief Allocates static echo context and responds with assigned session values. */
             bool VirtualEthernetExchanger::StaticEcho(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
+                ppp::string session_guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(GetId());
+                ppp::telemetry::SpanScope span("exchanger.static_echo.alloc", session_guid.c_str());
+
                 if (disposed_) {
                     return false;
                 }

@@ -22,6 +22,8 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
+#include <chrono>
+
 #if defined(_LINUX)
 #include <common/unix/UnixAfx.h>
 #include <linux/ppp/tap/TapLinux.h>
@@ -313,6 +315,21 @@ namespace ppp {
              * @return true when extensions contain a usable assignment; otherwise false.
              */
             bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
+                struct ScopedIPv6AssignHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+                    VirtualEthernetInformationExtensions& extensions;
+
+                    explicit ScopedIPv6AssignHistogram(VirtualEthernetInformationExtensions& value) noexcept
+                        : extensions(value) {}
+
+                    ~ScopedIPv6AssignHistogram() noexcept {
+                        if (extensions.AssignedIPv6Address.is_v6()) {
+                            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                            ppp::telemetry::Histogram("server.ipv6.assign.us", elapsed);
+                        }
+                    }
+                } ipv6_assign_histogram(extensions);
+
                 extensions.Clear();
 
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -904,6 +921,8 @@ namespace ppp {
              *       prevent holding syncobj_ for hundreds of milliseconds per client.
              */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
+                ppp::string session_guid = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
+                ppp::telemetry::SpanScope span("server.ipv6.withdraw", session_guid.c_str());
                 if (!extensions.AssignedIPv6Address.is_v6()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
@@ -1111,6 +1130,7 @@ namespace ppp {
              */
             bool VirtualEthernetSwitcher::AddIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept {
 #if defined(_LINUX)
+                ppp::telemetry::SpanScope span("server.route.add");
                 if (!ip.is_v6()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
@@ -1137,9 +1157,12 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+                auto started_at = std::chrono::steady_clock::now();
                 bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
                 if (ok) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
                     ppp::telemetry::Count("server.route.added", 1);
+                    ppp::telemetry::Histogram("server.route.add.us", elapsed);
                     ppp::telemetry::Log(Level::kDebug, "server", "route added");
                 }
                 else {
@@ -1160,6 +1183,7 @@ namespace ppp {
              */
             bool VirtualEthernetSwitcher::DeleteIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept {
 #if defined(_LINUX)
+                ppp::telemetry::SpanScope span("server.route.delete");
                 if (!ip.is_v6()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
@@ -1186,9 +1210,12 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+                auto started_at = std::chrono::steady_clock::now();
                 bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
                 if (ok) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
                     ppp::telemetry::Count("server.route.deleted", 1);
+                    ppp::telemetry::Histogram("server.route.delete.us", elapsed);
                     ppp::telemetry::Log(Level::kDebug, "server", "route deleted");
                 }
                 else {
@@ -1607,6 +1634,17 @@ namespace ppp {
              * @return true if establishment and run succeed; otherwise false.
              */
             bool VirtualEthernetSwitcher::Establish(const ITransmissionPtr& transmission, const Int128& session_id, const VirtualEthernetInformationPtr& i, YieldContext& y) noexcept {
+                ppp::string session_guid = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
+                ppp::telemetry::SpanScope span("server.session.establish", session_guid.c_str());
+                struct ScopedEstablishHistogram final {
+                    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+                    ~ScopedEstablishHistogram() noexcept {
+                        int64_t elapsed = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+                        ppp::telemetry::Histogram("server.session.establish.us", elapsed);
+                    }
+                } establish_histogram;
+
                 if (NULLPTR == transmission) {
                     return false;
                 }

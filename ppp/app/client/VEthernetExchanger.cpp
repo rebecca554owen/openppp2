@@ -21,6 +21,8 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
+#include <chrono>
+
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 
@@ -298,6 +300,17 @@ namespace ppp {
                 ppp::telemetry::Log(Level::kDebug, "client_exchanger", "dns resolved: %s", hostname.c_str());
 
                 if (NULLPTR != forwarding) {
+                    ppp::string session_guid = StringAuxiliary::Int128ToGuidString(GetId());
+                    ppp::telemetry::SpanScope span("client.proxy.setup", session_guid.c_str());
+                    struct ScopedProxySetupHistogram final {
+                        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+                        ~ScopedProxySetupHistogram() noexcept {
+                            int64_t elapsed = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+                            ppp::telemetry::Histogram("client.proxy.setup.us", elapsed);
+                        }
+                    } proxy_setup_histogram;
+
                     boost::asio::ip::tcp::endpoint forwarding_to_endpoint = forwarding->GetLocalEndPoint();
                     if (int forwarding_to_port = forwarding_to_endpoint.port(); forwarding_to_port > IPEndPoint::MinPort && forwarding_to_port <= IPEndPoint::MaxPort) {
                         forwarding->SetRemoteEndPoint(hostname, port);

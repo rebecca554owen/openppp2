@@ -31,6 +31,8 @@
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
 
+#include <chrono>
+
 /**
  * @file VEthernetNetworkSwitcher.cpp
  * @brief Client-side virtual Ethernet network switcher implementation.
@@ -1311,6 +1313,16 @@ namespace ppp {
 
             /** @brief Initializes switcher runtime components and opens all services. */
             bool VEthernetNetworkSwitcher::Open(const std::shared_ptr<ITap>& tap) noexcept {
+                ppp::telemetry::SpanScope span("client.connect");
+                struct ScopedConnectHistogram final {
+                    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+                    ~ScopedConnectHistogram() noexcept {
+                        int64_t elapsed = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+                        ppp::telemetry::Histogram("client.connect.us", elapsed);
+                    }
+                } connect_histogram;
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 // Get and retrieve the current underlying Ethernet interface information!
 #if defined(_WIN32)
@@ -1475,30 +1487,42 @@ namespace ppp {
                     // VPN routes need to be configured for the operating system to configure the bearer network and overlapping network links.
                     AddRoute();
 
+                    {
+                        ppp::telemetry::SpanScope span("client.dns.apply");
+                        struct ScopedDnsApplyHistogram final {
+                            std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                            ~ScopedDnsApplyHistogram() noexcept {
+                                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                                ppp::telemetry::Histogram("client.dns.apply.us", elapsed);
+                            }
+                        } dns_apply_histogram;
+
 #if defined(_WIN32)
-                    // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
-                    auto tun_ni = tun_ni_; 
-                    if (NULLPTR != tun_ni) {
-                        ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
-                    }
+                        // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
+                        auto tun_ni = tun_ni_; 
+                        if (NULLPTR != tun_ni) {
+                            ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
+                        }
 
-                    // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after 
-                    // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record 
-                    // Available in the region where the VPN server is located.
-                    ppp::tap::TapWindows::DnsFlushResolverCache();
+                        // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after 
+                        // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record 
+                        // Available in the region where the VPN server is located.
+                        ppp::tap::TapWindows::DnsFlushResolverCache();
 
-                    // Delete the default route of a physical network card in a single attempt without a reason.
-                    auto underlying_ni = underlying_ni_; 
-                    if (NULLPTR != underlying_ni) {
-                        ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
-                    }
+                        // Delete the default route of a physical network card in a single attempt without a reason.
+                        auto underlying_ni = underlying_ni_; 
+                        if (NULLPTR != underlying_ni) {
+                            ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
+                        }
 #else
-                    // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
-                    auto tun_ni = tun_ni_; 
-                    if (NULLPTR != tun_ni) {
-                        ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
-                    }
+                        // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
+                        auto tun_ni = tun_ni_; 
+                        if (NULLPTR != tun_ni) {
+                            ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
+                        }
 #endif
+                    }
                     ppp::telemetry::Log(Level::kDebug, "client", "DNS setup");
                     ppp::telemetry::Count("client.dns.setup", 1);
 
@@ -1570,6 +1594,16 @@ namespace ppp {
 
             /** @brief Installs VPN route entries into host operating system. */
             void VEthernetNetworkSwitcher::AddRoute() noexcept {
+                ppp::telemetry::SpanScope span("client.route.apply");
+                struct ScopedRouteApplyHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedRouteApplyHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("client.route.apply.us", elapsed);
+                    }
+                } route_apply_histogram;
+
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
 #if defined(_WIN32)

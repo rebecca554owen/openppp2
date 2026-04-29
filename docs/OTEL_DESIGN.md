@@ -25,7 +25,7 @@ Telemetry (structured logging / OTel) is an **optional supplementary layer**, no
 The telemetry system described in this document has been fully implemented:
 
 - **`ppp/diagnostics/Telemetry.h`** — Zero-cost facade. Provides inline no-op stubs when `PPP_TELEMETRY=0`, ensuring no runtime overhead when telemetry is disabled. Exposes `SetEnabled(bool)`, `SetMinLevel(int)`, `SetCountEnabled(bool)`, `SetSpanEnabled(bool)`, `Configure(const char* endpoint)`, `SetLogFile(const char* path)`, `Flush(int timeout_ms)`, `Histogram(...)`, and RAII `SpanScope` for runtime control and tracing.
-- **`ppp/diagnostics/Telemetry.cpp`** — Async backend with bounded queue (4096 entries), drop-on-full semantics, and a background worker thread. Supports three output targets: built-in stderr backend (default), HTTP OTLP exporter (`HttpOtlpExporter`), and optional file output. The OTLP exporter batches up to 256 events and sends them as OTLP/JSON HTTP POST requests to a configured collector endpoint, supporting Logs, Counters, Gauges, Histograms, and completed Spans. Uses raw POSIX sockets (WinSock2 on Windows) with no external dependencies.
+- **`ppp/diagnostics/Telemetry.cpp`** — Async backend with bounded queue (4096 entries), drop-on-full semantics, and a background worker thread. Supports three output targets: built-in stderr backend (default), HTTP OTLP exporter (`HttpOtlpExporter`), and optional file output. The OTLP exporter batches up to 256 events and sends them as OTLP/JSON HTTP POST requests to a configured collector endpoint, supporting Logs, Counters, Gauges, Histograms, and completed Spans. OTLP output now includes resource/service metadata and per-event attributes such as `service.name`, `thread.id`, `log.level`, `component`, and non-empty `session.id` on spans. Uses raw POSIX sockets (WinSock2 on Windows) with no external dependencies.
 - **CMake option `PPP_TELEMETRY`** — Compile-time switch, default `OFF`.
 - **Instrumentation** — 13 modules instrumented: transmission, protocol, server switcher, server exchanger, client switcher, client exchanger, mux, tap, vnetstack, ITap, tcpip, websocket, managed.
 - **Runtime config** — Loaded from `appsettings.json` via `AppConfiguration::telemetry.*` → `telemetry::SetEnabled/SetMinLevel/SetCountEnabled/SetSpanEnabled/Configure/SetLogFile()`.
@@ -34,6 +34,7 @@ The telemetry system described in this document has been fully implemented:
 - **File output** — New `telemetry.log-file` field in `appsettings.json`. When set (e.g. `"./telemetry.log"`), all telemetry output is written to both stderr and the file simultaneously.
 - **Graceful shutdown** — `Flush(int timeout_ms)` API waits for queued events to be drained before process exit. Hooked into `PppApplication::Dispose()`.
 - **Tracing model** — `SpanScope` now generates real `traceId`/`spanId` pairs with parent-child propagation through a thread-local trace stack. One-shot `TraceSpan(...)` also emits spans with generated IDs.
+- **Attribute enrichment** — OTLP export now includes global `service.name=openppp2`, per-event `thread.id`, `log.level` for logs, `component` for logs, and `session.id` for spans when present.
 
 > **Note:** The backend supports multiple output targets (stderr, OTLP HTTP, and file), controlled at runtime via `Configure()` and `SetLogFile()`. Changing the backend or adding exporters required no changes to any instrumented modules.
 
@@ -208,6 +209,7 @@ It must **never**:
 - Gauges instrumented: `server.active_sessions`, `server.exchanger_count`, `tap.active_fds`, `tap.ipv6_routes`, `tap.neighbor_proxies`.
 - `Histogram()` API added to `Telemetry.h` and OTLP `BuildHistogramJson()` now exports histogram samples.
 - Histogram instrumentation added for `websocket.handshake.us`, `websocket.wss.handshake.us`, and `managed.auth.us`.
+- Histogram instrumentation also covers `server.session.establish.us`, `server.ipv6.assign.us`, `server.route.add.us`, `server.route.delete.us`, `client.connect.us`, `client.proxy.setup.us`, `client.route.apply.us`, `client.dns.apply.us`, `managed.sync.us`, `mux.link.setup.us`, `tap.ipv6.route.add.us`, `tap.ipv6.neighbor.add.us`, `tap.ipv6.neighbor.delete.us`, `tap.interface.state.us`, `vnetstack.connect.us`, and `transmission.handshake.us`.
 - Full bucket aggregation is still minimal; current implementation exports one-sample histogram points with fixed explicit bounds.
 
 ### Phase 4 — Optional Traces ✅
@@ -215,6 +217,7 @@ It must **never**:
 - `SpanScope` RAII tracing is implemented in `Telemetry.h` / `Telemetry.cpp`.
 - OTLP span export now includes generated `traceId`, `spanId`, `parentSpanId`, `startTimeUnixNano`, and `endTimeUnixNano`.
 - Scoped spans are instrumented in websocket handshake paths, managed authentication paths, and protocol authentication handling.
+- Scoped spans are also instrumented in server session establishment, server IPv6 withdrawal, server route add / delete, client connect, client route apply, client DNS apply, client proxy setup, managed sync, mux link setup, tap IPv6 route add / neighbor add / neighbor delete, vnetstack connect, transmission lifecycle close, and exchanger static echo allocation paths.
 - Remaining work is higher-level trace coverage and richer attribute propagation, not the core tracing pipeline.
 
 ---

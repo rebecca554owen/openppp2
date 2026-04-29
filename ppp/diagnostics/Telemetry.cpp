@@ -15,6 +15,7 @@
 #include <random>
 #include <string>
 #include <functional>
+#include <thread>
 #include <vector>
 #include <memory>
 #include <sstream>
@@ -66,6 +67,10 @@ namespace ppp {
                     std::chrono::system_clock::now().time_since_epoch()).count();
             }
 
+            uint64_t CurrentThreadId() noexcept {
+                return (uint64_t)std::hash<std::thread::id>{}(std::this_thread::get_id());
+            }
+
             std::string Hex64(uint64_t value) {
                 std::ostringstream oss;
                 oss << std::hex << std::nouppercase;
@@ -113,6 +118,7 @@ namespace ppp {
         namespace {
             struct LogEvent {
                 uint64_t                               timestamp_ns;
+                uint64_t                               thread_id;
                 Level                                 level;
                 std::string                           component;
                 std::string                           message;
@@ -120,6 +126,7 @@ namespace ppp {
 
             struct CounterEvent {
                 uint64_t                               timestamp_ns;
+                uint64_t                               thread_id;
                 std::string                           metric;
                 int64_t                               delta;
             };
@@ -127,6 +134,7 @@ namespace ppp {
             struct SpanEvent {
                 uint64_t                               start_time_ns;
                 uint64_t                               end_time_ns;
+                uint64_t                               thread_id;
                 std::string                           name;
                 std::string                           session_id;
                 uint64_t                               trace_id_hi;
@@ -137,12 +145,14 @@ namespace ppp {
 
             struct GaugeEvent {
                 uint64_t                               timestamp_ns;
+                uint64_t                               thread_id;
                 std::string                           metric;
                 int64_t                               value;
             };
 
             struct HistogramEvent {
                 uint64_t                               timestamp_ns;
+                uint64_t                               thread_id;
                 std::string                           metric;
                 int64_t                               value;
             };
@@ -271,24 +281,28 @@ namespace ppp {
                 }
 
                 static std::string BuildLogJson(const std::vector<LogEvent>& events) noexcept {
-                    std::string json = "{\"resourceLogs\":[{\"resource\":{},\"scopeLogs\":[{\"scope\":{},\"logRecords\":[";
+                    std::string json = "{\"resourceLogs\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeLogs\":[{\"scope\":{},\"logRecords\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
-                        json += "{\"timeUnixNano\":\"" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(events[i].timestamp.time_since_epoch()).count()) + "\",";
+                        json += "{\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
                         json += "\"severityText\":\"" + LevelName(events[i].level) + "\",";
                         json += "\"body\":{\"stringValue\":\"" + JsonEscape(events[i].message) + "\"},";
-                        json += "\"attributes\":[{\"key\":\"component\",\"value\":{\"stringValue\":\"" + JsonEscape(events[i].component) + "\"}}]}";
+                        json += "\"attributes\":[";
+                        json += "{\"key\":\"component\",\"value\":{\"stringValue\":\"" + JsonEscape(events[i].component) + "\"}},";
+                        json += "{\"key\":\"log.level\",\"value\":{\"stringValue\":\"" + LevelName(events[i].level) + "\"}},";
+                        json += "{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}]}";
                     }
                     json += "]}]}]}";
                     return json;
                 }
 
                 static std::string BuildCounterJson(const std::vector<CounterEvent>& events) noexcept {
-                    std::string json = "{\"resourceMetrics\":[{\"resource\":{},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
+                    std::string json = "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"name\":\"" + JsonEscape(events[i].metric) + "\",";
                         json += "\"sum\":{\"dataPoints\":[{\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}],";
                         json += "\"asInt\":\"" + std::to_string(events[i].delta) + "\"}],\"aggregationTemporality\":2,\"isMonotonic\":true}}";
                     }
                     json += "]}]}]}";
@@ -296,7 +310,7 @@ namespace ppp {
                 }
 
                 static std::string BuildSpanJson(const std::vector<SpanEvent>& events) noexcept {
-                    std::string json = "{\"resourceSpans\":[{\"resource\":{},\"scopeSpans\":[{\"scope\":{},\"spans\":[";
+                    std::string json = "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeSpans\":[{\"scope\":{},\"spans\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"traceId\":\"" + Hex64(events[i].trace_id_hi) + Hex64(events[i].trace_id_lo) + "\",";
@@ -307,18 +321,23 @@ namespace ppp {
                         json += "\"name\":\"" + JsonEscape(events[i].name) + "\",";
                         json += "\"startTimeUnixNano\":\"" + std::to_string(events[i].start_time_ns) + "\",";
                         json += "\"endTimeUnixNano\":\"" + std::to_string(events[i].end_time_ns) + "\",";
-                        json += "\"attributes\":[{\"key\":\"session.id\",\"value\":{\"stringValue\":\"" + JsonEscape(events[i].session_id) + "\"}}]}";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}";
+                        if (!events[i].session_id.empty()) {
+                            json += ",{\"key\":\"session.id\",\"value\":{\"stringValue\":\"" + JsonEscape(events[i].session_id) + "\"}}";
+                        }
+                        json += "]}";
                     }
                     json += "]}]}]}";
                     return json;
                 }
 
                 static std::string BuildGaugeJson(const std::vector<GaugeEvent>& events) noexcept {
-                    std::string json = "{\"resourceMetrics\":[{\"resource\":{},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
+                    std::string json = "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"name\":\"" + JsonEscape(events[i].metric) + "\",";
                         json += "\"gauge\":{\"dataPoints\":[{\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}],";
                         json += "\"asInt\":\"" + std::to_string(events[i].value) + "\"}]}}";
                     }
                     json += "]}]}]}";
@@ -326,12 +345,13 @@ namespace ppp {
                 }
 
                 static std::string BuildHistogramJson(const std::vector<HistogramEvent>& events) noexcept {
-                    std::string json = "{\"resourceMetrics\":[{\"resource\":{},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
+                    std::string json = "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"openppp2\"}}]},\"scopeMetrics\":[{\"scope\":{},\"metrics\":[";
                     for (size_t i = 0; i < events.size(); ++i) {
                         if (i > 0) json += ",";
                         json += "{\"name\":\"" + JsonEscape(events[i].metric) + "\",";
                         json += "\"histogram\":{\"dataPoints\":[{";
                         json += "\"timeUnixNano\":\"" + std::to_string(events[i].timestamp_ns) + "\",";
+                        json += "\"attributes\":[{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"" + std::to_string(events[i].thread_id) + "\"}}],";
                         json += "\"count\":\"1\",";
                         json += "\"sum\":\"" + std::to_string(events[i].value) + "\",";
                         json += "\"bucketCounts\":[\"0\",\"0\",\"0\",\"0\",\"0\",\"1\"],";
@@ -383,7 +403,7 @@ namespace ppp {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (log_queue_.size() >= kMaxQueueSize) { dropped_logs_++; return; }
-                    log_queue_.push({std::chrono::steady_clock::now(), level, component, message});
+                    log_queue_.push({NowUnixNano(), CurrentThreadId(), level, component, message});
                     cv_.notify_one();
                 }
 
@@ -391,7 +411,7 @@ namespace ppp {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (counter_queue_.size() >= kMaxQueueSize) { dropped_counters_++; return; }
-                    counter_queue_.push({NowUnixNano(), metric, delta});
+                    counter_queue_.push({NowUnixNano(), CurrentThreadId(), metric, delta});
                     cv_.notify_one();
                 }
 
@@ -399,7 +419,7 @@ namespace ppp {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (span_queue_.size() >= kMaxQueueSize) { dropped_spans_++; return; }
-                    span_queue_.push({NowUnixNano(), NowUnixNano(), name, session_id, 0, 0, 0, 0});
+                    span_queue_.push({NowUnixNano(), NowUnixNano(), CurrentThreadId(), name, session_id, 0, 0, 0, 0});
                     cv_.notify_one();
                 }
 
@@ -407,7 +427,7 @@ namespace ppp {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (gauge_queue_.size() >= kMaxQueueSize) { dropped_gauges_++; return; }
-                    gauge_queue_.push({NowUnixNano(), metric, value});
+                    gauge_queue_.push({NowUnixNano(), CurrentThreadId(), metric, value});
                     cv_.notify_one();
                 }
 
@@ -415,7 +435,7 @@ namespace ppp {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (histogram_queue_.size() >= kMaxQueueSize) { dropped_histograms_++; return; }
-                    histogram_queue_.push({NowUnixNano(), metric, value});
+                    histogram_queue_.push({NowUnixNano(), CurrentThreadId(), metric, value});
                     cv_.notify_one();
                 }
 
@@ -424,7 +444,7 @@ namespace ppp {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (span_queue_.size() >= kMaxQueueSize) { dropped_spans_++; return; }
-                    span_queue_.push({start_time_ns, end_time_ns, name ? name : "", session_id ? session_id : "", trace_id_hi, trace_id_lo, span_id, parent_span_id});
+                    span_queue_.push({start_time_ns, end_time_ns, CurrentThreadId(), name ? name : "", session_id ? session_id : "", trace_id_hi, trace_id_lo, span_id, parent_span_id});
                     cv_.notify_one();
                 }
 

@@ -285,6 +285,15 @@ namespace ppp {
          * @brief Opens listener, initializes accept callback, and sets runtime mode.
          */
         bool VNetstack::Open(bool lwip, const int& localPort) noexcept {
+            struct ScopedConnectHistogram final {
+                std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                ~ScopedConnectHistogram() noexcept {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                    ppp::telemetry::Histogram("vnetstack.connect.us", elapsed);
+                }
+            } connect_histogram;
+
             if (localPort < IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
             }
@@ -983,6 +992,7 @@ namespace ppp {
          * @brief Finds or creates lwIP flow link and starts accept workflow.
          */
         std::shared_ptr<VNetstack::TapTcpLink> VNetstack::LwIpAcceptLink(uint32_t srcAddr, uint32_t dstAddr, int srcPort, int dstPort) noexcept {
+            ppp::telemetry::SpanScope span("vnetstack.connect");
             Int128 key = LAN2WAN_KEY(srcAddr, srcPort, dstAddr, dstPort);
             std::shared_ptr<TapTcpLink> link;
 

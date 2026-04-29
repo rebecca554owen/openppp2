@@ -18,6 +18,7 @@
 #include <ppp/threading/Thread.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/threading/BufferswapAllocator.h>
+#include <chrono>
 
 namespace ppp {
     namespace transmissions {
@@ -1170,6 +1171,8 @@ namespace ppp {
          * @brief Finalizes runtime state, cancels timers, and clears optional helpers.
          */
         void ITransmission::Finalize() noexcept {
+            ppp::telemetry::SpanScope span("transmission.lifecycle.close");
+
             // One-shot guard: only the first caller proceeds; subsequent calls are no-ops.
             bool expected = false;
             if (!finalized_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -1490,11 +1493,14 @@ namespace ppp {
                 return 0;
             }
 
+            auto handshake_started = std::chrono::steady_clock::now();
             ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient started");
             ppp::telemetry::Count("transmission.handshake.start", 1);
 
             Int128 sid = InternalHandshakeClient(y, mux);
             InternalHandshakeTimeoutClear();
+            auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+            ppp::telemetry::Histogram("transmission.handshake.us", handshake_elapsed);
 
             if (!sid) {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient failed");
@@ -1521,11 +1527,14 @@ namespace ppp {
                 return false;
             }
             
+            auto handshake_started = std::chrono::steady_clock::now();
             ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer started");
             ppp::telemetry::Count("transmission.handshake.start", 1);
             
             bool ok = InternalHandshakeServer(y, session_id, mux);
             InternalHandshakeTimeoutClear();
+            auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+            ppp::telemetry::Histogram("transmission.handshake.us", handshake_elapsed);
 
             if (!ok) {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer failed");

@@ -1,6 +1,7 @@
 #include "vmux.h"
 #include "vmux_net.h"
 #include "vmux_skt.h"
+#include <chrono>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
@@ -801,6 +802,9 @@ namespace vmux {
      * @brief Performs server/client handshake for one attached linklayer.
      */
     bool vmux_net::handshake(const vmux_linklayer_ptr& linklayer, uint16_t connection_id, ppp::coroutines::YieldContext& y) noexcept {
+        ppp::telemetry::SpanScope span("mux.link.setup");
+        auto setup_started_at = std::chrono::steady_clock::now();
+
         if (base_.disposed_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
@@ -861,6 +865,8 @@ namespace vmux {
         }
 
         linklayer_established();
+        auto setup_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - setup_started_at).count();
+        ppp::telemetry::Histogram("mux.link.setup.us", setup_elapsed);
         return true;
     }
 

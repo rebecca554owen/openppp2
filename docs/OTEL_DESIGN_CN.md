@@ -25,7 +25,7 @@ Telemetry（结构化日志 / OTel）是**可选补充层**，不是错误码的
 本文档描述的 telemetry 系统已完全实现：
 
 - **`ppp/diagnostics/Telemetry.h`** — 零开销门面。当 `PPP_TELEMETRY=0` 时提供内联空操作存根，确保禁用时无运行时开销。暴露 `SetEnabled(bool)`、`SetMinLevel(int)`、`SetCountEnabled(bool)`、`SetSpanEnabled(bool)`、`Configure(const char* endpoint)`、`SetLogFile(const char* path)`、`Flush(int timeout_ms)`、`Histogram(...)` 以及 RAII `SpanScope` 用于运行期控制和追踪。
-- **`ppp/diagnostics/Telemetry.cpp`** — 异步后端，使用有界队列（4096 条目）、满时丢弃策略及后台工作线程。支持三种输出目标：内置 stderr 后端（默认）、HTTP OTLP exporter（`HttpOtlpExporter`）和可选的文件输出。OTLP exporter 批量收集最多 256 个事件并以 OTLP/JSON HTTP POST 发送至配置的采集器端点，支持日志、计数器、Gauge、Histogram 和完成态 Span。使用原始 POSIX socket（Windows 上为 WinSock2），无外部依赖。
+- **`ppp/diagnostics/Telemetry.cpp`** — 异步后端，使用有界队列（4096 条目）、满时丢弃策略及后台工作线程。支持三种输出目标：内置 stderr 后端（默认）、HTTP OTLP exporter（`HttpOtlpExporter`）和可选的文件输出。OTLP exporter 批量收集最多 256 个事件并以 OTLP/JSON HTTP POST 发送至配置的采集器端点，支持日志、计数器、Gauge、Histogram 和完成态 Span。OTLP 输出现在包含资源/服务元数据以及每个事件的结构化属性，例如 `service.name`、`thread.id`、日志的 `log.level` / `component`，以及 span 在非空时的 `session.id`。使用原始 POSIX socket（Windows 上为 WinSock2），无外部依赖。
 - **CMake 选项 `PPP_TELEMETRY`** — 编译期开关，默认 `OFF`。
 - **插桩覆盖** — 已有 13 个模块完成插桩：transmission、protocol、server switcher、server exchanger、client switcher、client exchanger、mux、tap、vnetstack、ITap、tcpip、websocket、managed。
 - **运行期配置** — 从 `appsettings.json` 加载，路径为 `AppConfiguration::telemetry.*` → `telemetry::SetEnabled/SetMinLevel/SetCountEnabled/SetSpanEnabled/Configure/SetLogFile()`。
@@ -34,6 +34,7 @@ Telemetry（结构化日志 / OTel）是**可选补充层**，不是错误码的
 - **文件输出** — `appsettings.json` 新增 `telemetry.log-file` 字段。设置后（如 `"./telemetry.log"`），所有 telemetry 输出会同时写入 stderr 和该文件。
 - **优雅关闭** — `Flush(int timeout_ms)` API 在进程退出前等待队列中的事件被刷出。已接入 `PppApplication::Dispose()`。
 - **追踪模型** — `SpanScope` 已实现真实 `traceId`/`spanId` 生成，并通过线程局部 trace 栈传递父子 span 关系。一次性 `TraceSpan(...)` 也会发出带 ID 的 span。
+- **属性增强** — OTLP 导出现在包含全局 `service.name=openppp2`、每事件 `thread.id`、日志的 `log.level` / `component`，以及 span 在存在时的 `session.id`。
 
 > **注意：** 后端支持多种输出目标（stderr、OTLP HTTP 和文件），可通过 `Configure()` 和 `SetLogFile()` 在运行期控制。更换后端或添加 exporter 无需修改任何已插桩的模块。
 
@@ -208,6 +209,7 @@ Telemetry 可以记录：
 - Gauge 插桩：`server.active_sessions`、`server.exchanger_count`、`tap.active_fds`、`tap.ipv6_routes`、`tap.neighbor_proxies`。
 - `Histogram()` API 已添加到 `Telemetry.h`，OTLP `BuildHistogramJson()` 已可导出直方图样本。
 - Histogram 插桩：`websocket.handshake.us`、`websocket.wss.handshake.us`、`managed.auth.us`。
+- Histogram 插桩还覆盖：`server.session.establish.us`、`server.ipv6.assign.us`、`server.route.add.us`、`server.route.delete.us`、`client.connect.us`、`client.proxy.setup.us`、`client.route.apply.us`、`client.dns.apply.us`、`managed.sync.us`、`mux.link.setup.us`、`tap.ipv6.route.add.us`、`tap.ipv6.neighbor.add.us`、`tap.ipv6.neighbor.delete.us`、`tap.interface.state.us`、`vnetstack.connect.us`、`transmission.handshake.us`。
 - 当前桶聚合仍较轻量；现阶段实现为带固定边界的一样本 histogram 点。
 
 ### 第四阶段 —— 可选 Traces ✅
@@ -215,6 +217,7 @@ Telemetry 可以记录：
 - `SpanScope` RAII 追踪已在 `Telemetry.h` / `Telemetry.cpp` 中实现。
 - OTLP span 导出现在包含生成的 `traceId`、`spanId`、`parentSpanId`、`startTimeUnixNano` 和 `endTimeUnixNano`。
 - Scoped span 已插桩到 websocket 握手路径、managed 认证路径和协议认证处理路径。
+- Scoped span 还已插桩到 server 会话建立、server IPv6 回收、server route add / delete、client connect、client route apply、client DNS apply、client proxy setup、managed sync、mux link setup、tap IPv6 route add / neighbor add / neighbor delete、vnetstack connect、transmission lifecycle close、exchanger static echo allocation 等路径。
 - 剩余工作主要是更高层的 trace 覆盖率和更丰富的属性透传，而不是核心 tracing 管线。
 
 ---

@@ -582,6 +582,16 @@ namespace ppp {
 
             /** @brief Applies traffic response entries by feeding information to switcher. */
             bool VirtualEthernetManagedServer::AckAllUploadTrafficToManagedServer(Json::Value& json, YieldContext& y) noexcept {
+                ppp::telemetry::SpanScope span("managed.sync");
+                struct ScopedManagedSyncHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedManagedSyncHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("managed.sync.us", elapsed);
+                    }
+                } managed_sync_histogram;
+
                 Json::Value json_array = JsonAuxiliary::FromString(JsonAuxiliary::AsString(json["Data"]));
                 if (!json_array.isObject()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
