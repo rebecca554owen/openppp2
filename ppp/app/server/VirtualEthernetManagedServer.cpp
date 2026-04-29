@@ -10,6 +10,7 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 /**
  * @file VirtualEthernetManagedServer.cpp
@@ -25,6 +26,7 @@ using ppp::auxiliary::StringAuxiliary;
 using ppp::net::Socket;
 using ppp::net::IPEndPoint;
 using ppp::threading::Timer;
+using ppp::telemetry::Level;
 
 namespace ppp {
     namespace app {
@@ -97,6 +99,9 @@ namespace ppp {
              * @brief Sends an authentication request and stores completion callback with timeout.
              */
             bool VirtualEthernetManagedServer::AuthenticationToManagedServer(const ppp::Int128& session_id, const AuthenticationToManagedServerAsyncCallback& ac) noexcept {
+                ppp::string session_guid = StringAuxiliary::Int128ToGuidString(session_id);
+                ppp::telemetry::SpanScope span("managed.auth", session_guid.c_str());
+
                 if (disposed_) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
@@ -108,18 +113,20 @@ namespace ppp {
                 }
 
                 UInt64 next = Executors::GetTickCount() + PACKET_TIMEOUT_AUTHENTICATION; {
+                    auto started_at = std::chrono::steady_clock::now();
                     SynchronizedObjectScope scope(syncobj_);
                     if (authentications_.find(session_id) != authentications_.end()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetManagedAuthDuplicateSession);
                         return false;
                     }
 
-                    authentications_.emplace(session_id, AuthenticationWaitable{ next, ac });
+                    authentications_.emplace(session_id, AuthenticationWaitable{ next, started_at, ac });
                 }
 
                 int id = NewId();
                 bool ok = SendToManagedServer(session_id, PACKET_CMD_AUTHENTICATION, id);
                 if (ok) {
+                    ppp::telemetry::Log(Level::kInfo, "managed", "Authentication request sent");
                     return true;
                 }
 
@@ -512,8 +519,12 @@ namespace ppp {
                 while (!disposed_) {
                     IWebScoketPtr websocket = NewWebSocketConnectToManagedServer2(url, y);
                     if (websocket) {
+                        ppp::telemetry::Log(Level::kInfo, "managed", "WebSocket connected");
+                        ppp::telemetry::Count("managed.connect", 1);
                         server_ = websocket; {
                             Run(websocket, y); {
+                                ppp::telemetry::Log(Level::kInfo, "managed", "WebSocket disconnected");
+                                ppp::telemetry::Count("managed.disconnect", 1);
                                 server_.reset();
                             }
                         }
@@ -583,6 +594,9 @@ namespace ppp {
                     return false;
                 }
 
+                ppp::telemetry::Log(Level::kDebug, "managed", "Session sync received");
+                ppp::telemetry::Count("managed.sync", 1);
+
                 bool any = false;
                 Json::ArrayIndex json_array_size = json_array.size();
 
@@ -616,12 +630,31 @@ namespace ppp {
                     return false;
                 }
 
+                ppp::telemetry::SpanScope span("managed.auth", guid.c_str());
+
                 Int128 session_id = StringAuxiliary::GuidStringToInt128(guid);
-                AuthenticationToManagedServerAsyncCallback f = DeleteAuthenticationToManagedServer(session_id);
+                AuthenticationToManagedServerAsyncCallback f;
+                std::chrono::steady_clock::time_point started_at;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    auto tail = authentications_.find(session_id);
+                    auto endl = authentications_.end();
+                    if (tail != endl) {
+                        auto& aw = tail->second;
+                        started_at = aw.started_at;
+                        f = std::move(aw.ac);
+                        aw.ac = NULLPTR;
+                        authentications_.erase(tail);
+                    }
+                }
+
                 if (!f) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
                     return false;
                 }
+
+                auto auth_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("managed.auth.us", auth_elapsed);
 
                 std::shared_ptr<VirtualEthernetInformation> i;
                 if (!i) {
@@ -638,10 +671,20 @@ namespace ppp {
                 if (!i) {
                     VirtualEthernetInformationPtr nullVEI;
                     f(false, nullVEI);
+                    ppp::telemetry::Log(Level::kInfo, "managed", "Authentication response: failure");
+                    ppp::telemetry::Count("managed.auth.failure", 1);
                     return true;
                 }
 
-                f(i->Valid(), i);
+                bool auth_ok = i->Valid();
+                f(auth_ok, i);
+                if (auth_ok) {
+                    ppp::telemetry::Log(Level::kInfo, "managed", "Authentication response: success");
+                    ppp::telemetry::Count("managed.auth.success", 1);
+                } else {
+                    ppp::telemetry::Log(Level::kInfo, "managed", "Authentication response: failure");
+                    ppp::telemetry::Count("managed.auth.failure", 1);
+                }
                 return true;
             }
 
@@ -686,6 +729,7 @@ namespace ppp {
                 traffics_next_ = now + PACKET_TIMEOUT_TRAFFIC;
                 if (json_array.isArray()) {
                     int id = NewId();
+                    ppp::telemetry::Log(Level::kDebug, "managed", "Bandwidth report sent");
                     SendToManagedServer(0, PACKET_CMD_TRAFFIC, id, JsonAuxiliary::ToString(json));
                 }
 

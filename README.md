@@ -212,8 +212,10 @@ The repository contains paired English/Chinese documents plus the root README pa
 | IPv6 | `IPV6_TRANSIT_PLANE.md` | `IPV6_TRANSIT_PLANE_CN.md` |
 | IPv6 | `IPV6_NDP_PROXY.md` | `IPV6_NDP_PROXY_CN.md` |
 | IPv6 | `IPV6_CLIENT_ASSIGNMENT.md` | `IPV6_CLIENT_ASSIGNMENT_CN.md` |
-| TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
-| IPv6 Fix Notes | `IPV6_FIXES.md` | _(English only)_ |
+ | TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
+ | IPv6 Fix Notes | `IPV6_FIXES.md` | `IPV6_FIXES_CN.md` |
+ | Platform | `MULTIQUEUE_TUN_MODEL.md` | `MULTIQUEUE_TUN_MODEL_CN.md` |
+ | Observability | `OTEL_DESIGN.md` | `OTEL_DESIGN_CN.md` |
 
 ---
 

@@ -1,5 +1,6 @@
 #include <ppp/ethernet/VNetstack.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 /**
  * @file VNetstack.cpp
  * @brief Implements virtual TCP NAT mapping, accept bridge, and flow lifecycle.
@@ -40,6 +41,7 @@ typedef tcp_hdr::tcp_state                                      TcpState;
 typedef ppp::collections::Dictionary                            Dictionary;
 
 namespace ppp {
+    using ppp::telemetry::Level;
     /**
      * @brief SYN/ACK handshake state values used by TapTcpClient.
      */
@@ -391,6 +393,7 @@ namespace ppp {
          */
         bool VNetstack::Input(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept {
             if (NULLPTR == ip || NULLPTR == tcp || tcp_len < 1) {
+                ppp::telemetry::Log(Level::kInfo, "vnetstack", "null packet input");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VNetstackNullPacketInput);
             }
 
@@ -399,6 +402,7 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
+            ppp::telemetry::Count("vnetstack.input", 1);
             TcpFlags flags = (TcpFlags)tcp_hdr::TCPH_FLAGS(tcp);
             bool lan2wan = true;
             bool rst = true;
@@ -506,6 +510,8 @@ namespace ppp {
                         return true;
                     }
 
+                    ppp::telemetry::Count("vnetstack.connect", 1);
+                    ppp::telemetry::Log(Level::kDebug, "vnetstack", "TCP connect begin");
                     rst = false;
                     c->link_ = link;
                     std::atomic_store(&link->socket, c);
@@ -522,6 +528,7 @@ namespace ppp {
              * @brief If mapping is unresolved, send RST and abort processing.
              */
             if (rst) {
+                ppp::telemetry::Log(Level::kInfo, "vnetstack", "link input error: unresolved mapping");
                 this->RST(ip, tcp, tcp_len);
                 return false;
             }
@@ -743,6 +750,7 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
+            ppp::telemetry::Count("vnetstack.output", 1);
             if (ppp::net::Socket::IsDefaultFlashTypeOfService()) {
                 ip->tos = std::max<Byte>(ip->tos, ppp::net::packet::IPFrame::DefaultFlashTypeOfService());
             }
@@ -886,6 +894,8 @@ namespace ppp {
 
                 bool ok = pcb->EndAccept(socket, natEP);
                 if (ok) {
+                    ppp::telemetry::Count("vnetstack.accept", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "socket accepted");
                     link->Update();
                 }
                 else {
@@ -950,6 +960,7 @@ namespace ppp {
             if (pcb->sync_ack_state_.compare_exchange_strong(sync_ack_state, VNETSTACK_SYNC_ACK_STATE_SYN_SENT)) {
                 int sync_packet_size = 0;
                 link->Update();
+                ppp::telemetry::Log(Level::kDebug, "vnetstack", "lwip sync-ack begin");
 
                 pcb->sync_ack_bytes_size_.store(0, std::memory_order_relaxed);
                 std::atomic_store(&pcb->sync_ack_byte_array_, lwip::netstack_wrap_ipv4_tcp_syn_packet(dest, src, wnd, ack, seq, sync_packet_size));
@@ -1034,6 +1045,8 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            ppp::telemetry::Count("vnetstack.connect", 1);
+            ppp::telemetry::Log(Level::kDebug, "vnetstack", "TCP connect begin");
             std::atomic_store(&link->socket, socket);
             return link;
         }
@@ -1048,6 +1061,7 @@ namespace ppp {
             , strand_(strand)
             , sync_ack_state_(VNETSTACK_SYNC_ACK_STATE_CLOSED)
             , sync_ack_bytes_size_(0) {
+            ppp::telemetry::Log(Level::kInfo, "vnetstack", "socket created");
             socket_ = strand ? 
                 make_shared_object<boost::asio::ip::tcp::socket>(*strand) : make_shared_object<boost::asio::ip::tcp::socket>(*context);
         }
@@ -1110,6 +1124,7 @@ namespace ppp {
                 return;
             }
 
+            ppp::telemetry::Log(Level::kInfo, "vnetstack", "socket disposed");
             std::shared_ptr<TapTcpClient> self = shared_from_this();
             ppp::threading::Executors::ContextPtr context = context_;
             ppp::threading::Executors::StrandPtr strand = strand_;
@@ -1260,6 +1275,7 @@ namespace ppp {
                 return false;
             }
 
+            ppp::telemetry::Log(Level::kDebug, "vnetstack", "sync-ack accepted");
             if (NULLPTR == tap) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return false;

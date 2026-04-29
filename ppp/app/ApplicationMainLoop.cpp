@@ -5,6 +5,7 @@
 
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 namespace ppp::app {
 
@@ -353,6 +354,10 @@ void PppApplication::Dispose() noexcept {
     }
 
     ClearTickAlwaysTimeout();
+
+#if PPP_TELEMETRY
+    ppp::telemetry::Flush(3000);
+#endif
 }
 
 /**

@@ -18,13 +18,15 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <cstring>       // for std::memcpy
 
 namespace ppp {
     namespace app {
-        namespace protocol {
-            // Type aliases for convenience
+            namespace protocol {
+                using ppp::telemetry::Level;
+                // Type aliases for convenience
             typedef ppp::io::Stream                                     Stream;
             typedef ppp::io::BinaryReader                               BinaryReader;
             typedef ppp::io::MemoryStream                               MemoryStream;
@@ -523,6 +525,9 @@ namespace ppp {
                 last_ = Executors::GetTickCount();          // reset activity timer
                 next_ka_ = 0;                               // reset keep‑alive scheduler
 
+                ppp::telemetry::Log(Level::kInfo, "protocol", "session established");
+                ppp::telemetry::Count("protocol.session.established", 1);
+
                 for (;;) {
                     int packet_length = 0;
                     std::shared_ptr<Byte> packet = transmission->Read(y, packet_length);
@@ -540,6 +545,8 @@ namespace ppp {
                         last_ = Executors::GetTickCount();  // update last activity on success
                     }
                 }
+                ppp::telemetry::Log(Level::kInfo, "protocol", "session disposed");
+                ppp::telemetry::Count("protocol.session.disposed", 1);
                 return ok;
             }
 
@@ -656,6 +663,8 @@ namespace ppp {
                 }
                 elif (packet_action == PacketAction_ECHO) {          // echo request
                     if (packet_length > 0) {
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "ECHO received");
+                        ppp::telemetry::Count("protocol.echo.received", 1);
                         return OnEcho(transmission, p, packet_length, y);
                     } else {
                         return packet_length == 0;
@@ -664,6 +673,8 @@ namespace ppp {
                 elif (packet_action == PacketAction_ECHOACK) {       // echo reply
                     if (packet_length >= 3) {
                         int ack_id = global::PACKET_ConnectId(p, packet_length);
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "ECHOACK received ack_id=%d", ack_id);
+                        ppp::telemetry::Count("protocol.echoack.received", 1);
                         return OnEcho(transmission, ack_id, y);
                     } else {
                         return packet_length == 0;
@@ -762,6 +773,9 @@ namespace ppp {
                 }
                 elif (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
                     if (packet_length >= static_cast<int>(sizeof(VirtualEthernetInformation))) {
+                        ppp::string session_guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(id_);
+                        ppp::telemetry::SpanScope span("protocol.auth", session_guid.c_str());
+
                         InformationEnvelope info;
                         info.Base = *reinterpret_cast<VirtualEthernetInformation*>(p);
 
@@ -778,6 +792,13 @@ namespace ppp {
                             VirtualEthernetInformationExtensions::FromJson(info.Extensions, info.ExtendedJson);
                         }
 
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "INFO received bandwidth_qos=%lld incoming=%llu outgoing=%llu",
+                                            static_cast<long long>(info.Base.BandwidthQoS),
+                                            static_cast<unsigned long long>(info.Base.IncomingTraffic),
+                                            static_cast<unsigned long long>(info.Base.OutgoingTraffic));
+                        ppp::telemetry::Count("protocol.info.received", 1);
+                        ppp::telemetry::Count("protocol.auth.success", 1);
+                        ppp::telemetry::Count("protocol.bandwidth.received", 1);
                         return OnInformation(transmission, static_cast<const InformationEnvelope&>(info), y);
                     } else {
                         return packet_length == 0;
@@ -804,6 +825,8 @@ namespace ppp {
                     }
                 }
                 elif (packet_action == PacketAction_STATIC) {         // static route request
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "STATIC received");
+                    ppp::telemetry::Count("protocol.static.received", 1);
                     return OnStatic(transmission, y);
                 }
                 elif (packet_action == PacketAction_STATICACK) {      // static route acknowledgment (single entry)
@@ -816,6 +839,8 @@ namespace ppp {
                             std::memcpy(&uuid_buf, p, sizeof(uuid_buf));
 
                             Int128 fsid = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(uuid_buf);
+                            ppp::telemetry::Log(Level::kDebug, "protocol", "STATICACK received session_id=%d remote_port=%d", session_id, remote_port);
+                            ppp::telemetry::Count("protocol.staticack.received", 1);
                             return OnStatic(transmission, fsid, session_id, remote_port, y);
                         }
                     }
@@ -826,6 +851,10 @@ namespace ppp {
 
                     if (packet_length >= MUX_IL_REFT) {
                         VirtualEthernetLinklayer_MUX_IL* pil = reinterpret_cast<VirtualEthernetLinklayer_MUX_IL*>(p - 1);
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "MUX received vlan=%u max_connections=%u",
+                                            static_cast<unsigned int>(ntohs(pil->vlan)),
+                                            static_cast<unsigned int>(ntohs(pil->max_connections)));
+                        ppp::telemetry::Count("protocol.mux.received", 1);
                         return global::PACKET_Result(OnMux(transmission, ntohs(pil->vlan), ntohs(pil->max_connections), 
                                      pil->acceleration != 0, y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
@@ -837,6 +866,11 @@ namespace ppp {
 
                     if (packet_length >= MUXON_IL_REF) {
                         VirtualEthernetLinklayer_MUXON_IL* pil = reinterpret_cast<VirtualEthernetLinklayer_MUXON_IL*>(p - 1);
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "MUXON received vlan=%u seq=%u ack=%u",
+                                            static_cast<unsigned int>(ntohs(pil->vlan)),
+                                            static_cast<unsigned int>(ntohl(pil->seq)),
+                                            static_cast<unsigned int>(ntohl(pil->ack)));
+                        ppp::telemetry::Count("protocol.muxon.received", 1);
                         return global::PACKET_Result(OnMuxON(transmission, ntohs(pil->vlan), ntohl(pil->seq), ntohl(pil->ack), y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
                         return packet_length == 0;
@@ -971,6 +1005,13 @@ namespace ppp {
                     }
                 }
 
+                ppp::telemetry::Log(Level::kDebug, "protocol", "INFO sent bandwidth_qos=%lld incoming=%llu outgoing=%llu",
+                                    static_cast<long long>(info.BandwidthQoS),
+                                    static_cast<unsigned long long>(info.IncomingTraffic),
+                                    static_cast<unsigned long long>(info.OutgoingTraffic));
+                ppp::telemetry::Count("protocol.info.sent", 1);
+                ppp::telemetry::Count("protocol.bandwidth.sent", 1);
+
                 std::shared_ptr<Byte> buffer = ms.GetBuffer();
                 return global::PACKET_Push(PacketAction_INFO, transmission, buffer.get(), ms.GetPosition(), y);
             }
@@ -1062,6 +1103,8 @@ namespace ppp {
             /** @brief Sends echo acknowledgment by connection-style ID field. */
             bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept 
             {
+                ppp::telemetry::Log(Level::kDebug, "protocol", "ECHOACK sent ack_id=%d", ack_id);
+                ppp::telemetry::Count("protocol.echoack.sent", 1);
                 return global::PACKET_Push(PacketAction_ECHOACK, transmission, ack_id, NULLPTR, 0, y);
             }
 
@@ -1071,6 +1114,8 @@ namespace ppp {
             /** @brief Sends echo payload packet. */
             bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept 
             {
+                ppp::telemetry::Log(Level::kDebug, "protocol", "ECHO sent");
+                ppp::telemetry::Count("protocol.echo.sent", 1);
                 return global::PACKET_Push(PacketAction_ECHO, transmission, packet, packet_length, y);
             }
 
@@ -1083,6 +1128,8 @@ namespace ppp {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_STATIC))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "STATIC sent");
+                    ppp::telemetry::Count("protocol.static.sent", 1);
                     return transmission->Write(y, buffer.get(), ms.GetPosition());
                 }
 
@@ -1107,6 +1154,8 @@ namespace ppp {
                             Int128 fsid_netbuf = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(uuid_buf);
                             if (ms.Write(&fsid_netbuf, 0, sizeof(fsid_netbuf))) {
                                 std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                                ppp::telemetry::Log(Level::kDebug, "protocol", "STATICACK sent session_id=%d remote_port=%d", session_id, remote_port);
+                                ppp::telemetry::Count("protocol.staticack.sent", 1);
                                 return transmission->Write(y, buffer.get(), ms.GetPosition());
                             }
                         }
@@ -1131,6 +1180,9 @@ namespace ppp {
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "MUX sent vlan=%u max_connections=%u",
+                                        static_cast<unsigned int>(vlan), static_cast<unsigned int>(max_connections));
+                    ppp::telemetry::Count("protocol.mux.sent", 1);
                     return global::PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 
@@ -1152,6 +1204,9 @@ namespace ppp {
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "MUXON sent vlan=%u seq=%u ack=%u",
+                                        static_cast<unsigned int>(vlan), static_cast<unsigned int>(seq), static_cast<unsigned int>(ack));
+                    ppp::telemetry::Count("protocol.muxon.sent", 1);
                     return global::PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 

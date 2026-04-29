@@ -212,8 +212,10 @@ sequenceDiagram
 | IPv6 | `IPV6_TRANSIT_PLANE.md` | `IPV6_TRANSIT_PLANE_CN.md` |
 | IPv6 | `IPV6_NDP_PROXY.md` | `IPV6_NDP_PROXY_CN.md` |
 | IPv6 | `IPV6_CLIENT_ASSIGNMENT.md` | `IPV6_CLIENT_ASSIGNMENT_CN.md` |
-| TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
-| IPv6 修复说明 | `IPV6_FIXES.md` | _（仅英文）_ |
+ | TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
+ | IPv6 修复说明 | `IPV6_FIXES.md` | `IPV6_FIXES_CN.md` |
+ | 平台 | `MULTIQUEUE_TUN_MODEL.md` | `MULTIQUEUE_TUN_MODEL_CN.md` |
+ | 可观测性 | `OTEL_DESIGN.md` | `OTEL_DESIGN_CN.md` |
 
 ---
 
