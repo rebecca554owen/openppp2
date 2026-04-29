@@ -1,7 +1,9 @@
 #include "vmux.h"
 #include "vmux_net.h"
 #include "vmux_skt.h"
+#include <chrono>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include "ppp/app/client/VEthernetNetworkTcpipConnection.h"
 #include "ppp/app/server/VirtualEthernetNetworkTcpipConnection.h"
@@ -14,6 +16,8 @@
  */
 
 namespace vmux {
+    using ppp::telemetry::Level;
+
     /**
      * @brief Constructs a vmux network core with runtime mode/capacity settings.
      */
@@ -91,6 +95,9 @@ namespace vmux {
         }
 
         for (vmux_linklayer_ptr& linklayer : rx_links) {
+            ppp::telemetry::Log(Level::kInfo, "mux", "link close");
+            ppp::telemetry::Count("mux.link.close", 1);
+
             VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
             connection->Dispose();
 
@@ -222,6 +229,7 @@ namespace vmux {
         }
 
         std::shared_ptr<vmux_net> self = shared_from_this();
+        ppp::telemetry::Count("mux.link.send", 1);
         return transmission_write(self, transmission, packet, packet_length, 
             [self, this, linklayer, posted_ac](bool ok) noexcept {
                 if (NULLPTR != posted_ac) {
@@ -342,6 +350,8 @@ namespace vmux {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
+
+        ppp::telemetry::Count("mux.link.recv", 1);
 
         uint32_t seq = ntohl(h->seq);
         if (status_.rx_ack_ == seq) {
@@ -730,6 +740,10 @@ namespace vmux {
         tx_links_.emplace_back(linklayer);
         rx_links_.emplace_back(linklayer);
 
+        ppp::telemetry::Log(Level::kInfo, "mux", "link open");
+        ppp::telemetry::Count("mux.link.open", 1);
+        ppp::telemetry::Log(Level::kDebug, "mux", "link count=%d", static_cast<int>(rx_links_.size()));
+
         bool unlimited = rx_links_.size() < status_.max_connections;
         if (unlimited) {
             if (NULLPTR != cb && !cb()) {
@@ -788,6 +802,9 @@ namespace vmux {
      * @brief Performs server/client handshake for one attached linklayer.
      */
     bool vmux_net::handshake(const vmux_linklayer_ptr& linklayer, uint16_t connection_id, ppp::coroutines::YieldContext& y) noexcept {
+        ppp::telemetry::SpanScope span("mux.link.setup");
+        auto setup_started_at = std::chrono::steady_clock::now();
+
         if (base_.disposed_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
@@ -848,6 +865,8 @@ namespace vmux {
         }
 
         linklayer_established();
+        auto setup_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - setup_started_at).count();
+        ppp::telemetry::Histogram("mux.link.setup.us", setup_elapsed);
         return true;
     }
 
@@ -857,6 +876,8 @@ namespace vmux {
         if (!base_.established_) {
             base_.established_ = 
                 status_.opened_connections >= status_.max_connections;
+
+            ppp::telemetry::Log(Level::kDebug, "mux", "linklayer handshake complete, links=%d", static_cast<int>(status_.opened_connections));
 
             uint64_t now = now_tick();
             status_.last_heartbeat_ = now;

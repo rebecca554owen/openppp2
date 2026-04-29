@@ -19,6 +19,9 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
+
+#include <chrono>
 
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
@@ -47,6 +50,7 @@ typedef ppp::transmissions::ISslWebsocketTransmission               ISslWebsocke
 namespace ppp {
     namespace app {
         namespace client {
+            using ppp::telemetry::Level;
             /** @brief Minimum keepalive echo interval in milliseconds. */
             static constexpr int SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT = 1000;
             /** @brief Maximum keepalive echo interval in milliseconds. */
@@ -169,6 +173,8 @@ namespace ppp {
                 Dictionary::ReleaseAllObjects(mappings);
                 Dictionary::ReleaseAllObjects(datagrams);
 
+                ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger finalized");
+
                 if (NULLPTR != mux) {
                     mux->close_exec();
                 }
@@ -210,6 +216,7 @@ namespace ppp {
                 if (NULLPTR != transmission) {
                     transmission->QoS = switcher_->GetQoS();
                     transmission->Statistics = switcher_->GetStatistics();
+                    ppp::telemetry::Log(Level::kDebug, "client_exchanger", "transmission created: protocol=%d", (int)protocol_type);
                 }
                 
                 return transmission;
@@ -289,12 +296,28 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
+                ppp::telemetry::Count("client_exchanger.dns.resolve", 1);
+                ppp::telemetry::Log(Level::kDebug, "client_exchanger", "dns resolved: %s", hostname.c_str());
+
                 if (NULLPTR != forwarding) {
+                    ppp::string session_guid = StringAuxiliary::Int128ToGuidString(GetId());
+                    ppp::telemetry::SpanScope span("client.proxy.setup", session_guid.c_str());
+                    struct ScopedProxySetupHistogram final {
+                        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+                        ~ScopedProxySetupHistogram() noexcept {
+                            int64_t elapsed = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+                            ppp::telemetry::Histogram("client.proxy.setup.us", elapsed);
+                        }
+                    } proxy_setup_histogram;
+
                     boost::asio::ip::tcp::endpoint forwarding_to_endpoint = forwarding->GetLocalEndPoint();
                     if (int forwarding_to_port = forwarding_to_endpoint.port(); forwarding_to_port > IPEndPoint::MinPort && forwarding_to_port <= IPEndPoint::MaxPort) {
                         forwarding->SetRemoteEndPoint(hostname, port);
                         port = forwarding_to_port;
                         address = forwarding_to_endpoint.address().to_string();
+                        ppp::telemetry::Count("client_exchanger.proxy.setup", 1);
+                        ppp::telemetry::Log(Level::kInfo, "client_exchanger", "proxy forwarding setup: %s:%d", hostname.c_str(), port);
                     }
                 }
 
@@ -370,6 +393,7 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TcpConnectFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
+                ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connected: %s:%d", hostname.c_str(), remotePort);
                 return NewTransmission(context, strand, socket, protocol_type, hostname, path);
             }
 
@@ -606,6 +630,8 @@ namespace ppp {
                             if (transmission->HandshakeServer(y, GetId(), true) && EchoLanToRemoteExchanger(transmission, y) > -1) {
                                 transmission_ = transmission;
                                 ExchangeToEstablishState(); {
+                                    ppp::telemetry::Count("client_exchanger.connect", 1);
+                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger connected");
                                     if (!SendRequestedIPv6Configuration(transmission, y)) {
                                         transmission->Dispose();
                                         continue;
@@ -616,6 +642,8 @@ namespace ppp {
                                         StaticEchoClean();
                                     }
 
+                                    ppp::telemetry::Count("client_exchanger.disconnect", 1);
+                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger disconnecting");
                                     UnregisterAllMappingPorts();
                                 }
                                 transmission_.reset();

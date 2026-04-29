@@ -22,6 +22,7 @@
 #include <ppp/app/ConsoleUI.h>
 #include <ppp/app/PppApplication.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/threading/Executors.h>
 
 #if defined(_WIN32)
@@ -35,6 +36,66 @@
 #endif
 
 namespace ppp::app {
+
+namespace {
+#if PPP_TELEMETRY
+    static bool HandleTelemetryHotkey(char ch) noexcept {
+        auto emit_state = []() noexcept {
+            ppp::string msg = "Telemetry filter: ";
+            msg += ppp::telemetry::IsConsoleLogEnabled() ? "log=on " : "log=off ";
+            msg += ppp::telemetry::IsConsoleMetricEnabled() ? "metric=on " : "metric=off ";
+            msg += ppp::telemetry::IsConsoleSpanEnabled() ? "span=on " : "span=off ";
+            msg += "level=" + std::to_string(ppp::telemetry::GetMinLevel());
+            ConsoleUI::GetInstance().AppendLine(msg);
+        };
+
+        switch (ch) {
+            case 'l':
+            case 'L':
+                ppp::telemetry::SetConsoleLogEnabled(!ppp::telemetry::IsConsoleLogEnabled());
+                emit_state();
+                return true;
+            case 'm':
+            case 'M':
+                ppp::telemetry::SetConsoleMetricEnabled(!ppp::telemetry::IsConsoleMetricEnabled());
+                emit_state();
+                return true;
+            case 's':
+            case 'S':
+                ppp::telemetry::SetConsoleSpanEnabled(!ppp::telemetry::IsConsoleSpanEnabled());
+                emit_state();
+                return true;
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+                ppp::telemetry::SetMinLevel(ch - '0');
+                emit_state();
+                return true;
+            case 'a':
+            case 'A':
+                ppp::telemetry::SetConsoleLogEnabled(true);
+                ppp::telemetry::SetConsoleMetricEnabled(true);
+                ppp::telemetry::SetConsoleSpanEnabled(true);
+                emit_state();
+                return true;
+            case 'q':
+            case 'Q':
+                ppp::telemetry::SetConsoleLogEnabled(false);
+                ppp::telemetry::SetConsoleMetricEnabled(false);
+                ppp::telemetry::SetConsoleSpanEnabled(false);
+                emit_state();
+                return true;
+            case '?':
+                ConsoleUI::GetInstance().AppendLine("Telemetry hotkeys: l=toggle log, m=toggle metric, s=toggle span, 0/1/2/3=set level, a=all, q=quiet, ?=help");
+                emit_state();
+                return true;
+            default:
+                return false;
+        }
+    }
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // UTF-8 box-drawing character constants (each is 3 bytes, 1 display column)
@@ -1183,6 +1244,16 @@ void ConsoleUI::RenderFrame() noexcept {
             if (ppp::diagnostics::ErrorCode::Success != code && 0u < err_ts) {
                 status_text += " (" + FormatAge(now_ms, err_ts) + ")";
             }
+
+#if PPP_TELEMETRY
+            status_text += "  | T:";
+            status_text += ppp::telemetry::IsConsoleLogEnabled() ? "L" : "-";
+            status_text += ppp::telemetry::IsConsoleMetricEnabled() ? "M" : "-";
+            status_text += ppp::telemetry::IsConsoleSpanEnabled() ? "S" : "-";
+            status_text += " @";
+            status_text += std::to_string(ppp::telemetry::GetMinLevel());
+            status_text += " [?]";
+#endif
         }
 
         frame += build_status_row(status_text, status_color);
@@ -1661,6 +1732,12 @@ void ConsoleUI::InputLoop() noexcept {
         }
 
         if (32 <= ch && 126 >= ch) {
+#if PPP_TELEMETRY
+            if (HandleTelemetryHotkey(static_cast<char>(ch))) {
+                MarkDirty();
+                continue;
+            }
+#endif
             InsertInputChar(static_cast<char>(ch));
         }
     }
@@ -1756,6 +1833,12 @@ void ConsoleUI::InputLoop() noexcept {
         }
 
         if (32 <= static_cast<unsigned char>(ch) && 126 >= static_cast<unsigned char>(ch)) {
+#if PPP_TELEMETRY
+            if (HandleTelemetryHotkey(ch)) {
+                MarkDirty();
+                continue;
+            }
+#endif
             InsertInputChar(ch);
         }
     }

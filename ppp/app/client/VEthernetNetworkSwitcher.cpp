@@ -7,6 +7,7 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <ppp/io/File.h>
 #include <ppp/threading/Timer.h>
@@ -29,6 +30,8 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/http/HttpClient.h>
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
+
+#include <chrono>
 
 /**
  * @file VEthernetNetworkSwitcher.cpp
@@ -109,6 +112,7 @@ using ppp::net::packet::IcmpFrame;
 using ppp::net::packet::IcmpType;
 using ppp::net::packet::BufferSegment;
 using ppp::transmissions::ITransmission;
+using ppp::telemetry::Level;
 
 namespace ppp {
     namespace app {
@@ -566,6 +570,7 @@ namespace ppp {
                     [self, this, context]() noexcept {
                         Finalize();
                     });
+                ppp::telemetry::Log(Level::kInfo, "client", "TUN detached");
                 VEthernet::Dispose();
             }
 
@@ -718,6 +723,16 @@ namespace ppp {
                     return false;
                 }
 
+                ppp::telemetry::SpanScope span("client.ipv6.apply");
+                struct ScopedIPv6ApplyHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedIPv6ApplyHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("client.ipv6.apply.us", elapsed);
+                    }
+                } ipv6_apply_histogram;
+
 
                 bool nat_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                 bool gua_mode = extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua;
@@ -795,6 +810,8 @@ namespace ppp {
                     // can use it as a sticky hint on reconnect to re-request the same address when the
                     // user has not configured an explicit RequestedIPv6() preference.
                     last_assigned_ipv6_ = extensions.AssignedIPv6Address;
+                    ppp::telemetry::Log(Level::kDebug, "client", "IPv6 applied");
+                    ppp::telemetry::Count("client.ipv6.apply", 1);
                 }
                 else {
                     ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, extensions.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
@@ -806,9 +823,12 @@ namespace ppp {
 
             /** @brief Restores previous IPv6 configuration captured before apply. */
             void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
+                ppp::telemetry::SpanScope span("client.ipv6.restore");
                 if (!ipv6_applied_) {
                     return;
                 }
+
+                ppp::telemetry::Log(Level::kDebug, "client", "IPv6 removed");
 
                 auto tap = GetTap();
                 if (NULLPTR == tap) {
@@ -833,7 +853,10 @@ namespace ppp {
                 ipv6_context.InterfaceName = tun_ni->Name;
 
                 bool nat_mode = information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                auto started_at = std::chrono::steady_clock::now();
                 ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, information_extensions_.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("client.ipv6.restore.us", elapsed);
 
                 ipv6_applied_ = false;
                 ipv6_state_.Clear();
@@ -1238,6 +1261,7 @@ namespace ppp {
                     // IP address of the virtual network card is used here to make it inconsistent with the condition of determining
                     // The next hop gateway of the route in the IsBypassIpAddress function.
                     rib->AddAllRoutes(bypass_ip_list, IPEndPoint::LoopbackAddress);
+                    ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
                 }
 
                 // Add dns route set rules.
@@ -1303,6 +1327,16 @@ namespace ppp {
 
             /** @brief Initializes switcher runtime components and opens all services. */
             bool VEthernetNetworkSwitcher::Open(const std::shared_ptr<ITap>& tap) noexcept {
+                ppp::telemetry::SpanScope span("client.connect");
+                struct ScopedConnectHistogram final {
+                    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+                    ~ScopedConnectHistogram() noexcept {
+                        int64_t elapsed = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+                        ppp::telemetry::Histogram("client.connect.us", elapsed);
+                    }
+                } connect_histogram;
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 // Get and retrieve the current underlying Ethernet interface information!
 #if defined(_WIN32)
@@ -1331,6 +1365,9 @@ namespace ppp {
                 if (!VEthernet::Open(tap)) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }
+
+                ppp::telemetry::Log(Level::kInfo, "client", "TUN attached");
+                ppp::telemetry::Count("client.tun.attach", 1);
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_WIN32)
@@ -1464,34 +1501,51 @@ namespace ppp {
                     // VPN routes need to be configured for the operating system to configure the bearer network and overlapping network links.
                     AddRoute();
 
+                    {
+                        ppp::telemetry::SpanScope span("client.dns.apply");
+                        struct ScopedDnsApplyHistogram final {
+                            std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                            ~ScopedDnsApplyHistogram() noexcept {
+                                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                                ppp::telemetry::Histogram("client.dns.apply.us", elapsed);
+                            }
+                        } dns_apply_histogram;
+
 #if defined(_WIN32)
-                    // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
-                    auto tun_ni = tun_ni_; 
-                    if (NULLPTR != tun_ni) {
-                        ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
-                    }
+                        // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
+                        auto tun_ni = tun_ni_; 
+                        if (NULLPTR != tun_ni) {
+                            ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
+                        }
 
-                    // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after 
-                    // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record 
-                    // Available in the region where the VPN server is located.
-                    ppp::tap::TapWindows::DnsFlushResolverCache();
+                        // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after 
+                        // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record 
+                        // Available in the region where the VPN server is located.
+                        ppp::tap::TapWindows::DnsFlushResolverCache();
 
-                    // Delete the default route of a physical network card in a single attempt without a reason.
-                    auto underlying_ni = underlying_ni_; 
-                    if (NULLPTR != underlying_ni) {
-                        ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
-                    }
+                        // Delete the default route of a physical network card in a single attempt without a reason.
+                        auto underlying_ni = underlying_ni_; 
+                        if (NULLPTR != underlying_ni) {
+                            ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
+                        }
 #else
-                    // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
-                    auto tun_ni = tun_ni_; 
-                    if (NULLPTR != tun_ni) {
-                        ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
-                    }
+                        // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
+                        auto tun_ni = tun_ni_; 
+                        if (NULLPTR != tun_ni) {
+                            ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
+                        }
 #endif
+                    }
+                    ppp::telemetry::Log(Level::kDebug, "client", "DNS setup");
+                    ppp::telemetry::Count("client.dns.setup", 1);
+
                     // Run the default gateway route protector.
                     ProtectDefaultRoute();
                 }
 #endif
+                ppp::telemetry::Log(Level::kInfo, "client", "client connected");
+                ppp::telemetry::Count("client.connect", 1);
                 return true;
             }
 
@@ -1554,6 +1608,18 @@ namespace ppp {
 
             /** @brief Installs VPN route entries into host operating system. */
             void VEthernetNetworkSwitcher::AddRoute() noexcept {
+                ppp::telemetry::SpanScope span("client.route.apply");
+                struct ScopedRouteApplyHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedRouteApplyHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("client.route.apply.us", elapsed);
+                    }
+                } route_apply_histogram;
+
+                ppp::telemetry::Log(Level::kDebug, "client", "route add");
+                ppp::telemetry::Count("client.route.add", 1);
 #if defined(_WIN32)
                 // Find and delete all default route information!
                 if (auto tap = GetTap(); NULLPTR != tap) {
@@ -1646,6 +1712,8 @@ namespace ppp {
 
             /** @brief Removes VPN route entries and restores system defaults. */
             void VEthernetNetworkSwitcher::DeleteRoute() noexcept {
+                ppp::telemetry::Log(Level::kDebug, "client", "route delete");
+                ppp::telemetry::Count("client.route.delete", 1);
 #if defined(_WIN32)
                 // Delete the loaded route table from the windows operating system.
                 ppp::win32::network::DeleteAllRoutes(rib_);
@@ -1830,6 +1898,7 @@ namespace ppp {
                                 // Loading is considered valid only if any route is added.
                                 if (any) {
                                     rib_ = rib;
+                                    ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
                                 }
                             }
                         }
@@ -2220,6 +2289,9 @@ namespace ppp {
 
             /** @brief Releases all runtime services, routes, and related resources. */
             void VEthernetNetworkSwitcher::ReleaseAllObjects() noexcept {
+                ppp::telemetry::Log(Level::kInfo, "client", "client disconnected");
+                ppp::telemetry::Count("client.disconnect", 1);
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 // Windows platform needs to set the prdr synchronization lock state to prevent the problem of multi-thread concurrent competition.
                 SynchronizedObjectScope scope(prdr_);
@@ -2270,10 +2342,11 @@ namespace ppp {
 
                 // Delete VPN route table information configured in the operating system!
                 if (exchangeof(route_added_, false)) {
-                    // Delete routes entries configured by the VPN program from the operating system. 
+                    // Delete routes entries configured by the VPN program from the operating system.
                     DeleteRoute();
 
 #if defined(_WIN32)
+                    ppp::telemetry::Log(Level::kDebug, "client", "DNS teardown");
                     // Restore all dns servers addresses that have been configured when VPN routes are enabled.
                     ppp::win32::network::SetAllNicsDnsAddresses(ni_dns_servers_);
 
@@ -2282,6 +2355,7 @@ namespace ppp {
                     // Available in the region where the VPN server is located.
                     ppp::tap::TapWindows::DnsFlushResolverCache();
 #else
+                    ppp::telemetry::Log(Level::kDebug, "client", "DNS teardown");
                     // Restore the original linux /etc/resolve.conf to linux operating system configuration files.
                     UnixNetworkInterface::SetDnsResolveConfiguration(GetUnderlyingNetworkInterface());
 #endif

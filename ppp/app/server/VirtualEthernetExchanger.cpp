@@ -22,6 +22,7 @@
 #include <ppp/net/packet/IcmpFrame.h>
 #include <ppp/ipv6/IPv6Packet.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 /**
  * @file VirtualEthernetExchanger.cpp
@@ -96,6 +97,8 @@ namespace {
 namespace ppp {
     namespace app {
         namespace server {
+            using ppp::telemetry::Level;
+
             /**
              * @brief Initializes exchanger state for one virtual session.
              */
@@ -131,11 +134,17 @@ namespace ppp {
                 }
 
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
+
+                ppp::telemetry::Log(Level::kInfo, "exchanger", "constructed");
+                ppp::telemetry::Count("exchanger.create", 1);
             }
 
             /** @brief Releases exchanger resources. */
             VirtualEthernetExchanger::~VirtualEthernetExchanger() noexcept {
                 Finalize();
+
+                ppp::telemetry::Log(Level::kInfo, "exchanger", "destroyed");
+                ppp::telemetry::Count("exchanger.destroy", 1);
             }
 
             /** @brief Gets preferred TUN descriptor hint. */
@@ -226,7 +235,14 @@ namespace ppp {
                     switcher_->DeleteIPv6Exchanger(GetId());
                     switcher_->DeleteExchanger(this);
                     switcher_->DeleteNatInformation(this, address_);
-                    switcher_->StaticEchoUnallocated(static_echo_session_id_.exchange(0));
+
+                    int freed_session_id = static_echo_session_id_.exchange(0);
+                    if (freed_session_id != 0) {
+                        ppp::telemetry::Log(Level::kInfo, "exchanger", "static_echo freed session_id=%d", freed_session_id);
+                        ppp::telemetry::Count("exchanger.static_echo.free", 1);
+                    }
+
+                    switcher_->StaticEchoUnallocated(freed_session_id);
                 }
             }
 
@@ -451,6 +467,7 @@ namespace ppp {
                 boost::asio::ip::address gateway = switcher_->GetIPv6TransitGateway();
                 if (gateway.is_v6()) {
                     if (HandleIPv6GatewayEchoReply(packet, packet_length, gateway.to_v6())) {
+                        ppp::telemetry::Log(Level::kDebug, "exchanger", "IPv6 gateway echo reply handled");
                         return DoNat(transmission_, packet, packet_length, y);
                     }
                 }
@@ -503,6 +520,9 @@ namespace ppp {
 
             /** @brief Allocates static echo context and responds with assigned session values. */
             bool VirtualEthernetExchanger::StaticEcho(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
+                ppp::string session_guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(GetId());
+                ppp::telemetry::SpanScope span("exchanger.static_echo.alloc", session_guid.c_str());
+
                 if (disposed_) {
                     return false;
                 }
@@ -516,6 +536,9 @@ namespace ppp {
                 if (NULLPTR != allocated_context) {
                     static_echo_session_id_.exchange(allocated_id);
                     static_allocated_context_ = allocated_context;
+
+                    ppp::telemetry::Log(Level::kInfo, "exchanger", "static_echo allocated session_id=%d", allocated_id);
+                    ppp::telemetry::Count("exchanger.static_echo.alloc", 1);
 
                     return DoStatic(transmission, allocated_context->fsid, allocated_id, remote_port, y);
                 }
@@ -683,6 +706,7 @@ namespace ppp {
                                 logger->Port(GetId(), transmission, datagram->GetSourceEndPoint(), datagram->GetLocalEndPoint());
                             }
 
+                            ppp::telemetry::Log(Level::kDebug, "exchanger", "datagram port opened");
                             return datagram->SendTo(packet, packet_length, destinationEP);
                         }
                         else {
@@ -1369,6 +1393,9 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     if (NULLPTR != logger) {
                         logger->MPEntry(GetId(), transmission, mapping_port->BoundEndPointOfFrpServer(), tcp);
                     }
+
+                    ppp::telemetry::Log(Level::kDebug, "exchanger", "mapping added remote_port=%d", remote_port);
+                    ppp::telemetry::Count("exchanger.mapping.add", 1);
                 }
                 else {
                     mapping_port->Dispose();
@@ -1398,6 +1425,8 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                                     SynchronizedObjectScope scope(exchanger->syncobj_);
                                     VirtualEthernetMappingPort::DeleteMappingPort(
                                         exchanger->mappings_, self->ProtocolIsNetworkV4(), self->ProtocolIsTcpNetwork(), self->GetRemotePort());
+                                    ppp::telemetry::Log(Level::kDebug, "exchanger", "mapping removed remote_port=%d", self->GetRemotePort());
+                                    ppp::telemetry::Count("exchanger.mapping.remove", 1);
                                 };
 
                                 if (NULLPTR != context) {
@@ -1658,6 +1687,8 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                         if (NULLPTR != logger) {
                             logger->Port(GetId(), transmission, datagram_port->GetSourceEndPoint(), datagram_port->GetLocalEndPoint());
                         }
+
+                        ppp::telemetry::Log(Level::kDebug, "exchanger", "static_echo datagram port opened");
                     }
                     else {
                         /** @brief Lost the insertion race; dispose our redundant port. */

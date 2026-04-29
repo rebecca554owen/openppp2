@@ -158,6 +158,12 @@ ENDIF()
 # If the current compiler environment is detected to support AES.
 OPTION(ENABLE_SIMD "Enable x86/x64 SIMD AES-NI implementation" OFF)
 
+# Optional telemetry/observability facade (default OFF for zero-cost on low-end hardware).
+OPTION(PPP_TELEMETRY "Enable optional telemetry/OTel facade (adds non-zero runtime cost)" OFF)
+IF(PPP_TELEMETRY)
+    ADD_COMPILE_DEFINITIONS(PPP_TELEMETRY=1)
+ENDIF()
+
 SET(PLATFORM_ARCH_X86 FALSE)
 IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|amd64|AMD64|i[3-6]86|x86)$")
     SET(PLATFORM_ARCH_X86 TRUE)

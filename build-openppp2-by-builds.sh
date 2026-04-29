@@ -13,6 +13,12 @@ BIN_DIR="$BASE_DIR/bin"                 # Where final zip files will be placed
 BUILD_DIR="$BASE_DIR/build"             # Temporary build directory
 ORIGINAL_CMAKELISTS="$BASE_DIR/CMakeLists.txt"
 BACKUP_CMAKELISTS="$BASE_DIR/CMakeLists.txt.backup"
+THIRD_PARTY_ROOT="${1:-${THIRD_PARTY_LIBRARY_DIR:-/root/dev}}"
+
+if [ ! -d "$THIRD_PARTY_ROOT" ]; then
+    echo "THIRD_PARTY_LIBRARY_DIR not found: $THIRD_PARTY_ROOT"
+    exit 1
+fi
 
 # Create bin directory if it doesn't exist
 mkdir -p "$BIN_DIR"
@@ -70,7 +76,7 @@ for config_file in "$CONFIGS_DIR"/*; do
 
     # 3. Configure with CMake
     echo "Running CMake configuration..."
-    cmake .. -DCMAKE_BUILD_TYPE=Release
+    THIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY_ROOT" cmake .. -DCMAKE_BUILD_TYPE=Release
     if [ $? -ne 0 ]; then
         echo "CMake configuration failed for $config_name"
         restore_original

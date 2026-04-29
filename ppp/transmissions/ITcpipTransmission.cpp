@@ -1,5 +1,6 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 /**
  * @file ITcpipTransmission.cpp
@@ -18,6 +19,7 @@ using ppp::net::IPEndPoint;
 
 namespace ppp {
     namespace transmissions {
+        using ppp::telemetry::Level;
         /**
          * @brief Constructs a TCP/IP transmission and caches the remote endpoint.
          */
@@ -31,6 +33,8 @@ namespace ppp {
             , socket_(socket) {
             boost::system::error_code ec;
             remoteEP_ = ppp::net::Ipep::V6ToV4(socket->remote_endpoint(ec));
+            ppp::telemetry::Log(Level::kInfo, "tcpip", "socket established remote=%s:%u", remoteEP_.address().to_string().c_str(), remoteEP_.port());
+            ppp::telemetry::Count("tcpip.connect", 1);
 
 #if defined(_WIN32)
             if (ppp::net::Socket::IsDefaultFlashTypeOfService()) {
@@ -52,6 +56,8 @@ namespace ppp {
             if (disposed == TRUE) {
                 return;  // Already disposed, avoid double cleanup
             }
+
+            ppp::telemetry::Log(Level::kInfo, "tcpip", "socket closed remote=%s:%u", remoteEP_.address().to_string().c_str(), remoteEP_.port());
 
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
 

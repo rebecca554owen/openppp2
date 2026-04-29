@@ -20,6 +20,9 @@
 #include <ppp/ipv6/IPv6Auxiliary.h>
 #include <ppp/ipv6/IPv6Packet.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
+
+#include <chrono>
 
 #if defined(_LINUX)
 #include <common/unix/UnixAfx.h>
@@ -44,6 +47,7 @@ using ppp::net::AddressFamily;
 using ppp::threading::Executors;
 using ppp::coroutines::YieldContext;
 using ppp::collections::Dictionary;
+using ppp::telemetry::Level;
 
 
 /**
@@ -311,6 +315,21 @@ namespace ppp {
              * @return true when extensions contain a usable assignment; otherwise false.
              */
             bool VirtualEthernetSwitcher::BuildInformationIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept {
+                struct ScopedIPv6AssignHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+                    VirtualEthernetInformationExtensions& extensions;
+
+                    explicit ScopedIPv6AssignHistogram(VirtualEthernetInformationExtensions& value) noexcept
+                        : extensions(value) {}
+
+                    ~ScopedIPv6AssignHistogram() noexcept {
+                        if (extensions.AssignedIPv6Address.is_v6()) {
+                            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                            ppp::telemetry::Histogram("server.ipv6.assign.us", elapsed);
+                        }
+                    }
+                } ipv6_assign_histogram(extensions);
+
                 extensions.Clear();
 
                 const auto& ipv6 = configuration_->server.ipv6;
@@ -884,6 +903,9 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     ipv6s_[ip_key] = exchanger;
                 }
+
+                ppp::telemetry::Count("server.ipv6.assigned", 1);
+                ppp::telemetry::Log(Level::kDebug, "server", "ipv6 assigned");
                 return true;
             }
 
@@ -899,6 +921,8 @@ namespace ppp {
              *       prevent holding syncobj_ for hundreds of milliseconds per client.
              */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
+                ppp::string session_guid = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
+                ppp::telemetry::SpanScope span("server.ipv6.withdraw", session_guid.c_str());
                 if (!extensions.AssignedIPv6Address.is_v6()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
@@ -935,6 +959,9 @@ namespace ppp {
                  */
                 bool route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
                 bool proxy_removed = DeleteIPv6NeighborProxy(ip);
+
+                ppp::telemetry::Count("server.ipv6.withdrawn", 1);
+                ppp::telemetry::Log(Level::kDebug, "server", "ipv6 withdrawn");
 
                 RevokeIPv6Lease(session_id);
                 if (!route_removed) {
@@ -992,6 +1019,8 @@ namespace ppp {
                         tail = ipv6s_.erase(tail);
                         released_any = true;
                         any          = true;
+                        ppp::telemetry::Count("server.ipv6.withdrawn", 1);
+                        ppp::telemetry::Log(Level::kDebug, "server", "ipv6 withdrawn");
                     }
 
                     if (released_any) {
@@ -1101,6 +1130,7 @@ namespace ppp {
              */
             bool VirtualEthernetSwitcher::AddIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept {
 #if defined(_LINUX)
+                ppp::telemetry::SpanScope span("server.route.add");
                 if (!ip.is_v6()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
@@ -1127,8 +1157,15 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+                auto started_at = std::chrono::steady_clock::now();
                 bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
-                if (!ok) {
+                if (ok) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                    ppp::telemetry::Count("server.route.added", 1);
+                    ppp::telemetry::Histogram("server.route.add.us", elapsed);
+                    ppp::telemetry::Log(Level::kDebug, "server", "route added");
+                }
+                else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
                 }
                 return ok;
@@ -1146,6 +1183,7 @@ namespace ppp {
              */
             bool VirtualEthernetSwitcher::DeleteIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept {
 #if defined(_LINUX)
+                ppp::telemetry::SpanScope span("server.route.delete");
                 if (!ip.is_v6()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6AddressInvalid);
                     return false;
@@ -1172,8 +1210,15 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+                auto started_at = std::chrono::steady_clock::now();
                 bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
-                if (!ok) {
+                if (ok) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                    ppp::telemetry::Count("server.route.deleted", 1);
+                    ppp::telemetry::Histogram("server.route.delete.us", elapsed);
+                    ppp::telemetry::Log(Level::kDebug, "server", "route deleted");
+                }
+                else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
                 }
                 return ok;
@@ -1223,7 +1268,10 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::AddIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
-                if (!ok) {
+                if (ok) {
+                    ppp::telemetry::Log(Level::kDebug, "server", "neighbor proxy added");
+                }
+                else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed);
                 }
                 return ok;
@@ -1248,7 +1296,10 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ipv6_neighbor_proxy_ifname_, ip_str);
-                if (!ok) {
+                if (ok) {
+                    ppp::telemetry::Log(Level::kDebug, "server", "neighbor proxy deleted");
+                }
+                else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 }
                 return ok;
@@ -1274,7 +1325,10 @@ namespace ppp {
                 std::string ip_std = ip.to_string();
                 ppp::string ip_str(ip_std.data(), ip_std.size());
                 bool ok = ppp::tap::TapLinux::DeleteIPv6NeighborProxy(ifname, ip_str);
-                if (!ok) {
+                if (ok) {
+                    ppp::telemetry::Log(Level::kDebug, "server", "neighbor proxy deleted");
+                }
+                else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 }
                 return ok;
@@ -1289,6 +1343,7 @@ namespace ppp {
              * @return true if at least one acceptor starts successfully.
              */
              bool VirtualEthernetSwitcher::Run() noexcept {
+                ppp::telemetry::SpanScope span("server.acceptors.start");
                 // Snapshot the acceptor list under the lock, then start accept loops
                 // outside the lock to avoid holding syncobj_ across socket operations.
                 std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptors_snapshot[NetworkAcceptorCategories_Max];
@@ -1306,6 +1361,7 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 bool bany = false;
+                auto started_at = std::chrono::steady_clock::now();
                 for (int categories = NetworkAcceptorCategories_Min; categories < NetworkAcceptorCategories_Max; categories++) {
                     std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor = acceptors_snapshot[categories];
                     if (NULLPTR == acceptor) {
@@ -1330,6 +1386,11 @@ namespace ppp {
                         Socket::Closesocket(acceptor);
                         acceptors_[categories] = NULLPTR;
                     }
+                }
+                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                ppp::telemetry::Histogram("server.acceptors.start.us", elapsed);
+                if (bany) {
+                    ppp::telemetry::Log(Level::kInfo, "server", "server acceptors running");
                 }
                 return bany;
             }
@@ -1357,6 +1418,8 @@ namespace ppp {
                     if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                     }
+                    ppp::telemetry::Count("server.session.rejected", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server", "session rejected");
                     return STATUS_ERROR;
                 }
 
@@ -1541,7 +1604,11 @@ namespace ppp {
                     VirtualEthernetExchangerPtr& slot = exchangers_[session_id];
                     oldExchanger = std::move(slot);
                     slot         = newExchanger;
+                    ppp::telemetry::Gauge("server.exchanger_count", (int64_t)exchangers_.size());
                 }
+
+                ppp::telemetry::Count("server.exchanger.add", 1);
+                ppp::telemetry::Log(Level::kInfo, "server", "exchanger added");
 
                 IDisposable::Dispose(oldExchanger);
                 return newExchanger;
@@ -1571,6 +1638,17 @@ namespace ppp {
              * @return true if establishment and run succeed; otherwise false.
              */
             bool VirtualEthernetSwitcher::Establish(const ITransmissionPtr& transmission, const Int128& session_id, const VirtualEthernetInformationPtr& i, YieldContext& y) noexcept {
+                ppp::string session_guid = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
+                ppp::telemetry::SpanScope span("server.session.establish", session_guid.c_str());
+                struct ScopedEstablishHistogram final {
+                    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+                    ~ScopedEstablishHistogram() noexcept {
+                        int64_t elapsed = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+                        ppp::telemetry::Histogram("server.session.establish.us", elapsed);
+                    }
+                } establish_histogram;
+
                 if (NULLPTR == transmission) {
                     return false;
                 }
@@ -1579,6 +1657,10 @@ namespace ppp {
                 if (NULLPTR == channel) {
                     return false;
                 }
+
+                ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
+                ppp::telemetry::Count("server.session.accepted", 1);
+                ppp::telemetry::Log(Level::kInfo, "server", "session accepted");
 
                 VirtualEthernetInformation fallback_information;
                 const VirtualEthernetInformation* established_information = i.get();
@@ -1769,11 +1851,15 @@ namespace ppp {
                         if (p.get() == exchanger) {
                             channel = std::move(tail->second);
                             exchangers_.erase(tail);
+                            ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
+                            ppp::telemetry::Gauge("server.exchanger_count", (int64_t)exchangers_.size());
                         }
                     }
                 }
 
                 if (channel) {
+                    ppp::telemetry::Count("server.exchanger.remove", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server", "exchanger removed");
                     channel->Dispose();
                 }
                 return channel;
@@ -1936,6 +2022,7 @@ namespace ppp {
 
                 if (ok) {
                     OpenLogger();
+                    ppp::telemetry::Log(Level::kInfo, "server", "server opened");
                 }
 
                 return ok;
@@ -2459,6 +2546,7 @@ namespace ppp {
                 }
 
                 static_echo_bind_port_ = localEP.port();
+                ppp::telemetry::Log(Level::kInfo, "server", "static echo socket opened");
                 return LoopbackDatagramSocket();
             }
 
@@ -2579,6 +2667,7 @@ namespace ppp {
                 VirtualEthernetStaticEchoAllocatedContextPtr allocated_context;
                 for (SynchronizedObjectScope scope(syncobj_);;) {
                     if (Dictionary::TryRemove(static_echo_allocateds_, allocated_id, allocated_context)) {
+                        ppp::telemetry::Log(Level::kInfo, "server", "static echo unallocated");
                         return allocated_context;
                     }
 
@@ -2697,6 +2786,7 @@ namespace ppp {
                     if (Dictionary::TryAdd(static_echo_allocateds_, generate_id, allocated_context)) {
                         remote_port  = bind_port;
                         allocated_id = generate_id;
+                        ppp::telemetry::Log(Level::kInfo, "server", "static echo allocated");
                         return allocated_context;
                     }
                 }
@@ -2897,6 +2987,7 @@ namespace ppp {
              * @brief Performs full shutdown and releases all runtime resources.
              */
              void VirtualEthernetSwitcher::Finalize() noexcept {
+                ppp::telemetry::Log(Level::kInfo, "server", "server finalizing");
                 std::shared_ptr<boost::asio::ip::tcp::resolver> tresolver;
                 std::shared_ptr<boost::asio::ip::udp::resolver> uresolver;
 
@@ -3090,6 +3181,8 @@ namespace ppp {
                         if (!ex || !ex->Update(now)) {
                             if (ex) {
                                 stale.emplace_back(ex);
+                                ppp::telemetry::Count("server.exchanger.remove", 1);
+                                ppp::telemetry::Log(Level::kInfo, "server", "exchanger removed (stale)");
                             }
 
                             tail = exchangers_.erase(tail);
@@ -3098,6 +3191,7 @@ namespace ppp {
                             ++tail;
                         }
                     }
+                    ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
                 }
 
                 // Dispose outside the lock to avoid holding syncobj_ across
@@ -3182,6 +3276,9 @@ namespace ppp {
                         ppp::string addr_key(addr_std.data(), addr_std.size());
                         ipv6s_.erase(addr_key);
                     }
+
+                    ppp::telemetry::Count("server.ipv6.withdrawn", 1);
+                    ppp::telemetry::Log(Level::kDebug, "server", "ipv6 withdrawn (expired)");
 
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseExpired);
                     it = ipv6_leases_.erase(it);

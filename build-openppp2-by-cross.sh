@@ -80,7 +80,12 @@ apt-get install gcc-mipsel-linux-gnu g++-mipsel-linux-gnu -y
 
 THIRD_PARTY_LIBRARY_ROOT=$1
 if [ -z "$THIRD_PARTY_LIBRARY_ROOT" ] || [ ! -d "$THIRD_PARTY_LIBRARY_ROOT" ]; then
-    THIRD_PARTY_LIBRARY_ROOT="/root/dev"
+    THIRD_PARTY_LIBRARY_ROOT="${THIRD_PARTY_LIBRARY_DIR:-/root/dev}"
+fi
+
+if [ ! -d "$THIRD_PARTY_LIBRARY_ROOT" ]; then
+    echo "THIRD_PARTY_LIBRARY_DIR not found: $THIRD_PARTY_LIBRARY_ROOT"
+    exit 1
 fi
 
 PPP_build "$THIRD_PARTY_LIBRARY_ROOT" "aarch64" "aarch64-linux-gnu-ld" "aarch64-linux-gnu-gcc" "aarch64-linux-gnu-g++"

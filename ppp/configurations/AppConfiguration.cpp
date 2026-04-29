@@ -303,6 +303,16 @@ namespace ppp {
             config.virr.retry_interval = 300;
             config.vbgp.update_interval = 3600;
 
+            config.telemetry.enabled = false;
+            config.telemetry.level = 0;
+            config.telemetry.count = false;
+            config.telemetry.span = false;
+            config.telemetry.endpoint = "";
+            config.telemetry.log_file = "";
+            config.telemetry.console_log = true;
+            config.telemetry.console_metric = true;
+            config.telemetry.console_span = true;
+
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
 
@@ -1225,6 +1235,17 @@ namespace ppp {
             AssignIfPresent(config.virr.update_interval, json["virr"]["update-interval"]);
             AssignIfPresent(config.virr.retry_interval, json["virr"]["retry-interval"]);
             AssignIfPresent(config.vbgp.update_interval, json["vbgp"]["update-interval"]);
+
+            AssignBoolIfPresent(config.telemetry.enabled, json["telemetry"]["enabled"]);
+            AssignIfPresent(config.telemetry.level, json["telemetry"]["level"]);
+            AssignBoolIfPresent(config.telemetry.count, json["telemetry"]["count"]);
+            AssignBoolIfPresent(config.telemetry.span, json["telemetry"]["span"]);
+            AssignIfPresent(config.telemetry.endpoint, json["telemetry"]["endpoint"]);
+            AssignIfPresent(config.telemetry.log_file, json["telemetry"]["log-file"]);
+            AssignBoolIfPresent(config.telemetry.console_log, json["telemetry"]["console-log"]);
+            AssignBoolIfPresent(config.telemetry.console_metric, json["telemetry"]["console-metric"]);
+            AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
+
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
@@ -1441,6 +1462,18 @@ namespace ppp {
             Json::Value vbgp;
             vbgp["update-interval"] = config.vbgp.update_interval;
             root["vbgp"] = vbgp;
+
+            Json::Value telemetry;
+            telemetry["enabled"] = config.telemetry.enabled;
+            telemetry["level"] = config.telemetry.level;
+            telemetry["count"] = config.telemetry.count;
+            telemetry["span"] = config.telemetry.span;
+            telemetry["endpoint"] = config.telemetry.endpoint;
+            telemetry["log-file"] = config.telemetry.log_file;
+            telemetry["console-log"] = config.telemetry.console_log;
+            telemetry["console-metric"] = config.telemetry.console_metric;
+            telemetry["console-span"] = config.telemetry.console_span;
+            root["telemetry"] = telemetry;
 
             return root;
         }

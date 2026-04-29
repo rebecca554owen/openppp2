@@ -123,7 +123,7 @@ namespace ppp
                             }
                             return TRUE;
                         }
-                        void                                                    Free() noexcept // �ͷ��ڴ�
+                        void                                                    Free() noexcept // 释放内存
                         {
                             if (ProtoInfo != NULLPTR && GlobalSize(ProtoInfo) > 0)
                             {
@@ -237,7 +237,7 @@ namespace ppp
                                     return errorcode;
                                 }
 
-                                NextProcTable = *lpproctable; // ����ԭ������ں�����
+                                NextProcTable = *lpproctable; // 保存原始提供程序函数表
                                 if (StartProviderCompleted != NULLPTR)
                                 {
                                     StartProviderCompleted(&NextProcTable, lpproctable);
