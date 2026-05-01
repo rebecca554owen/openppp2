@@ -144,8 +144,10 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
             ethernet->Mux(&network_interface->Mux);
             ethernet->MuxAcceleration(&network_interface->MuxAcceleration);
             ethernet->StaticMode(&network_interface->StaticMode);
+#if !defined(_ANDROID)
             ethernet->PreferredNgw(network_interface->Ngw);
             ethernet->PreferredNic(network_interface->Nic);
+#endif
 
 #if defined(_LINUX)
             for (auto&& bypass_path : *network_interface->Bypass) {
@@ -180,7 +182,11 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
                 }
             }
             if (!ethernet->Open(tap)) {
+#if !defined(_ANDROID)
                 auto ni = ethernet->GetUnderlyingNetworkInterface();
+#else
+                auto ni = NULLPTR;
+#endif
                 if (NULLPTR != ni) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 } else {

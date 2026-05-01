@@ -95,7 +95,7 @@ namespace ppp
 
         public:
             /** @brief Creates an empty firewall with no rules loaded. */
-            Firewall() noexcept = default;
+            Firewall() noexcept {}
             /** @brief Destroys the firewall; all rule containers are freed. */
             virtual ~Firewall() noexcept = default;
 

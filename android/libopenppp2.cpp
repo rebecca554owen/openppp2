@@ -667,10 +667,10 @@ static int                                                                  libo
     if (network_state == NetworkState::NetworkState_Connecting) {
         return LIBOPENPPP2_LINK_STATE_CONNECTING;
     }
-    elif(network_state == NetworkState::NetworkState_Reconnecting) {
+    else if (network_state == NetworkState::NetworkState_Reconnecting) {
         return LIBOPENPPP2_LINK_STATE_RECONNECTING;
     }
-    elif(network_state == NetworkState::NetworkState_Established) {
+    else if (network_state == NetworkState::NetworkState_Established) {
         return LIBOPENPPP2_LINK_STATE_ESTABLISHED;
     }
 
@@ -781,7 +781,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1link_1stat
 
     libopenppp2_set_last_error_for_result(err);
 
-    elif(err == LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED || err == LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING) {
+    if (err == LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED || err == LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING) {
         return LIBOPENPPP2_LINK_STATE_APPLICATIION_UNINITIALIZED;
     }
     else {
@@ -808,9 +808,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1aggligator
 
     libopenppp2_set_last_error_for_result(err);
 
-    else {
-        return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
-    }
+    return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
 }
 
 // package: supersocksr.ppp.android.c
@@ -1010,7 +1008,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
         if (prefix < 16) {
             return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkMaskInvalid, LIBOPENPPP2_ERROR_ARG_MASK_SUBNET_IP_RANGE_GREATER_65535);
         }
-        elif(prefix > 30) {
+        else if (prefix > 30) {
             addresses[1] = IPEndPoint::NetmaskToPrefix(prefix);
             mask_address = Ipep::ToAddress(addresses[1]);
         }
@@ -1397,7 +1395,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                                 app->StartJNI(env, key_);
                             });
                     }
-                    elif(err != LIBOPENPPP2_ERROR_IT_IS_RUNING) {
+                    else if (err != LIBOPENPPP2_ERROR_IT_IS_RUNING) {
                         app->Release();
                         context->stop();
                     }
@@ -1497,7 +1495,7 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_if_1subnet(
         nip2 &= nmask;
         return nip1 == nip2;
     }
-    elif(ip1.is_v6() && ip2.is_v6() && mask.is_v6()) {
+    else if (ip1.is_v6() && ip2.is_v6() && mask.is_v6()) {
         ppp::Int128 nip1 = *(ppp::Int128*)(ip1.to_v6().to_bytes().data());
         ppp::Int128 nip2 = *(ppp::Int128*)(ip2.to_v6().to_bytes().data());
         ppp::Int128 nmask = *(ppp::Int128*)(mask.to_v6().to_bytes().data());
@@ -1716,7 +1714,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_link_1of(JNI
         json["proto"] = "ws";
         json["protocol"] = "ppp+ws";
     }
-    elif(protocol == ProtocolType::ProtocolType_HttpSSL || protocol == ProtocolType::ProtocolType_WebSocketSSL) {
+    else if (protocol == ProtocolType::ProtocolType_HttpSSL || protocol == ProtocolType::ProtocolType_WebSocketSSL) {
         json["proto"] = "wss";
         json["protocol"] = "ppp+wss";
     }
@@ -1836,7 +1834,7 @@ __LIBOPENPPP2__(jbyteArray) Java_supersocksr_ppp_android_c_libopenppp2_string_1t
             af = AF_INET;
             *(uint32_t*)bytes = htonl(ip.to_v4().to_uint());
         }
-        elif(ip.is_v6()) {
+        else if (ip.is_v6()) {
             boost::asio::ip::address_v6::bytes_type tb = ip.to_v6().to_bytes();
             af = AF_INET6;
             memcpy(bytes, tb.data(), tb.size());

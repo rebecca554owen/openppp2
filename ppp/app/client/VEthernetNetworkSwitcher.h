@@ -439,7 +439,7 @@ namespace ppp {
                  */
                 uint8_t                                                             MuxAcceleration(uint8_t* mux_acceleration) noexcept;
 
-#if defined(_ANDROID) || defined(_IPHONE)   
+#if defined(_ANDROID) || defined(_IPHONE)
                 /**
                  * @brief Sets the bypass IP-list text used on mobile platforms.
                  *
@@ -1043,7 +1043,7 @@ namespace ppp {
                 ProtectorNetworkPtr                                                 protect_network_;
 #endif
 
-#if defined(_ANDROID) || defined(_IPHONE)   
+#if defined(_ANDROID) || defined(_IPHONE)
                 /** @brief Mobile bypass IP-list text (CIDR-separated). */
                 ppp::string                                                         bypass_ip_list_;
 #else
