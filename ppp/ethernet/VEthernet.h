@@ -244,14 +244,17 @@ namespace ppp
 #if defined(_LINUX)
             /** @brief Desired Linux TAP multi-queue (MQ) SSMT mode. */
             bool                                                            ssmt_mq_                = false;
+#endif
             /**
              * @brief Signals that MQ mode has taken effect.
              * @note  Written under syncobj_ in ForkAllSsmt()/StopAllSsmt(); read lock-free
              *        from SSMT packet-input threads.  Must be std::atomic<bool> to prevent
              *        a data race between the writer and concurrent SSMT readers.
+             *        Declared unconditionally in the !_WIN32 block because StopAllSsmt()
+             *        references it without a _LINUX guard; on non-Linux platforms the flag
+             *        simply stays false.
              */
             std::atomic<bool>                                               ssmt_mq_to_take_effect_ = { false };
-#endif
             /** @brief SSMT worker io_context instances (one per SSMT thread). */
             std::vector<std::shared_ptr<boost::asio::io_context>/**/>       sssmt_;
 #endif
