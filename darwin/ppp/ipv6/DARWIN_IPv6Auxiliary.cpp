@@ -1,4 +1,5 @@
 #include <darwin/ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/ipv6/IPv6Packet.h>
 #include <ppp/diagnostics/Error.h>
 
 #include <common/unix/UnixAfx.h>
