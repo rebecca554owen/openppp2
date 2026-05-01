@@ -1,0 +1,12 @@
+# Compiled binaries
+guardian
+cmd/tui/guardian-tui
+
+# Node modules
+webui/node_modules/
+
+# Allow go.mod and go.sum (root .gitignore has *.mod for Fortran)
+!go.mod
+!go.sum
+!cmd/tui/go.mod
+!cmd/tui/go.sum
