@@ -295,7 +295,7 @@ namespace ppp {
                     }
 
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-                    if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && addr_v6 == ComputeNetworkAddress(addr_v6, prefix_length)) {
+                    if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && addr_v6 == ppp::ipv6::ComputeNetworkAddress(addr_v6, prefix_length)) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 
