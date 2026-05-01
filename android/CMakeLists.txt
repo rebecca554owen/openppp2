@@ -78,7 +78,7 @@ SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic") 
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/android)
+SET(THIRD_PARTY_LIBRARY_DIR /root/android CACHE PATH "Third-party library root directory")
 
 # Set the compiled header file search directorys.
 INCLUDE_DIRECTORIES(

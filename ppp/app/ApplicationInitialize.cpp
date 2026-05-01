@@ -227,8 +227,10 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 
 #if defined(_WIN32)
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId);
-#else
+#elif defined(_LINUX)
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId, network_interface->Ssmt, network_interface->SsmtMQ);
+#else
+            ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId, network_interface->Ssmt);
 #endif
             if (NULLPTR == ethernet) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);

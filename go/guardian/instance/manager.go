@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -435,7 +434,7 @@ func (m *Manager) stopInstance(inst *instance) error {
 
 	sig := signalFromName(stopSignal)
 	if sig != 0 {
-		_ = syscall.Kill(-cmd.Process.Pid, sig) // signal entire process group
+		_ = killProcessGroup(cmd.Process.Pid, sig) // signal entire process group
 	}
 
 	deadline := time.Now().Add(time.Duration(waitMs) * time.Millisecond)
@@ -454,22 +453,9 @@ func (m *Manager) stopInstance(inst *instance) error {
 	process := cmd.Process
 	inst.mu.RUnlock()
 	if stillRunning && process != nil {
-		_ = syscall.Kill(-process.Pid, syscall.SIGKILL) // force kill process group
+		_ = forceKillProcessGroup(process.Pid) // force kill process group
 	}
 	return nil
-}
-
-func signalFromName(name string) syscall.Signal {
-	switch strings.ToLower(name) {
-	case "interrupt", "sigint":
-		return syscall.SIGINT
-	case "terminate", "sigterm":
-		return syscall.SIGTERM
-	case "kill", "sigkill":
-		return syscall.SIGKILL
-	default:
-		return syscall.SIGINT
-	}
 }
 
 func (m *Manager) waitForExit(inst *instance) {

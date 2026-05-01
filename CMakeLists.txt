@@ -238,7 +238,7 @@ ELSE()
 ENDIF()
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+SET(THIRD_PARTY_LIBRARY_DIR /root/dev CACHE PATH "Third-party library root directory")
 
 IF(PLATFORM_SYSTEM_WINDOWS)
     SET(OPENSSL_USE_STATIC_LIBS TRUE)
@@ -318,6 +318,14 @@ ELSE()
 ENDIF()
 
 # List of common cpp source files compilations for ppp/unix cmake solution projects.
+#
+# NOTE: Do NOT pass a bare filename such as "${PROJECT_SOURCE_DIR}/main.cpp" to
+# FILE(GLOB_RECURSE ...). CMake interprets the last path component as a name
+# pattern and walks the entire tree, which means any stray main.cpp sitting
+# inside a vendored directory (e.g. third-party/boost/doc/html/boost_asio/
+# example/**/main.cpp) gets silently added to this target. The Boost asio
+# examples include C++20 coroutine code that cannot be built under -std=c++17
+# and blew up the Linux CI build. main.cpp is added explicitly below.
 FILE(GLOB_RECURSE SOURCE_FILES 
     ${PROJECT_SOURCE_DIR}/common/lwip/my/*.c 
     ${PROJECT_SOURCE_DIR}/common/lwip/core/*.c 
@@ -333,9 +341,9 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/common/aesni/aes.cpp
 
     ${PROJECT_SOURCE_DIR}/ppp/*.c 
-    ${PROJECT_SOURCE_DIR}/ppp/*.cpp
+    ${PROJECT_SOURCE_DIR}/ppp/*.cpp)
 
-    ${PROJECT_SOURCE_DIR}/main.cpp)
+LIST(APPEND SOURCE_FILES ${PROJECT_SOURCE_DIR}/main.cpp)
 
 IF(PLATFORM_SYSTEM_WINDOWS)
     LIST(APPEND SOURCE_FILES ${PROJECT_SOURCE_DIR}/resource.rc)
