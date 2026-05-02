@@ -360,7 +360,7 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
              * pseudo-terminal) is treated as a warning rather than an error.
              * The process continues with plain-text output mode.
              */
-            fprintf(stdout,
+            ppp::ConsoleWrite(
                 "Warning: ConsoleUI initialization failed. "
                 "Continuing in plain-text mode.\n");
             tui_enabled = false;
@@ -374,22 +374,21 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
          * Printed once at startup so that log files and pipes receive at least
          * basic identification information about this process instance.
          */
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "PPP PRIVATE NETWORK(TM) 2  version: %s\n",
             PPP_APPLICATION_VERSION);
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Mode    : %s\n",
             client_mode_ ? "client" : "server");
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Process : %d\n",
             static_cast<int>(ppp::GetCurrentProcessId()));
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Config  : %s\n",
             configuration_path_.data());
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Cwd     : %s\n",
             ppp::GetCurrentDirectoryPath().data());
-        std::fflush(stdout);
     }
 
     stopwatch_.Restart();
