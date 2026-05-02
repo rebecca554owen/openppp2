@@ -45,7 +45,11 @@
 #include <memory>
 #include <cstdlib>
 
+#if BOOST_VERSION >= 108700
 #include <boost/stacktrace/stacktrace.hpp>
+#else
+#include <boost/stacktrace.hpp>
+#endif
 #include <ppp/text/Encoding.h>
 #include <ppp/hash/hash_bytes.h>
 
