@@ -19,6 +19,7 @@ concurrency:
 env:
   VCPKG_DEFAULT_TRIPLET: x64-windows-static
   VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
