@@ -109,6 +109,7 @@ jobs:
             if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
           }
 
+          # Driver binaries (x64)
           $driverDir = Join-Path $artifactDir "Driver\x64"
           New-Item -ItemType Directory -Force -Path $driverDir | Out-Null
           foreach ($item in @(
@@ -118,6 +119,12 @@ jobs:
             $src = Join-Path $env:GITHUB_WORKSPACE $item.S
             $tgt = Join-Path $artifactDir $item.T
             if (Test-Path $src) { Copy-Item $src $tgt -Force }
+          }
+
+          # TAP driver installation files (root Driver/ folder)
+          foreach ($f in @('OemVista.inf', 'tap0901.cat', 'tap0901.sys', 'tapinstall.exe')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE "Driver\$f"
+            if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
           }
 
           foreach ($f in @(

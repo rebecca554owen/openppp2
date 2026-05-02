@@ -1,5 +1,5 @@
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
-# Description: PPP PRIVATE NETWORK(TM) 2 – Linux amd64 native build.
+# Description: PPP PRIVATE NETWORK(TM) 2 – Linux amd64 native build with feature matrix.
 # Author     : OpenCode.
 # Date-Time  : 2026/05/03
 
@@ -23,8 +23,52 @@ env:
 
 jobs:
   build:
-    name: Linux amd64
+    name: Linux amd64 ${{ matrix.suffix }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Base build (no extra features)
+          - suffix: ""
+            enable_sysnat: "OFF"
+            enable_io_uring: "OFF"
+            enable_simd: "OFF"
+          # io-uring
+          - suffix: "-io-uring"
+            enable_sysnat: "OFF"
+            enable_io_uring: "ON"
+            enable_simd: "OFF"
+          # SIMD
+          - suffix: "-simd"
+            enable_sysnat: "OFF"
+            enable_io_uring: "OFF"
+            enable_simd: "ON"
+          # tc (SYSNAT)
+          - suffix: "-tc"
+            enable_sysnat: "ON"
+            enable_io_uring: "OFF"
+            enable_simd: "OFF"
+          # tc + io-uring
+          - suffix: "-tc-io-uring"
+            enable_sysnat: "ON"
+            enable_io_uring: "ON"
+            enable_simd: "OFF"
+          # tc + simd
+          - suffix: "-tc-simd"
+            enable_sysnat: "ON"
+            enable_io_uring: "OFF"
+            enable_simd: "ON"
+          # io-uring + simd
+          - suffix: "-io-uring-simd"
+            enable_sysnat: "OFF"
+            enable_io_uring: "ON"
+            enable_simd: "ON"
+          # tc + io-uring + simd
+          - suffix: "-tc-io-uring-simd"
+            enable_sysnat: "ON"
+            enable_io_uring: "ON"
+            enable_simd: "ON"
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +79,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake git zip unzip curl wget \
             libkrb5-dev libicu-dev libssl-dev libunwind-dev \
-            autoconf clang
+            autoconf clang \
+            liburing-dev
 
       - name: Cache third-party libraries
         id: cache-third
@@ -75,16 +120,51 @@ jobs:
         run: |
           TP="${{ github.workspace }}/third-party"
           mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DENABLE_SYSNAT=${{ matrix.enable_sysnat }} \
+            -DENABLE_IO_URING=${{ matrix.enable_io_uring }} \
+            -DENABLE_SIMD=${{ matrix.enable_simd }}
           make -j$(nproc)
 
-      - name: Package artifact
+      - name: Collect artifacts
         run: |
-          cd bin
-          zip -r openppp2-linux-amd64.zip ppp
+          ARTIFACT="openppp2-linux-amd64${{ matrix.suffix }}.zip"
+          ARTIFACT_DIR="artifact"
+          mkdir -p "$ARTIFACT_DIR"
+
+          # Copy binary
+          cp bin/ppp "$ARTIFACT_DIR/"
+
+          # Copy configuration files
+          for f in appsettings.json cacert.pem cacert.sha256 \
+                   dns-rules.txt firewall-rules.txt ip.txt \
+                   cmcc.txt starrylink.net.key starrylink.net.pem; do
+            if [ -f "$f" ]; then cp "$f" "$ARTIFACT_DIR/"; fi
+          done
+
+          # Copy documentation
+          for f in README.md README_CN.md LICENSE; do
+            if [ -f "$f" ]; then cp "$f" "$ARTIFACT_DIR/"; fi
+          done
+
+          # Copy Linux driver / sysnat sources for downstream kernel module builds
+          mkdir -p "$ARTIFACT_DIR/linux/ppp/tap"
+          for f in linux/ppp/tap/TapLinux.cpp linux/ppp/tap/TapLinux.h \
+                   linux/ppp/tap/openppp2_driver.skel.h \
+                   linux/ppp/tap/openppp2_sysnat.c \
+                   linux/ppp/tap/openppp2_sysnat.h; do
+            if [ -f "$f" ]; then cp "$f" "$ARTIFACT_DIR/linux/ppp/tap/"; fi
+          done
+
+          # Package
+          cd "$ARTIFACT_DIR" && zip -r "../$ARTIFACT" .
+          cd ..
+          mv "$ARTIFACT" bin/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: openppp2-linux-amd64
-          path: bin/openppp2-linux-amd64.zip
+          name: openppp2-linux-amd64${{ matrix.suffix }}
+          path: bin/openppp2-linux-amd64${{ matrix.suffix }}.zip
           if-no-files-found: error
