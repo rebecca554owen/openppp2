@@ -200,7 +200,14 @@ func (m *Manager) GetPath(id string) (string, error) {
 	return item.Path, nil
 }
 
+// isPPPBinaryName returns true if name looks like a ppp binary (e.g. ppp, ppp-ci, ppp.exe, ppp-ci.exe).
+// It matches "ppp" or any "ppp-*" variant, with optional extension like .exe.
 func isPPPBinaryName(name string) bool {
 	lower := strings.ToLower(name)
-	return lower == "ppp" || lower == "ppp.exe"
+	// Strip extension (.exe, .bin, etc.)
+	base := lower
+	if idx := strings.LastIndex(lower, "."); idx > 0 {
+		base = lower[:idx]
+	}
+	return base == "ppp" || strings.HasPrefix(base, "ppp-")
 }

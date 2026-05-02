@@ -121,7 +121,7 @@
       <div class="card stats-card">
         <h3>{t('runtimeStats')}</h3>
         <div class="stats-grid">
-          {#each ['mode', 'duration', 'sessions', 'tx', 'rx', 'in', 'out', 'service 1', 'service 2', 'public ip', 'interface ip', 'application', 'process', 'template', 'max concurrent', 'hosting environment', 'triplet', 'config', 'cwd'] as key}
+          {#each ['application', 'max concurrent', 'process', 'triplet', 'cwd', 'template', 'managed server', 'vpn server', 'http proxy', 'socks proxy', 'p/a controller', 'public ip', 'interface ip', 'hosting environment', 'name', 'index', 'interface', 'aggligator', 'proxy interlayer', 'tcp/ip cc', 'block quic', 'mux state', 'link state', 'mode', 'config', 'duration', 'sessions', 'tx', 'rx', 'in', 'out'] as key}
             {#if instance.runtimeStats[key]}
               <div class="stat-item">
                 <span class="stat-label">{key}</span>
@@ -130,7 +130,7 @@
             {/if}
           {/each}
           {#each Object.entries(instance.runtimeStats) as [key, value]}
-            {#if !['mode', 'duration', 'sessions', 'tx', 'rx', 'in', 'out', 'service 1', 'service 2', 'public ip', 'interface ip', 'application', 'process', 'template', 'max concurrent', 'hosting environment', 'triplet', 'config', 'cwd'].includes(key)}
+            {#if !['application', 'max concurrent', 'process', 'triplet', 'cwd', 'template', 'managed server', 'vpn server', 'http proxy', 'socks proxy', 'p/a controller', 'public ip', 'interface ip', 'hosting environment', 'name', 'index', 'interface', 'aggligator', 'proxy interlayer', 'tcp/ip cc', 'block quic', 'mux state', 'link state', 'mode', 'config', 'duration', 'sessions', 'tx', 'rx', 'in', 'out'].includes(key)}
               <div class="stat-item">
                 <span class="stat-label">{key}</span>
                 <span class="stat-value">{value}</span>

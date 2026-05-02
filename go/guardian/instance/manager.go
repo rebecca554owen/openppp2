@@ -572,14 +572,35 @@ func (m *Manager) capturePty(inst *instance, reader io.ReadCloser) {
 		}
 	}()
 
+	// Exact-match keys (lowercase) for ppp TUI info lines.
 	statsKeys := map[string]bool{
 		"duration": true, "sessions": true, "tx": true, "rx": true,
 		"in": true, "out": true, "max concurrent": true,
 		"public ip": true, "interface ip": true,
-		"service 1": true, "service 2": true,
 		"hosting environment": true, "process": true,
 		"application": true, "template": true, "mode": true, "cwd": true, "config": true,
 		"triplet": true,
+		"managed server": true, "vpn server": true,
+		"http proxy": true, "socks proxy": true,
+		"p/a controller": true,
+		"name": true, "index": true, "interface": true,
+		"aggligator": true, "proxy interlayer": true,
+		"tcp/ip cc": true, "block quic": true,
+		"mux state": true, "link state": true,
+	}
+
+	// isStatsKey returns true if the key should be captured as a runtime stat.
+	// Handles both exact matches and dynamic prefixes like "Service 1", "DNS Server 2".
+	isStatsKey := func(key string) bool {
+		lower := strings.ToLower(key)
+		if statsKeys[lower] {
+			return true
+		}
+		// Dynamic keys: "Service N" (up to 9 services), "DNS Server N"
+		if strings.HasPrefix(lower, "service ") || strings.HasPrefix(lower, "dns server ") {
+			return true
+		}
+		return false
 	}
 
 	scanner := bufio.NewScanner(reader)
@@ -604,7 +625,7 @@ func (m *Manager) capturePty(inst *instance, reader io.ReadCloser) {
 			key = strings.TrimSpace(key)
 			val = strings.TrimSpace(val)
 
-			if key != "" && val != "" && statsKeys[strings.ToLower(key)] {
+			if key != "" && val != "" && isStatsKey(key) {
 				lastLine = clean
 				inst.logMu.Lock()
 				if inst.runtimeStats == nil {
@@ -616,7 +637,7 @@ func (m *Manager) capturePty(inst *instance, reader io.ReadCloser) {
 			}
 		}
 
-		// Skip TUI noise (borders, hints, empty lines, ASCII art)
+		// Skip TUI noise (borders, hints, empty lines, ASCII art, section headers)
 		trimmed := strings.TrimSpace(clean)
 		if trimmed == "" || strings.HasPrefix(trimmed, "─") || strings.HasPrefix(trimmed, "┌") ||
 			strings.HasPrefix(trimmed, "└") || strings.HasPrefix(trimmed, "├") ||
@@ -626,7 +647,9 @@ func (m *Manager) capturePty(inst *instance, reader io.ReadCloser) {
 			strings.Contains(trimmed, "/ _") || strings.Contains(trimmed, "| | |") ||
 			strings.Contains(trimmed, "| |_|") || strings.Contains(trimmed, "\\___/") ||
 			strings.Contains(trimmed, "Console UI started") ||
-			strings.Contains(trimmed, "Exec openppp") {
+			strings.Contains(trimmed, "Exec openppp") ||
+			strings.Contains(trimmed, "PPP PRIVATE NETWORK") ||
+			trimmed == "VPN" || trimmed == "TUN" || trimmed == "NIC" {
 			continue
 		}
 

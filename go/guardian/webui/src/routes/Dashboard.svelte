@@ -437,6 +437,9 @@
 
             {#if instance.runtimeStats && Object.keys(instance.runtimeStats).length > 0}
               <div class="stats-row">
+                {#if instance.runtimeStats['hosting environment']}<span class="chip">{instance.runtimeStats['hosting environment']}</span>{/if}
+                {#if instance.runtimeStats['vpn server']}<span class="chip">{instance.runtimeStats['vpn server']}</span>{/if}
+                {#if instance.runtimeStats['managed server']}<span class="chip">{instance.runtimeStats['managed server']}</span>{/if}
                 {#if instance.runtimeStats.duration}<span class="chip">{t('duration')}: {instance.runtimeStats.duration}</span>{/if}
                 {#if instance.runtimeStats.sessions}<span class="chip">{t('sessions')}: {instance.runtimeStats.sessions}</span>{/if}
                 {#if instance.runtimeStats.tx}<span class="chip">{t('tx')}: {instance.runtimeStats.tx}</span>{/if}

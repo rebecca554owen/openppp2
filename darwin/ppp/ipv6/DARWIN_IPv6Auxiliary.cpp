@@ -96,7 +96,7 @@ namespace ppp {
 
                     char buffer[1024];
                     while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
-                        ppp::string line = ATrim(buffer);
+                        ppp::string line = ATrim<ppp::string>(buffer);
                         if (line.empty()) {
                             continue;
                         }
@@ -109,11 +109,11 @@ namespace ppp {
                             continue;
                         }
 
-                        std::istringstream stream(line);
+                        std::istringstream stream(std::string(line.data(), line.size()));
                         ppp::vector<ppp::string> tokens;
-                        ppp::string token;
+                        std::string token;
                         while (stream >> token) {
-                            tokens.emplace_back(token);
+                            tokens.emplace_back(token.data(), token.size());
                         }
 
                         if (tokens.size() < 2 || tokens[0] != "default") {
