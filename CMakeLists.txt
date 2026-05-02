@@ -364,6 +364,14 @@ IF(NOT MSVC)
     LIST(APPEND SOURCE_FILES ${UNIX_SOURCE_FILES})
 ENDIF()
 
+# openppp2_sysnat.c requires libbpf headers; only compile it when SYSNAT is enabled.
+LIST(REMOVE_ITEM PLATFORM_SOURCE_FILES
+    ${PROJECT_SOURCE_DIR}/linux/ppp/tap/openppp2_sysnat.c)
+IF(ENABLE_SYSNAT)
+    LIST(APPEND PLATFORM_SOURCE_FILES
+        ${PROJECT_SOURCE_DIR}/linux/ppp/tap/openppp2_sysnat.c)
+ENDIF()
+
 # Add the compiled output binary files.
 ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES})
 
