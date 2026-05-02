@@ -1,0 +1,90 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – Linux amd64 native build.
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: Build · Linux amd64
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-linux-amd64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BOOST_VERSION: "1.86.0"
+  OPENSSL_VERSION: "3.0.13"
+  JEMALLOC_VERSION: "5.3.0"
+
+jobs:
+  build:
+    name: Linux amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git zip unzip curl wget \
+            libkrb5-dev libicu-dev libssl-dev libunwind-dev \
+            autoconf clang
+
+      - name: Cache third-party libraries
+        id: cache-third
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: linux-amd64-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+
+      - name: Build Boost
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar jxf boost_*.tar.bz2 && rm boost_*.tar.bz2
+          mv boost_* boost
+          cd boost && ./bootstrap.sh && ./b2 cxxflags=-fPIC -j$(nproc)
+
+      - name: Build OpenSSL
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar zxf openssl-*.tar.gz && rm openssl-*.tar.gz
+          mv openssl-* openssl
+          cd openssl && ./Configure && make -j$(nproc)
+
+      - name: Build jemalloc
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
+          tar jxf jemalloc-*.tar.bz2 && rm jemalloc-*.tar.bz2
+          mv jemalloc-* jemalloc
+          cd jemalloc && ./autogen.sh --with-jemalloc-prefix=je_ && make -j$(nproc)
+
+      - name: Build openppp2
+        run: |
+          TP="${{ github.workspace }}/third-party"
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+          make -j$(nproc)
+
+      - name: Package artifact
+        run: |
+          cd bin
+          zip -r openppp2-linux-amd64.zip ppp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openppp2-linux-amd64
+          path: bin/openppp2-linux-amd64.zip
+          if-no-files-found: error
