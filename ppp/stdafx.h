@@ -243,6 +243,7 @@
 #include <malloc.h>
 #endif
 
+#include <algorithm>
 #include <type_traits>
 #include <condition_variable>
 #include <limits>
