@@ -1641,6 +1641,19 @@ namespace ppp {
 
     const char*                                                             GetDefaultCipherSuites() noexcept;
 
+    /**
+     * @brief Writes a UTF-8 string to the console, auto-adapting to the
+     *        active Windows console code-page (uses WriteConsoleW when attached
+     *        to a real console, falls back to raw UTF-8 for file/pipe stdout).
+     */
+    void                                                                    ConsoleWrite(const char* utf8String) noexcept;
+
+    /**
+     * @brief printf-style console output with the same adaptive encoding
+     *        behaviour as ConsoleWrite.
+     */
+    void                                                                    ConsoleFormat(const char* fmt, ...) noexcept;
+
     bool                                                                    IfVersion(const ppp::vector<uint64_t>& now, const ppp::vector<uint64_t> min) noexcept;
 
     boost::uuids::uuid                                                      GuidGenerate() noexcept;

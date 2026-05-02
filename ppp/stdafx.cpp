@@ -1197,6 +1197,68 @@ namespace ppp {
         return PaddingLeftRightAllLines(padding_length, padding_char, s, false, line_count);
     }
 
+    /**
+     * @brief Internal helper: detects whether stdout is attached to an
+     *        interactive Windows console (as opposed to a file or pipe).
+     */
+#if defined(_WIN32)
+    static bool IsConsoleStdout() noexcept {
+        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (h == INVALID_HANDLE_VALUE || h == NULLPTR) {
+            return false;
+        }
+        DWORD mode = 0;
+        return GetConsoleMode(h, &mode) != FALSE;
+    }
+#endif
+
+    /** @brief Writes a UTF-8 string to the console with adaptive encoding. */
+    void ConsoleWrite(const char* utf8String) noexcept {
+        if (NULLPTR == utf8String) {
+            return;
+        }
+#if defined(_WIN32)
+        if (IsConsoleStdout()) {
+            int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8String, -1, NULLPTR, 0);
+            if (wideLen > 1) {
+                ppp::vector<wchar_t> wideBuf;
+                wideBuf.resize(wideLen);
+                if (MultiByteToWideChar(CP_UTF8, 0, utf8String, -1, wideBuf.data(), wideLen) > 0) {
+                    DWORD written = 0;
+                    WriteConsoleW(GetStdHandle(STD_OUTPUT_HANDLE), wideBuf.data(), static_cast<DWORD>(wideLen - 1), &written, NULLPTR);
+                    return;
+                }
+            }
+        }
+#endif
+        fputs(utf8String, stdout);
+    }
+
+    /** @brief printf-style console output with adaptive encoding. */
+    void ConsoleFormat(const char* fmt, ...) noexcept {
+        if (NULLPTR == fmt) {
+            return;
+        }
+        char buf[4096];
+        va_list args;
+        va_start(args, fmt);
+        int len = vsnprintf(buf, sizeof(buf), fmt, args);
+        va_end(args);
+        if (len > 0 && len < static_cast<int>(sizeof(buf))) {
+            buf[len] = '\x0';
+            ConsoleWrite(buf);
+        }
+        else if (len >= static_cast<int>(sizeof(buf))) {
+            // Fallback for very long strings: format to a dynamic buffer.
+            ppp::vector<char> bigBuf;
+            bigBuf.resize(len + 1);
+            va_start(args, fmt);
+            vsnprintf(bigBuf.data(), bigBuf.size(), fmt, args);
+            va_end(args);
+            ConsoleWrite(bigBuf.data());
+        }
+    }
+
     /** @brief Checks whether current version vector satisfies minimum version. */
     bool IfVersion(const ppp::vector<uint64_t>& now, const ppp::vector<uint64_t> min) noexcept {
         std::size_t now_length = now.size(), min_length = min.size();
