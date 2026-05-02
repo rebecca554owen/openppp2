@@ -108,13 +108,15 @@ jobs:
             if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
           }
 
+          $driverDir = Join-Path $artifactDir "Driver\x64"
+          New-Item -ItemType Directory -Force -Path $driverDir | Out-Null
           foreach ($item in @(
-            @{ S = 'Driver\x64\PaperAirplane.dll'; T = 'PaperAirplane.dll' },
-            @{ S = 'Driver\x64\sysproxy64.exe';   T = 'sysproxy64.exe' }
+            @{ S = 'Driver\x64\PaperAirplane.dll'; T = 'Driver\x64\PaperAirplane.dll' },
+            @{ S = 'Driver\x64\sysproxy64.exe';   T = 'Driver\x64\sysproxy64.exe' }
           )) {
             $src = Join-Path $env:GITHUB_WORKSPACE $item.S
             $tgt = Join-Path $artifactDir $item.T
-            if ((-not (Test-Path $tgt)) -and (Test-Path $src)) { Copy-Item $src $tgt -Force }
+            if (Test-Path $src) { Copy-Item $src $tgt -Force }
           }
 
           foreach ($f in @(
