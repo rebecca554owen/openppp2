@@ -18,6 +18,7 @@ concurrency:
 
 env:
   VCPKG_DEFAULT_TRIPLET: x64-windows-static
+  VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
 
 jobs:
   build:
@@ -57,7 +58,7 @@ jobs:
           path: |
             C:\vcpkg\installed
             C:\vcpkg\downloads
-          key: vcpkg-installed-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**\*.vcxproj') }}-${{ hashFiles('**\vcpkg.json', '**/vcpkg-configuration.json') }}
+          key: vcpkg-installed-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('.github/vcpkg-classic-deps.txt') }}
           restore-keys: |
             vcpkg-installed-${{ env.VCPKG_DEFAULT_TRIPLET }}-
 

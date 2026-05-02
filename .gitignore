@@ -90,3 +90,5 @@ build-*/
 build_*/
 builds/cmake-check/
 AGENTS.md
+stash-backups/
+
