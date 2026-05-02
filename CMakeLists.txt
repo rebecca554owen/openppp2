@@ -425,46 +425,43 @@ ELSEIF(PLATFORM_SYSTEM_DARWIN)
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
 
-    TARGET_LINK_LIBRARIES(${NAME}
-        libssl.a 
-        libcrypto.a 
+    SET(PPP_CLANG_LINK_LIBS
+        libssl.a
+        libcrypto.a
         libjemalloc.a
-        # liburing.a
-
-        # libbpf.a
-        # libelf.a
-        # libz.a
-
         atomic
         dl
         pthread
-
         libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
+        libboost_coroutine.a
+        libboost_thread.a
         libboost_context.a
-        libboost_regex.a 
-        libboost_filesystem.a) 
+        libboost_regex.a
+        libboost_filesystem.a)
+    IF(ENABLE_IO_URING)
+        LIST(APPEND PPP_CLANG_LINK_LIBS uring)
+    ENDIF()
+    TARGET_LINK_LIBRARIES(${NAME} ${PPP_CLANG_LINK_LIBS}) 
 ELSEIF(NOT MSVC)
-    TARGET_LINK_LIBRARIES(${NAME} 
+    SET(PPP_LINUX_LINK_LIBS
         libc.a
-        libssl.a 
-        libcrypto.a 
+        libssl.a
+        libcrypto.a
         libjemalloc.a
-        # liburing.a
-
-        # libbpf.a
-        # libelf.a
-        # libz.a
-
-        atomic
+        m
+        unwind
+        stdc++
+        rt
         dl
         pthread
-
         libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a 
+        libboost_coroutine.a
+        libboost_thread.a
+        libboost_context.a
         libboost_regex.a
-        libboost_filesystem.a) 
+        libboost_filesystem.a)
+    IF(ENABLE_IO_URING)
+        LIST(APPEND PPP_LINUX_LINK_LIBS uring)
+    ENDIF()
+    TARGET_LINK_LIBRARIES(${NAME} ${PPP_LINUX_LINK_LIBS}) 
 ENDIF()
