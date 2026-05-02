@@ -877,6 +877,7 @@ namespace ppp {
                  */
                 bool                                                                AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept;
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
             private:    
                 /**
                  * @brief Applies the server-assigned managed IPv6 configuration to the local NIC.
@@ -890,6 +891,7 @@ namespace ppp {
                  * @brief Restores the original IPv6 configuration if it was previously modified.
                  */
                 void                                                                RestoreAssignedIPv6() noexcept;
+#endif
 
             private:    
                 /**

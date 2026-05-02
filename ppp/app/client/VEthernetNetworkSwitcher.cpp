@@ -1,4 +1,4 @@
-#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
+﻿#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -703,6 +703,7 @@ namespace ppp {
                 return false;
             }
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
             /** @brief Applies managed IPv6 address, route, and DNS configuration. */
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!ClientSupportsManagedIPv6()) {
@@ -862,6 +863,8 @@ namespace ppp {
                 ipv6_state_.Clear();
             }
 
+#endif
+
             /** @brief Adapts base information callback to extension-aware overload. */
             bool VEthernetNetworkSwitcher::OnInformation(const std::shared_ptr<VirtualEthernetInformation>& info) noexcept {
                 VirtualEthernetInformationExtensions extensions;
@@ -877,6 +880,7 @@ namespace ppp {
                 }
 
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 bool previous_assignment = HasManagedIPv6Assignment(information_extensions_);
                 bool current_assignment = HasManagedIPv6Assignment(extensions);
                 if (ipv6_applied_ && (!previous_assignment || !current_assignment || !SameManagedIPv6Configuration(information_extensions_, extensions))) {
@@ -900,6 +904,9 @@ namespace ppp {
                         ApplyAssignedIPv6(extensions);
                     }
                 }
+#else
+                information_extensions_ = extensions;
+#endif
 
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_;
                 if (NULLPTR != qos) {
