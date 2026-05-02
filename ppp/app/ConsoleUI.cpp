@@ -1321,7 +1321,7 @@ void ConsoleUI::HandleHistoryUp() noexcept {
         if (-1 == history_index_) {
             history_edit_backup_ = input_buffer_;
             history_index_       = static_cast<int>(history_.size()) - 1;
-        } elif (0 < history_index_) {
+        } else if (0 < history_index_) {
             --history_index_;
         }
 
@@ -1553,7 +1553,7 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
     if (0u == lower.find(kNS)) {
         if (lower.size() == kNSLen) {
             openppp2_sub = "help";
-        } elif (lower.size() > kNSLen && ' ' == lower[kNSLen]) {
+        } else if (lower.size() > kNSLen && ' ' == lower[kNSLen]) {
             openppp2_sub = ppp::LTrim(lower.substr(kNSLen + 1u));
         }
     }
@@ -1691,21 +1691,21 @@ void ConsoleUI::InputLoop() noexcept {
             int key = ::_getch();
             if (72 == key) {            // Up arrow
                 HandleHistoryUp();
-            } elif (80 == key) {        // Down arrow
+            } else if (80 == key) {        // Down arrow
                 HandleHistoryDown();
-            } elif (75 == key) {        // Left arrow
+            } else if (75 == key) {        // Left arrow
                 MoveCursorLeft();
-            } elif (77 == key) {        // Right arrow
+            } else if (77 == key) {        // Right arrow
                 MoveCursorRight();
-            } elif (71 == key) {        // Home — scroll info to top
+            } else if (71 == key) {        // Home — scroll info to top
                 ScrollInfoBy(-999999);
-            } elif (79 == key) {        // End — scroll info to bottom
+            } else if (79 == key) {        // End — scroll info to bottom
                 ScrollInfoBy(999999);
-            } elif (83 == key) {        // Delete
+            } else if (83 == key) {        // Delete
                 EraseAtCursor();
-            } elif (73 == key) {        // PageUp — scroll cmd up
+            } else if (73 == key) {        // PageUp — scroll cmd up
                 ScrollCmdPage(1);
-            } elif (81 == key) {        // PageDown — scroll cmd down
+            } else if (81 == key) {        // PageDown — scroll cmd down
                 ScrollCmdPage(-1);
             }
             continue;
@@ -1810,23 +1810,23 @@ void ConsoleUI::InputLoop() noexcept {
 
             if ("[A" == key || "OA" == key) {       // Up
                 HandleHistoryUp();
-            } elif ("[B" == key || "OB" == key) {   // Down
+            } else if ("[B" == key || "OB" == key) {   // Down
                 HandleHistoryDown();
-            } elif ("[C" == key || "OC" == key) {   // Right
+            } else if ("[C" == key || "OC" == key) {   // Right
                 MoveCursorRight();
-            } elif ("[D" == key || "OD" == key) {   // Left
+            } else if ("[D" == key || "OD" == key) {   // Left
                 MoveCursorLeft();
-            } elif ("[H" == key || "[1~" == key ||  // Home — scroll info to top
+            } else if ("[H" == key || "[1~" == key ||  // Home — scroll info to top
                     "[7~" == key || "OH" == key) {
                 ScrollInfoBy(-999999);
-            } elif ("[F" == key || "[4~" == key ||  // End — scroll info to bottom
+            } else if ("[F" == key || "[4~" == key ||  // End — scroll info to bottom
                     "[8~" == key || "OF" == key) {
                 ScrollInfoBy(999999);
-            } elif ("[3~" == key) {                 // Delete
+            } else if ("[3~" == key) {                 // Delete
                 EraseAtCursor();
-            } elif ("[5~" == key) {                 // PageUp — scroll cmd up
+            } else if ("[5~" == key) {                 // PageUp — scroll cmd up
                 ScrollCmdPage(1);
-            } elif ("[6~" == key) {                 // PageDown — scroll cmd down
+            } else if ("[6~" == key) {                 // PageDown — scroll cmd down
                 ScrollCmdPage(-1);
             }
             continue;
