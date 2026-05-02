@@ -78,13 +78,13 @@
     <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <VcpkgEnableManifest>false</VcpkgEnableManifest>

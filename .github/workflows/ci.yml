@@ -204,6 +204,7 @@ jobs:
           }
           echo $vcpkgPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "VCPKG_ROOT=$vcpkgPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & "$vcpkgPath\vcpkg.exe" integrate install
 
       - name: Install vcpkg dependencies
         shell: pwsh
