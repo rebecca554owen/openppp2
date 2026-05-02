@@ -267,9 +267,6 @@
 #ifndef BOOST_BEAST_VERSION_HPP
 #define BOOST_BEAST_VERSION_HPP
 
-#include <boost/beast/core/detail/config.hpp>
-#include <boost/config.hpp>
-
 /*  BOOST_BEAST_VERSION
 
     Identifies the API version of Beast.

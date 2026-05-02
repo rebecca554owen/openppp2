@@ -138,17 +138,20 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
             ethernet->Ssmt(&network_interface->Ssmt);
 #if defined(_LINUX)
             ethernet->SsmtMQ(&network_interface->SsmtMQ);
+#if !defined(_ANDROID) && !defined(_IPHONE)
             ethernet->ProtectMode(&network_interface->ProtectNetwork);
+#endif
 #endif
 #endif
             ethernet->Mux(&network_interface->Mux);
             ethernet->MuxAcceleration(&network_interface->MuxAcceleration);
             ethernet->StaticMode(&network_interface->StaticMode);
-#if !defined(_ANDROID)
+#if !defined(_ANDROID) && !defined(_IPHONE)
             ethernet->PreferredNgw(network_interface->Ngw);
             ethernet->PreferredNic(network_interface->Nic);
 #endif
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_LINUX)
             for (auto&& bypass_path : *network_interface->Bypass) {
                 ethernet->AddLoadIPList(bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
@@ -170,6 +173,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
                 ethernet->AddLoadIPList(path, Ipep::ToAddress(route.ngw), route.vbgp);
 #endif
             }
+#endif
 
             if (!network_interface->DNSRules.empty()) {
                 ppp::string dns_rules_path = File::GetFullPath(File::RewritePath(network_interface->DNSRules.data()).data());
@@ -182,7 +186,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
                 }
             }
             if (!ethernet->Open(tap)) {
-#if !defined(_ANDROID)
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 auto ni = ethernet->GetUnderlyingNetworkInterface();
 #else
                 auto ni = NULLPTR;

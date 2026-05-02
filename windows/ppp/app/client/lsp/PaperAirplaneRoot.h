@@ -7,8 +7,6 @@
 #include <memory>
 #include <functional>
 
-#include <boost/asio.hpp>
-
 #if !defined(NULL)
 #define NULL 0
 #endif
