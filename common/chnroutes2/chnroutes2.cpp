@@ -547,9 +547,11 @@ ppp::string chnroutes2_getiplist() noexcept { // Must run on the default thread.
             [context]() noexcept {
                 ppp::SetThreadName("apnic");
                 auto work = boost::asio::make_work_guard(*context);
-                boost::system::error_code ec;
                 context->restart();
-                context->run(ec);
+                try {
+                    context->run();
+                }
+                catch (const std::exception&) {}
             }).detach();
     }
 

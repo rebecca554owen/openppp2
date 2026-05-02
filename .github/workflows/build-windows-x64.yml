@@ -79,7 +79,7 @@ jobs:
       - name: Build openppp2
         shell: pwsh
         run: |
-          msbuild .\ppp.sln /m /restore `
+          msbuild .\ppp.vcxproj /m /restore `
             /p:Configuration=${{ matrix.configuration }} `
             /p:Platform=${{ matrix.platform }} `
             /p:VcpkgEnableManifest=false `

@@ -131,9 +131,11 @@ namespace ppp
                 [&context]() noexcept
                 {
                     auto work = boost::asio::make_work_guard(context);
-                    boost::system::error_code ec;
                     context.restart();
-                    context.run(ec);
+                    try {
+                        context.run();
+                    }
+                    catch (const std::exception&) {}
                 };
 #if defined(_WIN32)
             __try

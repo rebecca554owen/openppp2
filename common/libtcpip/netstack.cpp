@@ -133,12 +133,14 @@ namespace lwip {
                     ppp::SetThreadPriorityToMaxLevel();
                 }
 
-                boost::system::error_code ec_;
                 ppp::SetThreadName("vnet");
 
                 auto work_ = boost::asio::make_work_guard(context);
                 context.restart();
-                context.run(ec_);
+                try {
+                    context.run();
+                }
+                catch (const std::exception&) {}
             };
 
         // The executor thread is intentionally detached because the netstack owns the context lifetime.
