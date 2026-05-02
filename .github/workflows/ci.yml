@@ -210,11 +210,18 @@ jobs:
         run: |
           vcpkg install `
             boost-system:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-asio:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-beast:$env:VCPKG_DEFAULT_TRIPLET `
             boost-coroutine:$env:VCPKG_DEFAULT_TRIPLET `
             boost-thread:$env:VCPKG_DEFAULT_TRIPLET `
             boost-context:$env:VCPKG_DEFAULT_TRIPLET `
             boost-regex:$env:VCPKG_DEFAULT_TRIPLET `
             boost-filesystem:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-date-time:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-lockfree:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-lexical-cast:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-uuid:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-interprocess:$env:VCPKG_DEFAULT_TRIPLET `
             openssl:$env:VCPKG_DEFAULT_TRIPLET `
             jemalloc:$env:VCPKG_DEFAULT_TRIPLET
 
