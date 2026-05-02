@@ -503,6 +503,7 @@ namespace aggligator
                             }
 
                             // Handshake in a separate coroutine
+#if BOOST_VERSION >= 108000
                             boost::asio::spawn(socket->get_executor(),
                                 [self, this, established](const boost::asio::yield_context& y) noexcept
                                 {
@@ -511,6 +512,16 @@ namespace aggligator
                                         close();
                                     }
                                 }, boost::asio::detached);
+#else
+                            boost::asio::spawn(socket->get_executor(),
+                                [self, this, established](const boost::asio::yield_context& y) noexcept
+                                {
+                                    if (!establish(y, established))
+                                    {
+                                        close();
+                                    }
+                                });
+#endif
 
                             return true;
                         });
