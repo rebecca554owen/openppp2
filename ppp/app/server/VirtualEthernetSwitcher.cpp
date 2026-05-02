@@ -2456,7 +2456,7 @@ namespace ppp {
 
                             SetThreadName("srv-ssmt");
                             boost::system::error_code ec;
-                            boost::asio::io_context::work work(*worker);
+                            auto work = boost::asio::make_work_guard(*worker);
                             worker->restart();
                             worker->run(ec);
                         });

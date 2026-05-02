@@ -1451,7 +1451,7 @@ namespace ppp {
             // so we cast to the concrete type to access ITransmission members in the lambda.
             std::shared_ptr<ITransmission> self =
                 std::static_pointer_cast<ITransmission>(shared_from_this());
-            timer->expires_from_now(std::chrono::milliseconds(expire_ms));
+            timer->expires_after(std::chrono::milliseconds(expire_ms));
 
             timer->async_wait(
                 [self](boost::system::error_code ec) noexcept {

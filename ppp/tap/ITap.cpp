@@ -54,7 +54,7 @@ namespace ppp
                 [](T* stream) noexcept
                 {
                     boost::system::error_code ec;
-                    stream->cancel(ec);
+                    stream->cancel();
                     stream->close(ec);
                     stream->~T();
                 });

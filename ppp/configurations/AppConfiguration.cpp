@@ -638,7 +638,7 @@ namespace ppp {
                 boost::asio::ip::address_v6 cidr_prefix = boost::asio::ip::address_v6();
                 boost::system::error_code cidr_ec;
                 if (!ipv6_prefix.empty()) {
-                    cidr_prefix = boost::asio::ip::address_v6::from_string(ipv6_prefix.c_str(), cidr_ec);
+                    cidr_prefix = boost::asio::ip::make_address_v6(ipv6_prefix.c_str(), cidr_ec);
                     if (!cidr_ec) {
                         cidr_prefix = ppp::ipv6::ComputeNetworkAddress(cidr_prefix, config.server.ipv6.prefix_length);
                         ipv6_prefix = cidr_prefix.to_string();
@@ -660,7 +660,7 @@ namespace ppp {
                 boost::asio::ip::address_v6 cidr_prefix = boost::asio::ip::address_v6();
                 boost::system::error_code cidr_ec;
                 if (!ipv6_prefix.empty()) {
-                    cidr_prefix = boost::asio::ip::address_v6::from_string(ipv6_prefix.c_str(), cidr_ec);
+                    cidr_prefix = boost::asio::ip::make_address_v6(ipv6_prefix.c_str(), cidr_ec);
                 }
 
                 boost::system::error_code gateway_ec;

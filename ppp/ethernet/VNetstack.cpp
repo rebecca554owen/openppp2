@@ -1410,8 +1410,7 @@ namespace ppp {
         void VNetstack::TapTcpClient::CancelSyncAckRetry() noexcept {
             std::shared_ptr<boost::asio::steady_timer> timer = std::move(this->sync_ack_retry_timer_);
             if (NULLPTR != timer) {
-                boost::system::error_code ec;
-                timer->cancel(ec);
+                timer->cancel();
             }
         }
 

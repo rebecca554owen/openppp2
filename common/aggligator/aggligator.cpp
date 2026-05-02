@@ -55,7 +55,7 @@ namespace aggligator
             {
                 acceptor& acceptor = kv.second;                             // Get the acceptor shared_ptr
                 boost::system::error_code ec;                               // Ignored error code
-                acceptor->cancel(ec);                                       // Cancel pending async_accept
+                acceptor->cancel();                                         // Cancel pending async_accept
                 acceptor->close(ec);                                        // Close the acceptor socket
             }
 
@@ -503,14 +503,14 @@ namespace aggligator
                             }
 
                             // Handshake in a separate coroutine
-                            boost::asio::spawn(
+                            boost::asio::spawn(socket->get_executor(),
                                 [self, this, established](const boost::asio::yield_context& y) noexcept
                                 {
                                     if (!establish(y, established))
                                     {
                                         close();
                                     }
-                                });
+                                }, boost::asio::detached);
 
                             return true;
                         });
@@ -718,7 +718,7 @@ namespace aggligator
         if (t)                                                              // Timer exists
         {
             auto self = shared_from_this();                                 // Keep aggregator alive
-            t->expires_from_now(std::chrono::milliseconds(10));             // Short interval for responsiveness
+            t->expires_after(std::chrono::milliseconds(10));             // Short interval for responsiveness
             t->async_wait(
                 [self, this](boost::system::error_code ec) noexcept
                 {
@@ -757,11 +757,10 @@ namespace aggligator
     //----------------------------------------------------------------------------
     void aggligator::deadline_timer_cancel(deadline_timer& t) noexcept
     {
-        boost::system::error_code ec;                                       // Ignored
         deadline_timer p = std::move(t);                                    // Take ownership
         if (p)
         {
-            p->cancel(ec);                                                  // Cancel any pending wait
+            p->cancel();                                                    // Cancel any pending wait
         }
     }
 
@@ -789,7 +788,7 @@ namespace aggligator
         if (socket.is_open())
         {
             boost::system::error_code ec;
-            socket.cancel(ec);                                              // Cancel pending async ops
+            socket.cancel();                                               // Cancel pending async ops
             socket.close(ec);                                               // Close descriptor
         }
     }
@@ -803,7 +802,7 @@ namespace aggligator
         {
             boost::system::error_code ec;
             socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec); // Send FIN
-            socket.cancel(ec);                                              // Cancel pending reads/writes
+            socket.cancel();                                                // Cancel pending reads/writes
             socket.close(ec);                                               // Close socket
         }
     }
@@ -882,7 +881,7 @@ namespace aggligator
         }
         else
         {
-            timeout->expires_from_now(std::chrono::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
+            timeout->expires_after(std::chrono::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
             timeout->async_wait(                                            // If handshake not completed, close socket
                 [socket](boost::system::error_code ec) noexcept
                 {
@@ -1344,7 +1343,7 @@ namespace aggligator
         int bind_port = pclient->local_port_;                               // Local UDP port (if any)
 
         auto self = shared_from_this();
-        t->expires_from_now(std::chrono::seconds(AGGLIGATOR_RECONNECT_TIMEOUT));
+        t->expires_after(std::chrono::seconds(AGGLIGATOR_RECONNECT_TIMEOUT));
         t->async_wait(
             [self, this, connections, bind_port, servers](boost::system::error_code ec) noexcept
             {
@@ -1566,7 +1565,7 @@ namespace aggligator
         }
 
         auto self = shared_from_this();                                     // Keep client alive
-        timeout->expires_from_now(std::chrono::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
+        timeout->expires_after(std::chrono::seconds(AGGLIGATOR_CONNECT_TIMEOUT));
         timeout->async_wait(
             [self, this](boost::system::error_code ec) noexcept
             {

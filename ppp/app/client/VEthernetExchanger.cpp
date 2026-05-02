@@ -924,7 +924,7 @@ namespace ppp {
                 auto self = shared_from_this();
                 boost::asio::steady_timer* deadline_timer = t.get();
 
-                t->expires_from_now(Timer::DurationTime(timeout));
+                t->expires_after(Timer::DurationTime(timeout));
                 t->async_wait(
                     [self, this, deadline_timer, event](const boost::system::error_code& ec) noexcept {
                         ReleaseDeadlineTimer(deadline_timer);
@@ -1987,7 +1987,7 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                context->post(
+                boost::asio::post(*context,
                     [self, this, context, timeout, status, &y]() noexcept {
                         bool ok = NewDeadlineTimer(context, timeout, 
                             [status, &y](bool b) noexcept {

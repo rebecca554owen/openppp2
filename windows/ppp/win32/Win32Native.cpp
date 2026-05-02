@@ -1355,16 +1355,15 @@ namespace ppp
         {
             if (NULLPTR != handle)
             {
-                boost::system::error_code ec;
                 try
                 {
-                    handle->cancel(ec);
+                    handle->cancel();
                 }
                 catch (const std::exception&) {}
 
                 try
                 {
-                    handle->close(ec);
+                    handle->close();
                 }
                 catch (const std::exception&) {}
             }

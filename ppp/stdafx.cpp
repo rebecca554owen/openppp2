@@ -45,7 +45,7 @@
 #include <memory>
 #include <cstdlib>
 
-#include <boost/stacktrace.hpp>
+#include <boost/stacktrace/stacktrace.hpp>
 #include <ppp/text/Encoding.h>
 #include <ppp/hash/hash_bytes.h>
 

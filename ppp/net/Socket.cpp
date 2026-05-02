@@ -235,9 +235,8 @@ namespace ppp {
         void Socket::Cancel(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
-                boost::system::error_code ec;
                 try {
-                    s.cancel(ec);
+                    s.cancel();
                 }
                 catch (const std::exception&) {}
             }
@@ -247,9 +246,8 @@ namespace ppp {
         void Socket::Cancel(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
-                boost::system::error_code ec;
                 try {
-                    s.cancel(ec);
+                    s.cancel();
                 }
                 catch (const std::exception&) {}
             }
@@ -259,9 +257,8 @@ namespace ppp {
         void Socket::Cancel(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (s.is_open()) {
-                boost::system::error_code ec;
                 try {
-                    s.cancel(ec);
+                    s.cancel();
                 }
                 catch (const std::exception&) {}
             }
@@ -288,9 +285,8 @@ namespace ppp {
         /** @brief Cancels pending steady (monotonic) timer operations. */
         void Socket::Cancel(const boost::asio::steady_timer& deadline_timer) noexcept {
             boost::asio::steady_timer& t = constantof(deadline_timer);
-            boost::system::error_code ec;
             try {
-                t.cancel(ec);
+                t.cancel();
             }
             catch (const std::exception&) {}
         }
@@ -1306,7 +1302,7 @@ namespace ppp {
             boost::system::error_code ec;
             if (stream->is_open()) {
                 try {
-                    stream->cancel(ec);
+                    stream->cancel();
                 }
                 catch (const std::exception&) {}
             }

@@ -1404,7 +1404,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                 });
         });
 
-    boost::asio::io_context::work work(*context);
+    auto work = boost::asio::make_work_guard(*context);
     boost::system::error_code ec;
     context->restart();
     context->run(ec);

@@ -223,6 +223,7 @@ jobs:
             boost-lexical-cast:$env:VCPKG_DEFAULT_TRIPLET `
             boost-uuid:$env:VCPKG_DEFAULT_TRIPLET `
             boost-interprocess:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-stacktrace:$env:VCPKG_DEFAULT_TRIPLET `
             openssl:$env:VCPKG_DEFAULT_TRIPLET `
             jemalloc:$env:VCPKG_DEFAULT_TRIPLET
 
