@@ -2,6 +2,8 @@
 
 #if PPP_TELEMETRY
 
+#include <ppp/stdafx.h>
+
 #include <mutex>
 #include <condition_variable>
 #include <queue>
@@ -121,6 +123,15 @@ namespace ppp {
 #endif
             }
 
+            std::string Hex64(uint64_t value) {
+                std::ostringstream oss;
+                oss << std::hex << std::nouppercase;
+                oss.width(16);
+                oss.fill('0');
+                oss << value;
+                return oss.str();
+            }
+
             std::string ShortHex64(uint64_t value) {
                 std::string full = Hex64(value);
                 return full.size() > 8 ? full.substr(0, 8) : full;
@@ -155,15 +166,6 @@ namespace ppp {
 
             const char* ResetColor() noexcept {
                 return "\x1b[0m";
-            }
-
-            std::string Hex64(uint64_t value) {
-                std::ostringstream oss;
-                oss << std::hex << std::nouppercase;
-                oss.width(16);
-                oss.fill('0');
-                oss << value;
-                return oss.str();
             }
         }
 
@@ -209,24 +211,6 @@ namespace ppp {
 
         int GetMinLevel() noexcept {
             return g_min_level.load(std::memory_order_relaxed);
-        }
-
-        void Configure(const char* endpoint) noexcept {
-            if (endpoint && endpoint[0]) {
-                g_endpoint = endpoint;
-            } else {
-                g_endpoint.clear();
-            }
-            GetBackend().RefreshConfig();
-        }
-
-        void SetLogFile(const char* path) noexcept {
-            if (path && path[0]) {
-                g_log_file = path;
-            } else {
-                g_log_file.clear();
-            }
-            GetBackend().RefreshConfig();
         }
 
         namespace {
@@ -918,6 +902,24 @@ namespace ppp {
                 static TelemetryBackend backend;
                 return backend;
             }
+        }
+
+        void Configure(const char* endpoint) noexcept {
+            if (endpoint && endpoint[0]) {
+                g_endpoint = endpoint;
+            } else {
+                g_endpoint.clear();
+            }
+            GetBackend().RefreshConfig();
+        }
+
+        void SetLogFile(const char* path) noexcept {
+            if (path && path[0]) {
+                g_log_file = path;
+            } else {
+                g_log_file.clear();
+            }
+            GetBackend().RefreshConfig();
         }
 
         void Log(Level level, const char* component, const char* fmt, ...) noexcept {
