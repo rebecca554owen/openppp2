@@ -33,11 +33,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-        continue-on-error: true
+      - name: Download artifacts from latest build runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          
+          # Get latest successful build run IDs
+          workflows=(
+            "build-android.yml"
+            "build-linux-amd64.yml"
+            "build-linux-cross.yml"
+            "build-macos.yml"
+            "build-windows-x64.yml"
+            "build-go-guardian.yml"
+          )
+          
+          for workflow in "${workflows[@]}"; do
+            echo "Downloading artifacts from $workflow..."
+            run_id=$(gh run list --workflow="$workflow" --branch=main --status=success --limit 1 --json databaseId --jq '.[0].databaseId')
+            
+            if [ -n "$run_id" ]; then
+              gh run download "$run_id" --dir artifacts 2>/dev/null || echo "No artifacts for $workflow"
+            fi
+          done
 
       - name: List artifacts
         run: |
