@@ -209,6 +209,17 @@ namespace ppp {
             struct {
                 int                                                         update_interval; ///< vBGP route announcement refresh interval in seconds.
             }                                                               vbgp;            ///< Virtual BGP (vBGP) route propagation configuration.
+            struct {
+                bool                                                        enabled;        ///< Enable telemetry output when true; default false for zero-cost on low-end hardware.
+                int                                                         level;          ///< Minimum verbosity level to output: 0=INFO, 1=VERB, 2=DEBUG, 3=TRACE.
+                bool                                                        count;          ///< Enable counter metrics when true.
+                bool                                                        span;           ///< Enable trace spans when true.
+                ppp::string                                                 endpoint;       ///< Optional OTLP/gRPC endpoint; empty uses built-in stderr backend.
+                ppp::string                                                 log_file;       ///< Optional local log file path; empty disables file output.
+                bool                                                        console_log;    ///< Show log events on local console/file sink.
+                bool                                                        console_metric; ///< Show counter/gauge/histogram events on local console/file sink.
+                bool                                                        console_span;   ///< Show span events on local console/file sink.
+            }                                                               telemetry;       ///< Optional telemetry/observability configuration.
         public:
             /**
              * @brief Initializes configuration fields to default values.

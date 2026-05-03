@@ -26,7 +26,7 @@ namespace ppp {
                 const StrandPtr&                                        strand,
                 const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
                 const AppConfigurationPtr&                              configuration) noexcept;
-            virtual ~IWebsocketTransmission()                                          noexcept = default;
+            virtual ~IWebsocketTransmission()                                          noexcept;
 
         public:
             /** @brief Optional host override for websocket handshake. */
@@ -79,7 +79,7 @@ namespace ppp {
                 const StrandPtr&                                        strand,
                 const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
                 const AppConfigurationPtr&                              configuration) noexcept;
-            virtual ~ISslWebsocketTransmission()                                       noexcept = default;
+            virtual ~ISslWebsocketTransmission()                                       noexcept;
 
         public:
             /** @brief Optional host override for websocket handshake. */

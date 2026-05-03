@@ -364,7 +364,7 @@ namespace ppp {
                         }
 
                         // Cancel timeout timer – it will not fire after this point.
-                        timeout_timer.expires_from_now(std::chrono::seconds(0));
+                        timeout_timer.expires_after(std::chrono::seconds(0));
 
                         Socket::Cancel(timeout_timer);
                         if (NULLPTR != socket) {
@@ -480,7 +480,7 @@ namespace ppp {
                                 if (NULLPTR == merge_timer) {
                                     merge_timer = make_shared_object<boost::asio::steady_timer>(executor);
                                     if (NULLPTR != merge_timer) {
-                                        merge_timer->expires_from_now(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
+                                        merge_timer->expires_after(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
                                         pending_timer = merge_timer; // capture before releasing lock
                                     }
                                 }
@@ -655,7 +655,7 @@ namespace ppp {
 
                         // Set the overall timeout for this request.
                         std::weak_ptr<DNS_RequestContext> weak_self = weak_from_this();
-                        timeout_timer.expires_from_now(Timer::DurationTime(timeout_ms));
+                        timeout_timer.expires_after(Timer::DurationTime(timeout_ms));
                         timeout_timer.async_wait(
                             [weak_self](const boost::system::error_code& ec) noexcept {
                                 std::shared_ptr<DNS_RequestContext> self = weak_self.lock();

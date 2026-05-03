@@ -243,6 +243,7 @@
 #include <malloc.h>
 #endif
 
+#include <algorithm>
 #include <type_traits>
 #include <condition_variable>
 #include <limits>
@@ -266,9 +267,6 @@
 
 #ifndef BOOST_BEAST_VERSION_HPP
 #define BOOST_BEAST_VERSION_HPP
-
-#include <boost/beast/core/detail/config.hpp>
-#include <boost/config.hpp>
 
 /*  BOOST_BEAST_VERSION
 
@@ -886,7 +884,7 @@ extern "C" {
 #if defined(_ANDROID)
 #include <android/log.h>
 
-// 定义日志输出函数
+// Define log output functions
 #define LOG_TAG (BOOST_BEAST_VERSION_STRING)
 #define LOG_INFO(...)               __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOG_ERROR(...)              __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -1643,6 +1641,19 @@ namespace ppp {
     const char*                                                             GetPlatformCode() noexcept;
 
     const char*                                                             GetDefaultCipherSuites() noexcept;
+
+    /**
+     * @brief Writes a UTF-8 string to the console, auto-adapting to the
+     *        active Windows console code-page (uses WriteConsoleW when attached
+     *        to a real console, falls back to raw UTF-8 for file/pipe stdout).
+     */
+    void                                                                    ConsoleWrite(const char* utf8String) noexcept;
+
+    /**
+     * @brief printf-style console output with the same adaptive encoding
+     *        behaviour as ConsoleWrite.
+     */
+    void                                                                    ConsoleFormat(const char* fmt, ...) noexcept;
 
     bool                                                                    IfVersion(const ppp::vector<uint64_t>& now, const ppp::vector<uint64_t> min) noexcept;
 

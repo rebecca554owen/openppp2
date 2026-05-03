@@ -56,6 +56,7 @@ namespace ppp
 
             SynchronizedObjectScope scope(syncobj_);
             bool inserted = ports_.emplace(port).second;
+
             ppp::diagnostics::SetLastErrorCode(inserted ? ppp::diagnostics::ErrorCode::Success : ppp::diagnostics::ErrorCode::FirewallDropPortAlreadyExists);
             return inserted;
         }
@@ -231,7 +232,6 @@ namespace ppp
                     return true;
                 }
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
             return false;
         }
 
@@ -286,7 +286,9 @@ namespace ppp
                 {
                     SharedSynchronizedObjectScope scope(syncobj_);
                     bool blocked = Firewall_IsDropNetworkSegment<UInt32>(ip, __ip, 32, network_segments_);
-                    ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+                    if (blocked) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
+                    }
                     return blocked;
                 }
             }
@@ -300,7 +302,9 @@ namespace ppp
                     {
                         SharedSynchronizedObjectScope scope(syncobj_);
                         bool blocked = Firewall_IsDropNetworkSegment<Int128>(ip, __ip, 128, network_segments_);
-                        ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+                        if (blocked) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
+                        }
                         return blocked;
                     }
                 }
@@ -369,7 +373,10 @@ namespace ppp
                     return tail != endl;
                 };
             bool blocked = IsSameNetworkDomains(host_lower, contains);
-            ppp::diagnostics::SetLastErrorCode(blocked ? ppp::diagnostics::ErrorCode::NetworkFirewallBlocked : ppp::diagnostics::ErrorCode::Success);
+            if (blocked) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
+            }
+
             return blocked;
         }
 
@@ -397,13 +404,13 @@ namespace ppp
             ppp::vector<ppp::string> lables;
             if (Tokenize<ppp::string>(host, lables, ".") < 1)
             {
-                return true;
+                return false;
             }
 
             std::size_t label_size = lables.size();
             if (label_size < 2) 
             {
-                return true;
+                return false;
             }
 
             for (ppp::string& i : lables) 

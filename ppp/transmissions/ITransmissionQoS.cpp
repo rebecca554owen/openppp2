@@ -87,7 +87,7 @@ namespace ppp {
             for (;;) { // co_await
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, NULLPTR);
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionClosing, NULLPTR);
                 }
 
                 bawait = IsPeek();
@@ -126,7 +126,7 @@ namespace ppp {
             else {
                 SynchronizedObjectScope scope(syncobj_);
                 if (disposed_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
             }
@@ -144,7 +144,7 @@ namespace ppp {
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     if (disposed_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return false;
                     }
 

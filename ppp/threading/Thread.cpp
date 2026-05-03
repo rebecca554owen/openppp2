@@ -81,7 +81,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadDetachFailed);
                 return false;
             }
         }
@@ -144,13 +144,13 @@ namespace ppp
             SynchronizedObjectScope scope(_syncobj);
             if (State != ThreadState::Stopped)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadAlreadyStarted);
                 return false;
             }
 
             if (Id != 0)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadAlreadyStarted);
                 return false;
             }
 
@@ -159,7 +159,7 @@ namespace ppp
 
             if (NULLPTR == start)
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadEntryMissing);
                 return false;
             }
 
@@ -197,7 +197,20 @@ namespace ppp
                     }
                 };
 
-            _thread = std::thread(thread_start);
+            try {
+                _thread = std::thread(thread_start);
+            }
+            catch (const std::bad_alloc&)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                return false;
+            }
+            catch (const std::exception&)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+                return false;
+            }
+
             return true;
         }
 

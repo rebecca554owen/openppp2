@@ -12,6 +12,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/tap/ITap.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #if defined(_WIN32)
 #include <windows/ppp/tap/TapWindows.h>
@@ -34,6 +35,7 @@ namespace ppp
 {
     namespace tap
     {
+        using ppp::telemetry::Level;
         /**
          * @brief Wraps a placement-constructed stream into a shared pointer.
          * @tparam T Stream type.
@@ -52,7 +54,7 @@ namespace ppp
                 [](T* stream) noexcept
                 {
                     boost::system::error_code ec;
-                    stream->cancel(ec);
+                    stream->cancel();
                     stream->close(ec);
                     stream->~T();
                 });
@@ -68,6 +70,7 @@ namespace ppp
         {
             if (handle == INVALID_HANDLE_VALUE)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "NewStreamFromHandle invalid handle");
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return NULLPTR;
             }
@@ -75,6 +78,7 @@ namespace ppp
             void* memory = Malloc(sizeof(boost::asio::posix::stream_descriptor));
             if (NULLPTR == memory)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "NewStreamFromHandle memory allocation failed");
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
@@ -92,6 +96,7 @@ namespace ppp
             }
             catch (const std::exception&)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "NewStreamFromHandle stream construction failed");
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 Mfree(memory);
                 memory = NULLPTR;
@@ -209,23 +214,27 @@ namespace ppp
         {
             if (NULLPTR == context)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Create failed: missing io context");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
             }
 
             if (dev.empty())
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Create failed: missing device");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             IPEndPoint ipEP(ip, IPEndPoint::MinPort);
             if (IPEndPoint::IsInvalid(ipEP))
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Create failed: invalid IP address");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
             }
 
             IPEndPoint gwEP(gw, IPEndPoint::MinPort);
             if (IPEndPoint::IsInvalid(gwEP))
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Create failed: invalid gateway");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
             }
 
@@ -233,6 +242,7 @@ namespace ppp
             UInt32 maskIPPX = IPEndPoint::PrefixToNetmask(maskCIDR);
             if (mask != maskIPPX)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Create failed: invalid subnet mask");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
             }
 
@@ -328,6 +338,8 @@ namespace ppp
             std::shared_ptr<boost::asio::posix::stream_descriptor> stream = std::move(_stream); 
             if (NULLPTR != stream) 
             {
+                ppp::telemetry::Log(Level::kInfo, "tap", "Closing tap stream");
+                ppp::telemetry::Count("tap.close", 1);
                 ppp::net::Socket::Closestream(stream);
             }
 
@@ -357,20 +369,25 @@ namespace ppp
             bool isReady = IsReady();
             if (!isReady)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Open failed: not ready");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
             }
 
             if (_opening)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Open failed: already opening");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
             }
 
             if (!AsynchronousReadPacketLoops())
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Open failed: read loop failed");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelReadFailed);
             }
 
             _opening = true;
+            ppp::telemetry::Log(Level::kInfo, "tap", "Tap opened");
+            ppp::telemetry::Count("tap.open", 1);
             return true;
         }
 
@@ -383,12 +400,14 @@ namespace ppp
             std::shared_ptr<boost::asio::posix::stream_descriptor> stream = _stream;
             if (NULLPTR == stream)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Read loop failed: no stream");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
             }
 
             bool opened = stream->is_open();
             if (!opened)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Read loop failed: stream not open");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelReadFailed);
             }
 
@@ -452,12 +471,14 @@ namespace ppp
                 std::shared_ptr<boost::asio::posix::stream_descriptor> stream = my->_stream;
                 if (NULLPTR == stream)
                 {
+                    ppp::telemetry::Log(Level::kDebug, "tap", "Write failed: no stream");
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
 
                 bool opened = stream->is_open();
                 if (!opened)
                 {
+                    ppp::telemetry::Log(Level::kDebug, "tap", "Write failed: stream not open");
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
                 }
 
@@ -468,6 +489,7 @@ namespace ppp
                         bool opened = stream->is_open();
                         if (!opened)
                         {
+                            ppp::telemetry::Log(Level::kDebug, "tap", "Write failed: stream not open (dispatch)");
                             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
                         }
 
@@ -505,6 +527,7 @@ namespace ppp
             std::shared_ptr<Byte> buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_size);
             if (NULLPTR == buffer)
             {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Output failed: memory allocation failed");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 

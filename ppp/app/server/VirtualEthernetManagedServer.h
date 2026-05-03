@@ -46,6 +46,7 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/net/asio/websocket.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <chrono>
 
 namespace ppp {
     namespace app {
@@ -108,6 +109,7 @@ namespace ppp {
                  */
                 typedef struct {
                     uint64_t                                                        timeout; ///< Absolute expiry tick in milliseconds.
+                    std::chrono::steady_clock::time_point                           started_at; ///< Request start time for auth round-trip telemetry.
                     AuthenticationToManagedServerAsyncCallback                      ac;      ///< Completion callback.
                 }                                                                   AuthenticationWaitable;
 

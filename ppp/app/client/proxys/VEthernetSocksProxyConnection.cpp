@@ -222,10 +222,10 @@ namespace ppp {
                     int command_status = Requirement(y, host, port, address_type);
                     if (command_status != SOCKS_ERR_OK) {
                         if (command_status == SOCKS_ERR_ATYPE) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksAddressTypeUnsupported);
                         }
                         elif(command_status == SOCKS_ERR_CMD) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksCommandUnsupported);
                         }
                         elif(command_status > SOCKS_ERR_OK) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
@@ -391,7 +391,7 @@ namespace ppp {
 
                     if (nmethod == SOCKS_METHOD_NONE) {
                         if (!no_auth) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialMissing);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksMethodUnsupported);
                         }
                         return no_auth ? SOCKS_ERR_OK : SOCKS_ERR_NO;
                     }
@@ -424,7 +424,7 @@ namespace ppp {
                     }
 
                     if (!no_auth) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthCredentialMissing);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksMethodUnsupported);
                         return SOCKS_ERR_NO;
                     }
 
@@ -502,12 +502,12 @@ namespace ppp {
                         }
                         else {
                             cmd = SOCKS_ERR_ATYPE;
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksAddressTypeUnsupported);
                             return SOCKS_ERR_ATYPE;
                         }
 
                         if (address_length < 1) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksAddressTypeUnsupported);
                             return SOCKS_ERR_ATYPE;
                         }
 

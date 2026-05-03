@@ -11,9 +11,6 @@
 #endif
 
 #include <string>
-#include <boost/asio.hpp>
-#include <boost/asio/buffer.hpp>
-#include <boost/asio/ip/tcp.hpp>
 
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>

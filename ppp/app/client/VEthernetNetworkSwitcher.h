@@ -439,7 +439,7 @@ namespace ppp {
                  */
                 uint8_t                                                             MuxAcceleration(uint8_t* mux_acceleration) noexcept;
 
-#if defined(_ANDROID) || defined(_IPHONE)   
+#if defined(_ANDROID) || defined(_IPHONE)
                 /**
                  * @brief Sets the bypass IP-list text used on mobile platforms.
                  *
@@ -877,6 +877,7 @@ namespace ppp {
                  */
                 bool                                                                AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept;
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
             private:    
                 /**
                  * @brief Applies the server-assigned managed IPv6 configuration to the local NIC.
@@ -890,6 +891,7 @@ namespace ppp {
                  * @brief Restores the original IPv6 configuration if it was previously modified.
                  */
                 void                                                                RestoreAssignedIPv6() noexcept;
+#endif
 
             private:    
                 /**
@@ -1043,7 +1045,7 @@ namespace ppp {
                 ProtectorNetworkPtr                                                 protect_network_;
 #endif
 
-#if defined(_ANDROID) || defined(_IPHONE)   
+#if defined(_ANDROID) || defined(_IPHONE)
                 /** @brief Mobile bypass IP-list text (CIDR-separated). */
                 ppp::string                                                         bypass_ip_list_;
 #else

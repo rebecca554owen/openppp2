@@ -1,6 +1,6 @@
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
 # Description: PPP PRIVATE NETWORK(TM) 2 – CI summary dashboard.
-#              Triggered after all build workflows complete.
+#              Individual builds live in build-*.yml workflow files.
 # Author     : OpenCode.
 # Date-Time  : 2026/05/03
 
@@ -9,77 +9,23 @@ name: CI · Summary
 on:
   workflow_run:
     workflows:
-      - "PPP PRIVATE NETWORK™ 2 ANDROID BUILD SCRIPT CROSS.(X) 1.0.0 VERSION."
-      - "PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT CROSS.(X) 1.0.0 VERSION."
-      - "PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT.(X) 1.0.0 VERSION."
-      - "PPP PRIVATE NETWORK™ 2 MACOS BUILD SCRIPT.(X) 1.0.0 VERSION."
-      - "PPP PRIVATE NETWORK(TM) 2 WINDOWS BUILD SCRIPT.(X) 1.0.0 VERSION."
+      - "Build · Linux amd64"
+      - "Build · Linux Cross"
+      - "Build · Windows x64"
+      - "Build · macOS"
+      - "Build · Android"
+      - "Build · Go Guardian"
     types: [completed]
 
-permissions:
-  actions: read
-
 jobs:
-  check_all_builds:
-    name: Check all builds completed
-    runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion != 'skipped' }}
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
-    steps:
-      - name: Check if all builds completed
-        id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "Checking if all 5 build workflows completed for commit ${{ github.event.workflow_run.head_sha }}..."
-          
-          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
-          
-          # Check each workflow
-          workflows=(
-            "PPP PRIVATE NETWORK™ 2 ANDROID BUILD SCRIPT CROSS.(X) 1.0.0 VERSION."
-            "PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT CROSS.(X) 1.0.0 VERSION."
-            "PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT.(X) 1.0.0 VERSION."
-            "PPP PRIVATE NETWORK™ 2 MACOS BUILD SCRIPT.(X) 1.0.0 VERSION."
-            "PPP PRIVATE NETWORK(TM) 2 WINDOWS BUILD SCRIPT.(X) 1.0.0 VERSION."
-          )
-          
-          all_completed=true
-          echo "| Workflow | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          
-          for workflow in "${workflows[@]}"; do
-            status=$(gh run list --workflow="$workflow" --commit="$COMMIT_SHA" --json status --jq '.[0].status' 2>/dev/null || echo "not_found")
-            conclusion=$(gh run list --workflow="$workflow" --commit="$COMMIT_SHA" --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "not_found")
-            
-            if [ "$status" = "completed" ]; then
-              echo "| $workflow | ✓ $conclusion |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "| $workflow | ⏳ $status |" >> $GITHUB_STEP_SUMMARY
-              all_completed=false
-            fi
-          done
-          
-          if [ "$all_completed" = true ]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "All builds completed!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "should_run=false" >> $GITHUB_OUTPUT
-            echo "Waiting for all builds to complete..." >> $GITHUB_STEP_SUMMARY
-          fi
-
   summary:
     name: Build result dashboard
     runs-on: ubuntu-latest
-    needs: check_all_builds
-    if: needs.check_all_builds.outputs.should_run == 'true'
     steps:
-      - name: Report final summary
+      - name: Report triggering workflow
         run: |
-          echo "## 🎉 CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** ${{ github.event.workflow_run.head_sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Event:** ${{ github.event.workflow_run.event }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "All 5 build workflows have completed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow | Conclusion |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ${{ github.event.workflow_run.name }} | ${{ github.event.workflow_run.conclusion }} |" >> $GITHUB_STEP_SUMMARY

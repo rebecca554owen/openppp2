@@ -28,7 +28,7 @@ namespace ppp {
                 }
 
                 if (IsDisposed()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
 
@@ -71,7 +71,7 @@ namespace ppp {
                     boost::beast::websocket::error::closed == read_ec ||
                     boost::asio::ssl::error::stream_truncated == read_ec)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketClosed);
                     return false;
                 }
 

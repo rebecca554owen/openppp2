@@ -1,0 +1,98 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – Android NDK builds (arm64, armv7a, x86, x64).
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: Build · Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Android ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            ppp_abi: aarch64
+          - abi: armeabi-v7a
+            ppp_abi: armv7a
+          - abi: x86
+            ppp_abi: x86
+          - abi: x86_64
+            ppp_abi: x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache NDK and dependencies
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ndk
+          key: android-ndk-r20b-boost174-openssl111i
+
+      - name: Download NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/ndk" && cd "${{ runner.temp }}/ndk"
+          wget -q https://dl.google.com/android/repository/android-ndk-r20b-linux-x86_64.zip
+          unzip -q android-ndk-r20b-linux-x86_64.zip && rm android-ndk-r20b-linux-x86_64.zip
+          mv android-ndk-r20b abi
+
+      - name: Clone Boost for Android
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/ndk"
+          git clone --depth 1 https://github.com/liulilittle/boost-1.74-for-android-r20b-fpic.git "${{ runner.temp }}/ndk/boost"
+
+      - name: Clone OpenSSL for Android
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/ndk"
+          git clone --depth 1 https://github.com/liulilittle/openssl-1.1.1i-for-android-r20b.git "${{ runner.temp }}/ndk/openssl"
+
+      - name: Build openppp2
+        run: |
+          NDK_ROOT="${{ runner.temp }}/ndk/abi"
+          TP="${{ runner.temp }}/ndk"
+          export PPP_ANDROID_ABI=${{ matrix.ppp_abi }}
+
+          cd android && mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_NATIVE_API_LEVEL=21 \
+            -DANDROID_STL=c++_static \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+          make -j$(nproc)
+
+      - name: Package artifact
+        run: |
+          ARTIFACT=openppp2-android-${{ matrix.abi }}.zip
+          echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
+          cd bin/android/${{ matrix.abi }}
+          zip -r "$ARTIFACT" libopenppp2.so
+          mv "$ARTIFACT" ../../
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: bin/${{ env.ARTIFACT }}
+          if-no-files-found: error

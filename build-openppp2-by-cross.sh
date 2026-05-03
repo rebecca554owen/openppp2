@@ -41,30 +41,22 @@ PPP_build() {
     
     rm -rf build/
     mkdir -p build/
-    cp -rf ./CMakeLists.txt ./build
-    sed -i 's/SET(THIRD_PARTY_LIBRARY_DIR \/root\/dev)/SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})/' ./CMakeLists.txt
     cd build/
 
     ncpu=$(nproc)
     PLATFORM_LD=$3
     PLATFORM_CC=$4
     PLATFORM_CXX=$5
-    export THIRD_PARTY_LIBRARY_DIR=$THIRD_PARTY_LIBRARY_DIR
 
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=$PLATFORM_CC -DCMAKE_CXX_COMPILER=$PLATFORM_CXX -DCMAKE_LINKER=$PLATFORM_LD
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DTHIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY_LIBRARY_DIR" -DCMAKE_C_COMPILER=$PLATFORM_CC -DCMAKE_CXX_COMPILER=$PLATFORM_CXX -DCMAKE_LINKER=$PLATFORM_LD
     make -j $ncpu
     cd ../bin
-    
+
     ARTIFACT_NAME=openppp2-linux-$PLATFORM.zip
     rm -rf $ARTIFACT_NAME
     zip -r $ARTIFACT_NAME ppp
-    unset THIRD_PARTY_LIBRARY_DIR
 
     rm -rf ppp
-    cd ../
-    rm -rf ./CMakeLists.txt
-    cd build/
-    mv ./CMakeLists.txt ../
     cd ../
     rm -rf build/
 }

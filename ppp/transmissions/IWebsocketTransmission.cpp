@@ -4,11 +4,15 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
+#include <chrono>
 
 /**
  * @file IWebsocketTransmission.cpp
  * @brief Implements websocket handshake and HTTP header decoration helpers.
  */
+
+using ppp::telemetry::Level;
 
 namespace ppp {
     namespace transmissions {
@@ -65,6 +69,10 @@ namespace ppp {
 
         }
 
+        IWebsocketTransmission::~IWebsocketTransmission() noexcept {
+            ppp::telemetry::Log(Level::kInfo, "websocket", "websocket close");
+        }
+
         /**
          * @brief Performs websocket handshake using override or configuration endpoint.
          */
@@ -73,6 +81,7 @@ namespace ppp {
             const std::shared_ptr<ppp::net::asio::websocket>&       socket,
             HandshakeType                                           handshake_type,
             YieldContext&                                           y) noexcept {
+            ppp::telemetry::SpanScope span("websocket.handshake");
 
             if (NULLPTR == configuration || NULLPTR == socket) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebsocketTransmissionHandshakeInvalidArguments);
@@ -84,20 +93,57 @@ namespace ppp {
              */
             ppp::string host = std::move(this->Host);
             ppp::string path = std::move(this->Path);
+            const char* role = (handshake_type == HandshakeType::HandshakeType_Client) ? "client" : "server";
 
             if (host.size() > 0 && path.size() > 0) {
+                ppp::telemetry::Log(Level::kDebug, "websocket", "handshake start role=%s host=%s path=%s", role, host.c_str(), path.c_str());
+                auto handshake_started = std::chrono::steady_clock::now();
                 bool ok = socket->Run(handshake_type, host, path, y);
+                auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+                ppp::telemetry::Histogram("websocket.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.failure", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "handshake failed role=%s", role);
+                }
+                else {
+                    if (handshake_type == HandshakeType::HandshakeType_Client) {
+                        ppp::telemetry::Count("websocket.connect", 1);
+                    }
+                    else {
+                        ppp::telemetry::Count("websocket.accept", 1);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.success", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "handshake success role=%s", role);
                 }
 
                 return ok;
             }
             else {
                 auto& cfg = configuration->websocket;
+                ppp::telemetry::Log(Level::kDebug, "websocket", "handshake start role=%s host=%s path=%s", role, cfg.host.c_str(), cfg.path.c_str());
+                auto handshake_started = std::chrono::steady_clock::now();
                 bool ok = socket->Run(handshake_type, cfg.host, cfg.path, y);
+                auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+                ppp::telemetry::Histogram("websocket.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.failure", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "handshake failed role=%s", role);
+                }
+                else {
+                    if (handshake_type == HandshakeType::HandshakeType_Client) {
+                        ppp::telemetry::Count("websocket.connect", 1);
+                    }
+                    else {
+                        ppp::telemetry::Count("websocket.accept", 1);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.success", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "handshake success role=%s", role);
                 }
 
                 return ok;
@@ -133,6 +179,10 @@ namespace ppp {
 
         }
 
+        ISslWebsocketTransmission::~ISslWebsocketTransmission() noexcept {
+            ppp::telemetry::Log(Level::kInfo, "websocket", "wss close");
+        }
+
         /**
          * @brief Performs TLS websocket handshake using override or configuration endpoint.
          */
@@ -141,6 +191,7 @@ namespace ppp {
             const std::shared_ptr<ppp::net::asio::sslwebsocket>&    socket,
             HandshakeType                                           handshake_type,
             YieldContext&                                           y) noexcept {
+            ppp::telemetry::SpanScope span("websocket.wss.handshake");
 
             if (NULLPTR == configuration || NULLPTR == socket) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebsocketTransmissionHandshakeInvalidArguments);
@@ -152,9 +203,12 @@ namespace ppp {
              */
             ppp::string host = std::move(this->Host);
             ppp::string path = std::move(this->Path);
+            const char* role = (handshake_type == HandshakeType::HandshakeType_Client) ? "client" : "server";
 
             if (host.size() > 0 && path.size() > 0) {
                 auto& cfg = configuration->websocket;
+                ppp::telemetry::Log(Level::kDebug, "websocket", "wss handshake start role=%s host=%s path=%s", role, host.c_str(), path.c_str());
+                auto handshake_started = std::chrono::steady_clock::now();
                 bool ok = socket->Run(handshake_type,
                     host,
                     path,
@@ -165,14 +219,32 @@ namespace ppp {
                     cfg.ssl.certificate_key_password,
                     cfg.ssl.ciphersuites,
                     y);
+                auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+                ppp::telemetry::Histogram("websocket.wss.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.failure", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "wss handshake failed role=%s", role);
+                }
+                else {
+                    if (handshake_type == HandshakeType::HandshakeType_Client) {
+                        ppp::telemetry::Count("websocket.connect", 1);
+                    }
+                    else {
+                        ppp::telemetry::Count("websocket.accept", 1);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.success", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "wss handshake success role=%s", role);
                 }
 
                 return ok;
             }
             else {
                 auto& cfg = configuration->websocket;
+                ppp::telemetry::Log(Level::kDebug, "websocket", "wss handshake start role=%s host=%s path=%s", role, cfg.host.c_str(), cfg.path.c_str());
+                auto handshake_started = std::chrono::steady_clock::now();
                 bool ok = socket->Run(handshake_type,
                     cfg.host,
                     cfg.path,
@@ -183,8 +255,24 @@ namespace ppp {
                     cfg.ssl.certificate_key_password,
                     cfg.ssl.ciphersuites,
                     y);
+                auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+                ppp::telemetry::Histogram("websocket.wss.handshake.us", handshake_elapsed);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::WebSocketHandshakeFailed);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.failure", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "wss handshake failed role=%s", role);
+                }
+                else {
+                    if (handshake_type == HandshakeType::HandshakeType_Client) {
+                        ppp::telemetry::Count("websocket.connect", 1);
+                    }
+                    else {
+                        ppp::telemetry::Count("websocket.accept", 1);
+                    }
+                    ppp::telemetry::Count("websocket.upgrade.success", 1);
+                    ppp::telemetry::Log(Level::kInfo, "websocket", "wss handshake success role=%s", role);
                 }
 
                 return ok;

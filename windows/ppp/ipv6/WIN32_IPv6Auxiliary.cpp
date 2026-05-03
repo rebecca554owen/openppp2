@@ -128,7 +128,7 @@ namespace ppp {
                             if (memcmp(&next_hop, &in6addr_any, sizeof(next_hop)) == 0) {
                                 gateway.clear();
                             }
-                            else if (NULLPTR != inet_ntop(AF_INET6, &next_hop, text, sizeof(text))) {
+                            elif (NULLPTR != inet_ntop(AF_INET6, &next_hop, text, sizeof(text))) {
                                 gateway = text;
                             }
                             else {
@@ -241,7 +241,7 @@ namespace ppp {
                         std::string gw_std = gateway.to_string();
                         gateway_str.assign(gw_std.data(), gw_std.size());
                     }
-                    else if (!nat_mode) {
+                    elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
@@ -326,7 +326,7 @@ namespace ppp {
 
                                     route.InterfaceIndex = static_cast<int>(parsed);
                                 }
-                                else if (key == "metric") {
+                                elif (key == "metric") {
                                     /**
                                      * @brief Validate metric using strtol.
                                      * @note Metric is typically non-negative.
@@ -339,7 +339,7 @@ namespace ppp {
                                     
                                     route.Metric = static_cast<int>(parsed);
                                 }
-                                else if (key == "gw") {
+                                elif (key == "gw") {
                                     route.Gateway = value;
                                 }
                             }

@@ -146,7 +146,7 @@ namespace ppp
                     return iphdr;
                 }
 
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ChecksumIpParseProtocolUnsupported);
                 return NULLPTR;
             }
 
@@ -173,7 +173,7 @@ namespace ppp
                 }
 
                 int hdrlen_bytes = TCPH_HDRLEN_BYTES(tcphdr);
-                if (hdrlen_bytes < TCP_HLEN || hdrlen_bytes > size) // 错误的数据报
+                if (hdrlen_bytes < TCP_HLEN || hdrlen_bytes > size) // Malformed datagram
                 {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return NULLPTR;

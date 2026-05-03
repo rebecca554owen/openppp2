@@ -31,7 +31,7 @@ namespace ppp
             {
                 throw std::invalid_argument(name.data());
             }
-            else if (err > 0)
+            elif (err > 0)
             {
                 throw std::runtime_error("Cannot create or open kernel event synchronization object. It may be because the event name has been used or the name string is incorrect.");
             }
@@ -56,7 +56,7 @@ namespace ppp
             {
                 if (openOrCreate)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventOpenFailed);
                     return -1;
                 }
 
@@ -75,7 +75,7 @@ namespace ppp
                 return 0;
             }
 
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventCreateFailed);
             return 1;
         }
 
@@ -135,7 +135,7 @@ namespace ppp
                 return true;
             }
 
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventSetFailed);
             return false;
         }
 
@@ -153,7 +153,7 @@ namespace ppp
                 return true;
             }
 
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventResetFailed);
             return false;
         }
 

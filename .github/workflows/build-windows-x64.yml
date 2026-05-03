@@ -1,0 +1,144 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – Windows x64 MSBuild.
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: Build · Windows x64
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-windows-x64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VCPKG_DEFAULT_TRIPLET: x64-windows-static
+  VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Windows x64 ${{ matrix.configuration }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Release]
+        platform: [x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - uses: NuGet/setup-nuget@v2
+
+      - name: Setup vcpkg
+        shell: pwsh
+        run: |
+          $vcpkgPath = "C:\vcpkg"
+          if (-not (Test-Path $vcpkgPath)) {
+            git clone https://github.com/microsoft/vcpkg.git $vcpkgPath
+            cd $vcpkgPath
+            .\bootstrap-vcpkg.bat
+          } else {
+            Write-Host "vcpkg already installed at $vcpkgPath"
+          }
+          echo $vcpkgPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "VCPKG_ROOT=$vcpkgPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & "$vcpkgPath\vcpkg.exe" integrate install
+
+      - name: Cache vcpkg installed packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\downloads
+          key: vcpkg-installed-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('.github/vcpkg-classic-deps.txt') }}
+          restore-keys: |
+            vcpkg-installed-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          vcpkg install `
+            boost-system:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-asio:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-beast:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-coroutine:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-thread:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-context:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-regex:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-filesystem:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-date-time:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-lockfree:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-lexical-cast:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-uuid:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-interprocess:$env:VCPKG_DEFAULT_TRIPLET `
+            boost-stacktrace:$env:VCPKG_DEFAULT_TRIPLET `
+            openssl:$env:VCPKG_DEFAULT_TRIPLET `
+            jemalloc:$env:VCPKG_DEFAULT_TRIPLET
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: nuget restore .\ppp.sln
+
+      - name: Build openppp2
+        shell: pwsh
+        run: |
+          msbuild .\ppp.vcxproj /m /restore `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=${{ matrix.platform }} `
+            /p:VcpkgEnableManifest=false `
+            /p:VcpkgEnabled=true `
+            /p:VcpkgUseStatic=true
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $out = "${{ matrix.platform }}\${{ matrix.configuration }}"
+          $artifactDir = "artifact"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          foreach ($f in @('ppp.exe', 'PaperAirplane.dll', 'wintun.dll')) {
+            $src = Join-Path $out $f
+            if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
+          }
+
+          # Driver binaries (x64)
+          $driverDir = Join-Path $artifactDir "Driver\x64"
+          New-Item -ItemType Directory -Force -Path $driverDir | Out-Null
+          foreach ($item in @(
+            @{ S = 'Driver\x64\PaperAirplane.dll'; T = 'Driver\x64\PaperAirplane.dll' },
+            @{ S = 'Driver\x64\sysproxy64.exe';   T = 'Driver\x64\sysproxy64.exe' }
+          )) {
+            $src = Join-Path $env:GITHUB_WORKSPACE $item.S
+            $tgt = Join-Path $artifactDir $item.T
+            if (Test-Path $src) { Copy-Item $src $tgt -Force }
+          }
+
+          # TAP driver installation files (root Driver/ folder)
+          foreach ($f in @('OemVista.inf', 'tap0901.cat', 'tap0901.sys', 'tapinstall.exe')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE "Driver\$f"
+            if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
+          }
+
+          foreach ($f in @(
+            'appsettings.json', 'cacert.pem', 'cacert.sha256',
+            'dns-rules.txt', 'firewall-rules.txt', 'ip.txt',
+            'cmcc.txt', 'starrylink.net.key', 'starrylink.net.pem'
+          )) {
+            $src = Join-Path $env:GITHUB_WORKSPACE $f
+            if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}
+          path: artifact
+          if-no-files-found: error

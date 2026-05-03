@@ -198,7 +198,7 @@ namespace ppp
                 pid_file_ = -1;
                 pid_path_.clear();
             }
-            else if (-1 != pid_file_)
+            elif (-1 != pid_file_)
             {
                 // Even if unlink failed, the file descriptor is already closed.
                 // Reset the internal state to avoid leaking a stale fd.

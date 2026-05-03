@@ -4,9 +4,9 @@
 
 本文档由 `ppp/diagnostics/ErrorCodes.def` 生成。该文件是 `ppp::diagnostics::ErrorCode` 的唯一事实来源。
 
-**实时总量：542 个错误码。**
+**实时总量：595 个错误码。**
 
-严重级别分布：kInfo=1、kWarning=7、kError=506、kFatal=28。
+严重级别分布：kInfo=8、kWarning=25、kError=539、kFatal=23。
 
 `ERROR_CODES_CN.md` 目前保留原始核心分类表（220 基线条目）以便阅读。
 完整实时目录（含扩展子系统专用条目与保留位）以 `ppp/diagnostics/ErrorCodes.def` 为唯一事实来源。
@@ -25,6 +25,8 @@ ErrorCode   ppp::diagnostics::GetLastErrorCode();           // 线程本地值
 ErrorCode   ppp::diagnostics::GetLastErrorCodeSnapshot();   // 最后原子发布值
 uint64_t    ppp::diagnostics::GetLastErrorTimestamp();      // 最后发布错误的毫秒时间戳
 const char* ppp::diagnostics::FormatErrorString(ErrorCode); // 可读文本描述
+ppp::string ppp::diagnostics::FormatErrorTriplet(ErrorCode); // "<id> <name>: <message>"
+bool ppp::diagnostics::IsValidErrorCodeValue(int);           // 原始整数校验
 ```
 
 ---
@@ -185,13 +187,13 @@ graph TD
 
 | 名称 | 描述（与源码一致） | 严重级别 |
 |------|-------------------|----------|
-| `AppAlreadyRunning` | Application already running | `kFatal` |
+| `AppAlreadyRunning` | Application already running | `kWarning` |
 | `AppLockAcquireFailed` | Application lock acquisition failed | `kError` |
-| `AppLockReleaseFailed` | Application lock release failed | `kError` |
-| `AppInvalidCommandLine` | Invalid command-line arguments | `kFatal` |
+| `AppLockReleaseFailed` | Application lock release failed | `kWarning` |
+| `AppInvalidCommandLine` | Invalid command-line arguments | `kWarning` |
 | `AppConfigurationMissing` | Application configuration missing | `kFatal` |
 | `AppContextUnavailable` | Application context unavailable | `kError` |
-| `AppPrivilegeRequired` | Administrator or root privilege required | `kFatal` |
+| `AppPrivilegeRequired` | Administrator or root privilege required | `kError` |
 | `AppPreflightCheckFailed` | Startup preflight check failed | `kFatal` |
 
 ---
@@ -220,8 +222,8 @@ graph TD
 |------|-------------------|----------|
 | `RuntimeInitializationFailed` | Runtime initialization failed | `kFatal` |
 | `RuntimeEnvironmentInvalid` | Runtime environment invalid | `kFatal` |
-| `RuntimeIoContextMissing` | I/O context unavailable | `kFatal` |
-| `RuntimeSchedulerUnavailable` | Scheduler unavailable | `kFatal` |
+| `RuntimeIoContextMissing` | I/O context unavailable | `kError` |
+| `RuntimeSchedulerUnavailable` | Scheduler unavailable | `kError` |
 | `RuntimeTimerCreateFailed` | Timer creation failed | `kError` |
 | `RuntimeTimerStartFailed` | Timer start failed | `kError` |
 | `RuntimeEventDispatchFailed` | Event dispatch failed | `kError` |
@@ -274,8 +276,8 @@ graph TD
 | `NetworkMaskInvalid` | Network mask invalid | `kError` |
 | `NetworkGatewayInvalid` | Network gateway invalid | `kError` |
 | `NetworkPortInvalid` | Network port invalid | `kError` |
-| `NetworkProtocolUnsupported` | Network protocol unsupported | `kFatal` |
-| `NetworkFirewallBlocked` | Network blocked by firewall | `kError` |
+| `NetworkProtocolUnsupported` | Network protocol unsupported | `kError` |
+| `NetworkFirewallBlocked` | Network blocked by firewall | `kWarning` |
 | `NetworkAddressFamilyMismatch` | Network address family mismatch | `kError` |
 | `NetworkPacketMalformed` | Malformed network packet | `kError` |
 | `NetworkPacketTooLarge` | Network packet too large | `kError` |
@@ -498,7 +500,7 @@ graph TD
 
 | 名称 | 描述（与源码一致） | 严重级别 |
 |------|-------------------|----------|
-| `CryptoAlgorithmUnsupported` | Crypto algorithm unsupported | `kFatal` |
+| `CryptoAlgorithmUnsupported` | Crypto algorithm unsupported | `kError` |
 
 ---
 

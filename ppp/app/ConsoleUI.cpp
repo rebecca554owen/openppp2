@@ -22,6 +22,7 @@
 #include <ppp/app/ConsoleUI.h>
 #include <ppp/app/PppApplication.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/threading/Executors.h>
 
 #if defined(_WIN32)
@@ -35,6 +36,66 @@
 #endif
 
 namespace ppp::app {
+
+namespace {
+#if PPP_TELEMETRY
+    static bool HandleTelemetryHotkey(char ch) noexcept {
+        auto emit_state = []() noexcept {
+            ppp::string msg = "Telemetry filter: ";
+            msg += ppp::telemetry::IsConsoleLogEnabled() ? "log=on " : "log=off ";
+            msg += ppp::telemetry::IsConsoleMetricEnabled() ? "metric=on " : "metric=off ";
+            msg += ppp::telemetry::IsConsoleSpanEnabled() ? "span=on " : "span=off ";
+            msg += "level=" + std::to_string(ppp::telemetry::GetMinLevel());
+            ConsoleUI::GetInstance().AppendLine(msg);
+        };
+
+        switch (ch) {
+            case 'l':
+            case 'L':
+                ppp::telemetry::SetConsoleLogEnabled(!ppp::telemetry::IsConsoleLogEnabled());
+                emit_state();
+                return true;
+            case 'm':
+            case 'M':
+                ppp::telemetry::SetConsoleMetricEnabled(!ppp::telemetry::IsConsoleMetricEnabled());
+                emit_state();
+                return true;
+            case 's':
+            case 'S':
+                ppp::telemetry::SetConsoleSpanEnabled(!ppp::telemetry::IsConsoleSpanEnabled());
+                emit_state();
+                return true;
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+                ppp::telemetry::SetMinLevel(ch - '0');
+                emit_state();
+                return true;
+            case 'a':
+            case 'A':
+                ppp::telemetry::SetConsoleLogEnabled(true);
+                ppp::telemetry::SetConsoleMetricEnabled(true);
+                ppp::telemetry::SetConsoleSpanEnabled(true);
+                emit_state();
+                return true;
+            case 'q':
+            case 'Q':
+                ppp::telemetry::SetConsoleLogEnabled(false);
+                ppp::telemetry::SetConsoleMetricEnabled(false);
+                ppp::telemetry::SetConsoleSpanEnabled(false);
+                emit_state();
+                return true;
+            case '?':
+                ConsoleUI::GetInstance().AppendLine("Telemetry hotkeys: l=toggle log, m=toggle metric, s=toggle span, 0/1/2/3=set level, a=all, q=quiet, ?=help");
+                emit_state();
+                return true;
+            default:
+                return false;
+        }
+    }
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // UTF-8 box-drawing character constants (each is 3 bytes, 1 display column)
@@ -65,22 +126,28 @@ static constexpr const char kVV[]   = "\xe2\x94\x82";
 // ANSI escape sequences
 // ---------------------------------------------------------------------------
 
-/** @brief Hide the terminal cursor. */
-static constexpr const char kHideCursor[]  = "\x1b[?25l";
-/** @brief Show the terminal cursor. */
-static constexpr const char kShowCursor[]  = "\x1b[?25h";
 /** @brief Clear entire screen and move cursor to (1,1). */
 static constexpr const char kClearScreen[] = "\x1b[2J\x1b[H";
 /** @brief ANSI dark-gray foreground (for OPEN in art). */
 static constexpr const char kColorGray[]   = "\x1b[90m";
 /** @brief ANSI bold bright-white foreground (for PPP2 in art). */
 static constexpr const char kColorWhite[]  = "\x1b[1;97m";
+/** @brief ANSI dim gray foreground for TRACE diagnostics. */
+static constexpr const char kColorTrace[]  = "\x1b[2;37m";
+/** @brief ANSI cyan foreground for DEBUG diagnostics. */
+static constexpr const char kColorDebug[]  = "\x1b[36m";
+/** @brief ANSI green foreground for INFO diagnostics. */
+static constexpr const char kColorInfo[]   = "\x1b[32m";
+/** @brief ANSI yellow foreground for WARN diagnostics. */
+static constexpr const char kColorWarn[]   = "\x1b[33m";
+/** @brief ANSI red foreground for ERROR diagnostics. */
+static constexpr const char kColorError[]  = "\x1b[31m";
+/** @brief ANSI bright red foreground for FATAL diagnostics. */
+static constexpr const char kColorFatal[]  = "\x1b[1;31m";
 /** @brief ANSI attribute reset. */
 static constexpr const char kColorReset[]  = "\x1b[0m";
 /** @brief ANSI dim/dark gray (for placeholder text). */
 static constexpr const char kColorDim[]    = "\x1b[2;37m";
-/** @brief ANSI reverse-video (used to render the synthetic cursor block). */
-static constexpr const char kColorReverse[] = "\x1b[7m";
 /** @brief ANSI white background (used for the synthetic white-block cursor). */
 static constexpr const char kColorWhiteBg[] = "\x1b[47m";
 /** @brief Enter alternate screen buffer (preserves the user's original console contents). */
@@ -505,7 +572,7 @@ bool ConsoleUI::Start() noexcept {
     vt_enabled_ = EnableVirtualTerminal();
 
     if (!PrepareInputTerminal()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeOptionalUiStartFailed);
         running_.store(false, std::memory_order_release);
         return false;
     }
@@ -541,6 +608,14 @@ bool ConsoleUI::Start() noexcept {
     EnterAlternateScreen();
     ppp::HideConsoleCursor(true);
 
+    std::atexit([]() noexcept {
+        ConsoleUI& self = ConsoleUI::GetInstance();
+        if (self.altscreen_entered_) {
+            ppp::HideConsoleCursor(false);
+            self.LeaveAlternateScreen();
+        }
+    });
+
     force_redraw_.store(true, std::memory_order_release);
     dirty_.store(true, std::memory_order_release);
 
@@ -548,7 +623,7 @@ bool ConsoleUI::Start() noexcept {
         render_thread_ = std::thread([this]() noexcept { RenderLoop(); });
         input_thread_  = std::thread([this]() noexcept { InputLoop(); });
     } catch (...) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeOptionalUiStartFailed);
         running_.store(false, std::memory_order_release);
         if (render_thread_.joinable()) {
             render_thread_.join();
@@ -1106,25 +1181,82 @@ void ConsoleUI::RenderFrame() noexcept {
 
     // --- Status bar (error only) ---
     {
+        auto select_status_color = [](ppp::diagnostics::ErrorSeverity severity) noexcept -> const char* {
+            switch (severity) {
+            case ppp::diagnostics::ErrorSeverity::kTrace:
+                return kColorTrace;
+            case ppp::diagnostics::ErrorSeverity::kDebug:
+                return kColorDebug;
+            case ppp::diagnostics::ErrorSeverity::kInfo:
+                return kColorInfo;
+            case ppp::diagnostics::ErrorSeverity::kWarn:
+                return kColorWarn;
+            case ppp::diagnostics::ErrorSeverity::kError:
+                return kColorError;
+            case ppp::diagnostics::ErrorSeverity::kFatal:
+                return kColorFatal;
+            default:
+                return NULLPTR;
+            }
+        };
+
+        auto build_status_row = [&](const ppp::string& plain_text, const char* color_code) noexcept -> ppp::string {
+            if (2 > width) {
+                return ppp::string();
+            }
+
+            int inner = width - 2;
+            ppp::string fitted = FitWidth(plain_text, inner - 1);
+            ppp::string row;
+            row.reserve(static_cast<std::size_t>(width) + fitted.size() + 32u);
+            row += kVV;
+
+            if (vt_enabled_ && NULLPTR != color_code && '\0' != color_code[0]) {
+                row += color_code;
+                row += fitted;
+                row += kColorReset;
+            } else {
+                row += fitted;
+            }
+
+            row += ' ';
+            row += kVV;
+            row += "\n";
+            return row;
+        };
+
         ppp::string status_text;
+        const char* status_color = NULLPTR;
         {
             ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCodeSnapshot();
-            const char* err_str = ppp::diagnostics::FormatErrorString(code);
+            ppp::diagnostics::ErrorSeverity severity = ppp::diagnostics::GetErrorSeverity(code);
+            
+            const char* severity_name = ppp::diagnostics::GetErrorSeverityName(severity);
             uint64_t err_ts     = ppp::diagnostics::GetLastErrorTimestamp();
             uint64_t now_ms     = ppp::threading::Executors::GetTickCount();
 
-            if (ppp::diagnostics::ErrorCode::Success == code) {
-                status_text = " No errors";
-            } else {
-                status_text  = " Error: ";
-                status_text += (NULLPTR == err_str) ? "Unknown" : err_str;
-                if (0u < err_ts) {
-                    status_text += " (" + FormatAge(now_ms, err_ts) + ")";
-                }
+            status_color  = select_status_color(severity);
+            status_text   = "[";
+            status_text  += (NULLPTR == severity_name) ? "UNKNOWN" : severity_name;
+            status_text  += "] ";
+            status_text  += ppp::diagnostics::FormatErrorTriplet(code);
+
+            if (ppp::diagnostics::ErrorCode::Success != code && 0u < err_ts) {
+                status_text += " (" + FormatAge(now_ms, err_ts) + ")";
             }
+
+#if PPP_TELEMETRY
+            status_text += "  | T:";
+            status_text += ppp::telemetry::IsConsoleLogEnabled() ? "L" : "-";
+            status_text += ppp::telemetry::IsConsoleMetricEnabled() ? "M" : "-";
+            status_text += ppp::telemetry::IsConsoleSpanEnabled() ? "S" : "-";
+            status_text += " @";
+            status_text += std::to_string(ppp::telemetry::GetMinLevel());
+            status_text += " [?]";
+#endif
         }
 
-        frame += BoxContentRow(status_text, width);
+        frame += build_status_row(status_text, status_color);
     }
 
     // --- Bottom border ---
@@ -1189,7 +1321,7 @@ void ConsoleUI::HandleHistoryUp() noexcept {
         if (-1 == history_index_) {
             history_edit_backup_ = input_buffer_;
             history_index_       = static_cast<int>(history_.size()) - 1;
-        } elif (0 < history_index_) {
+        } else if (0 < history_index_) {
             --history_index_;
         }
 
@@ -1421,7 +1553,7 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
     if (0u == lower.find(kNS)) {
         if (lower.size() == kNSLen) {
             openppp2_sub = "help";
-        } elif (lower.size() > kNSLen && ' ' == lower[kNSLen]) {
+        } else if (lower.size() > kNSLen && ' ' == lower[kNSLen]) {
             openppp2_sub = ppp::LTrim(lower.substr(kNSLen + 1u));
         }
     }
@@ -1559,21 +1691,21 @@ void ConsoleUI::InputLoop() noexcept {
             int key = ::_getch();
             if (72 == key) {            // Up arrow
                 HandleHistoryUp();
-            } elif (80 == key) {        // Down arrow
+            } else if (80 == key) {        // Down arrow
                 HandleHistoryDown();
-            } elif (75 == key) {        // Left arrow
+            } else if (75 == key) {        // Left arrow
                 MoveCursorLeft();
-            } elif (77 == key) {        // Right arrow
+            } else if (77 == key) {        // Right arrow
                 MoveCursorRight();
-            } elif (71 == key) {        // Home — scroll info to top
+            } else if (71 == key) {        // Home — scroll info to top
                 ScrollInfoBy(-999999);
-            } elif (79 == key) {        // End — scroll info to bottom
+            } else if (79 == key) {        // End — scroll info to bottom
                 ScrollInfoBy(999999);
-            } elif (83 == key) {        // Delete
+            } else if (83 == key) {        // Delete
                 EraseAtCursor();
-            } elif (73 == key) {        // PageUp — scroll cmd up
+            } else if (73 == key) {        // PageUp — scroll cmd up
                 ScrollCmdPage(1);
-            } elif (81 == key) {        // PageDown — scroll cmd down
+            } else if (81 == key) {        // PageDown — scroll cmd down
                 ScrollCmdPage(-1);
             }
             continue;
@@ -1600,6 +1732,12 @@ void ConsoleUI::InputLoop() noexcept {
         }
 
         if (32 <= ch && 126 >= ch) {
+#if PPP_TELEMETRY
+            if (HandleTelemetryHotkey(static_cast<char>(ch))) {
+                MarkDirty();
+                continue;
+            }
+#endif
             InsertInputChar(static_cast<char>(ch));
         }
     }
@@ -1659,6 +1797,9 @@ void ConsoleUI::InputLoop() noexcept {
                     break;
                 }
                 char c = seq[seq_len];
+                if (seq_len == 0 && 'O' == c) {
+                    continue;
+                }
                 if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || '~' == c) {
                     ++seq_len;
                     break;
@@ -1669,29 +1810,35 @@ void ConsoleUI::InputLoop() noexcept {
 
             if ("[A" == key || "OA" == key) {       // Up
                 HandleHistoryUp();
-            } elif ("[B" == key || "OB" == key) {   // Down
+            } else if ("[B" == key || "OB" == key) {   // Down
                 HandleHistoryDown();
-            } elif ("[C" == key || "OC" == key) {   // Right
+            } else if ("[C" == key || "OC" == key) {   // Right
                 MoveCursorRight();
-            } elif ("[D" == key || "OD" == key) {   // Left
+            } else if ("[D" == key || "OD" == key) {   // Left
                 MoveCursorLeft();
-            } elif ("[H" == key || "[1~" == key ||  // Home — scroll info to top
+            } else if ("[H" == key || "[1~" == key ||  // Home — scroll info to top
                     "[7~" == key || "OH" == key) {
                 ScrollInfoBy(-999999);
-            } elif ("[F" == key || "[4~" == key ||  // End — scroll info to bottom
+            } else if ("[F" == key || "[4~" == key ||  // End — scroll info to bottom
                     "[8~" == key || "OF" == key) {
                 ScrollInfoBy(999999);
-            } elif ("[3~" == key) {                 // Delete
+            } else if ("[3~" == key) {                 // Delete
                 EraseAtCursor();
-            } elif ("[5~" == key) {                 // PageUp — scroll cmd up
+            } else if ("[5~" == key) {                 // PageUp — scroll cmd up
                 ScrollCmdPage(1);
-            } elif ("[6~" == key) {                 // PageDown — scroll cmd down
+            } else if ("[6~" == key) {                 // PageDown — scroll cmd down
                 ScrollCmdPage(-1);
             }
             continue;
         }
 
         if (32 <= static_cast<unsigned char>(ch) && 126 >= static_cast<unsigned char>(ch)) {
+#if PPP_TELEMETRY
+            if (HandleTelemetryHotkey(ch)) {
+                MarkDirty();
+                continue;
+            }
+#endif
             InsertInputChar(ch);
         }
     }

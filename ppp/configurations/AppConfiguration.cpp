@@ -303,6 +303,16 @@ namespace ppp {
             config.virr.retry_interval = 300;
             config.vbgp.update_interval = 3600;
 
+            config.telemetry.enabled = false;
+            config.telemetry.level = 0;
+            config.telemetry.count = false;
+            config.telemetry.span = false;
+            config.telemetry.endpoint = "";
+            config.telemetry.log_file = "";
+            config.telemetry.console_log = true;
+            config.telemetry.console_metric = true;
+            config.telemetry.console_span = true;
+
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
 
@@ -628,7 +638,7 @@ namespace ppp {
                 boost::asio::ip::address_v6 cidr_prefix = boost::asio::ip::address_v6();
                 boost::system::error_code cidr_ec;
                 if (!ipv6_prefix.empty()) {
-                    cidr_prefix = boost::asio::ip::address_v6::from_string(ipv6_prefix.c_str(), cidr_ec);
+                    cidr_prefix = boost::asio::ip::make_address_v6(ipv6_prefix.c_str(), cidr_ec);
                     if (!cidr_ec) {
                         cidr_prefix = ppp::ipv6::ComputeNetworkAddress(cidr_prefix, config.server.ipv6.prefix_length);
                         ipv6_prefix = cidr_prefix.to_string();
@@ -650,7 +660,7 @@ namespace ppp {
                 boost::asio::ip::address_v6 cidr_prefix = boost::asio::ip::address_v6();
                 boost::system::error_code cidr_ec;
                 if (!ipv6_prefix.empty()) {
-                    cidr_prefix = boost::asio::ip::address_v6::from_string(ipv6_prefix.c_str(), cidr_ec);
+                    cidr_prefix = boost::asio::ip::make_address_v6(ipv6_prefix.c_str(), cidr_ec);
                 }
 
                 boost::system::error_code gateway_ec;
@@ -826,9 +836,13 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigPathInvalid);
             }
 
-            ppp::string json_string = File::ReadAllText(path.data());
+            ppp::string json_string = File::ReadAllText(file_path.data());
             if (json_string.empty()) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileUnreadable);
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFileEmpty);
+                }
+
+                return false;
             }
 
             Json::Value json = JsonAuxiliary::FromString(json_string);
@@ -1049,6 +1063,9 @@ namespace ppp {
 
             ppp::string vbgp = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["vbgp"])));
             if (!ppp::net::http::HttpClient::VerifyUri(vbgp, NULLPTR, NULLPTR, NULLPTR, NULLPTR)) {
+                if (ppp::diagnostics::ErrorCode::Success != ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+                }
                 vbgp = ppp::string();
             }
 
@@ -1218,6 +1235,17 @@ namespace ppp {
             AssignIfPresent(config.virr.update_interval, json["virr"]["update-interval"]);
             AssignIfPresent(config.virr.retry_interval, json["virr"]["retry-interval"]);
             AssignIfPresent(config.vbgp.update_interval, json["vbgp"]["update-interval"]);
+
+            AssignBoolIfPresent(config.telemetry.enabled, json["telemetry"]["enabled"]);
+            AssignIfPresent(config.telemetry.level, json["telemetry"]["level"]);
+            AssignBoolIfPresent(config.telemetry.count, json["telemetry"]["count"]);
+            AssignBoolIfPresent(config.telemetry.span, json["telemetry"]["span"]);
+            AssignIfPresent(config.telemetry.endpoint, json["telemetry"]["endpoint"]);
+            AssignIfPresent(config.telemetry.log_file, json["telemetry"]["log-file"]);
+            AssignBoolIfPresent(config.telemetry.console_log, json["telemetry"]["console-log"]);
+            AssignBoolIfPresent(config.telemetry.console_metric, json["telemetry"]["console-metric"]);
+            AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
+
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
@@ -1434,6 +1462,18 @@ namespace ppp {
             Json::Value vbgp;
             vbgp["update-interval"] = config.vbgp.update_interval;
             root["vbgp"] = vbgp;
+
+            Json::Value telemetry;
+            telemetry["enabled"] = config.telemetry.enabled;
+            telemetry["level"] = config.telemetry.level;
+            telemetry["count"] = config.telemetry.count;
+            telemetry["span"] = config.telemetry.span;
+            telemetry["endpoint"] = config.telemetry.endpoint;
+            telemetry["log-file"] = config.telemetry.log_file;
+            telemetry["console-log"] = config.telemetry.console_log;
+            telemetry["console-metric"] = config.telemetry.console_metric;
+            telemetry["console-span"] = config.telemetry.console_span;
+            root["telemetry"] = telemetry;
 
             return root;
         }

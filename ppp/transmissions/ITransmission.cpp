@@ -1,5 +1,6 @@
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 /**
  * @file ITransmission.cpp
@@ -17,9 +18,12 @@
 #include <ppp/threading/Thread.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/threading/BufferswapAllocator.h>
+#include <chrono>
 
 namespace ppp {
     namespace transmissions {
+
+        using ppp::telemetry::Level;
 
         // -----------------------------------------------------------------------------
         // Local type aliases for code brevity.
@@ -1145,6 +1149,9 @@ namespace ppp {
             , disposed_(0), frame_rn_(0), frame_tn_(0), handshaked_(0)
             , context_(context), strand_(strand), configuration_(configuration) {
 
+            ppp::telemetry::Log(Level::kInfo, "transmission", "ITransmission created");
+            ppp::telemetry::Count("transmission.connection.open", 1);
+
             if (ppp::configurations::extensions::IsHaveCiphertext(configuration.get())) {
                 if (Ciphertext::Support(configuration->key.protocol) && Ciphertext::Support(configuration->key.transport)) {
                     protocol_ = make_shared_object<Ciphertext>(configuration->key.protocol, configuration->key.protocol_key);
@@ -1164,11 +1171,16 @@ namespace ppp {
          * @brief Finalizes runtime state, cancels timers, and clears optional helpers.
          */
         void ITransmission::Finalize() noexcept {
+            ppp::telemetry::SpanScope span("transmission.lifecycle.close");
+
             // One-shot guard: only the first caller proceeds; subsequent calls are no-ops.
             bool expected = false;
             if (!finalized_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
                 return;
             }
+
+            ppp::telemetry::Log(Level::kInfo, "transmission", "ITransmission finalized");
+            ppp::telemetry::Count("transmission.connection.close", 1);
 
             DeadlineTimerPtr t = std::move(timeout_);
             disposed_ = true;
@@ -1290,6 +1302,9 @@ namespace ppp {
          * @brief Posts asynchronous cleanup of transmission and write queue resources.
          */
         void ITransmission::Dispose() noexcept {
+            ppp::telemetry::Log(Level::kInfo, "transmission", "ITransmission disposed");
+            ppp::telemetry::Count("transmission.transport.dispose", 1);
+
             auto self = shared_from_this();
             auto ctx = GetContext();
             auto st = GetStrand();
@@ -1436,7 +1451,7 @@ namespace ppp {
             // so we cast to the concrete type to access ITransmission members in the lambda.
             std::shared_ptr<ITransmission> self =
                 std::static_pointer_cast<ITransmission>(shared_from_this());
-            timer->expires_from_now(std::chrono::milliseconds(expire_ms));
+            timer->expires_after(std::chrono::milliseconds(expire_ms));
 
             timer->async_wait(
                 [self](boost::system::error_code ec) noexcept {
@@ -1478,11 +1493,22 @@ namespace ppp {
                 return 0;
             }
 
+            auto handshake_started = std::chrono::steady_clock::now();
+            ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient started");
+            ppp::telemetry::Count("transmission.handshake.start", 1);
+
             Int128 sid = InternalHandshakeClient(y, mux);
             InternalHandshakeTimeoutClear();
+            auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+            ppp::telemetry::Histogram("transmission.handshake.us", handshake_elapsed);
 
             if (!sid) {
+                ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient failed");
+                ppp::telemetry::Count("transmission.handshake.failure", 1);
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+            } else {
+                ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient completed");
+                ppp::telemetry::Count("transmission.handshake.success", 1);
             }
 
             return sid;
@@ -1501,11 +1527,22 @@ namespace ppp {
                 return false;
             }
             
+            auto handshake_started = std::chrono::steady_clock::now();
+            ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer started");
+            ppp::telemetry::Count("transmission.handshake.start", 1);
+            
             bool ok = InternalHandshakeServer(y, session_id, mux);
             InternalHandshakeTimeoutClear();
+            auto handshake_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - handshake_started).count();
+            ppp::telemetry::Histogram("transmission.handshake.us", handshake_elapsed);
 
             if (!ok) {
+                ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer failed");
+                ppp::telemetry::Count("transmission.handshake.failure", 1);
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+            } else {
+                ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer completed");
+                ppp::telemetry::Count("transmission.handshake.success", 1);
             }
 
             return ok;

@@ -734,7 +734,7 @@ namespace ppp
                         boost::system::error_code ec;
                         SetThreadName("ssmt");
 
-                        boost::asio::io_context::work work(*context);
+                        auto work = boost::asio::make_work_guard(*context);
                         context->restart();
 
                         boost::asio::post(*context, 

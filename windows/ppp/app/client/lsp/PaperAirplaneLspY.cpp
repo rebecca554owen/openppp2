@@ -115,7 +115,7 @@ namespace ppp
                         WSAPROTOCOL_INFOW LayeredProtocolInfo;
                         if (nArrayCount < 1)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspBaseProtocolMissing);
                             return FALSE;
                         }
                         else
@@ -133,7 +133,7 @@ namespace ppp
                         if (::WSCInstallProvider(&ProviderGuid,
                             pwszPathName, &LayeredProtocolInfo, 1, &nError) == SOCKET_ERROR)
                         {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::PaperAirplaneLspInstallProviderFailed);
                             return FALSE;
                         }
 
@@ -356,7 +356,7 @@ namespace ppp
                         {
                             Setup_Install();
                         }
-                        else if (!strncmp(argv[1], "uninstall", 10))
+                        elif (!strncmp(argv[1], "uninstall", 10))
                         {
                             Setup_Uninstall();
                         }

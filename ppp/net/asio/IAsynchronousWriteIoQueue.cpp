@@ -81,7 +81,7 @@ namespace ppp {
             /** @brief Coroutine-based write wrapper that dispatches through callback path. */
             bool IAsynchronousWriteIoQueue::WriteBytes(YieldContext& y, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
                 if (disposed_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
 
@@ -106,7 +106,7 @@ namespace ppp {
             bool IAsynchronousWriteIoQueue::WriteBytes(const std::shared_ptr<Byte>& packet, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 IAsynchronousWriteIoQueue* const q = this;
                 if (q->disposed_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
 
@@ -137,7 +137,7 @@ namespace ppp {
                     SynchronizedObjectScope scope(q->syncobj_);
                     if (q->disposed_) {
                         context->Clear();
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return false;
                     }
 
@@ -173,7 +173,7 @@ namespace ppp {
 
                     ctx_to_send->Clear();
                     if (q->disposed_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
                     else {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
@@ -199,7 +199,7 @@ namespace ppp {
              */
             bool IAsynchronousWriteIoQueue::DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept {
                 if (disposed_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
 
@@ -240,7 +240,7 @@ namespace ppp {
                     sending_ = false;
 
                     if (disposed_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return -1;
                     }
 
@@ -271,7 +271,7 @@ namespace ppp {
                 if (!ok) {
                     context->Forward(false);
                     if (disposed_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
                     else {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);

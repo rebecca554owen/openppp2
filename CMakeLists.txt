@@ -54,7 +54,10 @@ ENDIF()
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)
 # ADD_DEFINITIONS(-DCURLINC_CURL)
 # ADD_DEFINITIONS(-DTRANSMISSION_O1)
-# ADD_DEFINITIONS(-DSYSNAT)
+OPTION(ENABLE_SYSNAT "Enable SYSNAT kernel-bypass traffic control (Linux only)" OFF)
+IF(ENABLE_SYSNAT)
+    ADD_DEFINITIONS(-DSYSNAT)
+ENDIF()
 ADD_DEFINITIONS(-DJEMALLOC)
 ADD_DEFINITIONS(-DFUNCTION)
 ADD_DEFINITIONS(-DBUDDY_ALLOC_IMPLEMENTATION)
@@ -140,10 +143,11 @@ ENDIF()
 
 # When compiling only linux kernel distributions >= 5.10 and later, 
 # You can enable this macro to get the new io_uring asynchronous event driver model support.
-# IF(PLATFORM_SYSTEM_LINUX) 
-#     ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)
-#     ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)
-# ENDIF()
+OPTION(ENABLE_IO_URING "Enable io_uring async event driver for Boost.Asio (Linux kernel >= 5.10)" OFF)
+IF(ENABLE_IO_URING AND PLATFORM_SYSTEM_LINUX)
+    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)
+    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)
+ENDIF()
 
 # Check C/CXX compiler supports.
 INCLUDE(CheckCXXCompilerFlag)
@@ -157,6 +161,12 @@ ENDIF()
 
 # If the current compiler environment is detected to support AES.
 OPTION(ENABLE_SIMD "Enable x86/x64 SIMD AES-NI implementation" OFF)
+
+# Optional telemetry/observability facade (default OFF for zero-cost on low-end hardware).
+OPTION(PPP_TELEMETRY "Enable optional telemetry/OTel facade (adds non-zero runtime cost)" OFF)
+IF(PPP_TELEMETRY)
+    ADD_COMPILE_DEFINITIONS(PPP_TELEMETRY=1)
+ENDIF()
 
 SET(PLATFORM_ARCH_X86 FALSE)
 IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|amd64|AMD64|i[3-6]86|x86)$")
@@ -227,12 +237,12 @@ ELSE()
     # When the __MUSL__ macro is enabled and compilation errors are encountered, you can add the connector option: -static
     # -rdynamic -Wl,-Bstatic -Wl,-Bdynamic -lstdc++ -lpthread -ldl -lz -lrt
     IF(NOT MSVC)
-        SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic") 
+        SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -rdynamic -Wl,-Bstatic") 
     ENDIF()
 ENDIF()
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+SET(THIRD_PARTY_LIBRARY_DIR /root/dev CACHE PATH "Third-party library root directory")
 
 IF(PLATFORM_SYSTEM_WINDOWS)
     SET(OPENSSL_USE_STATIC_LIBS TRUE)
@@ -312,6 +322,14 @@ ELSE()
 ENDIF()
 
 # List of common cpp source files compilations for ppp/unix cmake solution projects.
+#
+# NOTE: Do NOT pass a bare filename such as "${PROJECT_SOURCE_DIR}/main.cpp" to
+# FILE(GLOB_RECURSE ...). CMake interprets the last path component as a name
+# pattern and walks the entire tree, which means any stray main.cpp sitting
+# inside a vendored directory (e.g. third-party/boost/doc/html/boost_asio/
+# example/**/main.cpp) gets silently added to this target. The Boost asio
+# examples include C++20 coroutine code that cannot be built under -std=c++17
+# and blew up the Linux CI build. main.cpp is added explicitly below.
 FILE(GLOB_RECURSE SOURCE_FILES 
     ${PROJECT_SOURCE_DIR}/common/lwip/my/*.c 
     ${PROJECT_SOURCE_DIR}/common/lwip/core/*.c 
@@ -327,9 +345,9 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/common/aesni/aes.cpp
 
     ${PROJECT_SOURCE_DIR}/ppp/*.c 
-    ${PROJECT_SOURCE_DIR}/ppp/*.cpp
+    ${PROJECT_SOURCE_DIR}/ppp/*.cpp)
 
-    ${PROJECT_SOURCE_DIR}/main.cpp)
+LIST(APPEND SOURCE_FILES ${PROJECT_SOURCE_DIR}/main.cpp)
 
 IF(PLATFORM_SYSTEM_WINDOWS)
     LIST(APPEND SOURCE_FILES ${PROJECT_SOURCE_DIR}/resource.rc)
@@ -344,6 +362,14 @@ IF(NOT MSVC)
         ${PROJECT_SOURCE_DIR}/common/unix/*.c 
         ${PROJECT_SOURCE_DIR}/common/unix/*.cpp)
     LIST(APPEND SOURCE_FILES ${UNIX_SOURCE_FILES})
+ENDIF()
+
+# openppp2_sysnat.c requires libbpf headers; only compile it when SYSNAT is enabled.
+LIST(REMOVE_ITEM PLATFORM_SOURCE_FILES
+    ${PROJECT_SOURCE_DIR}/linux/ppp/tap/openppp2_sysnat.c)
+IF(ENABLE_SYSNAT)
+    LIST(APPEND PLATFORM_SOURCE_FILES
+        ${PROJECT_SOURCE_DIR}/linux/ppp/tap/openppp2_sysnat.c)
 ENDIF()
 
 # Add the compiled output binary files.
@@ -407,46 +433,50 @@ ELSEIF(PLATFORM_SYSTEM_DARWIN)
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
 
-    TARGET_LINK_LIBRARIES(${NAME}
-        libssl.a 
-        libcrypto.a 
+    SET(PPP_CLANG_LINK_LIBS
+        libssl.a
+        libcrypto.a
         libjemalloc.a
-        # liburing.a
-
-        # libbpf.a
-        # libelf.a
-        # libz.a
-
         atomic
         dl
         pthread
-
         libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
+        libboost_coroutine.a
+        libboost_thread.a
         libboost_context.a
-        libboost_regex.a 
-        libboost_filesystem.a) 
+        libboost_regex.a
+        libboost_filesystem.a)
+    IF(ENABLE_IO_URING)
+        LIST(APPEND PPP_CLANG_LINK_LIBS uring)
+    ENDIF()
+    IF(ENABLE_SYSNAT)
+        LIST(APPEND PPP_CLANG_LINK_LIBS bpf)
+    ENDIF()
+    TARGET_LINK_LIBRARIES(${NAME} ${PPP_CLANG_LINK_LIBS})
 ELSEIF(NOT MSVC)
-    TARGET_LINK_LIBRARIES(${NAME} 
+    SET(PPP_LINUX_LINK_LIBS
         libc.a
-        libssl.a 
-        libcrypto.a 
+        libssl.a
+        libcrypto.a
         libjemalloc.a
-        # liburing.a
-
-        # libbpf.a
-        # libelf.a
-        # libz.a
-
+        m
+        unwind
         atomic
+        stdc++
+        rt
         dl
         pthread
-
         libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a 
+        libboost_coroutine.a
+        libboost_thread.a
+        libboost_context.a
         libboost_regex.a
-        libboost_filesystem.a) 
+        libboost_filesystem.a)
+    IF(ENABLE_IO_URING)
+        LIST(APPEND PPP_LINUX_LINK_LIBS uring)
+    ENDIF()
+    IF(ENABLE_SYSNAT)
+        LIST(APPEND PPP_LINUX_LINK_LIBS bpf)
+    ENDIF()
+    TARGET_LINK_LIBRARIES(${NAME} ${PPP_LINUX_LINK_LIBS}) 
 ENDIF()
