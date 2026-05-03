@@ -1,0 +1,37 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – CI summary dashboard.
+#              Triggered after all build workflows complete.
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: CI · Summary
+
+on:
+  workflow_run:
+    workflows:
+      - "PPP PRIVATE NETWORK™ 2 ANDROID BUILD SCRIPT CROSS.(X) 1.0.0 VERSION."
+      - "PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT CROSS.(X) 1.0.0 VERSION."
+      - "PPP PRIVATE NETWORK™ 2 LINUX BUILD SCRIPT.(X) 1.0.0 VERSION."
+      - "PPP PRIVATE NETWORK™ 2 MACOS BUILD SCRIPT.(X) 1.0.0 VERSION."
+      - "PPP PRIVATE NETWORK(TM) 2 WINDOWS BUILD SCRIPT.(X) 1.0.0 VERSION."
+    types: [completed]
+
+permissions:
+  actions: read
+
+jobs:
+  summary:
+    name: Build result dashboard
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion != 'skipped' }}
+    steps:
+      - name: Report triggering workflow
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow | Conclusion | Triggered By |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|--------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ${{ github.event.workflow_run.name }} | ${{ github.event.workflow_run.conclusion }} | ${{ github.event.workflow_run.event }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run ID:** ${{ github.event.workflow_run.id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.event.workflow_run.head_sha }}" >> $GITHUB_STEP_SUMMARY
