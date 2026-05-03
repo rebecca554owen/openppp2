@@ -10,7 +10,6 @@ on:
       - main
     paths-ignore:
       - '.github/workflows/release.yml'
-      - '.github/workflows/ci.yml'
   pull_request:
     branches:
       - main
