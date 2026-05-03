@@ -220,6 +220,11 @@ IF(PLATFORM_SYSTEM_DARWIN)
     # The mandatory version is C++17.
     SET(CMAKE_CXX_STANDARD 17)
 
+    # Minimum macOS deployment target for backward compatibility (macOS 13 Ventura).
+    IF(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        SET(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS deployment target")
+    ENDIF()
+
     ADD_DEFINITIONS(-D_GNU_SOURCE)
     ADD_DEFINITIONS(-DBOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED)
 ELSE()

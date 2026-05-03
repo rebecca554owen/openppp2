@@ -45,6 +45,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP"
           make -j$(sysctl -n hw.physicalcpu)
