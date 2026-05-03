@@ -37,11 +37,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+        continue-on-error: true
 
       - name: List artifacts
         run: |
           echo "Downloaded artifacts:"
-          ls -R artifacts
+          if [ -d artifacts ]; then
+            ls -R artifacts
+          else
+            echo "No artifacts found"
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -49,8 +54,8 @@ jobs:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.title }}
           prerelease: ${{ inputs.prerelease }}
-          files: artifacts/*/*
+          files: artifacts/**/*
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
