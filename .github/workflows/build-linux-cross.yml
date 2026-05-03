@@ -72,12 +72,20 @@ jobs:
 
       - name: Install cross-compiler
         run: |
-          sudo dpkg --add-architecture ${{ matrix.debian_arch }}
-          sudo apt-get update -y || true
+          sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake zip unzip \
-            gcc-${{ matrix.apt_pkg }} g++-${{ matrix.apt_pkg }} \
-            libunwind-dev:${{ matrix.debian_arch }}
+            gcc-${{ matrix.apt_pkg }} g++-${{ matrix.apt_pkg }}
+
+      - name: Build libunwind for target
+        run: |
+          cd /tmp
+          wget -q https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz
+          tar xf libunwind-1.8.1.tar.gz
+          cd libunwind-1.8.1
+          ./configure --host=${{ matrix.apt_pkg }} --prefix=${{ runner.temp }}/libunwind --disable-shared --enable-static
+          make -j$(nproc)
+          make install
 
       - name: Build openppp2
         run: |
@@ -87,6 +95,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DCMAKE_EXE_LINKER_FLAGS="-L${{ runner.temp }}/libunwind/lib" \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP"
           make -j$(nproc)
 
