@@ -461,6 +461,7 @@ ELSEIF(NOT MSVC)
         libjemalloc.a
         m
         unwind
+        atomic
         stdc++
         rt
         dl
