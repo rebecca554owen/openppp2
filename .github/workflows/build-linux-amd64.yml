@@ -81,7 +81,7 @@ jobs:
             build-essential cmake git zip unzip curl wget \
             libkrb5-dev libicu-dev libssl-dev libunwind-dev \
             autoconf clang \
-            liburing-dev
+            liburing-dev libbpf-dev
 
       - name: Cache third-party libraries
         id: cache-third
