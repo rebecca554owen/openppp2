@@ -1301,19 +1301,15 @@ namespace ppp {
 
             boost::system::error_code ec;
             if (stream->is_open()) {
-                try {
-                    stream->cancel();
-                }
-                catch (const std::exception&) {}
+                stream->cancel(ec);
+                ec.clear();
             }
 
-            try {
-                stream->close(ec);
-                if (boost::system::errc::success == ec) {
-                    return true;
-                }
+            stream->close(ec);
+            if (boost::system::errc::success == ec || !stream->is_open()) {
+                return true;
             }
-            catch (const std::exception&) {}
+
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
             return false;
         }
