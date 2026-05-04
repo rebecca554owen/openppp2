@@ -335,6 +335,11 @@ namespace ppp {
                     return false;
                 }
 
+                if (!socket->is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
+                    return false;
+                }
+
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
