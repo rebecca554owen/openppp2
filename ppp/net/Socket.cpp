@@ -694,13 +694,13 @@ namespace ppp {
          * @brief Applies send/receive socket buffer sizes when values are provided.
          */
         bool Socket::SetWindowSizeIfNotZero(int sockfd, int cwnd, int rwnd) noexcept {
+            if (cwnd < 1 && rwnd < 1) {
+                return true;
+            }
+
             if (-1 == sockfd) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
-            }
-
-            if (cwnd < 1 && rwnd < 1) {
-                return true;
             }
 
             bool any = false;
@@ -799,8 +799,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
-            return false;
+            return true;
         }
 
         /**
@@ -821,8 +820,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
-            return false;
+            return true;
         }
 
         /**

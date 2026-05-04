@@ -887,6 +887,8 @@ namespace ppp {
                 tap = this->Tap;
                 if (NULLPTR == tap) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
+                    ppp::telemetry::Count("vnetstack.accept.fail.tap", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: tap missing");
                     break;
                 }
 
@@ -894,14 +896,20 @@ namespace ppp {
                 IPEndPoint remoteEP = IPEndPoint::V6ToV4(IPEndPoint::ToEndPoint(natEP));
                 if (lwip_) {
                     if (remoteEP.GetAddress() != htonl(IPEndPoint::LoopbackAddress)) {
+                        ppp::telemetry::Count("vnetstack.accept.fail.endpoint", 1);
+                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: lwip endpoint mismatch");
                         break;
                     }
                 }
                 elif(remoteEP.GetAddress() != tap->GatewayServer) {
+                    ppp::telemetry::Count("vnetstack.accept.fail.endpoint", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: endpoint mismatch");
                     break;
                 }
 
                 if (remoteEP.Port <= IPEndPoint::MinPort || remoteEP.Port > IPEndPoint::MaxPort) {
+                    ppp::telemetry::Count("vnetstack.accept.fail.port", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: invalid port");
                     break;
                 }
 
@@ -911,6 +919,8 @@ namespace ppp {
                     int srcPort;
                     int dstPort;
                     if (!lwip::netstack::link(remoteEP.Port, srcAddr, srcPort, dstAddr, dstPort)) {
+                        ppp::telemetry::Count("vnetstack.accept.fail.lwip_link", 1);
+                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: lwip link missing");
                         break;
                     }
 
@@ -921,6 +931,8 @@ namespace ppp {
                 }
 
                 if (NULLPTR == link) {
+                    ppp::telemetry::Count("vnetstack.accept.fail.link", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: link missing");
                     break;
                 }
 
@@ -930,11 +942,15 @@ namespace ppp {
                         link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
                     }
 
+                    ppp::telemetry::Count("vnetstack.accept.fail.pcb", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: pcb missing");
                     break;
                 }
 
                 socket = pcb->NewAsynchronousSocket(sockfd, natEP);
                 if (NULLPTR == socket) {
+                    ppp::telemetry::Count("vnetstack.accept.fail.socket", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: socket wrap failed");
                     break;
                 }
 
@@ -945,6 +961,8 @@ namespace ppp {
                     link->Update();
                 }
                 else {
+                    ppp::telemetry::Count("vnetstack.accept.fail.end_accept", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: end accept failed");
                     link->Release();
                 }
                 

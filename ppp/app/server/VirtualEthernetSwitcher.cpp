@@ -1370,7 +1370,17 @@ namespace ppp {
 
                     bool bok = Socket::AcceptLoopbackAsync(acceptor, 
                         [self, this, acceptor, categories](const Socket::AsioContext& context, const Socket::AsioTcpSocket& socket) noexcept {
+                            if (NULLPTR == socket || !socket->is_open()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
+                                return false;
+                            }
+
                             if (!Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo)) {
+                                return false;
+                            }
+
+                            if (!socket->is_open()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                                 return false;
                             }
 
