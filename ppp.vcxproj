@@ -304,7 +304,9 @@
     <ClCompile Include="ppp\configurations\Ini.cpp" />
     <ClCompile Include="ppp\diagnostics\Error.cpp" />
     <ClCompile Include="ppp\diagnostics\ErrorHandler.cpp" />
+    <ClCompile Include="ppp\diagnostics\LinkTelemetry.cpp" />
     <ClCompile Include="ppp\diagnostics\PreventReturn.cpp" />
+    <ClCompile Include="ppp\diagnostics\Telemetry.cpp" />
     <ClCompile Include="ppp\hash\hash_bytes.cpp" />
     <ClCompile Include="ppp\net\asio\vdns.cpp" />
     <ClCompile Include="ppp\net\asio\websocket\websocket_accept_sslv_websocket.cpp" />
@@ -610,7 +612,9 @@
     <ClInclude Include="ppp\configurations\Ini.h" />
     <ClInclude Include="ppp\diagnostics\Error.h" />
     <ClInclude Include="ppp\diagnostics\ErrorHandler.h" />
+    <ClInclude Include="ppp\diagnostics\LinkTelemetry.h" />
     <ClInclude Include="ppp\diagnostics\PreventReturn.h" />
+    <ClInclude Include="ppp\diagnostics\Telemetry.h" />
     <ClInclude Include="ppp\hash\hash_bytes.h" />
     <ClInclude Include="ppp\net\asio\vdns.h" />
     <ClInclude Include="ppp\net\asio\websocket\websocket_accept_sslv_websocket.h" />
