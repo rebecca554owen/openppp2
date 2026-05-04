@@ -418,6 +418,7 @@ void PppApplication::Dispose() noexcept {
     ClearTickAlwaysTimeout();
 
     ppp::telemetry::Flush(3000);
+    ppp::telemetry::Shutdown();
 }
 
 /**
@@ -469,7 +470,7 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
 
     uint64_t incoming_traffic = 0;
     uint64_t outgoing_traffic = 0;
-    
+
     std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
     std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
     std::shared_ptr<VEthernetExchanger> exchanger = NULLPTR;

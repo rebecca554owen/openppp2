@@ -87,6 +87,7 @@ namespace ppp {
         void Configure(const char* endpoint) noexcept;
         void SetLogFile(const char* path) noexcept;
         void Flush(int timeout_ms = 3000) noexcept;
+        void Shutdown() noexcept;
 
     }
 }
