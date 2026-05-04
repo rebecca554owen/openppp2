@@ -67,7 +67,6 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     ppp::net::asio::vdns::ttl = configuration->udp.dns.ttl;
     ppp::net::asio::vdns::enabled = configuration->udp.dns.turbo;
 
-#if PPP_TELEMETRY
     ppp::telemetry::SetEnabled(configuration->telemetry.enabled);
     ppp::telemetry::SetMinLevel(configuration->telemetry.level);
     ppp::telemetry::SetCountEnabled(configuration->telemetry.count);
@@ -77,7 +76,6 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     ppp::telemetry::SetConsoleSpanEnabled(configuration->telemetry.console_span);
     ppp::telemetry::Configure(configuration->telemetry.endpoint.c_str());
     ppp::telemetry::SetLogFile(configuration->telemetry.log_file.c_str());
-#endif
 
     return 0;
 }

@@ -1,7 +1,5 @@
 #include <ppp/diagnostics/Telemetry.h>
 
-#if PPP_TELEMETRY
-
 #include <ppp/stdafx.h>
 
 #include <mutex>
@@ -624,8 +622,7 @@ namespace ppp {
 
                 void SetOtlpEndpoint(const std::string& url) {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    use_otlp_ = !url.empty();
-                    exporter_.SetEndpoint(url);
+                    SetOtlpEndpointLocked(url);
                 }
 
                 void SetLogFile(const std::string& path) {
@@ -634,7 +631,7 @@ namespace ppp {
 
                 void RefreshConfig() {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    SetOtlpEndpoint(g_endpoint);
+                    SetOtlpEndpointLocked(g_endpoint);
                     file_sink_.Open(g_log_file);
                 }
 
@@ -653,6 +650,11 @@ namespace ppp {
             private:
                 static constexpr size_t kMaxQueueSize = 4096;
                 static constexpr size_t kBatchSize    = 256;
+
+                void SetOtlpEndpointLocked(const std::string& url) {
+                    use_otlp_ = !url.empty();
+                    exporter_.SetEndpoint(url);
+                }
 
                 void Run() noexcept {
                     while (running_.load() || !log_queue_.empty() || !counter_queue_.empty() || !span_queue_.empty() || !gauge_queue_.empty() || !histogram_queue_.empty()) {
@@ -1032,5 +1034,3 @@ namespace ppp {
 
     }
 }
-
-#endif // PPP_TELEMETRY

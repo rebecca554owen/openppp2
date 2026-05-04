@@ -3,6 +3,7 @@
 #include <ppp/app/client/VEthernetDatagramPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
@@ -641,6 +642,20 @@ namespace ppp {
                                         run_once = true;
                                         StaticEchoClean();
                                     }
+
+                                    /**
+                                     * @brief Link telemetry: the connection was established but has now ended.
+                                     *
+                                     * When Run() returns, the link has dropped — this is an unexpected
+                                     * interruption from the tunnel's perspective (the underlying transport
+                                     * returned EOF or an error).  Record as a fault.
+                                     *
+                                     * Note: Clean FIN with 0-byte payload that leads to Run() returning
+                                     * is still counted as a fault here because the tunnel link itself was
+                                     * interrupted, not a single TCP connection within the tunnel.
+                                     */
+                                    link_telemetry_.RecordFault();
+                                    ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordFault();
 
                                     ppp::telemetry::Count("client_exchanger.disconnect", 1);
                                     ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger disconnecting");

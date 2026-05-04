@@ -5,7 +5,9 @@
 
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/diagnostics/Telemetry.h>
+#include <cstdio>
 
 namespace ppp::app {
 
@@ -68,7 +70,10 @@ static const char* ToNetworkStateString(VEthernetExchanger::NetworkState state) 
  * @brief Builds full runtime environment lines mirrored from legacy foreground console output.
  * @param lines Output line vector receiving formatted environment rows.
  */
-void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines) noexcept {
+void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines,
+    uint64_t incoming_traffic,
+    uint64_t outgoing_traffic,
+    const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept {
     lines.clear();
     lines.reserve(160u);
 
@@ -320,15 +325,6 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
     }
 #endif
 
-    uint64_t incoming_traffic = 0;
-    uint64_t outgoing_traffic = 0;
-    std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
-    if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
-        incoming_traffic = 0;
-        outgoing_traffic = 0;
-        statistics_snapshot = NULLPTR;
-    }
-
     lines.emplace_back("VPN");
     lines.emplace_back(section_separator);
     AppendEnvLine(lines, "Duration", stopwatch_.Elapsed().ToString("TT:mm:ss", false));
@@ -342,6 +338,59 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
         AppendEnvLine(lines, "IN", ppp::StrFormatByteSize(static_cast<Int64>(statistics_snapshot->IncomingTraffic.load())));
         AppendEnvLine(lines, "OUT", ppp::StrFormatByteSize(static_cast<Int64>(statistics_snapshot->OutgoingTraffic.load())));
     }
+
+    /**
+     * @brief Link Telemetry section — displayed in right column (two-column mode)
+     * or appended after info lines (single-column mode).
+     */
+    ppp::vector<ppp::string> telemetry_lines;
+    telemetry_lines.emplace_back("Link Telemetry");
+    telemetry_lines.emplace_back(section_separator);
+
+    {
+        ppp::diagnostics::LinkTelemetry& lt = ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal();
+        ppp::diagnostics::LinkTelemetrySnapshot snap = lt.GetSnapshot();
+
+        {
+            char quality_buf[64];
+            std::snprintf(quality_buf, sizeof(quality_buf), "%.2f%% %s",
+                snap.quality_percent,
+                ppp::diagnostics::LinkTelemetry::GetQualityGradeName(snap.grade));
+            AppendEnvLine(telemetry_lines, "Quality", ppp::string(quality_buf));
+        }
+
+        AppendEnvLine(telemetry_lines, "Error Count",
+            stl::to_string<ppp::string>(static_cast<Int64>(snap.error_count)));
+
+        AppendEnvLine(telemetry_lines, "Success Count",
+            stl::to_string<ppp::string>(static_cast<Int64>(snap.success_count)));
+
+        AppendEnvLine(telemetry_lines, "Total Events",
+            stl::to_string<ppp::string>(static_cast<Int64>(snap.total_count)));
+
+        {
+            double error_rate = 0.0;
+            if (snap.success_count > 0) {
+                error_rate = (static_cast<double>(snap.error_count) / static_cast<double>(snap.success_count)) * 100.0;
+            } else if (snap.error_count > 0) {
+                error_rate = 100.0;
+            }
+            char rate_buf[64];
+            std::snprintf(rate_buf, sizeof(rate_buf), "%.2f%% (relative to OK)", error_rate);
+            AppendEnvLine(telemetry_lines, "Error Rate", ppp::string(rate_buf));
+        }
+
+        if (snap.grade >= ppp::diagnostics::LinkQualityGrade::Good &&
+            snap.grade != ppp::diagnostics::LinkQualityGrade::Unknown) {
+            telemetry_lines.emplace_back("  !! Report to OPENPPP2 when quality <= 95%");
+        }
+
+        if (snap.grade == ppp::diagnostics::LinkQualityGrade::Unusable) {
+            telemetry_lines.emplace_back("  !! CRITICAL: Quality < 90% — STOP OPENPPP2!");
+        }
+    }
+
+    ConsoleUI::GetInstance().SetTelemetryLines(telemetry_lines);
 }
 
 /**
@@ -368,9 +417,7 @@ void PppApplication::Dispose() noexcept {
 
     ClearTickAlwaysTimeout();
 
-#if PPP_TELEMETRY
     ppp::telemetry::Flush(3000);
-#endif
 }
 
 /**
@@ -435,18 +482,18 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         outgoing_traffic = 0;
     }
 
-    ppp::string vpn_state = "down";
+    ppp::string vpn_state = "disconnected";
     if (NULLPTR != client) {
         if (NULLPTR == exchanger) {
-            vpn_state = "init";
+            vpn_state = "connecting";
         } else {
             NetworkState network_state = exchanger->GetNetworkState();
             if (network_state == NetworkState::NetworkState_Established) {
-                vpn_state = "up";
+                vpn_state = "established";
             } else if (network_state == NetworkState::NetworkState_Reconnecting) {
-                vpn_state = "reconnect";
+                vpn_state = "reconnecting";
             } else {
-                vpn_state = "connect";
+                vpn_state = "connecting";
             }
         }
     }
@@ -454,10 +501,21 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     ppp::string status = "vpn=" + vpn_state;
     status += " rx=" + ppp::StrFormatByteSize((Int64)incoming_traffic);
     status += " tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
+
+    {
+        double quality = ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().GetQualityPercent();
+        ppp::diagnostics::LinkQualityGrade grade = ppp::diagnostics::LinkTelemetry::ClassifyQuality(quality);
+        char quality_buf[32];
+        std::snprintf(quality_buf, sizeof(quality_buf), " link=%.1f%%", quality);
+        status += quality_buf;
+        status += " ";
+        status += ppp::diagnostics::LinkTelemetry::GetQualityGradeName(grade);
+    }
+
     ConsoleUI::GetInstance().UpdateStatus(status);
 
     ppp::vector<ppp::string> info;
-    GetEnvironmentInformationLines(info);
+    GetEnvironmentInformationLines(info, incoming_traffic, outgoing_traffic, statistics_snapshot);
     ConsoleUI::GetInstance().SetInfoLines(info);
 
 #if defined(_WIN32)

@@ -22,7 +22,7 @@
  * ├──────────────────────────────────────────────────────────────────────┤
  * │  > [input line or placeholder text]                                  │
  * ├──────────────────────────────────────┬───────────────────────────────┤
- * │  Error: description (Ns ago)         │  VPN: state  ↑ tx/s  ↓ rx/s │
+ * │  [INFO] error description (Ns ago)   │  VPN: state  ↑ tx/s  ↓ rx/s │
  * └──────────────────────────────────────┴───────────────────────────────┘
  * @endcode
  *
@@ -114,6 +114,16 @@ public:
      * @param lines New set of lines for the info section.
      */
     void                    SetInfoLines(const ppp::vector<ppp::string>& lines) noexcept;
+
+    /**
+     * @brief Replaces the telemetry info section content.
+     *
+     * In two-column mode these lines are shown in the right column.
+     * In single-column mode they are appended after info_lines_.
+     *
+     * @param lines New set of telemetry lines.
+     */
+    void                    SetTelemetryLines(const ppp::vector<ppp::string>& lines) noexcept;
 
 private:
     ConsoleUI() = default;
@@ -368,6 +378,8 @@ private:
 
     /** @brief VPN info snapshot displayed in the info section. */
     ppp::vector<ppp::string>    info_lines_;
+    /** @brief Telemetry lines displayed in the right column (two-column mode). */
+    ppp::vector<ppp::string>    telemetry_lines_;
     /**
      * @brief Info section scroll offset.
      *
@@ -477,7 +489,7 @@ private:
     // -----------------------------------------------------------------------
 
     /** @brief Maximum number of lines retained in the command output buffer. */
-    static constexpr int        kMaxCmdLines        = 1000;
+    static constexpr int        kMaxCmdLines        = 10000;
     /** @brief Maximum number of history entries. */
     static constexpr int        kMaxHistoryEntries  = 200;
     /**

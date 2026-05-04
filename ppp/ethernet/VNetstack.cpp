@@ -1,5 +1,6 @@
 #include <ppp/ethernet/VNetstack.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/diagnostics/Telemetry.h>
 /**
  * @file VNetstack.cpp
@@ -554,7 +555,25 @@ namespace ppp {
              * @brief Advance simplified TCP state for timeout management.
              */
             if (flags & TcpFlags::TCP_RST) {
+                TcpState prev_state = (TcpState)link->state.load(std::memory_order_relaxed);
                 link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
+
+                /**
+                 * @brief Link telemetry: unexpected RST received on an established connection.
+                 *
+                 * An RST on an ESTABLISHED connection is an unexpected interruption.
+                 * RST on other states (SYN_RECEIVED, etc.) is a normal connection rejection
+                 * and does not count as a link fault.
+                 *
+                 * Also: RST received through the underlying link (when the EC triggers it)
+                 * should be recorded as a fault. Other RSTs (e.g., destination unreachable)
+                 * are not link faults.
+                 */
+                if (prev_state == TcpState::TCP_STATE_ESTABLISHED) {
+                    ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordFault();
+                    ppp::telemetry::Count("vnetstack.unexpected_rst", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "unexpected RST on established connection");
+                }
             }
             elif((flags & TcpFlags::TCP_SYN) && (flags & TcpFlags::TCP_ACK)) {
                 if ((TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_SYN_RECEIVED) {
@@ -565,6 +584,16 @@ namespace ppp {
                 TcpState ls2 = (TcpState)link->state.load(std::memory_order_relaxed);
                 if (ls2 == TcpState::TCP_STATE_ESTABLISHED) {
                     link->state.store((Byte)TcpState::TCP_STATE_CLOSE_WAIT, std::memory_order_relaxed);
+
+                    /**
+                     * @brief Link telemetry: clean FIN received on an established connection.
+                     *
+                     * A FIN+ACK on an ESTABLISHED connection with no error is a graceful close.
+                     * Per specification, FIN with 0 bytes is NOT an error.
+                     * Record as success (clean close).
+                     */
+                    ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordSuccess();
+                    ppp::telemetry::Count("vnetstack.clean_fin", 1);
                 }
                 elif(ls2 == TcpState::TCP_STATE_LAST_ACK) {
                     link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);

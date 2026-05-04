@@ -2,19 +2,24 @@
 
 /**
  * @file Telemetry.h
- * @brief Zero-cost telemetry facade for optional observability.
+ * @brief Always-compiled telemetry facade for observability.
  *
- * @details When PPP_TELEMETRY is disabled (default), all calls compile to inline no-ops.
- *          When enabled, they delegate to a backend implementation.
- *          This facade never allocates, never throws, and never blocks on the hot path.
+ * @details All telemetry code is unconditionally compiled.  Runtime behavior
+ *          is controlled by the g_enabled flag which defaults to false.
+ *          The JSON config field "telemetry": { "enabled": true } activates
+ *          the backend at application startup.
+ *
+ *          This facade never allocates, never throws, and never blocks on
+ *          the hot path when telemetry is disabled at runtime.
  */
 
 #include <cstdint>
 #include <cstdarg>
 #include <cstddef>
 
+/* Always compiled — kept for any external code that checks the macro. */
 #ifndef PPP_TELEMETRY
-# define PPP_TELEMETRY 0
+# define PPP_TELEMETRY 1
 #endif
 
 namespace ppp {
@@ -44,7 +49,6 @@ namespace ppp {
          */
         class SpanScope final {
         public:
-#if PPP_TELEMETRY
             SpanScope(const char* name, const char* session_id = nullptr) noexcept;
             ~SpanScope() noexcept;
             SpanScope(SpanScope&& other) noexcept;
@@ -61,17 +65,7 @@ namespace ppp {
             uint64_t                                                      span_id_        = 0;
             uint64_t                                                      parent_span_id_ = 0;
             bool                                                          active_         = false;
-#else
-            SpanScope(const char*, const char* = nullptr) noexcept {}
-            ~SpanScope() noexcept = default;
-            SpanScope(SpanScope&&) noexcept = default;
-            SpanScope& operator=(SpanScope&&) noexcept = delete;
-            SpanScope(const SpanScope&) = delete;
-            SpanScope& operator=(const SpanScope&) = delete;
-#endif
         };
-
-#if PPP_TELEMETRY
 
         void Log(Level level, const char* component, const char* fmt, ...) noexcept;
         void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept;
@@ -93,31 +87,6 @@ namespace ppp {
         void Configure(const char* endpoint) noexcept;
         void SetLogFile(const char* path) noexcept;
         void Flush(int timeout_ms = 3000) noexcept;
-
-#else
-
-        inline void Log(Level, const char*, const char*, ...) noexcept {}
-        inline void LogWithAttributes(Level, const char*, const Attribute*, size_t, const char*, ...) noexcept {}
-        inline void Count(const char*, int64_t) noexcept {}
-        inline void Gauge(const char*, int64_t) noexcept {}
-        inline void Histogram(const char*, int64_t) noexcept {}
-        inline void TraceSpan(const char*, const char*) noexcept {}
-        inline void SetEnabled(bool) noexcept {}
-        inline void SetCountEnabled(bool) noexcept {}
-        inline void SetSpanEnabled(bool) noexcept {}
-        inline void SetConsoleLogEnabled(bool) noexcept {}
-        inline void SetConsoleMetricEnabled(bool) noexcept {}
-        inline void SetConsoleSpanEnabled(bool) noexcept {}
-        inline bool IsConsoleLogEnabled() noexcept { return false; }
-        inline bool IsConsoleMetricEnabled() noexcept { return false; }
-        inline bool IsConsoleSpanEnabled() noexcept { return false; }
-        inline int  GetMinLevel() noexcept { return 0; }
-        inline void SetMinLevel(int) noexcept {}
-        inline void Configure(const char*) noexcept {}
-        inline void SetLogFile(const char*) noexcept {}
-        inline void Flush(int) noexcept {}
-
-#endif
 
     }
 }
