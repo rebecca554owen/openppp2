@@ -340,9 +340,9 @@ namespace ppp
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
-            if (!tap->IsOpen())
+            if (!tap->IsOpen() && !tap->Open())
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
+                return false;
             }
 
             std::shared_ptr<IPFragment> fragment = NewFragment();
