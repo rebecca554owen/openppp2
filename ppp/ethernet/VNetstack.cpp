@@ -500,12 +500,15 @@ namespace ppp {
                     else {
                         c = std::atomic_load(&link->socket);
                         if (NULLPTR != c) {
-                            if (c->IsDisposed()) {
-                                if (ls == TcpState::TCP_STATE_SYN_RECEIVED || ls == TcpState::TCP_STATE_SYN_SENT) {
-                                    link->Update();
-                                    return true;
-                                }
+                            bool disposed = c->IsDisposed();
+                            bool pending = ls == TcpState::TCP_STATE_SYN_RECEIVED || ls == TcpState::TCP_STATE_SYN_SENT;
+                            if (!disposed && pending) {
+                                ppp::telemetry::Count("vnetstack.native_syn.duplicate", 1);
+                                link->Update();
+                                return true;
+                            }
 
+                            if (disposed) {
                                 rst = true;
                             }
                             break;
