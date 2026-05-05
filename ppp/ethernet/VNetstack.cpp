@@ -1406,14 +1406,12 @@ namespace ppp {
             this->sync_ack_retry_count_ = 0;
             this->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_CLOSED;
 
-            if (lwip_) {
-                std::shared_ptr<TapTcpLink> link = this->link_;
-                if (NULLPTR == link) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
-                }
-
-                link->state.store((Byte)TcpState::TCP_STATE_ESTABLISHED, std::memory_order_relaxed);
+            std::shared_ptr<TapTcpLink> link = this->link_;
+            if (NULLPTR == link) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
             }
+
+            link->state.store((Byte)TcpState::TCP_STATE_ESTABLISHED, std::memory_order_relaxed);
 
             return this->Establish();
         }
