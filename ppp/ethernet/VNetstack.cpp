@@ -581,6 +581,10 @@ namespace ppp {
                     ppp::telemetry::Count("vnetstack.unexpected_rst", 1);
                     ppp::telemetry::Log(Level::kInfo, "vnetstack", "unexpected RST on established connection src=%s:%u dst=%s:%u lan=%s:%u wan=%s:%u flags=0x%02x", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(ip->src, ntohs(tcp->src)).address().to_string().c_str(), ntohs(tcp->src), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(ip->dest, ntohs(tcp->dest)).address().to_string().c_str(), ntohs(tcp->dest), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)flags);
                 }
+                else {
+                    ppp::telemetry::Count("vnetstack.rst_pre_established", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "RST in non-established state lan=%s:%u wan=%s:%u prev_state=%u flags=0x%02x lwip=%s", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)prev_state, (unsigned int)flags, link->lwip ? "yes" : "no");
+                }
             }
             elif((flags & TcpFlags::TCP_SYN) && (flags & TcpFlags::TCP_ACK)) {
                 if ((TcpState)link->state.load(std::memory_order_relaxed) == TcpState::TCP_STATE_SYN_RECEIVED) {
@@ -601,6 +605,15 @@ namespace ppp {
                      */
                     ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordSuccess();
                     ppp::telemetry::Count("vnetstack.clean_fin", 1);
+                    ppp::telemetry::Log(Level::kDebug, "vnetstack", "clean FIN lan=%s:%u wan=%s:%u lwip=%s", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), link->lwip ? "yes" : "no");
+                }
+                elif(ls2 == TcpState::TCP_STATE_SYN_SENT || ls2 == TcpState::TCP_STATE_SYN_RECEIVED) {
+                    /**
+                     * @brief Diagnostic: FIN+ACK before flow ever reached ESTABLISHED.
+                     *        Indicates lwIP/NAT or peer prematurely closed before connect-back.
+                     */
+                    ppp::telemetry::Count("vnetstack.fin_before_established", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "FIN before established lan=%s:%u wan=%s:%u prev_state=%u flags=0x%02x lwip=%s", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)ls2, (unsigned int)flags, link->lwip ? "yes" : "no");
                 }
                 elif(ls2 == TcpState::TCP_STATE_LAST_ACK) {
                     link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
@@ -1062,6 +1075,11 @@ namespace ppp {
                 WAN2LANTABLE::iterator tail = this->wan2lan_.find(key);
                 WAN2LANTABLE::iterator endl = this->wan2lan_.end();
                 if (tail != endl) {
+                    std::shared_ptr<TapTcpLink> existing = tail->second;
+                    if (NULLPTR != existing) {
+                        ppp::telemetry::Count("vnetstack.lwip_accept.reused", 1);
+                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "lwip accept reused link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->srcAddr, ntohs(existing->srcPort)).address().to_string().c_str(), ntohs(existing->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->dstAddr, ntohs(existing->dstPort)).address().to_string().c_str(), ntohs(existing->dstPort), (unsigned int)existing->state.load(std::memory_order_relaxed), existing->closed.load(std::memory_order_relaxed) ? 1 : 0);
+                    }
                     return tail->second;
                 }
 
