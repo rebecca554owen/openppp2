@@ -145,13 +145,13 @@ namespace ppp
             if (NULLPTR == server)
             {
                 ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: server missing");
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed: server missing");
                 return false;
             }
             else if (!server->is_open())
             {
                 ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: server closed");
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed: server closed");
                 return false;
             }
 
@@ -159,7 +159,7 @@ namespace ppp
             if (NULLPTR == context)
             {
                 ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: context missing");
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed: context missing");
                 return false;
             }
 
@@ -167,7 +167,7 @@ namespace ppp
             if (NULLPTR == socket)
             {
                 ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: socket allocation failed");
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed: socket allocation failed");
                 return false;
             }
 
@@ -177,7 +177,7 @@ namespace ppp
                 if (!server->is_open())
                 {
                     ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: server closed");
+                    ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed: server closed");
                     return false;
                 }
 
@@ -191,7 +191,6 @@ namespace ppp
                     [self, this, server, socket](boost::system::error_code ec) noexcept
                     {
                         accept_pending_.fetch_sub(1, std::memory_order_acq_rel);
-                        ppp::telemetry::Count("socket_acceptor.accept.complete", 1);
                         if (ec == boost::system::errc::operation_canceled) /* WSAWaitForMultipleEvents */
                         {
                             ppp::telemetry::Count("socket_acceptor.accept.canceled", 1);
@@ -204,7 +203,7 @@ namespace ppp
                             if (!Next())
                             {
                                 ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed after error");
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed after error");
                             }
                             return;
                         }
@@ -236,7 +235,7 @@ namespace ppp
                         if (!Next())
                         {
                             ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed after accept");
+                            ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed after accept");
                         }
 
                         if (sockfd != -1)

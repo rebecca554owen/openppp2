@@ -1146,7 +1146,7 @@ namespace ppp {
                             (state == TcpState::TCP_STATE_SYN_SENT || state == TcpState::TCP_STATE_SYN_RECEIVED);
                         if (reusable) {
                             ppp::telemetry::Count("vnetstack.lwip_accept.reused", 1);
-                            ppp::telemetry::Log(Level::kInfo, "vnetstack", "lwip accept reused link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->srcAddr, ntohs(existing->srcPort)).address().to_string().c_str(), ntohs(existing->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->dstAddr, ntohs(existing->dstPort)).address().to_string().c_str(), ntohs(existing->dstPort), (unsigned int)state, closed ? 1 : 0);
+                            ppp::telemetry::Log(Level::kDebug, "vnetstack", "lwip accept reused link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->srcAddr, ntohs(existing->srcPort)).address().to_string().c_str(), ntohs(existing->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->dstAddr, ntohs(existing->dstPort)).address().to_string().c_str(), ntohs(existing->dstPort), (unsigned int)state, closed ? 1 : 0);
                             return existing;
                         }
 
