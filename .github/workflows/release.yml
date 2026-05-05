@@ -46,6 +46,7 @@ jobs:
             "build-linux-cross.yml"
             "build-macos.yml"
             "build-windows-x64.yml"
+            "build-windows-arm64.yml"
             "build-go-guardian.yml"
           )
           

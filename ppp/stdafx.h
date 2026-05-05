@@ -158,6 +158,10 @@
 #define __ORDER_LITTLE_ENDIAN__     1
 #define __ORDER_BIG_ENDIAN__        0
 #define __BYTE_ORDER__              __ORDER_LITTLE_ENDIAN__
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+#define __ORDER_LITTLE_ENDIAN__     1
+#define __ORDER_BIG_ENDIAN__        0
+#define __BYTE_ORDER__              __ORDER_LITTLE_ENDIAN__
 #else
 #define __ORDER_LITTLE_ENDIAN__     0
 #define __ORDER_BIG_ENDIAN__        1
