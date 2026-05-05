@@ -92,3 +92,19 @@ builds/cmake-check/
 AGENTS.md
 stash-backups/
 
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+*.iml
+.idea/
+android/.gradle/
+android/local.properties
+android/app/debug
+android/app/profile
+android/app/release
+android/.metadata
+
