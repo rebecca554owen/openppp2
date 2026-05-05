@@ -547,7 +547,9 @@ namespace ppp {
              */
             if (rst) {
                 ppp::telemetry::Log(Level::kInfo, "vnetstack", "link input error: unresolved mapping");
-                this->RST(ip, tcp, tcp_len);
+                if (!(flags & TcpFlags::TCP_RST)) {
+                    this->RST(ip, tcp, tcp_len);
+                }
                 return false;
             }
 
@@ -570,7 +572,6 @@ namespace ppp {
                  * are not link faults.
                  */
                 if (prev_state == TcpState::TCP_STATE_ESTABLISHED) {
-                    ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordFault();
                     ppp::telemetry::Count("vnetstack.unexpected_rst", 1);
                     ppp::telemetry::Log(Level::kInfo, "vnetstack", "unexpected RST on established connection");
                 }
