@@ -25,6 +25,7 @@ namespace ppp
             void                                                                    Finalize() noexcept;
             void                                                                    ArmWatchdog() noexcept;
             void                                                                    OnWatchdogTick() noexcept;
+            bool                                                                    RebuildListener() noexcept;
 
         private:
             std::shared_ptr<boost::asio::ip::tcp::acceptor>                         server_;
@@ -33,6 +34,9 @@ namespace ppp
             std::atomic<uint64_t>                                                   last_event_tick_ = { 0 };
             std::atomic<uint64_t>                                                   pending_since_tick_ = { 0 };
             std::atomic<bool>                                                       disposed_ = { false };
+            boost::asio::ip::address                                                bound_address_;
+            int                                                                     bound_port_ = 0;
+            int                                                                     bound_backlog_ = 0;
             bool                                                                    in_      = false;
         };
     }

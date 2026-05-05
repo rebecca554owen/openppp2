@@ -120,12 +120,14 @@ namespace ppp
 
             bool any = false;
             boost::asio::ip::address bind_ips[] = { address, boost::asio::ip::address_v4::any(), boost::asio::ip::address_v6::any() };
+            boost::asio::ip::address bound_ip;
             for (boost::asio::ip::address& bind_ip : bind_ips)
             {
                 any = Socket::OpenAcceptor(*server_, bind_ip, localPort, backlog, false, false);
                 if (any)
                 {
                     in_ = bind_ip.is_v4();
+                    bound_ip = bind_ip;
                     break;
                 }
 
@@ -140,6 +142,15 @@ namespace ppp
             {
                 return false;
             }
+
+            /**
+             * @brief Remember the bind parameters so the watchdog can rebuild the
+             *        listener with identical bind() arguments when the kqueue reactor
+             *        wedges the fd in a non-reportable state.
+             */
+            bound_address_ = bound_ip;
+            bound_port_ = localPort;
+            bound_backlog_ = backlog;
 
             uint64_t now_ms = UnixAcceptor_NowMs();
             last_event_tick_.store(now_ms, std::memory_order_release);
@@ -402,16 +413,18 @@ namespace ppp
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog stall detected silence_ms=%llu pending_since=%llu last_event=%llu fd=%d", (unsigned long long)silence_ms, (unsigned long long)pending_since, (unsigned long long)last_event, server->native_handle());
 
                 /**
-                 * @brief Cancel the pending async_accept so its handler runs with
-                 *        operation_aborted, which branches into Next() and re-registers
-                 *        the readable event with the reactor. This does NOT close the fd.
+                 * @brief Observed on macOS: once the kqueue reactor stops reporting
+                 *        readable for the listener fd, simply cancelling the pending
+                 *        async_accept is NOT enough. The subsequent re-registered
+                 *        async_accept never fires either. The only reliable recovery
+                 *        is to destroy the current acceptor and create a fresh one
+                 *        bound to the same port. SO_REUSEADDR is set on the listener
+                 *        so re-binding the same port succeeds.
                  */
-                boost::system::error_code ec;
-                server->cancel(ec);
-                if (ec)
+                if (!RebuildListener())
                 {
-                    ppp::telemetry::Count("socket_acceptor.watchdog.cancel_error", 1);
-                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog cancel error=%d message=%s", ec.value(), ec.message().c_str());
+                    ppp::telemetry::Count("socket_acceptor.watchdog.rebuild_failed", 1);
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog rebuild failed, keeping old acceptor");
                 }
 
                 /**
@@ -422,6 +435,57 @@ namespace ppp
             }
 
             ArmWatchdog();
+        }
+
+        bool UnixSocketAcceptor::RebuildListener() noexcept
+        {
+            std::shared_ptr<boost::asio::io_context> context = context_;
+            if (NULLPTR == context)
+            {
+                return false;
+            }
+
+            if (bound_port_ <= 0)
+            {
+                return false;
+            }
+
+            std::shared_ptr<boost::asio::ip::tcp::acceptor> old_server = std::move(server_);
+            if (NULLPTR != old_server)
+            {
+                Socket::Closesocket(old_server);
+            }
+
+            std::shared_ptr<boost::asio::ip::tcp::acceptor> new_server = make_shared_object<boost::asio::ip::tcp::acceptor>(*context);
+            if (NULLPTR == new_server)
+            {
+                return false;
+            }
+
+            if (!Socket::OpenAcceptor(*new_server, bound_address_, bound_port_, bound_backlog_, false, false))
+            {
+                boost::system::error_code ec_close;
+                new_server->close(ec_close);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuild OpenAcceptor failed port=%d", bound_port_);
+                return false;
+            }
+
+            server_ = new_server;
+
+            ppp::telemetry::Count("socket_acceptor.watchdog.rebuild", 1);
+            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuilt listener new_fd=%d port=%d", new_server->native_handle(), bound_port_);
+
+            /**
+             * @brief Arm a fresh async_accept on the new listener. Without this the
+             *        rebuilt acceptor never pumps the accept loop again.
+             */
+            if (!Next())
+            {
+                ppp::telemetry::Count("socket_acceptor.watchdog.next_after_rebuild_failed", 1);
+                return false;
+            }
+
+            return true;
         }
     }
 }
