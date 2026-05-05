@@ -143,13 +143,21 @@ namespace ppp
                 return false;
             }
 
+            boost::system::error_code ec_endpoint;
+            boost::asio::ip::tcp::endpoint endpoint = server_->local_endpoint(ec_endpoint);
+            if (ec_endpoint || endpoint.port() <= 0)
+            {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept open local endpoint failed error=%d port=%d", ec_endpoint.value(), ec_endpoint ? -1 : endpoint.port());
+                return false;
+            }
+
             /**
              * @brief Remember the bind parameters so the watchdog can rebuild the
              *        listener with identical bind() arguments when the kqueue reactor
              *        wedges the fd in a non-reportable state.
              */
             bound_address_ = bound_ip;
-            bound_port_ = localPort;
+            bound_port_ = endpoint.port();
             bound_backlog_ = backlog;
 
             uint64_t now_ms = UnixAcceptor_NowMs();
@@ -464,7 +472,7 @@ namespace ppp
                     }
                 }
 
-                if (!recovered)
+                if (!recovered && pending_since == 0)
                 {
                     /**
                      * @brief Reset so the next tick starts a fresh silence window.
@@ -482,17 +490,35 @@ namespace ppp
             std::shared_ptr<boost::asio::io_context> context = context_;
             if (NULLPTR == context)
             {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuild failed: context missing");
                 return false;
             }
 
             if (bound_port_ <= 0)
             {
-                return false;
+                std::shared_ptr<boost::asio::ip::tcp::acceptor> server = server_;
+                if (NULLPTR != server && server->is_open())
+                {
+                    boost::system::error_code ec_endpoint;
+                    boost::asio::ip::tcp::endpoint endpoint = server->local_endpoint(ec_endpoint);
+                    if (!ec_endpoint && endpoint.port() > 0)
+                    {
+                        bound_port_ = endpoint.port();
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuild recovered bound port=%d", bound_port_);
+                    }
+                }
+
+                if (bound_port_ <= 0)
+                {
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuild failed: bound port missing");
+                    return false;
+                }
             }
 
             std::shared_ptr<boost::asio::ip::tcp::acceptor> new_server = make_shared_object<boost::asio::ip::tcp::acceptor>(*context);
             if (NULLPTR == new_server)
             {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuild failed: acceptor allocation failed");
                 return false;
             }
 
