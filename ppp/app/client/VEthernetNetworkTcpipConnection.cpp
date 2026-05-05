@@ -169,7 +169,7 @@ namespace ppp {
                     if (rinetd_status < 1) {
                         if (rinetd_status < 0) {
                             ppp::telemetry::Count("tcpip.peer_connect.fail.rinetd", 1);
-                            ppp::telemetry::Log(Level::kInfo, "tcpip", "peer connect failed: stage=rinetd remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=rinetd remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                             if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                             }
@@ -181,7 +181,7 @@ namespace ppp {
                     if (mux_status < 1) {
                         if (mux_status < 0) {
                             ppp::telemetry::Count("tcpip.peer_connect.fail.mux", 1);
-                            ppp::telemetry::Log(Level::kInfo, "tcpip", "peer connect failed: stage=mux remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=mux remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                             if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                             }
@@ -192,7 +192,7 @@ namespace ppp {
                     std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger->ConnectTransmission(context, strand, y);
                     if (NULLPTR == transmission) {
                         ppp::telemetry::Count("tcpip.peer_connect.fail.transport", 1);
-                        ppp::telemetry::Log(Level::kInfo, "tcpip", "peer connect failed: stage=transport remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=transport remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         return false;
                     }
@@ -215,7 +215,7 @@ namespace ppp {
                     bool ok = connection->Connect(y, transmission, ppp::net::Ipep::ToAddressString<ppp::string>(remoteEP), remoteEP.port());
                     if (!ok) {
                         ppp::telemetry::Count("tcpip.peer_connect.fail.vpn", 1);
-                        ppp::telemetry::Log(Level::kInfo, "tcpip", "peer connect failed: stage=vpn remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=vpn remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                         IDisposable::DisposeReferences(connection, transmission);
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                         return false;
