@@ -223,6 +223,14 @@ namespace ppp
             server->async_accept(*socket,
                 [self, this, server, socket](boost::system::error_code ec) noexcept
                 {
+                    std::shared_ptr<boost::asio::ip::tcp::acceptor> current_server = server_;
+                    if (server != current_server)
+                    {
+                        ppp::telemetry::Count("socket_acceptor.accept.stale", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept stale callback ec=%d old_fd=%d current_fd=%d", ec.value(), server->native_handle(), NULLPTR == current_server ? -1 : current_server->native_handle());
+                        return;
+                    }
+
                     uint64_t now_ms = UnixAcceptor_NowMs();
                     last_event_tick_.store(now_ms, std::memory_order_release);
                     pending_since_tick_.store(0, std::memory_order_release);
@@ -372,6 +380,12 @@ namespace ppp
             std::shared_ptr<boost::asio::ip::tcp::acceptor> server = server_;
             if (NULLPTR == server || !server->is_open())
             {
+                if (!RebuildListener())
+                {
+                    ppp::telemetry::Count("socket_acceptor.watchdog.rebuild_failed", 1);
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog rebuild failed");
+                }
+                ArmWatchdog();
                 return;
             }
 
@@ -412,6 +426,22 @@ namespace ppp
                 ppp::telemetry::Count("socket_acceptor.watchdog.stall", 1);
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog stall detected silence_ms=%llu pending_since=%llu last_event=%llu fd=%d", (unsigned long long)silence_ms, (unsigned long long)pending_since, (unsigned long long)last_event, server->native_handle());
 
+                bool recovered = false;
+                if (pending_since == 0)
+                {
+                    if (Next())
+                    {
+                        recovered = true;
+                        ppp::telemetry::Count("socket_acceptor.watchdog.idle_next", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog rearmed idle accept fd=%d", server->native_handle());
+                    }
+                    else
+                    {
+                        ppp::telemetry::Count("socket_acceptor.watchdog.idle_next_failed", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog idle rearm failed fd=%d", server->native_handle());
+                    }
+                }
+
                 /**
                  * @brief Observed on macOS: once the kqueue reactor stops reporting
                  *        readable for the listener fd, simply cancelling the pending
@@ -421,17 +451,27 @@ namespace ppp
                  *        bound to the same port. SO_REUSEADDR is set on the listener
                  *        so re-binding the same port succeeds.
                  */
-                if (!RebuildListener())
+                if (!recovered)
                 {
-                    ppp::telemetry::Count("socket_acceptor.watchdog.rebuild_failed", 1);
-                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog rebuild failed, keeping old acceptor");
+                    if (RebuildListener())
+                    {
+                        recovered = true;
+                    }
+                    else
+                    {
+                        ppp::telemetry::Count("socket_acceptor.watchdog.rebuild_failed", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog rebuild failed");
+                    }
                 }
 
-                /**
-                 * @brief Reset so the next tick starts a fresh silence window.
-                 */
-                last_event_tick_.store(now_ms, std::memory_order_release);
-                pending_since_tick_.store(0, std::memory_order_release);
+                if (!recovered)
+                {
+                    /**
+                     * @brief Reset so the next tick starts a fresh silence window.
+                     */
+                    last_event_tick_.store(now_ms, std::memory_order_release);
+                    pending_since_tick_.store(0, std::memory_order_release);
+                }
             }
 
             ArmWatchdog();
@@ -456,6 +496,12 @@ namespace ppp
                 return false;
             }
 
+            std::shared_ptr<boost::asio::ip::tcp::acceptor> old_server = std::move(server_);
+            if (NULLPTR != old_server)
+            {
+                Socket::Closesocket(old_server);
+            }
+
             if (!Socket::OpenAcceptor(*new_server, bound_address_, bound_port_, bound_backlog_, false, false))
             {
                 boost::system::error_code ec_close;
@@ -474,13 +520,7 @@ namespace ppp
                 return false;
             }
 
-            std::shared_ptr<boost::asio::ip::tcp::acceptor> old_server = server_;
             server_ = new_server;
-
-            if (NULLPTR != old_server)
-            {
-                Socket::Closesocket(old_server);
-            }
 
             ppp::telemetry::Count("socket_acceptor.watchdog.rebuild", 1);
             ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuilt listener new_fd=%d port=%d", new_server->native_handle(), bound_port_);
