@@ -450,12 +450,6 @@ namespace ppp
                 return false;
             }
 
-            std::shared_ptr<boost::asio::ip::tcp::acceptor> old_server = std::move(server_);
-            if (NULLPTR != old_server)
-            {
-                Socket::Closesocket(old_server);
-            }
-
             std::shared_ptr<boost::asio::ip::tcp::acceptor> new_server = make_shared_object<boost::asio::ip::tcp::acceptor>(*context);
             if (NULLPTR == new_server)
             {
@@ -470,7 +464,23 @@ namespace ppp
                 return false;
             }
 
+            boost::system::error_code ec_endpoint;
+            boost::asio::ip::tcp::endpoint endpoint = new_server->local_endpoint(ec_endpoint);
+            if (ec_endpoint || endpoint.port() != (unsigned short)bound_port_)
+            {
+                boost::system::error_code ec_close;
+                new_server->close(ec_close);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuild bound wrong port expected=%d actual=%d error=%d", bound_port_, ec_endpoint ? -1 : endpoint.port(), ec_endpoint.value());
+                return false;
+            }
+
+            std::shared_ptr<boost::asio::ip::tcp::acceptor> old_server = server_;
             server_ = new_server;
+
+            if (NULLPTR != old_server)
+            {
+                Socket::Closesocket(old_server);
+            }
 
             ppp::telemetry::Count("socket_acceptor.watchdog.rebuild", 1);
             ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept rebuilt listener new_fd=%d port=%d", new_server->native_handle(), bound_port_);

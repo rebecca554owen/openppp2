@@ -1116,6 +1116,14 @@ namespace ppp {
             ppp::net::Socket::SetSignalPipeline(handle, false);
             ppp::net::Socket::ReuseSocketAddress(handle, true);
 
+#if defined(__APPLE__) && defined(SO_REUSEPORT)
+            int reuse_port = 1;
+            if (0 != ::setsockopt(handle, SOL_SOCKET, SO_REUSEPORT, (char*)&reuse_port, sizeof(reuse_port))) {
+                Closesocket(acceptor_);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            }
+#endif
+
             acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
             if (ec) {
                 Closesocket(acceptor_);  // Clean up opened acceptor
