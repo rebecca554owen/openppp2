@@ -160,9 +160,21 @@ namespace ppp {
             auto key = LAN2WAN_KEY(src_ip, src_port, dst_ip, dst_port);
             std::shared_ptr<TapTcpLink> link = this->FindTcpLink(key);
             if (NULLPTR != link) {
-                return link;
+                std::shared_ptr<TapTcpClient> socket = std::atomic_load(&link->socket);
+                TcpState state = (TcpState)link->state.load(std::memory_order_relaxed);
+                bool stale_link = link->closed.load(std::memory_order_acquire) || state == TcpState::TCP_STATE_CLOSED || (NULLPTR != socket && socket->IsDisposed());
+                if (!stale_link) {
+                    return link;
+                }
+
+                ppp::telemetry::Count("vnetstack.native_accept.stale", 1);
+                ppp::telemetry::Log(Level::kInfo, "vnetstack", "native accept stale link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)state, link->closed.load(std::memory_order_relaxed) ? 1 : 0);
+                this->CloseTcpLink(link);
+                link = NULLPTR;
             }
-            else {
+
+            std::shared_ptr<TapTcpLink> stale;
+            {
                 int newPort = 0;
                 SynchronizedObjectScope scope(syncobj_);
 
@@ -179,6 +191,25 @@ namespace ppp {
                     auto existing_tail = lan2wan_.find(key);
                     if (existing_tail != lan2wan_.end()) {
                         link = existing_tail->second;
+                        if (NULLPTR != link) {
+                            std::shared_ptr<TapTcpClient> socket = std::atomic_load(&link->socket);
+                            TcpState state = (TcpState)link->state.load(std::memory_order_relaxed);
+                            bool closed = link->closed.load(std::memory_order_acquire);
+                            bool stale_link = closed || state == TcpState::TCP_STATE_CLOSED || (NULLPTR != socket && socket->IsDisposed());
+                            if (stale_link) {
+                                ppp::telemetry::Count("vnetstack.native_accept.stale", 1);
+                                ppp::telemetry::Log(Level::kInfo, "vnetstack", "native accept stale link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)state, closed ? 1 : 0);
+
+                                auto tail_wan2lan = wan2lan_.find(Int128(link->natPort));
+                                if (tail_wan2lan != wan2lan_.end() && tail_wan2lan->second == link) {
+                                    wan2lan_.erase(tail_wan2lan);
+                                }
+
+                                lan2wan_.erase(existing_tail);
+                                stale = link;
+                                link = NULLPTR;
+                            }
+                        }
                     }
                 }
 
@@ -223,6 +254,10 @@ namespace ppp {
                         }
                     }
                 }
+            }
+
+            if (NULLPTR != stale) {
+                stale->Release();
             }
 
             if (NULLPTR != link) {
@@ -536,6 +571,7 @@ namespace ppp {
                     ppp::telemetry::Log(Level::kDebug, "vnetstack", "TCP connect begin local=%s:%u remote=%s:%u", localEP.address().to_string().c_str(), localEP.port(), remoteEP.address().to_string().c_str(), remoteEP.port());
                     rst = false;
                     c->link_ = link;
+                    c->owner_ = shared_from_this();
                     std::atomic_store(&link->socket, c);
 
                     ip->src = tap->GatewayServer;
@@ -625,7 +661,12 @@ namespace ppp {
                 }
             }
 
-            return this->Output(lan2wan, ip, tcp, tcp_len, c.get());
+            bool output = this->Output(lan2wan, ip, tcp, tcp_len, c.get());
+            if ((flags & TcpFlags::TCP_RST) && NULLPTR != link && !link->lwip) {
+                this->CloseTcpLink(link);
+            }
+
+            return output;
         }
 
         /**
@@ -1141,6 +1182,7 @@ namespace ppp {
 
             socket->lwip_ = key;
             socket->link_ = link;
+            socket->owner_ = shared_from_this();
 
 #ifdef SYSNAT
             for (SynchronizedObjectScope _(socket->sysnat_synbobj_);;) {
@@ -1272,16 +1314,19 @@ namespace ppp {
 
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
             std::shared_ptr<TapTcpLink> link = std::move(link_);
+            std::shared_ptr<VNetstack> owner = owner_.lock();
+            owner_.reset();
 
             if (NULLPTR != socket) {
                 Socket::Closesocket(socket);
             }
 
             if (NULLPTR != link) {
-                if (lwip_) {
+                bool closed_by_owner = NULLPTR != owner && owner->CloseTcpLink(link);
+                if (!closed_by_owner && lwip_) {
                     link->Release();
                 }
-                else {
+                elif(!closed_by_owner) {
                     link->Closing();
                 }
             }

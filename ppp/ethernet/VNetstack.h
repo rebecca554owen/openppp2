@@ -210,6 +210,7 @@ namespace ppp {
                 std::shared_ptr<boost::asio::ip::tcp::socket>               socket_;
                 /** @brief Owning NAT flow link entry. */
                 std::shared_ptr<TapTcpLink>                                 link_;
+                std::weak_ptr<VNetstack>                                    owner_;
 
                 /**
                  * @note  These fields MUST be accessed exclusively via `std::atomic_load` /

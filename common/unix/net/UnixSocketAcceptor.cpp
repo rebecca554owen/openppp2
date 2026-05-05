@@ -1,6 +1,7 @@
 #include <ppp/net/SocketAcceptor.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/Socket.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/threading/Executors.h>
 #include <common/unix/net/UnixSocketAcceptor.h>
 
@@ -133,6 +134,10 @@ namespace ppp
             {
                 return false;
             }
+            else if (!server->is_open())
+            {
+                return false;
+            }
 
             std::shared_ptr<boost::asio::io_context> context = context_;
             if (NULLPTR == context)
@@ -152,6 +157,13 @@ namespace ppp
                 {
                     if (ec == boost::system::errc::operation_canceled) /* WSAWaitForMultipleEvents */
                     {
+                        return;
+                    }
+                    else if (ec)
+                    {
+                        ppp::telemetry::Count("socket_acceptor.accept.error", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept failed error=%d message=%s", ec.value(), ec.message().c_str());
+                        Next();
                         return;
                     }
 
