@@ -112,7 +112,7 @@ namespace ppp
                 }
             }
 
-            accept_parallel_ = std::max<int>(1, std::min<int>(backlog, 32));
+            accept_parallel_ = 1;
             for (int i = 0; any && i < accept_parallel_; i++)
             {
                 any = Next();

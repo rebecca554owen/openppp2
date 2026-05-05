@@ -352,6 +352,12 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
             else {
+                std::shared_ptr<VNetstack> self = shared_from_this();
+                acceptor->AcceptSocket =
+                    [self](SocketAcceptor*, SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
+                        self->ProcessAcceptSocket(e.Socket);
+                    };
+
                 ppp::string bindIP = ppp::net::Ipep::ToAddressString<ppp::string>(boost::asio::ip::address_v4::any());
                 if (!acceptor->Open(bindIP.data(), localPort, PPP_LISTEN_BACKLOG)) {
                     acceptor->Dispose();
@@ -368,12 +374,6 @@ namespace ppp {
                     listenPort_.store(listenEP_.Port, std::memory_order_release);
                 }
             }
-
-            std::shared_ptr<VNetstack> self = shared_from_this();
-            acceptor->AcceptSocket =
-                [self](SocketAcceptor*, SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
-                    self->ProcessAcceptSocket(e.Socket);
-                };
 
             lwip_ = lwip;
             acceptor_ = acceptor;
