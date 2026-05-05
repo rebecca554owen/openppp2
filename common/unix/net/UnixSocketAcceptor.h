@@ -1,8 +1,5 @@
 #pragma once
 
-#include <atomic>
-#include <mutex>
-
 #include <ppp/net/SocketAcceptor.h>
 
 namespace ppp
@@ -28,9 +25,6 @@ namespace ppp
         private:
             std::shared_ptr<boost::asio::ip::tcp::acceptor>                         server_;
             std::shared_ptr<boost::asio::io_context>                                context_ = NULLPTR;
-            std::mutex                                                              accept_mutex_;
-            std::atomic<int>                                                        accept_pending_ = { 0 };
-            int                                                                     accept_parallel_ = 1;
             bool                                                                    in_      = false;
         };
     }
