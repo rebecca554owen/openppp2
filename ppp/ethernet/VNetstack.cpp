@@ -457,6 +457,10 @@ namespace ppp {
 
             ppp::telemetry::Count("vnetstack.input", 1);
             TcpFlags flags = (TcpFlags)tcp_hdr::TCPH_FLAGS(tcp);
+            UInt32 original_src_addr = ip->src;
+            UInt32 original_dst_addr = ip->dest;
+            UInt16 original_src_port = tcp->src;
+            UInt16 original_dst_port = tcp->dest;
             bool lan2wan = true;
             bool rst = true;
             std::shared_ptr<TapTcpLink> link;
@@ -622,7 +626,7 @@ namespace ppp {
                 }
                 else {
                     ppp::telemetry::Count("vnetstack.rst_pre_established", 1);
-                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "RST in non-established state lan=%s:%u wan=%s:%u prev_state=%u flags=0x%02x lwip=%s", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)prev_state, (unsigned int)flags, link->lwip ? "yes" : "no");
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "RST in non-established state lan=%s:%u wan=%s:%u prev_state=%u flags=0x%02x lwip=%s dir=%s pkt_src=%s:%u pkt_dst=%s:%u", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->srcAddr, ntohs(link->srcPort)).address().to_string().c_str(), ntohs(link->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(link->dstAddr, ntohs(link->dstPort)).address().to_string().c_str(), ntohs(link->dstPort), (unsigned int)prev_state, (unsigned int)flags, link->lwip ? "yes" : "no", lan2wan ? "lan2wan" : "wan2lan", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(original_src_addr, ntohs(original_src_port)).address().to_string().c_str(), ntohs(original_src_port), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(original_dst_addr, ntohs(original_dst_port)).address().to_string().c_str(), ntohs(original_dst_port));
                 }
             }
             elif((flags & TcpFlags::TCP_SYN) && (flags & TcpFlags::TCP_ACK)) {
@@ -942,6 +946,8 @@ namespace ppp {
          * @brief Resolves accepted socket to pending flow and finalizes accept.
          */
         bool VNetstack::ProcessAcceptSocket(int sockfd) noexcept {
+            ppp::telemetry::Count("vnetstack.accept.entry", 1);
+            ppp::telemetry::Log(Level::kDebug, "vnetstack", "accept entry sockfd=%d", sockfd);
             std::shared_ptr<boost::asio::ip::tcp::socket> socket;
             std::shared_ptr<TapTcpLink> link;
             std::shared_ptr<TapTcpClient> pcb;

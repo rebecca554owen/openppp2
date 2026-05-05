@@ -132,22 +132,30 @@ namespace ppp
             std::shared_ptr<boost::asio::ip::tcp::acceptor> server = server_;
             if (NULLPTR == server)
             {
+                ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: server missing");
                 return false;
             }
             else if (!server->is_open())
             {
+                ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: server closed");
                 return false;
             }
 
             std::shared_ptr<boost::asio::io_context> context = context_;
             if (NULLPTR == context)
             {
+                ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: context missing");
                 return false;
             }
 
             std::shared_ptr<boost::asio::ip::tcp::socket> socket = make_shared_object<boost::asio::ip::tcp::socket>(*context);
             if (NULLPTR == socket)
             {
+                ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed: socket allocation failed");
                 return false;
             }
 
@@ -155,15 +163,21 @@ namespace ppp
             server->async_accept(*socket, 
                 [self, this, server, socket](boost::system::error_code ec) noexcept
                 {
+                    ppp::telemetry::Count("socket_acceptor.accept.complete", 1);
                     if (ec == boost::system::errc::operation_canceled) /* WSAWaitForMultipleEvents */
                     {
+                        ppp::telemetry::Count("socket_acceptor.accept.canceled", 1);
                         return;
                     }
                     else if (ec)
                     {
                         ppp::telemetry::Count("socket_acceptor.accept.error", 1);
                         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept failed error=%d message=%s", ec.value(), ec.message().c_str());
-                        Next();
+                        if (!Next())
+                        {
+                            ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed after error");
+                        }
                         return;
                     }
 
@@ -179,6 +193,8 @@ namespace ppp
 #endif
                     if (ec)
                     {
+                        ppp::telemetry::Count("socket_acceptor.accept.release_error", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept release failed error=%d message=%s", ec.value(), ec.message().c_str());
                         sockfd = -1;
                     }
                     else
@@ -190,13 +206,18 @@ namespace ppp
                     }
 
                     Socket::Closesocket(socket);
+                    if (!Next())
+                    {
+                        ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept next failed after accept");
+                    }
+
                     if (sockfd != -1)
                     {
+                        ppp::telemetry::Count("socket_acceptor.accept.raw", 1);
                         AcceptSocketEventArgs e = { sockfd };
                         OnAcceptSocket(e);
                     }
-
-                    Next();
                 });
             return true;
         }
