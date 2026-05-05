@@ -155,6 +155,8 @@ namespace ppp
                 return false;
             }
 
+            ppp::telemetry::Count("socket_acceptor.next.success", 1);
+
             std::shared_ptr<boost::asio::io_context> context = context_;
             if (NULLPTR == context)
             {
@@ -187,10 +189,15 @@ namespace ppp
                 }
 
                 accept_pending_.fetch_add(1, std::memory_order_acq_rel);
+                int pending_after = accept_pending_.load(std::memory_order_acquire);
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept scheduled, pending=%d fd=%d", pending_after, server->native_handle());
                 server->async_accept(*socket,
                     [self, this, server, socket](boost::system::error_code ec) noexcept
                     {
+                        int pending_before = accept_pending_.load(std::memory_order_acquire);
                         accept_pending_.fetch_sub(1, std::memory_order_acq_rel);
+                        int pending_after = accept_pending_.load(std::memory_order_acquire);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept callback, ec=%d pending_before=%d pending_after=%d fd=%d", ec.value(), pending_before, pending_after, server->native_handle());
                         if (ec == boost::system::errc::operation_canceled) /* WSAWaitForMultipleEvents */
                         {
                             ppp::telemetry::Count("socket_acceptor.accept.canceled", 1);
@@ -199,7 +206,7 @@ namespace ppp
                         else if (ec)
                         {
                             ppp::telemetry::Count("socket_acceptor.accept.error", 1);
-                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept failed error=%d message=%s", ec.value(), ec.message().c_str());
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept failed error=%d message=%s pending=%d fd=%d", ec.value(), ec.message().c_str(), pending_after, server->native_handle());
                             if (!Next())
                             {
                                 ppp::telemetry::Count("socket_acceptor.next.fail", 1);
@@ -235,7 +242,7 @@ namespace ppp
                         if (!Next())
                         {
                             ppp::telemetry::Count("socket_acceptor.next.fail", 1);
-                            ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed after accept");
+                            ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed after accept, pending=%d fd=%d", pending_after, server->native_handle());
                         }
 
                         if (sockfd != -1)
@@ -243,6 +250,10 @@ namespace ppp
                             ppp::telemetry::Count("socket_acceptor.accept.raw", 1);
                             AcceptSocketEventArgs e = { sockfd };
                             OnAcceptSocket(e);
+                        }
+                        else
+                        {
+                            ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept sockfd=-1 after release, pending=%d fd=%d", pending_after, server->native_handle());
                         }
                     });
             }
