@@ -1,3 +1,5 @@
+#include <chrono>
+
 #include <ppp/net/SocketAcceptor.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/Socket.h>
@@ -5,10 +7,35 @@
 #include <ppp/threading/Executors.h>
 #include <common/unix/net/UnixSocketAcceptor.h>
 
+/**
+ * @brief Interval between watchdog ticks. Runs on the same io_context as the acceptor.
+ */
+static constexpr int PPP_UNIX_ACCEPTOR_WATCHDOG_INTERVAL_MS = 5000;
+
+/**
+ * @brief Maximum silence window between accept callbacks before the watchdog
+ *        treats the pending async_accept as stalled and cancels it to force
+ *        the kqueue reactor to re-register the readable event.
+ *
+ * On macOS we observe the boost.asio kqueue reactor silently dropping readable
+ * notifications for the listener fd after roughly 60s under load, even though
+ * the underlying socket remains open and the io_context is healthy. Cancelling
+ * the pending async_accept drives the handler to run with operation_aborted
+ * which triggers a fresh Next() that re-arms the event.
+ */
+static constexpr int PPP_UNIX_ACCEPTOR_STALL_THRESHOLD_MS = 15000;
+
 namespace ppp
 {
     namespace net
     {
+        /** @brief Returns the current steady clock in milliseconds since process start. */
+        static uint64_t UnixAcceptor_NowMs() noexcept
+        {
+            return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
         UnixSocketAcceptor::UnixSocketAcceptor() noexcept
             : server_(NULLPTR)
             , context_(ppp::threading::Executors::GetDefault())
@@ -109,11 +136,28 @@ namespace ppp
                 }
             }
 
-            return any && Next();
+            if (!any)
+            {
+                return false;
+            }
+
+            uint64_t now_ms = UnixAcceptor_NowMs();
+            last_event_tick_.store(now_ms, std::memory_order_release);
+            pending_since_tick_.store(0, std::memory_order_release);
+
+            if (!Next())
+            {
+                return false;
+            }
+
+            ArmWatchdog();
+            return true;
         }
 
         void UnixSocketAcceptor::Dispose() noexcept
         {
+            disposed_.store(true, std::memory_order_release);
+
             std::shared_ptr<boost::asio::io_context> context = context_;
             if (NULLPTR != context)
             {
@@ -162,14 +206,33 @@ namespace ppp
             ppp::telemetry::Count("socket_acceptor.next.success", 1);
             ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept scheduled fd=%d", server->native_handle());
 
+            pending_since_tick_.store(UnixAcceptor_NowMs(), std::memory_order_release);
+
             std::shared_ptr<SocketAcceptor> self = shared_from_this();
             server->async_accept(*socket,
                 [self, this, server, socket](boost::system::error_code ec) noexcept
                 {
+                    uint64_t now_ms = UnixAcceptor_NowMs();
+                    last_event_tick_.store(now_ms, std::memory_order_release);
+                    pending_since_tick_.store(0, std::memory_order_release);
+
                     ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept callback ec=%d fd=%d", ec.value(), server->native_handle());
                     if (ec == boost::system::errc::operation_canceled) /* WSAWaitForMultipleEvents */
                     {
                         ppp::telemetry::Count("socket_acceptor.accept.canceled", 1);
+                        /**
+                         * @brief Watchdog-driven cancels intentionally re-arm the loop so the
+                         *        kqueue reactor re-registers the readable event. Only skip the
+                         *        re-arm when the acceptor itself is being disposed.
+                         */
+                        if (!disposed_.load(std::memory_order_acquire) && server->is_open())
+                        {
+                            if (!Next())
+                            {
+                                ppp::telemetry::Count("socket_acceptor.next.fail", 1);
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "socket_acceptor", "unix accept next failed after canceled");
+                            }
+                        }
                         return;
                     }
                     else if (ec)
@@ -228,12 +291,137 @@ namespace ppp
 
         void UnixSocketAcceptor::Finalize() noexcept
         {
+            disposed_.store(true, std::memory_order_release);
+
+            std::shared_ptr<boost::asio::steady_timer> watchdog = std::move(watchdog_);
+            if (NULLPTR != watchdog)
+            {
+                boost::system::error_code ec;
+                watchdog->cancel(ec);
+            }
+
             std::shared_ptr<boost::asio::ip::tcp::acceptor> server = std::move(server_);
             if (NULLPTR != server)
             {
                 Socket::Closesocket(server);
             }
             context_.reset();
+        }
+
+        void UnixSocketAcceptor::ArmWatchdog() noexcept
+        {
+            if (disposed_.load(std::memory_order_acquire))
+            {
+                return;
+            }
+
+            std::shared_ptr<boost::asio::io_context> context = context_;
+            if (NULLPTR == context)
+            {
+                return;
+            }
+
+            std::shared_ptr<boost::asio::steady_timer> watchdog = watchdog_;
+            if (NULLPTR == watchdog)
+            {
+                watchdog = make_shared_object<boost::asio::steady_timer>(*context);
+                if (NULLPTR == watchdog)
+                {
+                    return;
+                }
+                watchdog_ = watchdog;
+            }
+
+            boost::system::error_code ec;
+            watchdog->expires_after(std::chrono::milliseconds(PPP_UNIX_ACCEPTOR_WATCHDOG_INTERVAL_MS));
+            if (ec)
+            {
+                return;
+            }
+
+            std::shared_ptr<SocketAcceptor> self = shared_from_this();
+            watchdog->async_wait(
+                [self, this](const boost::system::error_code& ec2) noexcept
+                {
+                    if (ec2)
+                    {
+                        return;
+                    }
+                    OnWatchdogTick();
+                });
+        }
+
+        void UnixSocketAcceptor::OnWatchdogTick() noexcept
+        {
+            if (disposed_.load(std::memory_order_acquire))
+            {
+                return;
+            }
+
+            std::shared_ptr<boost::asio::ip::tcp::acceptor> server = server_;
+            if (NULLPTR == server || !server->is_open())
+            {
+                return;
+            }
+
+            uint64_t now_ms = UnixAcceptor_NowMs();
+            uint64_t pending_since = pending_since_tick_.load(std::memory_order_acquire);
+            uint64_t last_event = last_event_tick_.load(std::memory_order_acquire);
+
+            /**
+             * @brief Detect two distinct stalls:
+             *        1) A pending async_accept has been outstanding for longer than the
+             *           stall threshold without any callback.
+             *        2) No accept scheduling has happened at all (pending_since=0) for
+             *           longer than the stall threshold while the server is still open
+             *           -- this is the "silent idle" state that should never persist
+             *           when the caller expects continuous accepts.
+             */
+            bool stalled = false;
+            uint64_t silence_ms = 0;
+            if (pending_since != 0)
+            {
+                silence_ms = now_ms - pending_since;
+                if (silence_ms >= (uint64_t)PPP_UNIX_ACCEPTOR_STALL_THRESHOLD_MS)
+                {
+                    stalled = true;
+                }
+            }
+            else if (last_event != 0)
+            {
+                silence_ms = now_ms - last_event;
+                if (silence_ms >= (uint64_t)PPP_UNIX_ACCEPTOR_STALL_THRESHOLD_MS)
+                {
+                    stalled = true;
+                }
+            }
+
+            if (stalled)
+            {
+                ppp::telemetry::Count("socket_acceptor.watchdog.stall", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog stall detected silence_ms=%llu pending_since=%llu last_event=%llu fd=%d", (unsigned long long)silence_ms, (unsigned long long)pending_since, (unsigned long long)last_event, server->native_handle());
+
+                /**
+                 * @brief Cancel the pending async_accept so its handler runs with
+                 *        operation_aborted, which branches into Next() and re-registers
+                 *        the readable event with the reactor. This does NOT close the fd.
+                 */
+                boost::system::error_code ec;
+                server->cancel(ec);
+                if (ec)
+                {
+                    ppp::telemetry::Count("socket_acceptor.watchdog.cancel_error", 1);
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "socket_acceptor", "unix accept watchdog cancel error=%d message=%s", ec.value(), ec.message().c_str());
+                }
+
+                /**
+                 * @brief Reset so the next tick starts a fresh silence window.
+                 */
+                last_event_tick_.store(now_ms, std::memory_order_release);
+                pending_since_tick_.store(0, std::memory_order_release);
+            }
+
+            ArmWatchdog();
         }
     }
 }
