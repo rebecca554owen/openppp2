@@ -878,14 +878,14 @@ namespace ppp {
                 Int128 wan_key = (Int128(0) != link->lwipKey) ? link->lwipKey : Int128(link->natPort);
                 auto tail_wan2lan = this->wan2lan_.find(wan_key);
                 auto endl_wan2lan = this->wan2lan_.end();
-                if (tail_wan2lan != endl_wan2lan) {
+                if (tail_wan2lan != endl_wan2lan && tail_wan2lan->second == link) {
                     this->wan2lan_.erase(tail_wan2lan);
                 }
 
                 auto key = LAN2WAN_KEY(link->srcAddr, link->srcPort, link->dstAddr, link->dstPort);
                 auto tail_lan2wan = this->lan2wan_.find(key);
                 auto endl_lan2wan = this->lan2wan_.end();
-                if (tail_lan2wan != endl_lan2wan) {
+                if (tail_lan2wan != endl_lan2wan && tail_lan2wan->second == link) {
                     this->lan2wan_.erase(tail_lan2wan);
                 }
             }
@@ -1070,6 +1070,7 @@ namespace ppp {
             ppp::telemetry::SpanScope span("vnetstack.connect");
             Int128 key = LAN2WAN_KEY(srcAddr, srcPort, dstAddr, dstPort);
             std::shared_ptr<TapTcpLink> link;
+            std::shared_ptr<TapTcpLink> stale;
 
             for (SynchronizedObjectScope scope(syncobj_);;) {
                 WAN2LANTABLE::iterator tail = this->wan2lan_.find(key);
@@ -1077,10 +1078,28 @@ namespace ppp {
                 if (tail != endl) {
                     std::shared_ptr<TapTcpLink> existing = tail->second;
                     if (NULLPTR != existing) {
-                        ppp::telemetry::Count("vnetstack.lwip_accept.reused", 1);
-                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "lwip accept reused link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->srcAddr, ntohs(existing->srcPort)).address().to_string().c_str(), ntohs(existing->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->dstAddr, ntohs(existing->dstPort)).address().to_string().c_str(), ntohs(existing->dstPort), (unsigned int)existing->state.load(std::memory_order_relaxed), existing->closed.load(std::memory_order_relaxed) ? 1 : 0);
+                        TcpState state = (TcpState)existing->state.load(std::memory_order_relaxed);
+                        std::shared_ptr<TapTcpClient> socket = std::atomic_load(&existing->socket);
+                        bool closed = existing->closed.load(std::memory_order_acquire);
+                        bool disposed = NULLPTR != socket && socket->IsDisposed();
+                        bool reusable = !closed && NULLPTR != socket && !disposed &&
+                            (state == TcpState::TCP_STATE_SYN_SENT || state == TcpState::TCP_STATE_SYN_RECEIVED);
+                        if (reusable) {
+                            ppp::telemetry::Count("vnetstack.lwip_accept.reused", 1);
+                            ppp::telemetry::Log(Level::kInfo, "vnetstack", "lwip accept reused link lan=%s:%u wan=%s:%u state=%u closed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->srcAddr, ntohs(existing->srcPort)).address().to_string().c_str(), ntohs(existing->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->dstAddr, ntohs(existing->dstPort)).address().to_string().c_str(), ntohs(existing->dstPort), (unsigned int)state, closed ? 1 : 0);
+                            return existing;
+                        }
+
+                        ppp::telemetry::Count("vnetstack.lwip_accept.stale", 1);
+                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "lwip accept replaced stale link lan=%s:%u wan=%s:%u state=%u closed=%d socket=%d disposed=%d", IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->srcAddr, ntohs(existing->srcPort)).address().to_string().c_str(), ntohs(existing->srcPort), IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(existing->dstAddr, ntohs(existing->dstPort)).address().to_string().c_str(), ntohs(existing->dstPort), (unsigned int)state, closed ? 1 : 0, NULLPTR != socket ? 1 : 0, disposed ? 1 : 0);
+                        stale = existing;
                     }
-                    return tail->second;
+
+                    this->wan2lan_.erase(tail);
+                    auto tail_lan2wan = this->lan2wan_.find(key);
+                    if (tail_lan2wan != this->lan2wan_.end() && tail_lan2wan->second == existing) {
+                        this->lan2wan_.erase(tail_lan2wan);
+                    }
                 }
 
                 link = make_shared_object<TapTcpLink>();
@@ -1101,6 +1120,10 @@ namespace ppp {
 
                 this->wan2lan_[key] = link;
                 break;
+            }
+
+            if (NULLPTR != stale) {
+                stale->Release();
             }
 
             boost::asio::ip::tcp::endpoint localEP = IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(srcAddr, srcPort);
