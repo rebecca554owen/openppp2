@@ -9,6 +9,7 @@
 #include <darwin/ppp/tap/TapDarwin.h>
 #include <darwin/ppp/tun/utun.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <ppp/tap/ITap.h>
 #include <ppp/net/native/eth.h>
@@ -330,10 +331,20 @@ namespace ppp
             #endif
 
                 int err = send(route_fd, &packet, sizeof(packet), message_flags);
+                int route_errno = err == -1 ? errno : 0;
                 close(route_fd);
 
                 if (err == -1)
                 {
+                    bool add_existing = action == RTM_ADD && route_errno == EEXIST;
+                    bool delete_missing = action == RTM_DELETE && (route_errno == ESRCH || route_errno == ENOENT);
+                    if (add_existing || delete_missing)
+                    {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tap", "darwin route idempotent action=%d errno=%d dst=%u mask=%u gw=%u", action, route_errno, dst, mask, nexthop);
+                        return true;
+                    }
+
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tap", "darwin route failed action=%d errno=%d dst=%u mask=%u gw=%u", action, route_errno, dst, mask, nexthop);
                     ppp::diagnostics::SetLastErrorCode(action == RTM_ADD ? ppp::diagnostics::ErrorCode::RouteAddFailed : ppp::diagnostics::ErrorCode::RouteDeleteFailed);
                 }
 
