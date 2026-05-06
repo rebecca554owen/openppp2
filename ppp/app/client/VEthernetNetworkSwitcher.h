@@ -49,6 +49,8 @@
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 
+namespace ppp { namespace dns { class DnsResolver; } }
+
 #if defined(_WIN32)
 #include <windows/ppp/win32/network/Router.h>
 #include <windows/ppp/win32/network/NetworkInterface.h>
@@ -1001,6 +1003,8 @@ namespace ppp {
                 std::shared_ptr<aggligator::aggligator>                             aggligator_;
                 /** @brief Optional proxy forwarding helper. */
                 IForwardingPtr                                                      forwarding_;
+                /** @brief Multi-protocol DNS resolver for provider-based rules. */
+                std::shared_ptr<ppp::dns::DnsResolver>                              dns_resolver_;
                 /**
                  * @brief Last received extended server information block.
                  *

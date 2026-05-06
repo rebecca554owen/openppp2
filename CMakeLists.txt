@@ -444,7 +444,9 @@ ELSEIF(PLATFORM_SYSTEM_DARWIN)
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_thread.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_context.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_regex.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a) 
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a
+        "-framework Security"
+        "-framework CoreFoundation") 
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
 

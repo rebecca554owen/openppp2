@@ -28,7 +28,7 @@
 #include <sys/time.h>
 #include <netinet/tcp.h>
 
-#if defined(__MUSL__)
+#if defined(__MUSL__) || defined(__BIONIC__) || defined(_ANDROID)
 #include <err.h>
 #include <poll.h>
 #else
@@ -466,6 +466,41 @@ namespace ppp
                 return true;
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
+#endif
+        }
+
+        bool ProtectorNetwork::ProtectSync(int sockfd) noexcept
+        {
+            if (sockfd == -1)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+                return false;
+            }
+
+            ProtectEventHandler e = ProtectEvent;
+            if (NULLPTR != e)
+            {
+                return e(sockfd);
+            }
+
+#if defined(_ANDROID)
+            // On Android without ProtectEvent, we cannot protect synchronously
+            // without a JNI environment or YieldContext.  Return false so the
+            // caller can fall back to route-based protection.
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+            return false;
+#else
+            if (dev_.empty())
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                return false;
+            }
+            if (::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1)
+            {
+                return true;
+            }
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             return false;
 #endif

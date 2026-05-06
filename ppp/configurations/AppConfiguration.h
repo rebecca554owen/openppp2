@@ -220,6 +220,28 @@ namespace ppp {
                 bool                                                        console_metric; ///< Show counter/gauge/histogram events on local console/file sink.
                 bool                                                        console_span;   ///< Show span events on local console/file sink.
             }                                                               telemetry;       ///< Optional telemetry/observability configuration.
+            /**
+             * @brief DNS resolver configuration for multi-protocol upstream support.
+             *
+             * Controls domestic/foreign DNS server selection, unmatched-query
+             * interception policy, and EDNS Client Subnet (ECS) behavior.
+             * When all fields are at their defaults the legacy DNS forwarding
+             * path is used exclusively, preserving backward compatibility.
+             */
+            struct {
+                struct {
+                    ppp::string                                             domestic;        ///< Domestic DNS server identifier (provider shorthand, IP, or URL).
+                    ppp::string                                             foreign;         ///< Foreign DNS server identifier (provider shorthand, IP, or URL).
+                }                                                           servers;         ///< DNS server selection for domestic and foreign queries.
+                bool                                                        intercept_unmatched; ///< When true, unmatched DNS queries are intercepted and routed through dns.servers.foreign; default false preserves legacy behavior.
+                struct {
+                    bool                                                    enabled;         ///< Enable EDNS Client Subnet (ECS) OPT RR injection for domestic queries; default false.
+                    ppp::string                                             override_ip;     ///< Manual exit IP for ECS; highest-priority source. Empty = auto-detect from server or STUN.
+                }                                                           ecs;             ///< EDNS Client Subnet configuration.
+                struct {
+                    bool                                                    verify_peer;     ///< Verify DoH/DoT server certificates with system/bundled CA roots; default true.
+                }                                                           tls;             ///< TLS verification configuration for encrypted DNS upstreams.
+            }                                                               dns;             ///< DNS resolver extension configuration.
         public:
             /**
              * @brief Initializes configuration fields to default values.

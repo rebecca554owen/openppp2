@@ -387,6 +387,7 @@
     <ClCompile Include="ppp\app\ConsoleUI.cpp" />
     <ClCompile Include="ppp\app\PppApplication.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
+    <ClCompile Include="ppp\dns\DnsResolver.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetLocalProxyConnection.cpp" />
@@ -692,6 +693,7 @@
     <ClInclude Include="common\lwip\my\arch\epstruct.h" />
     <ClInclude Include="common\lwip\my\lwipopts.h" />
     <ClInclude Include="ppp\app\client\dns\Rule.h" />
+    <ClInclude Include="ppp\dns\DnsResolver.h" />
     <ClInclude Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.h" />
     <ClInclude Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.h" />
     <ClInclude Include="ppp\app\client\proxys\VEthernetLocalProxyConnection.h" />

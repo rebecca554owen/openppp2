@@ -47,7 +47,9 @@
 
 #include <unistd.h>
 #include <netdb.h>
+#if !defined(__BIONIC__) && !defined(_ANDROID)
 #include <error.h>
+#endif
 #include <pthread.h>
 #include <sched.h>
 

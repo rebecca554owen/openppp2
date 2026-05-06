@@ -117,6 +117,15 @@ namespace ppp {
                 boost::asio::ip::address                            RequestedIPv6Address;
                 /** @brief Human-readable IPv6 status message. */
                 ppp::string                                         IPv6StatusMessage;
+                /**
+                 * @brief Client exit IP observed by the server.
+                 *
+                 * Populated by the server from `transmission->GetRemoteEndPoint()`
+                 * during session establishment.  The client reads this value as
+                 * priority-2 source for EDNS Client Subnet (ECS) override IP.
+                 * Accepts both IPv4 and IPv6.
+                 */
+                boost::asio::ip::address                            ClientExitIP;
 
                 /** @brief Detailed IPv6 provisioning outcomes.
                  *

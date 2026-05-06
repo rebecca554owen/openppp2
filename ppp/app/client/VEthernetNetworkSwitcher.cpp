@@ -25,6 +25,7 @@
 #include <ppp/ipv6/IPv6Packet.h>
 
 #include <ppp/net/asio/vdns.h>
+#include <ppp/dns/DnsResolver.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
@@ -32,6 +33,10 @@
 #include <ppp/net/asio/InternetControlMessageProtocol.h>
 
 #include <chrono>
+
+#if defined(_ANDROID)
+#include <android/log.h>
+#endif
 
 /**
  * @file VEthernetNetworkSwitcher.cpp
@@ -339,9 +344,23 @@ namespace ppp {
                 // Check whether dns resolution packets need to be redirected.
                 int destinationPort = frame->Destination.Port;
                 if (destinationPort == PPP_DNS_SYS_PORT) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2",
+                        "dns_redirect udp53 input src_port=%d dst_port=%d payload=%d dst=%s",
+                        (int)frame->Source.Port,
+                        (int)frame->Destination.Port,
+                        NULLPTR != messages ? (int)messages->Length : -1,
+                        Ipep::ToAddress(packet->Destination).to_string().c_str());
+#endif
                     if (RedirectDnsServer(exchanger, packet, frame, messages)) {
+#if defined(_ANDROID)
+                        __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect udp53 handled");
+#endif
                         return true;
                     }
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect udp53 passthrough");
+#endif
                 }
 
                 // If the current need to prohibit the transfer of QUIC IETF control protocol traffic, 
@@ -449,13 +468,27 @@ namespace ppp {
 
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
                 std::shared_ptr<IcmpFrame> frame = IcmpFrame::Parse(packet.get());
+#if defined(_ANDROID)
+                __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_input dst=%s ttl=%d type=%d code=%d frame=%p",
+                    Ipep::ToAddress(packet->Destination).to_string().c_str(),
+                    packet->Ttl,
+                    NULLPTR != frame ? (int)frame->Type : -1,
+                    NULLPTR != frame ? (int)frame->Code : -1,
+                    (void*)frame.get());
+#endif
                 if (NULLPTR == frame || frame->Ttl == 0) {
                     return false;
                 }
                 elif(IPAddressIsGatewayServer(frame->Destination, tap->GatewayServer, tap->SubmaskAddress)) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_gateway dst=%s", Ipep::ToAddress(packet->Destination).to_string().c_str());
+#endif
                     return EchoGatewayServer(exchanger, packet, allocator);
                 }
                 elif(frame->Ttl == 1) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_ttl1 dst=%s", Ipep::ToAddress(packet->Destination).to_string().c_str());
+#endif
                     return EchoGatewayServer(exchanger, packet, allocator);
                 }
                 else {
@@ -467,11 +500,21 @@ namespace ppp {
                     frame->Ttl = ttl;
                     packet->Ttl = ttl;
 
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_other dst=%s ttl=%d", Ipep::ToAddress(packet->Destination).to_string().c_str(), ttl);
+#endif
                     return EchoOtherServer(exchanger, packet, allocator);
                 }
             }
 
-            /** @brief Forwards ICMP packet to non-gateway destination through exchanger. */
+            /** @brief Forwards ICMP packet to non-gateway destination through exchanger.
+             *
+             *  Fallback strategy: when static echo is available, try it first for the
+             *  low-latency path.  Regardless of the static-echo result, also send via
+             *  the standard PacketAction_ECHO channel so the server's ICMP echo-reply
+             *  machinery always gets a chance to respond.  The server de-duplicates
+             *  repeated echo requests natively, so the extra probe is harmless.
+             */
             bool VEthernetNetworkSwitcher::EchoOtherServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 if (NULLPTR == exchanger) {
                     return false;
@@ -483,15 +526,28 @@ namespace ppp {
 
                 std::shared_ptr<BufferSegment> messages = IPFrame::ToArray(allocator, packet.get());
                 if (NULLPTR == messages) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "icmp_other to_array failed dst=%s",
+                        Ipep::ToAddress(packet->Destination).to_string().c_str());
+#endif
                     return false;
                 }
 
                 auto& static_ = configuration_->udp.static_;
                 if ((static_mode_ && static_.icmp) && exchanger->StaticEchoAllocated()) {
-                    return exchanger->StaticEchoPacketToRemoteExchanger(packet.get());
+                    bool se_ok = exchanger->StaticEchoPacketToRemoteExchanger(packet.get());
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_other static_echo dst=%s ok=%d",
+                        Ipep::ToAddress(packet->Destination).to_string().c_str(), (int)se_ok);
+#endif
                 }
 
-                return exchanger->Echo(messages->Buffer.get(), messages->Length);
+                bool ok = exchanger->Echo(messages->Buffer.get(), messages->Length);
+#if defined(_ANDROID)
+                __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_other echo dst=%s ok=%d",
+                    Ipep::ToAddress(packet->Destination).to_string().c_str(), (int)ok);
+#endif
+                return ok;
             }
 
             /** @brief Tracks ICMP packet by ACK ID and triggers remote gateway echo flow. */
@@ -538,6 +594,9 @@ namespace ppp {
                             break;
                         }
                         elif(exchanger->Echo(ack_id)) {
+#if defined(_ANDROID)
+                            __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_gateway echo ack_id=%d ok=1", ack_id);
+#endif
                             return true;
                         }
 
@@ -552,7 +611,11 @@ namespace ppp {
                     return false;
                 }
 
-                if (exchanger->StaticEchoGatewayServer(ack_id)) {
+                bool ok = exchanger->StaticEchoGatewayServer(ack_id);
+#if defined(_ANDROID)
+                __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_gateway static_echo ack_id=%d ok=%d", ack_id, (int)ok);
+#endif
+                if (ok) {
                     return true;
                 }
                 else {
@@ -889,6 +952,13 @@ namespace ppp {
 
                 information_extensions_ = extensions;
 
+                // Propagate the server-observed ClientExitIP into DnsResolver so that
+                // ECS injection can use it as the fallback source address when no
+                // override_ip is configured.
+                if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
+                    dns_resolver_->SetExitIP(extensions.ClientExitIP);
+                }
+
                 bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
                 if (!valid_ipv6_assignment && ipv6_applied_) {
                     RestoreAssignedIPv6();
@@ -906,6 +976,11 @@ namespace ppp {
                 }
 #else
                 information_extensions_ = extensions;
+
+                // Propagate ClientExitIP for ECS on mobile platforms as well.
+                if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
+                    dns_resolver_->SetExitIP(extensions.ClientExitIP);
+                }
 #endif
 
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_;
@@ -1458,6 +1533,76 @@ namespace ppp {
 #if defined(_LINUX)
                 protect_network_ = std::move(protector_network);
 #endif
+
+                // Create the multi-protocol DNS resolver for provider-based rules.
+                // The resolver is used when dns-rules.txt contains provider short names
+                // (e.g. "doh.pub", "cloudflare") instead of raw IP addresses.
+                {
+                    std::shared_ptr<boost::asio::io_context> resolver_ctx = GetContext();
+                    if (NULLPTR != resolver_ctx) {
+                        dns_resolver_ = make_shared_object<ppp::dns::DnsResolver>(*resolver_ctx);
+
+#if defined(_ANDROID)
+                        // Android VPNService socket protection normally requires
+                        // Java/Kotlin protect(fd) or a coroutine JNI context.  The
+                        // pure-async DnsResolver path cannot safely fabricate a
+                        // YieldContext, and ProtectEvent is not wired on this object
+                        // today.  Do not fail all provider-DNS sockets here; rely on
+                        // route-based protection and keep a clear TODO for a future
+                        // synchronous VPNService.protect bridge.
+                        if (NULLPTR != dns_resolver_) {
+                            dns_resolver_->SetProtectSocketCallback(
+                                [](int /*handle*/) noexcept -> bool {
+                                    return true;
+                                });
+                        }
+#elif defined(_LINUX)
+                        // Wire Linux socket-protect into DnsResolver.
+                        //
+                        // ProtectorNetwork::ProtectSync() provides a synchronous
+                        // overload that does not require a YieldContext.  On
+                        // non-Android Linux it calls SO_BINDTODEVICE; on Android
+                        // it delegates to ProtectEvent if set, otherwise returns
+                        // false (caller falls back to route-based protection).
+                        if (NULLPTR != dns_resolver_ && NULLPTR != protect_network_) {
+                            auto pn = protect_network_;
+                            dns_resolver_->SetProtectSocketCallback(
+                                [pn](int handle) noexcept -> bool {
+                                    return pn->ProtectSync(handle);
+                                });
+                        }
+                        elif (NULLPTR != dns_resolver_) {
+                            // No ProtectorNetwork available.  Provide a no-op
+                            // callback; DnsResolver-created sockets will still
+                            // bypass the VPN via the host-route entries installed
+                            // by AddRouteWithDnsServers().
+                            dns_resolver_->SetProtectSocketCallback(
+                                [](int /*handle*/) noexcept -> bool {
+                                    return true;
+                                });
+                        }
+#endif
+                    }
+
+                    // Configure default DNS providers from application configuration.
+                    // These are used by ResolveAsyncWithFallback when intercept_unmatched is true
+                    // and no explicit DNS rule matches a query.
+                    if (NULLPTR != dns_resolver_) {
+                        ppp::string domestic = configuration_->dns.servers.domestic;
+                        ppp::string foreign  = configuration_->dns.servers.foreign;
+                        if (!domestic.empty() || !foreign.empty()) {
+                            dns_resolver_->SetDefaultProviders(domestic, foreign);
+                        }
+
+                        // Configure EDNS Client Subnet (ECS) injection.
+                        // When dns.ecs.enabled is true, domestic DNS queries sent
+                        // through DnsResolver will have an ECS OPT RR appended.
+                        dns_resolver_->SetEcsConfig(
+                            configuration_->dns.ecs.enabled,
+                            configuration_->dns.ecs.override_ip);
+                        dns_resolver_->SetTlsVerifyPeer(configuration_->dns.tls.verify_peer);
+                    }
+                }
 
                 // New the beast network bandwidth aggregator.
                 if (static_mode_ && configuration_->udp.static_.aggligator > 0) {
@@ -2337,6 +2482,9 @@ namespace ppp {
                     forwarding->Dispose();
                 }
 
+                // Release the multi-protocol DNS resolver.
+                dns_resolver_.reset();
+
 #if defined(_WIN32)
                 // On Windows platforms, you need to try to turn off the [PaperAirplane NSP/LSP] server-side controller.
                 if (PaperAirplaneControllerPtr controller = std::move(paper_airplane_ctrl_);  NULLPTR != controller) {
@@ -2631,10 +2779,20 @@ namespace ppp {
 
                 bool opened = ppp::coroutines::asio::async_open(y, *socket, serverEP.protocol());
                 if (!opened) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_ERROR, "openppp2", "dns_redirect socket_open failed server=%s",
+                        serverIP.to_string().c_str());
+#endif
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                 }
 
                 int handle = socket->native_handle();
+#if defined(_ANDROID)
+                __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect socket_open fd=%d server=%s port=%d",
+                    handle,
+                    serverIP.to_string().c_str(),
+                    (int)frame->Destination.Port);
+#endif
                 ppp::net::Socket::AdjustDefaultSocketOptional(handle, serverIP.is_v4());
                 ppp::net::Socket::SetTypeOfService(handle);
                 ppp::net::Socket::SetSignalPipeline(handle, false);
@@ -2645,29 +2803,59 @@ namespace ppp {
                 // IPV6 does not need to be linked, because VPN is IPV4,
                 // And IPV6 does not affect the physical layer network communication of the VPN.
                 if (!serverIP.is_loopback()) {
-                    if (IsBypassIpAddress(serverIP)) {
-                        auto protector_network = GetProtectorNetwork(); 
-                        if (NULLPTR != protector_network) {
-                            if (!protector_network->Protect(handle, y)) {
-                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
-                            }
+                    auto protector_network = GetProtectorNetwork(); 
+                    if (NULLPTR != protector_network) {
+                        if (!protector_network->Protect(handle, y)) {
+#if defined(_ANDROID)
+                            __android_log_print(ANDROID_LOG_ERROR, "openppp2", "dns_redirect protect failed fd=%d server=%s",
+                                handle,
+                                serverIP.to_string().c_str());
+#endif
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                         }
+#if defined(_ANDROID)
+                        __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect protect ok fd=%d server=%s",
+                            handle,
+                            serverIP.to_string().c_str());
+#endif
                     }
+#if defined(_ANDROID)
+                    else {
+                        __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect protector missing fd=%d server=%s",
+                            handle,
+                            serverIP.to_string().c_str());
+                    }
+#endif
                 }
 #endif
 
                 socket->send_to(boost::asio::buffer(messages->Buffer.get(), messages->Length), serverEP,
                     boost::asio::socket_base::message_end_of_record, ec);
                 if (ec) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_ERROR, "openppp2", "dns_redirect send failed fd=%d server=%s ec=%d",
+                        handle,
+                        serverIP.to_string().c_str(),
+                        ec.value());
+#endif
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
                 }
+#if defined(_ANDROID)
+                __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect send ok fd=%d server=%s bytes=%d",
+                    handle,
+                    serverIP.to_string().c_str(),
+                    NULLPTR != messages ? (int)messages->Length : -1);
+#endif
 
                 const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
                 const std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
                 
                 const auto self = shared_from_this();
                 const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
-                    [self, socket_weak](Timer*) noexcept {
+                    [self, socket_weak, handle](Timer*) noexcept {
+#if defined(_ANDROID)
+                        __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect timeout fd=%d", handle);
+#endif
                         const std::shared_ptr<boost::asio::ip::udp::socket> socket = socket_weak.lock();
                         if (socket) {
                             ppp::net::Socket::Closesocket(socket);
@@ -2696,13 +2884,25 @@ namespace ppp {
                 }
 
                 socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,
-                    [self, this, socket, timeout, buffer, sourceEP, destinationEP, serverEPPtr](boost::system::error_code ec, size_t sz) noexcept {
+                    [self, this, socket, timeout, buffer, sourceEP, destinationEP, serverEPPtr, handle](boost::system::error_code ec, size_t sz) noexcept {
                         DeleteTimeout(socket.get());
                         if (ec == boost::system::errc::success) {
                             if (sz > 0) {
+#if defined(_ANDROID)
+                                __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect recv ok fd=%d bytes=%d",
+                                    handle,
+                                    (int)sz);
+#endif
                                 DatagramOutput(sourceEP, destinationEP, buffer.get(), sz);
                             }
                         }
+#if defined(_ANDROID)
+                        else {
+                            __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect recv failed fd=%d ec=%d",
+                                handle,
+                                ec.value());
+                        }
+#endif
 
                         ppp::net::Socket::Closesocket(socket);
                         if (timeout) {
@@ -2717,15 +2917,28 @@ namespace ppp {
             bool VEthernetNetworkSwitcher::RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<BufferSegment>& messages) noexcept {
                 ::dns::Message m;
                 if (m.decode(static_cast<uint8_t*>(messages->Buffer.get()), messages->Length) != ::dns::BufferResult::NoError) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect decode failed payload=%d",
+                        NULLPTR != messages ? (int)messages->Length : -1);
+#endif
                     return false;
                 }
 
                 if (m.questions.empty()) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect empty questions");
+#endif
                     return false;
                 }
                 
                 boost::asio::ip::address destinationIP = Ipep::ToAddress(packet->Destination);
                 ::dns::QuestionSection& qs = *m.questions.data();
+#if defined(_ANDROID)
+                __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect query host=%s type=%d dst=%s",
+                    qs.mName.c_str(),
+                    (int)qs.mType,
+                    destinationIP.to_string().c_str());
+#endif
 
                 if (!ppp::net::asio::vdns::QueryCache2(qs.mName.data(), m, qs.mType == ::dns::RecordType::kA ?
                     ppp::net::asio::vdns::AddressFamily::kA : ppp::net::asio::vdns::AddressFamily::kAAAA).empty()) {
@@ -2734,6 +2947,11 @@ namespace ppp {
                     char dns_packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE]; 
 
                     if (m.encode(dns_packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE, dns_size) == ::dns::BufferResult::NoError && dns_size > 0) {
+#if defined(_ANDROID)
+                        __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect cache hit host=%s bytes=%d",
+                            qs.mName.c_str(),
+                            (int)dns_size);
+#endif
                         return DatagramOutput(
                             IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source), 
                             boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT), dns_packet, dns_size, false);
@@ -2744,36 +2962,184 @@ namespace ppp {
                 if (std::shared_ptr<ITap> tap = GetTap(); IPAddressIsGatewayServer(packet->Destination, tap->GatewayServer, tap->SubmaskAddress)) {
                     auto& dnsServers = ppp::net::asio::vdns::servers;
                     if (dnsServers->empty()) {
+#if defined(_ANDROID)
+                        __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect gateway but empty upstream list host=%s",
+                            qs.mName.c_str());
+#endif
                         return false;
                     }
 
                     serverIP = dnsServers->begin()->address();
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect gateway upstream=%s host=%s",
+                        serverIP.to_string().c_str(),
+                        qs.mName.c_str());
+#endif
                 }
                 else {
                     ppp::app::client::dns::Rule::Ptr rulePtr = ppp::app::client::dns::Rule::Get(stl::transform<ppp::string>(qs.mName), dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
                     if (NULLPTR == rulePtr) {
+#if defined(_ANDROID)
+                        // On Android: if intercept_unmatched is enabled, use DnsResolver
+                        // with foreign→domestic→cloudflare fallback.  Otherwise fall back
+                        // to destinationIP (legacy behaviour).
+                        if (configuration_->dns.intercept_unmatched && NULLPTR != dns_resolver_) {
+                            ppp::string domestic = configuration_->dns.servers.domestic;
+                            ppp::string foreign  = configuration_->dns.servers.foreign;
+
+                            boost::asio::ip::udp::endpoint sourceEP =
+                                IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
+                            boost::asio::ip::udp::endpoint destEP(destinationIP, PPP_DNS_SYS_PORT);
+
+                            auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
+                                shared_from_this());
+
+                            dns_resolver_->ResolveAsyncWithFallback(
+                                foreign, domestic, "cloudflare",
+                                static_cast<const Byte*>(messages->Buffer.get()),
+                                messages->Length,
+                                [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                    if (!response.empty()) {
+                                        ppp::net::asio::vdns::AddCache(
+                                            response.data(),
+                                            static_cast<int>(response.size()));
+
+                                        self->DatagramOutput(
+                                            sourceEP, destEP,
+                                            response.data(),
+                                            static_cast<int>(response.size()),
+                                            false);
+                                    }
+                                });
+                            return true;
+                        }
+
+                        serverIP = destinationIP;
+                        __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect android fallback upstream=%s host=%s",
+                            serverIP.to_string().c_str(),
+                            qs.mName.c_str());
+#else
+                        // Desktop: if intercept_unmatched is enabled, use DnsResolver
+                        // with foreign→domestic→cloudflare fallback.  Otherwise the
+                        // packet passes through without DNS interception (legacy behaviour).
+                        if (configuration_->dns.intercept_unmatched && NULLPTR != dns_resolver_) {
+                            ppp::string domestic = configuration_->dns.servers.domestic;
+                            ppp::string foreign  = configuration_->dns.servers.foreign;
+
+                            boost::asio::ip::udp::endpoint sourceEP =
+                                IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
+                            boost::asio::ip::udp::endpoint destEP(destinationIP, PPP_DNS_SYS_PORT);
+
+                            auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
+                                shared_from_this());
+
+                            dns_resolver_->ResolveAsyncWithFallback(
+                                foreign, domestic, "cloudflare",
+                                static_cast<const Byte*>(messages->Buffer.get()),
+                                messages->Length,
+                                [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                    if (!response.empty()) {
+                                        ppp::net::asio::vdns::AddCache(
+                                            response.data(),
+                                            static_cast<int>(response.size()));
+
+                                        self->DatagramOutput(
+                                            sourceEP, destEP,
+                                            response.data(),
+                                            static_cast<int>(response.size()),
+                                            false);
+                                    }
+                                });
+                            return true;
+                        }
+
                         return false;
+#endif
+                    }
+                    else {
+                        if (!rulePtr->ProviderName.empty()) {
+                            // Provider-based DNS resolution via DnsResolver (DoH/DoT/TCP/UDP).
+                            // This path is taken when dns-rules.txt contains a provider short name
+                            // (e.g. "doh.pub", "cloudflare") instead of a raw IP address.
+                            bool domestic = rulePtr->Nic;
+                            boost::asio::ip::udp::endpoint sourceEP =
+                                IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
+                            boost::asio::ip::udp::endpoint destEP(destinationIP, PPP_DNS_SYS_PORT);
+
+                            // Capture shared_from_this() to guarantee the switcher outlives
+                            // the async DnsResolver callback — never use a bare `this` pointer.
+                            auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
+                                shared_from_this());
+
+                            dns_resolver_->ResolveAsync(
+                                rulePtr->ProviderName, domestic,
+                                static_cast<const Byte*>(messages->Buffer.get()),
+                                messages->Length,
+                                [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                    if (!response.empty()) {
+                                        // Populate the vdns cache before injecting the response.
+                                        ppp::net::asio::vdns::AddCache(
+                                            response.data(),
+                                            static_cast<int>(response.size()));
+
+                                        // Inject the DNS response back into the virtual network.
+                                        self->DatagramOutput(
+                                            sourceEP, destEP,
+                                            response.data(),
+                                            static_cast<int>(response.size()),
+                                            false);
+                                    }
+                                });
+                            return true;
+                        }
+
+                        // Legacy IP-based path: direct UDP forwarding to rulePtr->Server.
+                        serverIP = rulePtr->Server;
+#if defined(_ANDROID)
+                        __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect rule upstream=%s host=%s",
+                            serverIP.to_string().c_str(),
+                            qs.mName.c_str());
+#endif
                     }
 
-                    if (rulePtr->Server == destinationIP) {
+#if !defined(_ANDROID)
+                    if (serverIP == destinationIP) {
                         return false;
                     }
-
-                    serverIP = rulePtr->Server;
+#endif
                 }
 
                 std::shared_ptr<boost::asio::io_context> context = exchanger->GetContext();
                 if (NULLPTR == context) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect missing context host=%s",
+                        qs.mName.c_str());
+#endif
                     return false;
                 }
 
                 std::shared_ptr<Byte> buffer = exchanger->GetBuffer();
                 if (NULLPTR == buffer) {
-                    return false;
+                    const auto allocator = configuration_->GetBufferAllocator();
+                    if (allocator) {
+                        buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, PPP_BUFFER_SIZE);
+                    }
+                    if (NULLPTR == buffer) {
+                        buffer = std::shared_ptr<Byte>(new Byte[PPP_BUFFER_SIZE], std::default_delete<Byte[]>());
+                    }
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "dns_redirect temp buffer alloc host=%s ptr=%p",
+                        qs.mName.c_str(),
+                        buffer.get());
+#endif
                 }
 
                 const std::shared_ptr<boost::asio::ip::udp::socket> socket = make_shared_object<boost::asio::ip::udp::socket>(*context);
                 if (!socket) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect socket alloc failed host=%s",
+                        qs.mName.c_str());
+#endif
                     return false;
                 }
 

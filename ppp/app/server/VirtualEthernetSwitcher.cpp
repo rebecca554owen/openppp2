@@ -1705,6 +1705,26 @@ namespace ppp {
                         envelope.Extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Failed;
                         envelope.Extensions.IPv6StatusMessage = "server-ipv6-dataplane-install-failed";
                     }
+
+                    // Fill ClientExitIP from the client's remote TCP endpoint.
+                    // The client uses this value (priority-2) for EDNS Client Subnet
+                    // when dns.ecs.override_ip is not configured.  GetRemoteEndPoint()
+                    // returns the peer address of the underlying socket; it is
+                    // "usually correct" but may differ from the real DNS exit IP in
+                    // multi-WAN, proxy-chain, or transparent-proxy scenarios.
+                    {
+                        boost::asio::ip::tcp::endpoint remote_ep = transmission->GetRemoteEndPoint();
+                        boost::asio::ip::address remote_addr = remote_ep.address();
+                        if (!remote_addr.is_unspecified()) {
+                            envelope.Extensions.ClientExitIP = remote_addr;
+                        }
+                    }
+
+                    // Refresh ExtendedJson so the serialized payload reflects both
+                    // the IPv6 extensions (possibly mutated above) and the newly
+                    // populated ClientExitIP.
+                    envelope.ExtendedJson = envelope.Extensions.ToJson();
+
                     run = channel->DoInformation(transmission, envelope, y);
                     if (run) {
                         // Use Unix wall-clock time (time(NULL)) to compare against the server-issued

@@ -107,6 +107,7 @@ namespace ppp {
                 IPv6StatusCode = IPv6Status_None;
                 RequestedIPv6Address = boost::asio::ip::address();
                 IPv6StatusMessage.clear();
+                ClientExitIP = boost::asio::ip::address();
             }
 
             /** @brief Returns whether any IPv6 extension field is currently populated. */
@@ -122,7 +123,8 @@ namespace ppp {
                     AssignedIPv6Dns2.is_v6() ||
                     RequestedIPv6Address.is_v6() ||
                     IPv6StatusCode != IPv6Status_None ||
-                    !IPv6StatusMessage.empty();
+                    !IPv6StatusMessage.empty() ||
+                    !ClientExitIP.is_unspecified();
             }
 
             /** @brief Writes IPv6 extension fields to a JSON object. */
@@ -165,6 +167,11 @@ namespace ppp {
 
                 if (!IPv6StatusMessage.empty()) {
                     json["IPv6StatusMessage"] = Json::Value(IPv6StatusMessage.c_str());
+                }
+
+                if (!ClientExitIP.is_unspecified()) {
+                    std::string value = ClientExitIP.to_string();
+                    json["ClientExitIP"] = Json::Value(value.c_str());
                 }
             }
 
@@ -248,6 +255,15 @@ namespace ppp {
                 }
 
                 value.IPv6StatusMessage = JsonAuxiliary::AsString(json["IPv6StatusMessage"]);
+
+                // Parse ClientExitIP: accepts both IPv4 and IPv6 addresses.
+                // This field is populated by the server from the client's remote
+                // endpoint and read by the client for ECS exit-IP fallback.
+                ec.clear();
+                address = StringToAddress(JsonAuxiliary::AsString(json["ClientExitIP"]), ec);
+                if (!ec && !address.is_unspecified()) {
+                    value.ClientExitIP = address;
+                }
 
                 return value.HasAny();
             }

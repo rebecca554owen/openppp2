@@ -66,8 +66,29 @@ namespace ppp
                      *
                      * @details May be an IPv4 or IPv6 address.  Ignored when `Nic` is true
                      *          (the host resolver is used instead).
+                     *
+                     * @note    When `ProviderName` is non-empty this field is left
+                     *          default-constructed and the rule routes through
+                     *          `DnsResolver` instead of direct UDP forwarding.
                      */
                     boost::asio::ip::address            Server;
+
+                    /**
+                     * @brief Built-in DNS provider short name (e.g. "doh.pub", "cloudflare").
+                     *
+                     * @details When non-empty, DNS queries matching this rule are resolved
+                     *          through `ppp::dns::DnsResolver::ResolveAsync()` using
+                     *          multi-protocol upstream servers (DoH / DoT / TCP / UDP)
+                     *          instead of the legacy single-IP UDP forwarding path.
+                     *
+                     *          The `Nic` flag is repurposed as the "domestic" selector:
+                     *          `Nic == true`  → domestic provider group,
+                     *          `Nic == false` → foreign provider group.
+                     *
+                     *          An empty `ProviderName` means the rule uses the legacy
+                     *          `Server` IP + UDP forwarding path (fully backward compatible).
+                     */
+                    ppp::string                         ProviderName;
 
                 public:
                     /** @brief Convenience alias for a reference-counted `Rule` pointer. */

@@ -313,6 +313,13 @@ namespace ppp {
             config.telemetry.console_metric = true;
             config.telemetry.console_span = true;
 
+            config.dns.servers.domestic = "";
+            config.dns.servers.foreign = "";
+            config.dns.intercept_unmatched = false;
+            config.dns.ecs.enabled = false;
+            config.dns.ecs.override_ip = "";
+            config.dns.tls.verify_peer = true;
+
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
 
@@ -361,6 +368,9 @@ namespace ppp {
                     &config.key.protocol_key,
                     &config.key.transport,
                     &config.key.transport_key,
+                    &config.dns.servers.domestic,
+                    &config.dns.servers.foreign,
+                    &config.dns.ecs.override_ip,
                 };
                 LRTrim(strings, arraysizeof(strings));
             }
@@ -815,6 +825,20 @@ namespace ppp {
             config.virr.update_interval = std::max<int>(1, config.virr.update_interval);
             config.vbgp.update_interval = std::max<int>(1, config.vbgp.update_interval);
 
+            // Validate dns.ecs.override_ip: if non-empty, must be a valid IP address.
+            // Accept both IPv4 and IPv6.  ECS first version primarily uses IPv4,
+            // but the configuration field itself allows either family.
+            if (!config.dns.ecs.override_ip.empty()) {
+                boost::system::error_code dns_ec;
+                boost::asio::ip::address dns_addr = StringToAddress(config.dns.ecs.override_ip.data(), dns_ec);
+                if (dns_ec || IPEndPoint::IsInvalid(dns_addr)) {
+                    config.dns.ecs.override_ip = "";
+                }
+                else {
+                    config.dns.ecs.override_ip = Ipep::ToAddressString<ppp::string>(dns_addr);
+                }
+            }
+
             config._lcgmods[LCGMOD_TYPE_TRANSMISSION] = ppp::cryptography::ssea::lcgmod(config.key.kf, EVP_HEADER_MSS_MIN_MOD, EVP_HEADER_MSS_MAX_MOD);
             config._lcgmods[LCGMOD_TYPE_STATIC] = ppp::cryptography::ssea::lcgmod(config.key.kf, VEP_HEADER_MSS_MIN_MOD, VEP_HEADER_MSS_MAX_MOD);
             return true;
@@ -1246,6 +1270,19 @@ namespace ppp {
             AssignBoolIfPresent(config.telemetry.console_metric, json["telemetry"]["console-metric"]);
             AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
 
+            // DNS resolver extension configuration.
+            // The domestic/foreign fields accept string shorthand (provider names),
+            // simple object, or array forms.  AsValue<ppp::string> safely returns
+            // an empty string for object/array/number JSON nodes, so object and
+            // array forms will not crash; they are simply treated as "not configured"
+            // until the full DnsResolver parser is implemented in a later phase.
+            config.dns.servers.domestic = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["servers"]["domestic"]);
+            config.dns.servers.foreign = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["servers"]["foreign"]);
+            AssignBoolIfPresent(config.dns.intercept_unmatched, json["dns"]["intercept-unmatched"]);
+            AssignBoolIfPresent(config.dns.ecs.enabled, json["dns"]["ecs"]["enabled"]);
+            config.dns.ecs.override_ip = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["ecs"]["override-ip"]);
+            AssignBoolIfPresent(config.dns.tls.verify_peer, json["dns"]["tls"]["verify-peer"]);
+
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
@@ -1474,6 +1511,15 @@ namespace ppp {
             telemetry["console-metric"] = config.telemetry.console_metric;
             telemetry["console-span"] = config.telemetry.console_span;
             root["telemetry"] = telemetry;
+
+            Json::Value dns;
+            dns["servers"]["domestic"] = config.dns.servers.domestic;
+            dns["servers"]["foreign"] = config.dns.servers.foreign;
+            dns["intercept-unmatched"] = config.dns.intercept_unmatched;
+            dns["ecs"]["enabled"] = config.dns.ecs.enabled;
+            dns["ecs"]["override-ip"] = config.dns.ecs.override_ip;
+            dns["tls"]["verify-peer"] = config.dns.tls.verify_peer;
+            root["dns"] = dns;
 
             return root;
         }

@@ -1,4 +1,5 @@
 #include <ppp/app/client/dns/Rule.h>
+#include <ppp/dns/DnsResolver.h>
 #include <ppp/io/File.h>
 #include <ppp/net/Firewall.h>
 #include <ppp/net/Ipep.h>
@@ -155,19 +156,9 @@ namespace ppp
                             host = ToLower<ppp::string>(host);
                         }
 
-                        boost::system::error_code ec;
-                        boost::asio::ip::address address = StringToAddress(segments[1], ec);
-                        if (ec)
-                        {
-                            continue;
-                        }
-                        elif(ppp::net::IPEndPoint::IsInvalid(address))
-                        {
-                            continue;
-                        }
-
+                        // Parse the optional third segment (nic flag) before the address
+                        // check so it is available for both IP and provider-name paths.
                         bool nic = true;
-                        // Optional third segment controls NIC routing behavior.
                         if (segment_size > 2)
                         {
                             ppp::string& nic_type = segments[2];
@@ -179,6 +170,44 @@ namespace ppp
                                     nic = false;
                                 }
                             }
+                        }
+
+                        boost::system::error_code ec;
+                        boost::asio::ip::address address = StringToAddress(segments[1], ec);
+                        if (ec)
+                        {
+                            // New: segments[1] is not a valid IP address.
+                            // Check whether it matches a built-in DNS provider name
+                            // (e.g. "doh.pub", "cloudflare", "alidns").
+                            if (ppp::dns::DnsResolver::HasProvider(segments[1]))
+                            {
+                                // Create a rule that routes through DnsResolver
+                                // instead of legacy UDP forwarding.
+                                //   Server        = default (unspecified)
+                                //   ProviderName  = segments[1]
+                                Ptr rule = make_shared_object<Rule>(Rule{ host, nic, {}, segments[1] });
+                                if (NULLPTR == rule)
+                                {
+                                    break;
+                                }
+                                elif(regexp)
+                                {
+                                    regexp_rules[host] = rule;
+                                }
+                                elif(full)
+                                {
+                                    full_rules[host] = rule;
+                                }
+                                else
+                                {
+                                    rules[host] = rule;
+                                }
+                            }
+                            continue;
+                        }
+                        elif(ppp::net::IPEndPoint::IsInvalid(address))
+                        {
+                            continue;
                         }
                     
                         Ptr rule = make_shared_object<Rule>(Rule{ host, nic, address });
