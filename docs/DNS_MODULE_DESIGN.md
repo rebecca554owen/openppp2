@@ -28,6 +28,7 @@
 | DoQ（DNS over QUIC） | ❌ 未来 | 无 QUIC 传输；配置层 `doq` 值会归一化为 `dot`（见下文） |
 | DoH3（DNS over HTTP/3） | ❌ 未来 | 无代码、无引用 |
 | 遥测（Telemetry） | ✅ 已实现 | `DnsResolver` 内部记录解析开始/成功/失败、协议 fallback、STUN 结果；外部继续记录 DNS 配置应用事件 |
+| Geo 规则生成（Phase G） | ✅ 已实现 | 从文本 GeoIP/GeoSite 生成 CN bypass IP 与 DNS rules，并允许附加自定义 IP/rule |
 
 ---
 
@@ -223,6 +224,218 @@
 | `hostname` | string | ✅ 已解析 | DoT SNI 主机名 |
 | `address` | string | ✅ 已解析 | UDP/TCP 服务器地址（`IP` 或 `IP:Port`） |
 | `bootstrap` | string[] | ✅ 已解析 | Bootstrap DNS IP（当前存储于 `DnsServerEntry.bootstrap`，主路径未消费） |
+
+### Geo 规则生成配置（Phase G，✅ 已实现）
+
+`geo-rules` 是一个可选配置块，默认关闭。开启后，客户端启动时会读取文本格式的 GeoIP / GeoSite 输入，生成两个文件：
+
+- `output-bypass`：自动生成的 IP bypass CIDR 列表。
+- `output-dns-rules`：自动生成的 `dns-rules.txt` 规则文件。
+
+生成完成后，这两个文件会被追加接入现有加载路径：
+
+- bypass 文件通过现有 `AddLoadIPList(...)` 路径加载。
+- DNS rules 文件通过现有 `LoadAllDnsRules(...)` 路径加载。
+
+因此，Phase G 不替换原有 `client.bypass` / `client.dns-rules`，而是在原有基础上增加一个自动生成层。
+
+#### 最小配置
+
+```json
+{
+    "geo-rules": {
+        "enabled": true,
+        "geoip": "./geoip-cn.txt",
+        "geosite": "./geosite-cn.txt"
+    },
+    "dns": {
+        "servers": {
+            "domestic": "doh.pub",
+            "foreign": "cloudflare"
+        }
+    }
+}
+```
+
+此配置会：
+
+- 从 `./geoip-cn.txt` 读取 CN CIDR。
+- 从 `./geosite-cn.txt` 读取 CN 域名。
+- 默认写入：
+  - `./generated/bypass-cn.txt`
+  - `./generated/dns-rules-cn.txt`
+- DNS 规则默认使用 `dns.servers.domestic`，若为空则 fallback 到 `doh.pub`。
+
+#### 完整配置
+
+```json
+{
+    "geo-rules": {
+        "enabled": true,
+        "country": "cn",
+
+        "geoip-dat": "./GeoIP.dat",
+        "geosite-dat": "./GeoSite.dat",
+        "geoip-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+        "geosite-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+
+        "geoip": [
+            "./geoip-cn.txt",
+            "./extra-geoip-cn.txt"
+        ],
+        "geosite": [
+            "./geosite-cn.txt",
+            "./extra-geosite-cn.txt"
+        ],
+
+        "dns-provider-domestic": "doh.pub",
+        "dns-provider-foreign": "cloudflare",
+
+        "output-bypass": "./generated/bypass-cn.txt",
+        "output-dns-rules": "./generated/dns-rules-cn.txt",
+
+        "append-bypass": [
+            "10.0.0.0/8",
+            "192.168.0.0/16",
+            "./custom-bypass.txt"
+        ],
+        "append-dns-rules": [
+            "example.cn /doh.pub/nic",
+            "internal.example.cn",
+            "rules://./custom-dns-rules.txt"
+        ]
+    }
+}
+```
+
+#### 字段说明
+
+| JSON key | 类型 | 默认值 | 当前状态 | 说明 |
+|----------|------|--------|----------|------|
+| `geo-rules.enabled` | bool | `false` | ✅ 已实现 | 是否启用 Geo 规则生成；默认关闭，不改变现有行为 |
+| `geo-rules.country` | string | `"cn"` | ✅ 已实现 | 生成文件注释中的国家/区域标记；首版只按 CN 语义使用 |
+| `geo-rules.geoip-dat` | string | `"GeoIP.dat"` | ✅ 已实现 | GeoIP dat 下载缓存路径；当前只负责下载/缓存，不解析二进制 dat |
+| `geo-rules.geosite-dat` | string | `"GeoSite.dat"` | ✅ 已实现 | GeoSite dat 下载缓存路径；当前只负责下载/缓存，不解析二进制 dat |
+| `geo-rules.geoip-download-url` | string | `""` | ✅ 已实现 | 可选 GeoIP dat 下载 URL，例如 MetaCubeX `geoip.dat` release 地址 |
+| `geo-rules.geosite-download-url` | string | `""` | ✅ 已实现 | 可选 GeoSite dat 下载 URL，例如 MetaCubeX `geosite.dat` release 地址 |
+| `geo-rules.geoip` | string 或 string[] | `[]` | ✅ 已实现 | 文本 CIDR 来源文件路径；支持单个字符串或数组 |
+| `geo-rules.geosite` | string 或 string[] | `[]` | ✅ 已实现 | 文本域名来源文件路径；支持单个字符串或数组 |
+| `geo-rules.dns-provider-domestic` | string | `dns.servers.domestic` 或 `"doh.pub"` | ✅ 已实现 | 生成 CN 域名 DNS rule 使用的 provider，例如 `doh.pub`、`alidns`、`114` |
+| `geo-rules.dns-provider-foreign` | string | `dns.servers.foreign` 或 `"cloudflare"` | ⚠️ 已解析/预留 | 当前解析和序列化该字段，但首版不生成 foreign/tun 规则 |
+| `geo-rules.output-bypass` | string | `"./generated/bypass-cn.txt"` | ✅ 已实现 | 生成的 bypass 文件输出路径；父目录会自动创建 |
+| `geo-rules.output-dns-rules` | string | `"./generated/dns-rules-cn.txt"` | ✅ 已实现 | 生成的 DNS rules 文件输出路径；父目录会自动创建 |
+| `geo-rules.append-bypass` | string[] | `[]` | ✅ 已实现 | 在 GeoIP 结果后追加自定义 CIDR 或本地 CIDR 文件路径 |
+| `geo-rules.append-dns-rules` | string[] | `[]` | ✅ 已实现 | 在 GeoSite 结果后追加完整 DNS rule、域名输入或 `rules://` 本地规则文件 |
+
+#### dat 下载配置
+
+如果只需要在启动时下载并缓存 MetaCubeX Geo 数据，可以加入：
+
+```json
+{
+    "geo-rules": {
+        "enabled": true,
+        "geoip-dat": "GeoIP.dat",
+        "geosite-dat": "GeoSite.dat",
+        "geoip-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+        "geosite-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+    }
+}
+```
+
+兼容解析用户给出的 snake_case key：`geoip_dat`、`geosite_dat`、`geoip_download_url`、`geosite_download_url`；序列化和推荐写法仍使用 kebab-case。
+
+注意：当前 dat 文件**会下载到本地缓存路径**，但二进制 `geoip.dat` / `geosite.dat` 解析仍在 backlog。规则生成仍依赖下方的文本 `geoip` / `geosite` 来源，或 `append-bypass` / `append-dns-rules`。
+
+#### `geoip` 输入格式
+
+当前首版支持**文本 CIDR 文件**，每行一条 IPv4/IPv6 CIDR，支持 `#` 注释：
+
+```text
+# comments allowed
+1.0.1.0/24
+1.0.2.0/23
+2408:8000::/20
+```
+
+处理规则：
+
+- 有效 CIDR 写入 `output-bypass`。
+- 非法行跳过，并通过 telemetry/log 记录。
+- `append-bypass` 中如果某项本身是 CIDR，则作为内联 CIDR 追加。
+- `append-bypass` 中如果某项不是 CIDR，则按本地文件路径读取。
+
+#### `geosite` 输入格式
+
+当前首版支持**文本域名文件**，每行一条域名或匹配表达式，支持 `#` 注释：
+
+```text
+# comments allowed
+baidu.com
+.qq.com
+domain:taobao.com
+suffix:jd.com
+full:example.cn
+regexp:^.*\\.example\\.cn$
+```
+
+生成规则：
+
+| 输入 | 生成示例（provider 为 `doh.pub`） | 说明 |
+|------|----------------------------------|------|
+| `baidu.com` | `baidu.com /doh.pub/nic` | 普通域名按 suffix 规则生成 |
+| `.qq.com` | `qq.com /doh.pub/nic` | 去掉前导点后按 suffix 规则生成 |
+| `domain:taobao.com` | `taobao.com /doh.pub/nic` | 按 suffix 规则生成 |
+| `suffix:jd.com` | `jd.com /doh.pub/nic` | 按 suffix 规则生成 |
+| `full:example.cn` | `full:example.cn /doh.pub/nic` | 复用现有 `Rule::Load` 的 full-match 语法 |
+| `regexp:^.*\\.example\\.cn$` | `regexp:^.*\\.example\\.cn$ /doh.pub/nic` | 复用现有 `Rule::Load` 的 regexp 语法 |
+
+#### 自定义追加规则
+
+`append-dns-rules` 支持三类输入：
+
+```json
+{
+    "geo-rules": {
+        "append-dns-rules": [
+            "example.cn /doh.pub/nic",
+            "internal.example.cn",
+            "rules://./custom-dns-rules.txt"
+        ]
+    }
+}
+```
+
+- 包含 `/` 的条目视为完整 DNS rule，原样追加。
+- 不包含 `/` 的条目视为域名输入，使用 `dns-provider-domestic` 归一化生成 rule。
+- `rules://` 前缀表示读取本地规则文件，文件内每行可以是完整 DNS rule，也可以是域名输入。
+
+#### 生成与加载顺序
+
+```text
+generated bypass = geo-rules.geoip CIDR
+                 + geo-rules.append-bypass inline CIDR
+                 + geo-rules.append-bypass local file content
+
+generated dns-rules = geo-rules.geosite -> /<domestic-provider>/nic
+                    + geo-rules.append-dns-rules inline rule/domain
+                    + geo-rules.append-dns-rules rules:// local file content
+```
+
+启动加载顺序为：
+
+1. 先注册原有 `client.bypass` / `client.routes`。
+2. 先加载原有 `client.dns-rules`。
+3. 若 `geo-rules.enabled=true`，生成 Phase G 文件。
+4. 将生成的 bypass 文件追加注册到现有 IP list 加载路径。
+5. 将生成的 DNS rules 文件追加加载到现有 DNS rule 表。
+
+#### 当前限制
+
+- `geoip` / `geosite` 规则来源仅支持本地文本文件；dat 下载 URL 已支持，但下载后的二进制 dat 暂不解析。
+- 暂不解析二进制 `geoip.dat` / `geosite.dat`。
+- Android/iOS 当前不启用生成器，避免破坏已有移动端 `set_dns_rules_list(...)` 路径。
+- `dns-provider-foreign` 已配置解析但暂未消费；后续可用于 `geolocation-!cn` 自动生成 `/tun` 规则。
 
 ---
 
@@ -812,6 +1025,141 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 - `DnsResolver` 内部已添加解析开始、成功、失败、provider miss、协议/条目 fallback 计数
 - STUN 检测已添加 start/success/no-candidates/timeout/send-fail/recv-fail/invalid-response/no-xmapped 计数
 - 剩余 backlog：SendUdp/SendTcp/SendDoh/SendDot 内部失败原因可继续细分，例如连接拒绝、TLS 握手失败、HTTP 非 200、读写超时
+
+### Phase G：GeoIP / GeoSite 规则生成（✅ 已实现）
+
+目标是在**现有 bypass 与 dns-rules 加载机制基础上增强**，而不是替换现有文件格式或运行时路径：
+
+- 已根据文本 GeoIP 中的 CN CIDR 自动生成/合并 IP bypass 列表。
+- 已根据文本 GeoSite 中的 CN 域名集合自动生成/合并 `dns-rules.txt` 规则。
+- 已支持在自动生成结果基础上**附加用户自定义 IP 与 DNS rule**，保证人工覆盖/补充不会被生成器吞掉。
+- 生成结果写入配置指定文件，再复用现有 `AddLoadIPList(...)` / `LoadAllDnsRules(...)` 路径。
+
+#### 设计原则
+
+| 原则 | 说明 |
+|------|------|
+| 不破坏现有配置 | `client.bypass`、`client.dns-rules`、`--bypass`、`--dns-rules` 继续可用 |
+| 生成结果可叠加 | Geo 生成结果先加载，用户自定义 IP/rule 后加载或追加，后者用于补洞 |
+| 文件格式复用 | bypass 仍是一行一个 CIDR；DNS rules 仍使用 `domain /provider/nic|tun` |
+| 默认关闭 | 不配置 `geo-rules.enabled=true` 时不改变行为 |
+| 首版轻依赖 | 当前支持纯文本/规则列表格式；二进制 `geoip.dat`/`geosite.dat` 作为后续增强，避免首版引入大型解析库 |
+
+#### 建议配置
+
+```json
+{
+    "geo-rules": {
+        "enabled": true,
+        "country": "cn",
+
+        "geoip-dat": "./GeoIP.dat",
+        "geosite-dat": "./GeoSite.dat",
+        "geoip-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+        "geosite-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+
+        "geoip": "./geoip-cn.txt",
+        "geosite": "./geosite-cn.txt",
+
+        "dns-provider-domestic": "doh.pub",
+        "dns-provider-foreign": "cloudflare",
+
+        "output-bypass": "./generated/bypass-cn.txt",
+        "output-dns-rules": "./generated/dns-rules-cn.txt",
+
+        "append-bypass": [
+            "10.0.0.0/8",
+            "192.168.0.0/16",
+            "./custom-bypass.txt"
+        ],
+        "append-dns-rules": [
+            "example.cn /doh.pub/nic",
+            "rules://./custom-dns-rules.txt"
+        ]
+    }
+}
+```
+
+字段说明：
+
+| JSON key | 类型 | 默认值 | 说明 |
+|----------|------|--------|------|
+| `geo-rules.enabled` | bool | `false` | 是否启用 Geo 规则生成 |
+| `geo-rules.country` | string | `"cn"` | 目标国家/区域，首版只要求支持 `cn` |
+| `geo-rules.geoip-dat` | string | `GeoIP.dat` | GeoIP dat 下载缓存路径；当前只下载/缓存，不解析二进制 dat |
+| `geo-rules.geosite-dat` | string | `GeoSite.dat` | GeoSite dat 下载缓存路径；当前只下载/缓存，不解析二进制 dat |
+| `geo-rules.geoip-download-url` | string | `""` | 可选 GeoIP dat 下载 URL |
+| `geo-rules.geosite-download-url` | string | `""` | 可选 GeoSite dat 下载 URL |
+| `geo-rules.geoip` | string/string[] | `[]` | GeoIP/CIDR 来源；当前支持本地纯文本 CIDR 文件 |
+| `geo-rules.geosite` | string/string[] | `[]` | GeoSite/domain 来源；当前支持本地纯文本域名文件 |
+| `geo-rules.dns-provider-domestic` | string | `dns.servers.domestic` 或 `doh.pub` | 生成 CN 域名 DNS rule 时使用的 provider |
+| `geo-rules.dns-provider-foreign` | string | `dns.servers.foreign` 或 `cloudflare` | 已解析/序列化，预留给非 CN/geolocation-!cn 规则；当前不消费 |
+| `geo-rules.output-bypass` | string | `./generated/bypass-cn.txt` | 生成后的 bypass 文件路径 |
+| `geo-rules.output-dns-rules` | string | `./generated/dns-rules-cn.txt` | 生成后的 DNS rules 文件路径 |
+| `geo-rules.append-bypass` | string[] | `[]` | 追加的 CIDR 或本地 bypass 文件；在 GeoIP 结果之后合并 |
+| `geo-rules.append-dns-rules` | string[] | `[]` | 追加的 DNS rule 行、域名输入或 `rules://` 本地文件；在 GeoSite 结果之后合并 |
+
+#### 输入格式首版约束
+
+当前不解析 v2ray/sing-box 的二进制 `geoip.dat` / `geosite.dat`，已支持更容易落地的文本格式：
+
+GeoIP/CIDR 输入：
+
+```text
+# comments allowed
+1.0.1.0/24
+1.0.2.0/23
+2408:8000::/20
+```
+
+GeoSite/domain 输入：
+
+```text
+# comments allowed
+baidu.com
+.qq.com
+domain:taobao.com
+suffix:jd.com
+full:example.cn
+regexp:^.*\\.example\\.cn$
+```
+
+归一化规则：
+
+- CIDR 行原样写入 bypass 结果，非法行跳过并记录 telemetry/log。
+- 普通域名、`domain:`、`suffix:` 都生成 suffix 风格 DNS rule：`domain /<domestic-provider>/nic`。
+- `full:` 生成 full-match DNS rule。
+- `regexp:` 生成 regexp DNS rule，复用现有 `Rule::Load` 支持的格式。
+- `append-dns-rules` 中已经是完整 `domain /provider/nic|tun` 的行应原样追加，不再改写 provider。
+
+#### 合并顺序
+
+```text
+generated bypass = GeoIP(CN) CIDR
+                 + append-bypass inline CIDR
+                 + append-bypass 本地文件内容
+
+generated dns-rules = GeoSite(CN) -> /<domestic-provider>/nic
+                    + append-dns-rules inline rule
+                    + append-dns-rules rules:// 本地文件内容
+```
+
+CIDR 当前通过 `unordered_set` 去重；DNS rule 保持追加顺序，不做强制去重。整体顺序为先 Geo，后自定义，便于排查用户补充项。
+
+#### 接入点
+
+- 配置结构：`AppConfiguration` 已新增 `geo_rules` 配置块。
+- 生成器：已新增 `ppp/app/client/GeoRuleGenerator.h/cpp`。
+- 加载时机：客户端启动时，在现有 bypass / dns-rules 注册后生成文件，然后把生成文件路径追加到现有加载列表。
+- Android/iOS：当前禁用生成器，不破坏已有 `set_dns_rules_list(...)` 路径。
+
+#### Backlog
+
+- 二进制 `geoip.dat` / `geosite.dat` 解析。
+- 自动下载/缓存 Geo 数据。
+- geosite 分类不止 CN：如 `geolocation-!cn` 自动生成 foreign/tun DNS rules。
+- 生成文件 hash 与更新时间 telemetry。
+- UI/CLI 显示生成规则数量与跳过行数量。
 
 ---
 

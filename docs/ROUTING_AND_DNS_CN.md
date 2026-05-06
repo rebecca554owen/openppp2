@@ -351,6 +351,15 @@ vBGP 路由会合并到客户端 RIB 中。
 |--------|--------|------|
 | `client.dns-rules` | `[]` | DNS 规则文件路径或 URL |
 | `client.bypass` | `[]` | IP bypass 列表文件路径或 URL |
+| `geo-rules.enabled` | `false` | 从本地文本 GeoIP/GeoSite 输入生成额外的 bypass 和 DNS-rule 文件 |
+| `geo-rules.geoip-dat` | `GeoIP.dat` | 下载 GeoIP dat 的本地缓存路径；当前会下载但不解析 |
+| `geo-rules.geosite-dat` | `GeoSite.dat` | 下载 GeoSite dat 的本地缓存路径；当前会下载但不解析 |
+| `geo-rules.geoip-download-url` | `""` | 可选 HTTP/HTTPS URL，用于下载/更新 `geoip-dat` |
+| `geo-rules.geosite-download-url` | `""` | 可选 HTTP/HTTPS URL，用于下载/更新 `geosite-dat` |
+| `geo-rules.geoip` | `[]` | 本地文本 CIDR 来源文件路径或路径数组 |
+| `geo-rules.geosite` | `[]` | 本地文本域名来源文件路径或路径数组 |
+| `geo-rules.append-bypass` | `[]` | 在 GeoIP CIDR 后追加的内联 CIDR 或本地 CIDR 文件 |
+| `geo-rules.append-dns-rules` | `[]` | 在 GeoSite 规则后追加的内联 DNS 规则/域名或 `rules://` 本地文件 |
 | `virr.update-interval` | `86400` | bypass 列表刷新间隔（秒） |
 | `virr.url` | `""` | 周期性刷新的 bypass 列表 URL |
 | `vbgp.update-interval` | `3600` | vBGP 路由刷新间隔（秒） |
@@ -413,6 +422,79 @@ DNS 规则文件格式示例：
 .google.com 8.8.8.8
 .cloudflare.com 1.1.1.1
 ```
+
+### 生成 GeoIP / GeoSite 分流规则
+
+`geo-rules` 是可选配置，默认关闭。开启后，OPENPPP2 会读取本地文本 GeoIP/GeoSite 输入，写出生成的 bypass 和 DNS-rule 文件，然后把这些文件追加接入现有路由/DNS 加载路径。它不会替换 `client.bypass` 或 `client.dns-rules`。
+
+```json
+{
+  "geo-rules": {
+    "enabled": true,
+    "country": "cn",
+    "geoip-dat": "/var/lib/openppp2/GeoIP.dat",
+    "geosite-dat": "/var/lib/openppp2/GeoSite.dat",
+    "geoip-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+    "geosite-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+    "geoip": [
+      "/etc/openppp2/geoip-cn.txt"
+    ],
+    "geosite": [
+      "/etc/openppp2/geosite-cn.txt"
+    ],
+    "dns-provider-domestic": "doh.pub",
+    "dns-provider-foreign": "cloudflare",
+    "output-bypass": "/var/lib/openppp2/generated/bypass-cn.txt",
+    "output-dns-rules": "/var/lib/openppp2/generated/dns-rules-cn.txt",
+    "append-bypass": [
+      "10.0.0.0/8",
+      "/etc/openppp2/custom-bypass.txt"
+    ],
+    "append-dns-rules": [
+      "example.cn /doh.pub/nic",
+      "internal.example.cn",
+      "rules:///etc/openppp2/custom-dns-rules.txt"
+    ]
+  },
+  "dns": {
+    "servers": {
+      "domestic": "doh.pub",
+      "foreign": "cloudflare"
+    }
+  }
+}
+```
+
+当前支持的输入格式刻意保持简单：
+
+```text
+# geoip-cn.txt：每行一个 CIDR
+1.0.1.0/24
+1.0.2.0/23
+2408:8000::/20
+```
+
+```text
+# geosite-cn.txt：每行一个域名或匹配表达式
+baidu.com
+.qq.com
+domain:taobao.com
+suffix:jd.com
+full:example.cn
+regexp:^.*\.example\.cn$
+```
+
+注意事项：
+
+- `geoip-download-url` 和 `geosite-download-url` 会在启动时把 dat 文件下载到 `geoip-dat` 和 `geosite-dat`。
+- 下载后的二进制 `geoip.dat` / `geosite.dat` 当前只作为本地缓存保存，暂不解析；规则生成仍依赖本地文本 `geoip` / `geosite` 输入和 append 列表。
+- 解析器也兼容 snake_case 写法（`geoip_dat`、`geosite_dat`、`geoip_download_url`、`geosite_download_url`），但文档推荐 kebab-case。
+- `geoip` 和 `geosite` 当前仅支持本地文本文件；这些字段暂不支持 URL 来源。
+- 生成的 DNS 规则使用 `/<dns-provider-domestic>/nic`；未配置时依次 fallback 到 `dns.servers.domestic` 和 `doh.pub`。
+- `dns-provider-foreign` 已解析并预留给未来非 CN 或 `geolocation-!cn` 生成，但当前生成器不消费它。
+- `append-bypass` 在 GeoIP CIDR 后合并，可包含内联 CIDR 或本地 CIDR 文件。
+- `append-dns-rules` 在 GeoSite 规则后合并，可包含完整规则、用国内 provider 归一化的普通域名，或 `rules://` 本地文件。
+- Android/iOS 客户端当前不运行生成器，因此不会影响已有移动端 DNS 规则注入路径。
 
 ### VIRR 定期刷新 bypass 列表示例
 

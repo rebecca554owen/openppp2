@@ -323,6 +323,21 @@ namespace ppp {
             config.dns.tls.verify_peer = true;
             config.dns.stun.candidates.clear();
 
+            config.geo_rules.enabled = false;
+            config.geo_rules.country = "cn";
+            config.geo_rules.geoip_dat = "GeoIP.dat";
+            config.geo_rules.geosite_dat = "GeoSite.dat";
+            config.geo_rules.geoip_download_url = "";
+            config.geo_rules.geosite_download_url = "";
+            config.geo_rules.geoip.clear();
+            config.geo_rules.geosite.clear();
+            config.geo_rules.dns_provider_domestic = "";
+            config.geo_rules.dns_provider_foreign = "";
+            config.geo_rules.output_bypass = "./generated/bypass-cn.txt";
+            config.geo_rules.output_dns_rules = "./generated/dns-rules-cn.txt";
+            config.geo_rules.append_bypass.clear();
+            config.geo_rules.append_dns_rules.clear();
+
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
 
@@ -374,6 +389,15 @@ namespace ppp {
                     &config.dns.servers.domestic,
                     &config.dns.servers.foreign,
                     &config.dns.ecs.override_ip,
+                    &config.geo_rules.country,
+                    &config.geo_rules.geoip_dat,
+                    &config.geo_rules.geosite_dat,
+                    &config.geo_rules.geoip_download_url,
+                    &config.geo_rules.geosite_download_url,
+                    &config.geo_rules.dns_provider_domestic,
+                    &config.geo_rules.dns_provider_foreign,
+                    &config.geo_rules.output_bypass,
+                    &config.geo_rules.output_dns_rules,
                 };
                 LRTrim(strings, arraysizeof(strings));
             }
@@ -563,6 +587,17 @@ namespace ppp {
                             [](const ppp::string& s) noexcept { return s.empty(); }),
                         entry.bootstrap.end());
                 }
+            }
+
+            for (auto* vec : { &config.geo_rules.geoip, &config.geo_rules.geosite,
+                               &config.geo_rules.append_bypass, &config.geo_rules.append_dns_rules }) {
+                for (auto& s : *vec) {
+                    s = LTrim(RTrim(s));
+                }
+                vec->erase(
+                    std::remove_if(vec->begin(), vec->end(),
+                        [](const ppp::string& s) noexcept { return s.empty(); }),
+                    vec->end());
             }
 
             if (config.client.guid.empty()) {
@@ -1491,6 +1526,59 @@ namespace ppp {
                 }
             }
 
+            // Geo-rules configuration (Phase G).
+            // geoip/geosite accept string or string[].
+            // append-bypass/append-dns-rules accept string[].
+            {
+                const Json::Value& gr = json["geo-rules"];
+                if (gr.isObject()) {
+                    AssignBoolIfPresent(config.geo_rules.enabled, gr["enabled"]);
+                    auto assign_string_if_nonempty = [](ppp::string& target, const Json::Value& v) noexcept {
+                        ppp::string s = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(v)));
+                        if (!s.empty()) { target = std::move(s); }
+                    };
+                    assign_string_if_nonempty(config.geo_rules.country, gr["country"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_dat, gr["geoip-dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_dat, gr["geosite-dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_download_url, gr["geoip-download-url"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_download_url, gr["geosite-download-url"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_dat, gr["geoip_dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_dat, gr["geosite_dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_download_url, gr["geoip_download_url"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_download_url, gr["geosite_download_url"]);
+                    assign_string_if_nonempty(config.geo_rules.dns_provider_domestic, gr["dns-provider-domestic"]);
+                    assign_string_if_nonempty(config.geo_rules.dns_provider_foreign, gr["dns-provider-foreign"]);
+                    assign_string_if_nonempty(config.geo_rules.output_bypass, gr["output-bypass"]);
+                    assign_string_if_nonempty(config.geo_rules.output_dns_rules, gr["output-dns-rules"]);
+                    auto load_string_or_array = [](const Json::Value& v, ppp::vector<ppp::string>& out) noexcept {
+                        out.clear();
+                        if (v.isString()) {
+                            ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(v)));
+                            if (!s.empty()) { out.emplace_back(std::move(s)); }
+                        }
+                        elif(v.isArray()) {
+                            for (Json::ArrayIndex i = 0; i < v.size(); i++) {
+                                ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(v[i])));
+                                if (!s.empty()) { out.emplace_back(std::move(s)); }
+                            }
+                        }
+                    };
+                    load_string_or_array(gr["geoip"], config.geo_rules.geoip);
+                    load_string_or_array(gr["geosite"], config.geo_rules.geosite);
+                    auto load_string_array = [](const Json::Value& v, ppp::vector<ppp::string>& out) noexcept {
+                        if (v.isArray()) {
+                            out.clear();
+                            for (Json::ArrayIndex i = 0; i < v.size(); i++) {
+                                ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(v[i])));
+                                if (!s.empty()) { out.emplace_back(std::move(s)); }
+                            }
+                        }
+                    };
+                    load_string_array(gr["append-bypass"], config.geo_rules.append_bypass);
+                    load_string_array(gr["append-dns-rules"], config.geo_rules.append_dns_rules);
+                }
+            }
+
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
@@ -1756,6 +1844,39 @@ namespace ppp {
                 dns["stun"]["candidates"] = stun_cands;
             }
             root["dns"] = dns;
+
+            Json::Value geo_rules;
+            geo_rules["enabled"] = config.geo_rules.enabled;
+            geo_rules["country"] = config.geo_rules.country;
+            geo_rules["geoip-dat"] = config.geo_rules.geoip_dat;
+            geo_rules["geosite-dat"] = config.geo_rules.geosite_dat;
+            if (!config.geo_rules.geoip_download_url.empty()) { geo_rules["geoip-download-url"] = config.geo_rules.geoip_download_url; }
+            if (!config.geo_rules.geosite_download_url.empty()) { geo_rules["geosite-download-url"] = config.geo_rules.geosite_download_url; }
+            if (!config.geo_rules.geoip.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.geoip) { arr.append(s); }
+                geo_rules["geoip"] = arr;
+            }
+            if (!config.geo_rules.geosite.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.geosite) { arr.append(s); }
+                geo_rules["geosite"] = arr;
+            }
+            if (!config.geo_rules.dns_provider_domestic.empty()) { geo_rules["dns-provider-domestic"] = config.geo_rules.dns_provider_domestic; }
+            if (!config.geo_rules.dns_provider_foreign.empty()) { geo_rules["dns-provider-foreign"] = config.geo_rules.dns_provider_foreign; }
+            geo_rules["output-bypass"] = config.geo_rules.output_bypass;
+            geo_rules["output-dns-rules"] = config.geo_rules.output_dns_rules;
+            if (!config.geo_rules.append_bypass.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.append_bypass) { arr.append(s); }
+                geo_rules["append-bypass"] = arr;
+            }
+            if (!config.geo_rules.append_dns_rules.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.append_dns_rules) { arr.append(s); }
+                geo_rules["append-dns-rules"] = arr;
+            }
+            root["geo-rules"] = geo_rules;
 
             return root;
         }
