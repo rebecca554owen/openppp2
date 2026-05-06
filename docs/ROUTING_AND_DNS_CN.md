@@ -425,7 +425,7 @@ DNS 规则文件格式示例：
 
 ### 生成 GeoIP / GeoSite 分流规则
 
-`geo-rules` 是可选配置，默认关闭。开启后，OPENPPP2 会读取本地文本 GeoIP/GeoSite 输入，写出生成的 bypass 和 DNS-rule 文件，然后把这些文件追加接入现有路由/DNS 加载路径。它不会替换 `client.bypass` 或 `client.dns-rules`。
+`geo-rules` 是可选配置，默认关闭。开启后，OPENPPP2 会按配置下载/解析 GeoIP/GeoSite dat，读取本地文本 GeoIP/GeoSite 输入，写出生成的 bypass 和 DNS-rule 文件，然后接入现有路由/DNS 加载路径。`client.dns-rules` / `--dns-rules` 仍按旧逻辑加载。对于 bypass，`client.bypass` / `--bypass` 会被读入生成器，与 GeoIP/dat/text/append-bypass 结果合并去重后写入 `output-bypass`，而不是再作为第二份独立 bypass 列表重复注册。
 
 ```json
 {
@@ -488,6 +488,7 @@ regexp:^.*\.example\.cn$
 
 - `geoip-download-url` 和 `geosite-download-url` 会在启动时把 dat 文件下载到 `geoip-dat` 和 `geosite-dat`。
 - 下载后的二进制 `geoip.dat` / `geosite.dat` 会按 `geo-rules.country` 自动解析生成规则；本地文本 `geoip` / `geosite` 输入和 append 列表会继续合并。
+- 当 `geo-rules.enabled=true` 时，命令行/配置 bypass 来源（`--bypass` / `client.bypass`）会合并进 `output-bypass`，并与 GeoIP CIDR 去重；当 `geo-rules.enabled=false` 时，旧的直接注册 bypass 行为不变。
 - 解析器也兼容 snake_case 写法（`geoip_dat`、`geosite_dat`、`geoip_download_url`、`geosite_download_url`），但文档推荐 kebab-case。
 - `geoip` 和 `geosite` 当前仅支持本地文本文件；这些字段暂不支持 URL 来源。
 - 生成的 DNS 规则使用 `/<dns-provider-domestic>/nic`；未配置时依次 fallback 到 `dns.servers.domestic` 和 `doh.pub`。
