@@ -154,12 +154,16 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_LINUX)
-            for (auto&& bypass_path : *network_interface->Bypass) {
-                ethernet->AddLoadIPList(bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
+            if (!configuration->geo_rules.enabled) {
+                for (auto&& bypass_path : *network_interface->Bypass) {
+                    ethernet->AddLoadIPList(bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
+                }
             }
 #else
-            for (auto&& bypass_path : *network_interface->Bypass) {
-                ethernet->AddLoadIPList(bypass_path, network_interface->BypassNgw, ppp::string());
+            if (!configuration->geo_rules.enabled) {
+                for (auto&& bypass_path : *network_interface->Bypass) {
+                    ethernet->AddLoadIPList(bypass_path, network_interface->BypassNgw, ppp::string());
+                }
             }
 #endif
             for (auto&& route : configuration->client.routes) {
@@ -189,7 +193,11 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             if (configuration->geo_rules.enabled) {
-                auto geo_result = ppp::app::client::GeoRuleGenerator::Generate(*configuration);
+                ppp::vector<ppp::string> bypass_sources;
+                for (auto&& bypass_path : *network_interface->Bypass) {
+                    bypass_sources.emplace_back(bypass_path);
+                }
+                auto geo_result = ppp::app::client::GeoRuleGenerator::Generate(*configuration, &bypass_sources);
                 if (!geo_result.output_bypass_path.empty()) {
 #if defined(_LINUX)
                     ethernet->AddLoadIPList(geo_result.output_bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());

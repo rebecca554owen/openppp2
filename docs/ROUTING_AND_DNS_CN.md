@@ -352,8 +352,8 @@ vBGP 路由会合并到客户端 RIB 中。
 | `client.dns-rules` | `[]` | DNS 规则文件路径或 URL |
 | `client.bypass` | `[]` | IP bypass 列表文件路径或 URL |
 | `geo-rules.enabled` | `false` | 从本地文本 GeoIP/GeoSite 输入生成额外的 bypass 和 DNS-rule 文件 |
-| `geo-rules.geoip-dat` | `GeoIP.dat` | 下载 GeoIP dat 的本地缓存路径；当前会下载但不解析 |
-| `geo-rules.geosite-dat` | `GeoSite.dat` | 下载 GeoSite dat 的本地缓存路径；当前会下载但不解析 |
+| `geo-rules.geoip-dat` | `GeoIP.dat` | GeoIP dat 本地缓存路径；会下载并按配置国家解析 |
+| `geo-rules.geosite-dat` | `GeoSite.dat` | GeoSite dat 本地缓存路径；会下载并按配置国家解析 |
 | `geo-rules.geoip-download-url` | `""` | 可选 HTTP/HTTPS URL，用于下载/更新 `geoip-dat` |
 | `geo-rules.geosite-download-url` | `""` | 可选 HTTP/HTTPS URL，用于下载/更新 `geosite-dat` |
 | `geo-rules.geoip` | `[]` | 本地文本 CIDR 来源文件路径或路径数组 |
@@ -487,7 +487,7 @@ regexp:^.*\.example\.cn$
 注意事项：
 
 - `geoip-download-url` 和 `geosite-download-url` 会在启动时把 dat 文件下载到 `geoip-dat` 和 `geosite-dat`。
-- 下载后的二进制 `geoip.dat` / `geosite.dat` 当前只作为本地缓存保存，暂不解析；规则生成仍依赖本地文本 `geoip` / `geosite` 输入和 append 列表。
+- 下载后的二进制 `geoip.dat` / `geosite.dat` 会按 `geo-rules.country` 自动解析生成规则；本地文本 `geoip` / `geosite` 输入和 append 列表会继续合并。
 - 解析器也兼容 snake_case 写法（`geoip_dat`、`geosite_dat`、`geoip_download_url`、`geosite_download_url`），但文档推荐 kebab-case。
 - `geoip` 和 `geosite` 当前仅支持本地文本文件；这些字段暂不支持 URL 来源。
 - 生成的 DNS 规则使用 `/<dns-provider-domestic>/nic`；未配置时依次 fallback 到 `dns.servers.domestic` 和 `doh.pub`。

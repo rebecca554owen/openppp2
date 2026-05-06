@@ -13,8 +13,8 @@
  * @file GeoRuleGenerator.cpp
  * @brief Phase G: GeoIP/GeoSite rule generation implementation.
  *
- * Optionally downloads GeoIP/GeoSite dat cache files, then reads text-format
- * GeoIP (CIDR) and GeoSite (domain) source files,
+ * Optionally downloads and parses GeoIP/GeoSite dat cache files, then reads
+ * text-format GeoIP (CIDR) and GeoSite (domain) source files,
  * generates merged bypass CIDR and DNS rule output files, appending
  * custom user rules/sources on top.
  *
@@ -177,6 +177,268 @@ namespace ppp {
                 return false;
             }
 
+            namespace {
+                struct ProtoField final {
+                    int field_number = 0;
+                    int wire_type = 0;
+                    uint64_t varint = 0;
+                    const unsigned char* data = NULLPTR;
+                    std::size_t size = 0;
+                };
+
+                static bool ReadVarint(const unsigned char*& p, const unsigned char* end, uint64_t& value) noexcept {
+                    value = 0;
+                    int shift = 0;
+                    while (p < end && shift <= 63) {
+                        unsigned char b = *p++;
+                        value |= ((uint64_t)(b & 0x7f)) << shift;
+                        if ((b & 0x80) == 0) {
+                            return true;
+                        }
+                        shift += 7;
+                    }
+                    return false;
+                }
+
+                static bool SkipFixed(const unsigned char*& p, const unsigned char* end, std::size_t n) noexcept {
+                    if ((std::size_t)(end - p) < n) {
+                        return false;
+                    }
+                    p += n;
+                    return true;
+                }
+
+                static bool NextProtoField(const unsigned char*& p, const unsigned char* end, ProtoField& f) noexcept {
+                    if (p >= end) {
+                        return false;
+                    }
+
+                    uint64_t key = 0;
+                    if (!ReadVarint(p, end, key)) {
+                        return false;
+                    }
+
+                    f = ProtoField();
+                    f.field_number = (int)(key >> 3);
+                    f.wire_type = (int)(key & 0x07);
+
+                    switch (f.wire_type) {
+                    case 0: // varint
+                        return ReadVarint(p, end, f.varint);
+                    case 1: // fixed64
+                        return SkipFixed(p, end, 8);
+                    case 2: { // length-delimited
+                        uint64_t len = 0;
+                        if (!ReadVarint(p, end, len) || len > (uint64_t)(end - p)) {
+                            return false;
+                        }
+                        f.data = p;
+                        f.size = (std::size_t)len;
+                        p += len;
+                        return true;
+                    }
+                    case 5: // fixed32
+                        return SkipFixed(p, end, 4);
+                    default:
+                        return false;
+                    }
+                }
+
+                static ppp::string ProtoString(const ProtoField& f) noexcept {
+                    if (f.wire_type != 2 || NULLPTR == f.data || f.size < 1) {
+                        return "";
+                    }
+                    return ppp::string((const char*)f.data, f.size);
+                }
+
+                static ppp::string NormalizeCountryCode(const ppp::string& country) noexcept {
+                    ppp::string c = ToLower<ppp::string>(LTrim(RTrim(country)));
+                    if (c.size() > 6 && memcmp(c.data(), "geoip:", 6) == 0) {
+                        c = c.substr(6);
+                    }
+                    if (c.size() > 8 && memcmp(c.data(), "geosite:", 8) == 0) {
+                        c = c.substr(8);
+                    }
+                    return c.empty() ? "cn" : c;
+                }
+
+                static bool LoadDatBytes(const ppp::string& path, std::shared_ptr<Byte>& bytes, int& length) noexcept {
+                    length = 0;
+                    if (path.empty()) {
+                        return false;
+                    }
+
+                    ppp::string full_path = File::GetFullPath(File::RewritePath(path.data()).data());
+                    if (full_path.empty()) {
+                        full_path = path;
+                    }
+                    if (!File::Exists(full_path.data())) {
+                        ppp::telemetry::Log(Level::kInfo, "geo-rules",
+                            "dat file not found: %s", full_path.data());
+                        return false;
+                    }
+
+                    bytes = File::ReadAllBytes(full_path.data(), length);
+                    if (!bytes || length <= 0) {
+                        ppp::telemetry::Log(Level::kInfo, "geo-rules",
+                            "dat file read failed: %s", full_path.data());
+                        return false;
+                    }
+                    return true;
+                }
+
+                static ppp::string IpBytesToString(const unsigned char* data, std::size_t size) noexcept {
+                    try {
+                        if (size == 4) {
+                            boost::asio::ip::address_v4::bytes_type b = { { data[0], data[1], data[2], data[3] } };
+                            std::string s = boost::asio::ip::address_v4(b).to_string();
+                            return ppp::string(s.data(), s.size());
+                        }
+                        if (size == 16) {
+                            boost::asio::ip::address_v6::bytes_type b;
+                            for (std::size_t i = 0; i < 16; ++i) {
+                                b[i] = data[i];
+                            }
+                            std::string s = boost::asio::ip::address_v6(b).to_string();
+                            return ppp::string(s.data(), s.size());
+                        }
+                    }
+                    catch (const std::exception&) {
+                    }
+                    return "";
+                }
+
+                static bool ParseGeoIpCidrMessage(const unsigned char* data, std::size_t size, ppp::string& cidr) noexcept {
+                    const unsigned char* p = data;
+                    const unsigned char* end = data + size;
+                    ppp::string ip;
+                    int prefix = -1;
+
+                    ProtoField f;
+                    while (NextProtoField(p, end, f)) {
+                        if (f.field_number == 1 && f.wire_type == 2) {
+                            ip = IpBytesToString(f.data, f.size);
+                        }
+                        elif(f.field_number == 2 && f.wire_type == 0) {
+                            prefix = (int)f.varint;
+                        }
+                    }
+
+                    if (ip.empty()) {
+                        return false;
+                    }
+                    if (prefix < 0) {
+                        prefix = (ip.find(':') == ppp::string::npos) ? 32 : 128;
+                    }
+
+                    cidr = ip + "/" + stl::to_string<ppp::string>(prefix);
+                    return IsValidCidr(cidr);
+                }
+
+                static void ParseGeoIpEntry(const unsigned char* data, std::size_t size, const ppp::string& country, ppp::unordered_set<ppp::string>& cidrs, int& skipped) noexcept {
+                    const unsigned char* p = data;
+                    const unsigned char* end = data + size;
+                    ppp::string code;
+                    ppp::vector<ppp::string> entry_cidrs;
+
+                    ProtoField f;
+                    while (NextProtoField(p, end, f)) {
+                        if (f.field_number == 1 && f.wire_type == 2) {
+                            code = NormalizeCountryCode(ProtoString(f));
+                        }
+                        elif(f.field_number == 2 && f.wire_type == 2) {
+                            ppp::string cidr;
+                            if (ParseGeoIpCidrMessage(f.data, f.size, cidr)) {
+                                entry_cidrs.emplace_back(std::move(cidr));
+                            }
+                            else {
+                                skipped++;
+                            }
+                        }
+                    }
+
+                    if (code == country) {
+                        for (auto& cidr : entry_cidrs) {
+                            cidrs.emplace(std::move(cidr));
+                        }
+                    }
+                }
+
+                static ppp::string GeoSiteDomainToInput(int type, const ppp::string& value) noexcept {
+                    ppp::string v = ToLower<ppp::string>(LTrim(RTrim(value)));
+                    if (v.empty()) {
+                        return "";
+                    }
+
+                    // v2ray geosite proto: Plain=0, Regex=1, Domain=2, Full=3.
+                    switch (type) {
+                    case 1:
+                        return "regexp:" + value;
+                    case 3:
+                        return "full:" + v;
+                    case 0:
+                    case 2:
+                    default:
+                        return v;
+                    }
+                }
+
+                static bool ParseGeoSiteDomainMessage(const unsigned char* data, std::size_t size, ppp::string& input) noexcept {
+                    const unsigned char* p = data;
+                    const unsigned char* end = data + size;
+                    int type = 0;
+                    ppp::string value;
+
+                    ProtoField f;
+                    while (NextProtoField(p, end, f)) {
+                        if (f.field_number == 1 && f.wire_type == 0) {
+                            type = (int)f.varint;
+                        }
+                        elif(f.field_number == 2 && f.wire_type == 2) {
+                            value = ProtoString(f);
+                        }
+                    }
+
+                    input = GeoSiteDomainToInput(type, value);
+                    return !input.empty();
+                }
+
+                static void ParseGeoSiteEntry(const unsigned char* data, std::size_t size, const ppp::string& country, const ppp::string& domestic_provider, ppp::vector<ppp::string>& dns_rules, int& skipped) noexcept {
+                    const unsigned char* p = data;
+                    const unsigned char* end = data + size;
+                    ppp::string code;
+                    ppp::vector<ppp::string> inputs;
+
+                    ProtoField f;
+                    while (NextProtoField(p, end, f)) {
+                        if (f.field_number == 1 && f.wire_type == 2) {
+                            code = NormalizeCountryCode(ProtoString(f));
+                        }
+                        elif(f.field_number == 2 && f.wire_type == 2) {
+                            ppp::string input;
+                            if (ParseGeoSiteDomainMessage(f.data, f.size, input)) {
+                                inputs.emplace_back(std::move(input));
+                            }
+                            else {
+                                skipped++;
+                            }
+                        }
+                    }
+
+                    if (code == country) {
+                        for (const auto& input : inputs) {
+                            ppp::string rule = GeoRuleGenerator::NormalizeDomainToDnsRule(input, domestic_provider);
+                            if (!rule.empty()) {
+                                dns_rules.emplace_back(std::move(rule));
+                            }
+                            else {
+                                skipped++;
+                            }
+                        }
+                    }
+                }
+            }
+
             /**
              * @brief Processes a single GeoIP source, appending valid CIDR lines.
              *
@@ -197,6 +459,32 @@ namespace ppp {
                             "skipped invalid CIDR: %s", line.data());
                     }
                 }
+            }
+
+            void GeoRuleGenerator::ProcessGeoIpDat(const ppp::string& path, const ppp::string& country, ppp::unordered_set<ppp::string>& cidrs, int& skipped) noexcept {
+                std::shared_ptr<Byte> bytes;
+                int length = 0;
+                if (!LoadDatBytes(path, bytes, length)) {
+                    return;
+                }
+
+                ppp::string normalized_country = NormalizeCountryCode(country);
+                std::size_t before = cidrs.size();
+                const unsigned char* p = (const unsigned char*)bytes.get();
+                const unsigned char* end = p + length;
+
+                ProtoField f;
+                while (NextProtoField(p, end, f)) {
+                    // GeoIPList: repeated GeoIP entry = 1.
+                    if (f.field_number == 1 && f.wire_type == 2) {
+                        ParseGeoIpEntry(f.data, f.size, normalized_country, cidrs, skipped);
+                    }
+                }
+
+                ppp::telemetry::Log(Level::kInfo, "geo-rules",
+                    "geoip dat parsed: country=%s cidrs=%d source=%s",
+                    normalized_country.data(), (int)(cidrs.size() - before), path.data());
+                ppp::telemetry::Count("geo-rules.geoip_dat_cidrs", (int)(cidrs.size() - before));
             }
 
             /**
@@ -293,6 +581,32 @@ namespace ppp {
                 }
             }
 
+            void GeoRuleGenerator::ProcessGeoSiteDat(const ppp::string& path, const ppp::string& country, const ppp::string& domestic_provider, ppp::vector<ppp::string>& dns_rules, int& skipped) noexcept {
+                std::shared_ptr<Byte> bytes;
+                int length = 0;
+                if (!LoadDatBytes(path, bytes, length)) {
+                    return;
+                }
+
+                ppp::string normalized_country = NormalizeCountryCode(country);
+                std::size_t before = dns_rules.size();
+                const unsigned char* p = (const unsigned char*)bytes.get();
+                const unsigned char* end = p + length;
+
+                ProtoField f;
+                while (NextProtoField(p, end, f)) {
+                    // GeoSiteList: repeated GeoSite entry = 1.
+                    if (f.field_number == 1 && f.wire_type == 2) {
+                        ParseGeoSiteEntry(f.data, f.size, normalized_country, domestic_provider, dns_rules, skipped);
+                    }
+                }
+
+                ppp::telemetry::Log(Level::kInfo, "geo-rules",
+                    "geosite dat parsed: country=%s rules=%d source=%s",
+                    normalized_country.data(), (int)(dns_rules.size() - before), path.data());
+                ppp::telemetry::Count("geo-rules.geosite_dat_rules", (int)(dns_rules.size() - before));
+            }
+
             /**
              * @brief Ensures the parent directory of a file path exists.
              *
@@ -314,7 +628,7 @@ namespace ppp {
             /**
              * @brief Runs the full geo-rules generation pipeline.
              */
-            GeoRuleGenerateResult GeoRuleGenerator::Generate(const ppp::configurations::AppConfiguration& config) noexcept {
+            GeoRuleGenerateResult GeoRuleGenerator::Generate(const ppp::configurations::AppConfiguration& config, const ppp::vector<ppp::string>* bypass_sources) noexcept {
                 GeoRuleGenerateResult result;
 
                 const auto& gr = config.geo_rules;
@@ -345,8 +659,20 @@ namespace ppp {
                 ppp::unordered_set<ppp::string> cidr_set;
                 int skipped = 0;
 
+                ProcessGeoIpDat(gr.geoip_dat, gr.country, cidr_set, skipped);
+
                 for (const auto& geoip_src : gr.geoip) {
                     ProcessGeoIpSource(geoip_src, cidr_set, skipped);
+                }
+
+                // Merge existing client/command-line bypass sources into the generated
+                // bypass output as well.  This keeps geo-rules as one de-duplicated
+                // effective bypass list instead of registering command-line bypass and
+                // geo output as separate route-list files.
+                if (NULLPTR != bypass_sources) {
+                    for (const auto& bypass_src : *bypass_sources) {
+                        ProcessGeoIpSource(bypass_src, cidr_set, skipped);
+                    }
                 }
 
                 ppp::telemetry::Log(Level::kDebug, "geo-rules",
@@ -375,6 +701,8 @@ namespace ppp {
                 // Phase 3: Collect DNS rules from GeoSite sources.
                 // ----------------------------------------------------------
                 ppp::vector<ppp::string> dns_rule_lines;
+
+                ProcessGeoSiteDat(gr.geosite_dat, gr.country, domestic_provider, dns_rule_lines, skipped);
 
                 for (const auto& geosite_src : gr.geosite) {
                     ProcessGeoSiteSource(geosite_src, domestic_provider, dns_rule_lines, skipped);

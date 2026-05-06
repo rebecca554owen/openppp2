@@ -2,10 +2,10 @@
 
 /**
  * @file GeoRuleGenerator.h
- * @brief Phase G: GeoIP/GeoSite rule generation from text-format inputs.
+ * @brief Phase G: GeoIP/GeoSite rule generation from dat and text-format inputs.
  *
- * Optionally downloads GeoIP/GeoSite dat cache files, then reads text-format
- * GeoIP (CIDR) and GeoSite (domain) files, generates
+ * Optionally downloads and parses GeoIP/GeoSite dat cache files, then reads
+ * text-format GeoIP (CIDR) and GeoSite (domain) files, generates
  * merged bypass CIDR and DNS rule output files, and returns their paths
  * for the caller to append to the existing load lists.
  *
@@ -14,12 +14,13 @@
  *          the configured output paths; parent directories are created
  *          automatically if they do not exist.
  *
- * Limitations (Phase G initial):
- *   - Binary geoip.dat/geosite.dat files can be downloaded and cached, but are
- *     not parsed into rules yet.
+ * Limitations:
+ *   - Binary geoip.dat/geosite.dat files are parsed for the configured country
+ *     when present. The parser intentionally supports the standard v2ray/Xray/
+ *     MetaCubeX protobuf dat layout needed by geoip/geosite CN generation.
  *   - URL sources in geoip/geosite fields are not yet supported; only local
  *     file paths.  Use geoip-download-url/geosite-download-url for dat cache
- *     downloads.
+ *     downloads before dat parsing.
  *   - append-bypass supports inline CIDR strings and local file paths.
  *   - append-dns-rules supports inline rule strings and local file paths
  *     (prefix with "rules://" to load from file).
@@ -49,7 +50,7 @@ namespace ppp {
             };
 
             /**
-             * @brief Generates bypass CIDR and DNS rule files from GeoIP/GeoSite text inputs.
+             * @brief Generates bypass CIDR and DNS rule files from GeoIP/GeoSite dat/text inputs.
              *
              * This class is stateless; all state is passed through the static
              * Generate() method.  Thread-safe if called from a single thread
@@ -65,14 +66,23 @@ namespace ppp {
                  *
                  * Workflow:
                   * 1. Download geoip-dat/geosite-dat cache files when download URLs are configured.
-                  * 2. Resolve effective dns-provider-domestic (fallback to dns.servers.domestic, then "doh.pub").
-                  * 3. Read and parse all GeoIP source files → collect CIDR lines.
-                  * 4. Read and parse all GeoSite source files → generate DNS rule lines.
-                  * 5. Process append-bypass entries (inline CIDR or file paths).
-                  * 6. Process append-dns-rules entries (inline rules or rules:// file paths).
-                  * 7. De-duplicate (stable) and write output files.
+                   * 2. Resolve effective dns-provider-domestic (fallback to dns.servers.domestic, then "doh.pub").
+                   * 3. Parse geoip-dat/geosite-dat for geo-rules.country when present.
+                   * 4. Read and parse all GeoIP source files → collect CIDR lines.
+                   * 5. Read and parse all GeoSite source files → generate DNS rule lines.
+                   * 6. Process append-bypass entries (inline CIDR or file paths).
+                   * 7. Process append-dns-rules entries (inline rules or rules:// file paths).
+                   * 8. De-duplicate (stable) and write output files.
                   */
-                static GeoRuleGenerateResult Generate(const ppp::configurations::AppConfiguration& config) noexcept;
+                static GeoRuleGenerateResult Generate(const ppp::configurations::AppConfiguration& config, const ppp::vector<ppp::string>* bypass_sources = NULLPTR) noexcept;
+
+                /**
+                 * @brief Normalizes a domain input line into a DNS rule line.
+                 * @param line Raw input line (e.g. "baidu.com", ".qq.com", "domain:taobao.com", "full:example.cn", "regexp:^.*\\.example\\.cn$").
+                 * @param domestic_provider Domestic DNS provider name.
+                 * @return Normalized DNS rule line, or empty if the line should be skipped.
+                 */
+                static ppp::string NormalizeDomainToDnsRule(const ppp::string& line, const ppp::string& domestic_provider) noexcept;
 
             private:
                 /**
@@ -101,6 +111,11 @@ namespace ppp {
                 static void ProcessGeoIpSource(const ppp::string& path, ppp::unordered_set<ppp::string>& cidrs, int& skipped) noexcept;
 
                 /**
+                 * @brief Parses v2ray/Xray/MetaCubeX geoip.dat and appends CIDRs for the configured country.
+                 */
+                static void ProcessGeoIpDat(const ppp::string& path, const ppp::string& country, ppp::unordered_set<ppp::string>& cidrs, int& skipped) noexcept;
+
+                /**
                  * @brief Processes a single GeoSite source, generating DNS rule lines.
                  * @param path Source file path.
                  * @param domestic_provider Effective domestic DNS provider name.
@@ -110,12 +125,9 @@ namespace ppp {
                 static void ProcessGeoSiteSource(const ppp::string& path, const ppp::string& domestic_provider, ppp::vector<ppp::string>& dns_rules, int& skipped) noexcept;
 
                 /**
-                 * @brief Normalizes a domain input line into a DNS rule line.
-                 * @param line Raw input line (e.g. "baidu.com", ".qq.com", "domain:taobao.com", "full:example.cn", "regexp:^.*\\.example\\.cn$").
-                 * @param domestic_provider Domestic DNS provider name.
-                 * @return Normalized DNS rule line, or empty if the line should be skipped.
+                 * @brief Parses v2ray/Xray/MetaCubeX geosite.dat and appends DNS rules for the configured country.
                  */
-                static ppp::string NormalizeDomainToDnsRule(const ppp::string& line, const ppp::string& domestic_provider) noexcept;
+                static void ProcessGeoSiteDat(const ppp::string& path, const ppp::string& country, const ppp::string& domestic_provider, ppp::vector<ppp::string>& dns_rules, int& skipped) noexcept;
 
                 /**
                  * @brief Ensures the parent directory of a file path exists.

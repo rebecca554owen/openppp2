@@ -314,8 +314,8 @@
 |----------|------|--------|----------|------|
 | `geo-rules.enabled` | bool | `false` | ✅ 已实现 | 是否启用 Geo 规则生成；默认关闭，不改变现有行为 |
 | `geo-rules.country` | string | `"cn"` | ✅ 已实现 | 生成文件注释中的国家/区域标记；首版只按 CN 语义使用 |
-| `geo-rules.geoip-dat` | string | `"GeoIP.dat"` | ✅ 已实现 | GeoIP dat 下载缓存路径；当前只负责下载/缓存，不解析二进制 dat |
-| `geo-rules.geosite-dat` | string | `"GeoSite.dat"` | ✅ 已实现 | GeoSite dat 下载缓存路径；当前只负责下载/缓存，不解析二进制 dat |
+| `geo-rules.geoip-dat` | string | `"GeoIP.dat"` | ✅ 已实现 | GeoIP dat 下载缓存路径；会下载/缓存并解析配置国家的二进制 dat |
+| `geo-rules.geosite-dat` | string | `"GeoSite.dat"` | ✅ 已实现 | GeoSite dat 下载缓存路径；会下载/缓存并解析配置国家的二进制 dat |
 | `geo-rules.geoip-download-url` | string | `""` | ✅ 已实现 | 可选 GeoIP dat 下载 URL，例如 MetaCubeX `geoip.dat` release 地址 |
 | `geo-rules.geosite-download-url` | string | `""` | ✅ 已实现 | 可选 GeoSite dat 下载 URL，例如 MetaCubeX `geosite.dat` release 地址 |
 | `geo-rules.geoip` | string 或 string[] | `[]` | ✅ 已实现 | 文本 CIDR 来源文件路径；支持单个字符串或数组 |
@@ -345,7 +345,7 @@
 
 兼容解析用户给出的 snake_case key：`geoip_dat`、`geosite_dat`、`geoip_download_url`、`geosite_download_url`；序列化和推荐写法仍使用 kebab-case。
 
-注意：当前 dat 文件**会下载到本地缓存路径**，但二进制 `geoip.dat` / `geosite.dat` 解析仍在 backlog。规则生成仍依赖下方的文本 `geoip` / `geosite` 来源，或 `append-bypass` / `append-dns-rules`。
+注意：当前 dat 文件会下载到本地缓存路径，并按 `geo-rules.country` 自动解析 `geoip.dat` / `geosite.dat` 生成规则；文本 `geoip` / `geosite` 来源和追加项会继续叠加并去重。
 
 #### `geoip` 输入格式
 
@@ -432,8 +432,8 @@ generated dns-rules = geo-rules.geosite -> /<domestic-provider>/nic
 
 #### 当前限制
 
-- `geoip` / `geosite` 规则来源仅支持本地文本文件；dat 下载 URL 已支持，但下载后的二进制 dat 暂不解析。
-- 暂不解析二进制 `geoip.dat` / `geosite.dat`。
+- `geoip-dat` / `geosite-dat` 支持 v2ray/Xray/MetaCubeX protobuf dat 布局，会按 `country` 提取 GeoIP CIDR 和 GeoSite 域名。
+- `geoip` / `geosite` 文本来源仍支持本地文本文件，并会叠加到 dat 解析结果之后。
 - Android/iOS 当前不启用生成器，避免破坏已有移动端 `set_dns_rules_list(...)` 路径。
 - `dns-provider-foreign` 已配置解析但暂未消费；后续可用于 `geolocation-!cn` 自动生成 `/tun` 规则。
 
@@ -1086,8 +1086,8 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 |----------|------|--------|------|
 | `geo-rules.enabled` | bool | `false` | 是否启用 Geo 规则生成 |
 | `geo-rules.country` | string | `"cn"` | 目标国家/区域，首版只要求支持 `cn` |
-| `geo-rules.geoip-dat` | string | `GeoIP.dat` | GeoIP dat 下载缓存路径；当前只下载/缓存，不解析二进制 dat |
-| `geo-rules.geosite-dat` | string | `GeoSite.dat` | GeoSite dat 下载缓存路径；当前只下载/缓存，不解析二进制 dat |
+| `geo-rules.geoip-dat` | string | `GeoIP.dat` | GeoIP dat 下载缓存路径；会下载/缓存并解析配置国家的二进制 dat |
+| `geo-rules.geosite-dat` | string | `GeoSite.dat` | GeoSite dat 下载缓存路径；会下载/缓存并解析配置国家的二进制 dat |
 | `geo-rules.geoip-download-url` | string | `""` | 可选 GeoIP dat 下载 URL |
 | `geo-rules.geosite-download-url` | string | `""` | 可选 GeoSite dat 下载 URL |
 | `geo-rules.geoip` | string/string[] | `[]` | GeoIP/CIDR 来源；当前支持本地纯文本 CIDR 文件 |
@@ -1101,7 +1101,7 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 
 #### 输入格式首版约束
 
-当前不解析 v2ray/sing-box 的二进制 `geoip.dat` / `geosite.dat`，已支持更容易落地的文本格式：
+当前已支持解析 v2ray/Xray/MetaCubeX protobuf 布局的二进制 `geoip.dat` / `geosite.dat`，也继续支持文本格式：
 
 GeoIP/CIDR 输入：
 

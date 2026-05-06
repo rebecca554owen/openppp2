@@ -358,8 +358,8 @@ Routing and DNS are not separate knobs. They form a unified traffic classificati
 | `client.dns-rules` | `[]` | DNS rules file paths or URLs |
 | `client.bypass` | `[]` | IP bypass list file paths or URLs |
 | `geo-rules.enabled` | `false` | Generate extra bypass and DNS-rule files from local text GeoIP/GeoSite inputs |
-| `geo-rules.geoip-dat` | `GeoIP.dat` | Local cache path for downloaded GeoIP dat; currently downloaded but not parsed |
-| `geo-rules.geosite-dat` | `GeoSite.dat` | Local cache path for downloaded GeoSite dat; currently downloaded but not parsed |
+| `geo-rules.geoip-dat` | `GeoIP.dat` | Local cache path for GeoIP dat; downloaded and parsed for the configured country |
+| `geo-rules.geosite-dat` | `GeoSite.dat` | Local cache path for GeoSite dat; downloaded and parsed for the configured country |
 | `geo-rules.geoip-download-url` | `""` | Optional HTTP/HTTPS URL used to download/update `geoip-dat` |
 | `geo-rules.geosite-download-url` | `""` | Optional HTTP/HTTPS URL used to download/update `geosite-dat` |
 | `geo-rules.geoip` | `[]` | Local text CIDR source file path or array of paths |
@@ -493,9 +493,9 @@ regexp:^.*\.example\.cn$
 Important details:
 
 - `geoip-download-url` and `geosite-download-url` download dat files into `geoip-dat` and `geosite-dat` at startup.
-- Downloaded binary `geoip.dat` / `geosite.dat` files are cached but not parsed yet; rule generation still uses local text `geoip` / `geosite` inputs and append lists.
+- Downloaded binary `geoip.dat` / `geosite.dat` files are parsed automatically for `geo-rules.country`; local text `geoip` / `geosite` inputs and append lists are merged afterwards.
 - The parser also accepts snake_case compatibility keys (`geoip_dat`, `geosite_dat`, `geoip_download_url`, `geosite_download_url`), but kebab-case is the documented form.
-- `geoip` and `geosite` currently support local text files only; URL sources in these fields are not parsed yet.
+- `geoip` and `geosite` still support local text files only; use `geoip-download-url` / `geosite-download-url` for dat downloads.
 - Generated DNS rules use `/<dns-provider-domestic>/nic`; if unset, the provider falls back to `dns.servers.domestic`, then `doh.pub`.
 - `dns-provider-foreign` is parsed and reserved for future non-CN or `geolocation-!cn` generation, but is not consumed by the current generator.
 - `append-bypass` is merged after GeoIP CIDRs and can contain inline CIDRs or local CIDR files.
