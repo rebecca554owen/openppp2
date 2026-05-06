@@ -4,6 +4,32 @@
 
 在现有 DNS 拦截/缓存架构上扩展多协议上游支持（UDP / TCP / DoH / DoT），配合 EDNS Client Subnet 优化国内 CDN 解析。目标是**默认零破坏性变更**：完全兼容现有 `dns-rules.txt` 和 `vdns` 缓存；所有会改变未命中规则处理行为的能力必须通过显式配置开启。
 
+## 实现状态总览
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| UDP/TCP/DoH/DoT 四协议 | ✅ 已实现 | 全部异步，`DnsResolver.cpp` 中完整实现 |
+| 12 个内置提供商 | ✅ 已实现 | 代码硬编码于 `Providers()` 静态表中 |
+| dns-rules.txt 扩展（提供商名称） | ✅ 已实现 | `Rule::Load()` 扩展，`ProviderName` 字段 |
+| `intercept-unmatched` 配置 | ✅ 已实现 | 未命中规则时走 `dns.servers.foreign` |
+| `verify-peer` TLS 证书校验 | ✅ 已实现 | 可选，使用 `cacert.pem` / 内置根证书 / 系统 CA |
+| ECS IPv4 /24 注入 | ✅ 已实现 | `InjectEcsOptRr()` 内联实现 |
+| ClientExitIP 服务器→客户端传递 | ✅ 已实现 | 优先级 2 的出口 IP 来源 |
+| 协议降级故障转移 | ✅ 已实现 | `TryProtocols()` 按条目顺序尝试 |
+| 多提供商级联故障转移 | ✅ 已实现 | `ResolveAsyncWithFallback()` 支持三级提供商 |
+| Socket protect（Android VPN） | ✅ 已实现 | `SetProtectSocketCallback()` 已接线 |
+| STUN 出口 IP 检测 | ✅ 已实现 | `DetectExitIPViaStun()` 完整实现，已接入 `ResolveAsync()` 主路径；限制见下文 |
+| object/array 配置解析 | ✅ 已实现 | `ParseDnsServerSpec()` 支持 string/object/array 三种形式；含 `protocol`、`url`、`hostname`、`address`、`bootstrap` 字段 |
+| Bootstrap DNS helper | ⚠️ helper 已有 | `ResolveHostnameAsync()` 已实现，但主路径尚未使用；提供商表中已硬编码 IP，无需动态解析 |
+| OPT RR 合并（ARCOUNT > 0） | ✅ 已实现 | `InjectEcsOptRr()` 完整实现 OPT RR 扫描与 ECS option 合并 |
+| TLS 连接池 | ❌ 未实现 | 每请求新建 TLS 连接，无复用 |
+| ECS IPv6 支持 | ❌ 未实现 | 首版仅 IPv4，IPv6 地址会被跳过 |
+| DoQ（DNS over QUIC） | ❌ 未来 | 无 QUIC 传输；配置层 `doq` 值会归一化为 `dot`（见下文） |
+| DoH3（DNS over HTTP/3） | ❌ 未来 | 无代码、无引用 |
+| 遥测（Telemetry） | ⚠️ 外部已集成 | `DnsResolver` 本身无内部遥测调用；外部（`VEthernetNetworkSwitcher`）使用 `ppp::telemetry::*` 记录 DNS 配置应用事件 |
+
+---
+
 ## 核心原则
 
 | 原则 | 说明 |
@@ -12,17 +38,20 @@
 | **性能优先** | 减少不必要拷贝、支持后续连接复用、优先使用服务器返回的出口 IP 候选值 |
 | **分阶段实现** | 先 UDP/TCP + provider 规则闭环，再 DoT/DoH，最后 ECS/STUN/连接池优化 |
 | **平台安全** | 新建 UDP/TCP/TLS/STUN/bootstrap socket 必须复用现有 Linux/Android tunnel protect 边界 |
-| **不实现 DoQ** | QUIC 库依赖过重，普及度低，标记为未来扩展 |
+| **不实现 DoQ** | QUIC 库依赖过重，普及度低，标记为未来扩展；配置层做 `doq→dot` 归一化 |
 
 ## 协议支持
 
 | 协议 | 端口 | 加密 | 状态 | 说明 |
 |------|------|------|------|------|
-| **UDP** | 53 | ❌ | ✅ 实现 | 最快，复用现有转发路径 |
-| **TCP** | 53 | ❌ | ✅ 实现 | 防 UDP 欺骗，支持大响应 |
-| **DoH** | 443 | ✅ | ✅ 实现 | DNS over HTTPS，先实现 HTTP/1.1，复用 `boost::beast::http`；HTTP/2 不作为首版目标 |
-| **DoT** | 853 | ✅ | ✅ 实现 | DNS over TLS，复用 `boost::asio::ssl` |
-| **DoQ** | 784/853 | ✅ | ⏳ 未来 | 需引入 QUIC 库，暂不实现；配置 `doq` 时自动降级为 `dot` |
+| **UDP** | 53 | ❌ | ✅ 已实现 | 最快，复用现有转发路径 |
+| **TCP** | 53 | ❌ | ✅ 已实现 | 防 UDP 欺骗，支持大响应 |
+| **DoH** | 443 | ✅ | ✅ 已实现 | DNS over HTTPS，HTTP/1.1，基于 `boost::beast::http`；HTTP/2 不作为首版目标 |
+| **DoT** | 853 | ✅ | ✅ 已实现 | DNS over TLS，基于 `boost::asio::ssl` |
+| **DoQ** | 784/853 | ✅ | ❌ 未来 | 需引入 QUIC 库，暂不实现；配置层 `doq` 值自动归一化为 `dot`（`NormalizeDnsProtocol()`） |
+| **DoH3** | 443 (QUIC) | ✅ | ❌ 未来 | DNS over HTTP/3，依赖 QUIC 库，暂不实现 |
+
+> **关于 DoQ 自动降级**：`AppConfiguration.cpp` 中的 `NormalizeDnsProtocol()` 函数会在配置解析阶段将 `"doq"` 协议值归一化为 `"dot"`。这意味着如果用户在 object/array 配置中指定 `"protocol": "doq"`，该条目会被当作 DoT 处理，而非报错或被忽略。由于没有 QUIC 传输实现，这不是真正的 DoQ→DoT 降级，而是配置层面的归一化。DoH3 不做任何归一化（无对应协议枚举值）。
 
 ---
 
@@ -43,7 +72,7 @@
 |------|---------|------|
 | `dns::Rule::Load` | 扩展 | `server_ip` 字段新增识别提供商简写名称 |
 | `RedirectDnsServer` | 扩展 | 当匹配到提供商名称时走 `DnsResolver` 路径；未命中规则默认保持旧行为 |
-| `appsettings.json` | 扩展 | 新增 `dns.servers.domestic`/`dns.servers.foreign`/`dns.intercept_unmatched` 配置 |
+| `appsettings.json` | 扩展 | 新增 `dns.servers.domestic`/`dns.servers.foreign`/`dns.intercept-unmatched` 配置 |
 | `VirtualEthernetInformationExtensions` | 扩展 | 新增 `ClientExitIP` 字段，服务器填充，客户端读取用于 ECS |
 
 ### 新增的组件
@@ -51,7 +80,7 @@
 | 文件 | 说明 |
 |------|------|
 | `ppp/dns/DnsResolver.h` | 配置结构 + 提供商表 + 统一异步解析接口 + socket protect 回调声明 |
-| `ppp/dns/DnsResolver.cpp` | UDP/TCP/DoT/DoH 协议实现 + bootstrap + ECS 构造 |
+| `ppp/dns/DnsResolver.cpp` | UDP/TCP/DoT/DoH 实现 + ECS 构造 + STUN 检测 + bootstrap helper（1880 行） |
 
 ---
 
@@ -69,26 +98,32 @@
 │  3. dns::Rule::Get() 匹配 dns_rules.txt                   │
 │     ├─ 命中且 Rule->Server 是 IP 地址                     │
 │     │  → 走现有 UDP 转发路径（零修改）                      │
-│     └─ 命中且 Rule->Server 是提供商名称（如 "doh.pub"）    │
+│     └─ 命中且 Rule->ProviderName 非空（如 "doh.pub"）      │
 │        → 走新 DnsResolver 路径                            │
-│  4. 未命中任何规则 → 默认保持旧行为；仅 intercept_unmatched │
+│  4. 未命中任何规则 → 默认保持旧行为；仅 intercept-unmatched │
 │     显式开启时才走 dns.servers.foreign                     │
 │                                                          │
 │  新路径:                                                  │
-│  4a. 根据 nic/tun 标志选择 domestic/foreign 服务器组       │
-│  4b. DnsResolver::ResolveAsync()                          │
-│      ├─ 若 domestic && ecs_enabled → 添加 ECS OPT RR      │
-│      ├─ 按优先级选择协议：DoH → DoT → TCP → UDP            │
+│  4a. DnsResolver::ResolveAsync()                          │
+│      ├─ 若 domestic && ecs_enabled →                     │
+│      │    ├─ GetEcsIp() 有可用 IP → InjectEcsOptRr()     │
+│      │    └─ GetEcsIp() 无可用 IP →                      │
+│      │         DetectExitIPViaStun() → 注入 ECS → Try    │
+│      ├─ 按条目顺序尝试协议：DoH → DoT → TCP → UDP          │
 │      ├─ 发送异步请求                                      │
 │      └─ 回调返回原始 DNS 响应                              │
-│  4c. vdns::AddCache() 写入缓存                            │
-│  4d. DatagramOutput() 注入响应                            │
+│  4b. vdns::AddCache() 写入缓存                            │
+│  4c. DatagramOutput() 注入响应                            │
 └──────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 配置格式
+
+### JSON key 与 C++ 字段命名对照
+
+本模块的 JSON 配置 key 统一使用 **kebab-case**（如 `intercept-unmatched`、`override-ip`、`verify-peer`），与项目其余配置风格一致。C++ 内部结构体字段使用 **snake_case**（如 `intercept_unmatched`、`override_ip`、`verify_peer`），这是 C++ 惯例。序列化/反序列化代码负责两种命名之间的映射。
 
 ### 最简配置（推荐，2 行即可）
 
@@ -109,56 +144,64 @@
 {
     "dns": {
         "servers": {
-            "domestic": {
-                "protocol": "doh",
-                "url": "https://doh.pub/dns-query",
-                "bootstrap": ["119.29.29.29"]
-            },
-            "foreign": {
-                "protocol": "doh",
-                "url": "https://cloudflare-dns.com/dns-query",
-                "bootstrap": ["1.1.1.1", "1.0.0.1"]
-            }
+            "domestic": "doh.pub",
+            "foreign": "cloudflare"
         },
+        "intercept-unmatched": false,
         "ecs": {
             "enabled": true,
-            "override_ip": ""
+            "override-ip": ""
+        },
+        "tls": {
+            "verify-peer": true
         }
     }
 }
 ```
 
-### 多协议故障转移配置
+### object/array 配置形式（✅ 已实现）
+
+`domestic`/`foreign` 字段支持三种形式：
+
+- **string**：提供商简写或 IP 地址，如 `"cloudflare"` 或 `"1.1.1.1:53"`
+- **object**：单个结构化条目，含 `protocol`、`url`、`hostname`、`address`、`bootstrap` 字段
+- **array**：混合字符串和对象的数组
+
+解析代码位于 `AppConfiguration.cpp` 的 `ParseDnsServerSpec()` 和 `ParseDnsServerEntry()` 函数中。
 
 ```json
 {
     "dns": {
         "servers": {
             "domestic": [
-                { "protocol": "doh", "url": "https://doh.pub/dns-query", "bootstrap": ["119.29.29.29"] },
-                { "protocol": "dot", "hostname": "dot.pub", "bootstrap": ["119.29.29.29"] },
-                { "protocol": "udp", "address": "119.29.29.29" }
+                { "protocol": "doh", "url": "https://doh.pub/dns-query", "hostname": "doh.pub", "address": "119.29.29.29:443", "bootstrap": ["119.29.29.29"] },
+                { "protocol": "dot", "hostname": "dot.pub", "address": "119.29.29.29:853" },
+                { "protocol": "udp", "address": "119.29.29.29:53" }
             ],
             "foreign": [
-                { "protocol": "doh", "url": "https://cloudflare-dns.com/dns-query", "bootstrap": ["1.1.1.1"] },
-                { "protocol": "dot", "hostname": "cloudflare-dns.com", "bootstrap": ["1.1.1.1"] },
-                { "protocol": "tcp", "address": "1.1.1.1" }
+                { "protocol": "doh", "url": "https://cloudflare-dns.com/dns-query", "hostname": "cloudflare-dns.com", "address": "1.1.1.1:443", "bootstrap": ["1.1.1.1"] },
+                { "protocol": "dot", "hostname": "cloudflare-dns.com", "address": "1.1.1.1:853" },
+                { "protocol": "tcp", "address": "1.1.1.1:53" }
             ]
         }
     }
 }
 ```
 
+> **注意**：当 `domestic`/`foreign` 传入 object/array 时，解析后的结构化条目存储在 `dns.servers.domestic_entries`/`foreign_entries` 中。但当前 `RedirectDnsServer` 主路径使用 `dns.servers.domestic`/`foreign` 简写字段匹配内置提供商表，因此自定义 object/array 条目**需要 DnsResolver 侧的适配才能作为自定义提供商使用**。使用字符串简写即可获得等效的多协议降级能力（代码内置提供商表已包含完整的 DoH/DoT/TCP/UDP 条目，按优先级自动降级）。
+
 ### 配置字段说明
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `dns.servers.domestic` | string/object/array | — | 国内 DNS 服务器（简写名、单配置、或数组） |
-| `dns.servers.foreign` | string/object/array | — | 海外 DNS 服务器 |
-| `dns.intercept_unmatched` | bool | `false` | 未命中 `dns-rules.txt` 时是否默认拦截并走 `dns.servers.foreign`；默认 false 保持旧行为 |
-| `dns.ecs.enabled` | bool | `false` | 启用 ECS（仅国内查询）；涉及隐私，默认关闭 |
-| `dns.ecs.override_ip` | string | `""` | 手动指定出口 IP（最高优先，跳过自动检测和 STUN） |
-| `dns.tls.verify_peer` | bool | `true` | DoH/DoT 是否校验证书链与主机名；默认开启，使用 `cacert.pem`、内置根证书和系统默认 CA 路径 |
+| JSON key | C++ 字段 | 类型 | 默认值 | 状态 | 说明 |
+|----------|----------|------|--------|------|------|
+| `dns.servers.domestic` | `dns.servers.domestic` | string | `""` | ✅ 已实现 | 国内 DNS 服务器提供商简写名 |
+| `dns.servers.domestic` | `dns.servers.domestic_entries` | object/array | `[]` | ✅ 已实现 | 国内 DNS 结构化条目列表（支持 object/array 形式） |
+| `dns.servers.foreign` | `dns.servers.foreign` | string | `""` | ✅ 已实现 | 海外 DNS 服务器提供商简写名 |
+| `dns.servers.foreign` | `dns.servers.foreign_entries` | object/array | `[]` | ✅ 已实现 | 海外 DNS 结构化条目列表（支持 object/array 形式） |
+| `dns.intercept-unmatched` | `dns.intercept_unmatched` | bool | `false` | ✅ 已实现 | 未命中 `dns-rules.txt` 时是否默认拦截并走 `dns.servers.foreign`；默认 false 保持旧行为 |
+| `dns.ecs.enabled` | `dns.ecs.enabled` | bool | `false` | ✅ 已实现 | 启用 ECS（仅国内查询）；涉及隐私，默认关闭 |
+| `dns.ecs.override-ip` | `dns.ecs.override_ip` | string | `""` | ✅ 已实现 | 手动指定出口 IP（最高优先，跳过自动检测） |
+| `dns.tls.verify-peer` | `dns.tls.verify_peer` | bool | `true` | ✅ 已实现 | DoH/DoT 是否校验证书链与主机名；默认开启，使用 `cacert.pem`、内置根证书和系统默认 CA 路径 |
 
 缓存 TTL 和开关复用现有配置，不再重复定义：
 
@@ -167,15 +210,17 @@
 | `udp.dns.ttl` | 缓存 TTL（秒） | 对应 `vdns::ttl` |
 | `udp.dns.turbo` | 启用 vdns 缓存 | 对应 `vdns::enabled` |
 
-### 协议配置字段
+### 协议配置字段（object/array 形式）
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `protocol` | string | `udp` / `tcp` / `doh` / `dot`（省略时按优先级自动选择） |
-| `url` | string | DoH 端点 URL |
-| `hostname` | string | DoT SNI 主机名 |
-| `address` | string | UDP/TCP 服务器地址（`IP` 或 `IP:Port`） |
-| `bootstrap` | string[] | Bootstrap DNS IP（用于解析 DoH/DoT 域名） |
+以下字段在 object/array 配置解析中已实现，由 `ParseDnsServerEntry()` 解析：
+
+| 字段 | 类型 | 状态 | 说明 |
+|------|------|------|------|
+| `protocol` | string | ✅ 已解析 | `udp` / `tcp` / `doh` / `dot`；`doq` 归一化为 `dot`；省略时按优先级自动选择 |
+| `url` | string | ✅ 已解析 | DoH 端点 URL |
+| `hostname` | string | ✅ 已解析 | DoT SNI 主机名 |
+| `address` | string | ✅ 已解析 | UDP/TCP 服务器地址（`IP` 或 `IP:Port`） |
+| `bootstrap` | string[] | ✅ 已解析 | Bootstrap DNS IP（当前存储于 `DnsServerEntry.bootstrap`，主路径未消费） |
 
 ---
 
@@ -190,7 +235,7 @@ google.com         /1.1.1.1/tun
 
 此格式下，`server_ip` 是一个具体 IP，DNS 包直接 UDP 转发到该 IP（**现有逻辑不变**）。
 
-### 扩展格式（新增，向后兼容）
+### 扩展格式（已实现，向后兼容）
 
 ```
 qq.com             /doh.pub/nic
@@ -200,29 +245,31 @@ baidu.com          /alidns/nic
 
 当 `server_ip` 字段匹配内置提供商名称时，走 `DnsResolver` 多协议路径。
 
-### 识别逻辑（扩展 `Rule::Load`）
+### 识别逻辑（已实现，`Rule::Load`）
 
 ```
 segments[1] 解析流程：
   1. 尝试 StringToAddress() → 成功 → 现有逻辑，Rule->Server 存 IP
-  2. 失败 → 检查是否匹配内置提供商名称（DnsProviders::Contains(segments[1])）
-     ├─ 匹配 → Rule->Server 存提供商名称字符串（编码为特殊 IP 或新增字段）
+  2. 失败 → 检查是否匹配内置提供商名称（DnsResolver::HasProvider(segments[1])）
+     ├─ 匹配 → Rule->ProviderName 存提供商名称字符串
      └─ 不匹配 → 跳过此规则（现有行为不变）
 ```
 
-**实现方式**：在 `Rule` 结构中新增一个 `ProviderName` 字段（`ppp::string`），当非空时表示走新路径。`Server` 字段保持 `boost::asio::ip::address` 不变，用于旧路径兼容。
+**实现方式**：在 `Rule` 结构中新增 `ProviderName` 字段（`ppp::string`），当非空时表示走新路径。`Server` 字段保持 `boost::asio::ip::address` 不变，用于旧路径兼容。代码位于 `ppp/app/client/dns/Rule.cpp` 第 176–206 行。
 
 ### 匹配优先级（不变）
 
 1. `dns-rules.txt` 规则优先
-2. 未匹配的域名默认保持旧路径；仅 `dns.intercept_unmatched=true` 时使用 `dns.servers.foreign`
+2. 未匹配的域名默认保持旧路径；仅 `dns.intercept-unmatched=true` 时使用 `dns.servers.foreign`
 3. ECS 仅对 `nic`（国内）查询添加，并且必须显式开启
 
 ---
 
 ## 内置提供商
 
-### 国内
+代码在 `ppp/dns/DnsResolver.cpp` 的 `Providers()` 函数中硬编码了全部 12 个提供商，每个提供商包含 DoH/DoT/TCP/UDP 四种协议条目（部分提供商无 DoT）。**这些条目已预解析 IP 地址**，无需动态 bootstrap 解析。
+
+### 国内（6 个）
 
 | 简写 | DoH | DoT | UDP/TCP |
 |------|-----|-----|---------|
@@ -233,7 +280,7 @@ segments[1] 解析流程：
 | `114` | `https://dns.114.com/dns-query` | — | `114.114.114.114` |
 | `tuna` | `https://doh.tuna.tsinghua.edu.cn/dns-query` | `dns.tuna.tsinghua.edu.cn` | `101.6.6.6` |
 
-### 海外
+### 海外（6 个）
 
 | 简写 | DoH | DoT | UDP/TCP |
 |------|-----|-----|---------|
@@ -246,16 +293,16 @@ segments[1] 解析流程：
 
 ### 简写协议选择策略
 
-当用户使用简写（如 `"domestic": "doh.pub"`）时，按以下优先级自动选择首个可用协议：
+当用户使用简写（如 `"domestic": "doh.pub"`）时，代码按提供商表中的**条目顺序**尝试协议（每家提供商的条目顺序可能不同）：
 
 ```
-1. DoH（最安全，复用 HTTP 连接池）
-2. DoT（安全，专用端口）
+1. DoH（最安全）
+2. DoT（安全，专用端口）—— 部分提供商无 DoT 条目
 3. TCP（防欺骗）
 4. UDP（最快，兜底）
 ```
 
-若首选协议失败（连接超时/TLS 握手失败），自动降级到下一个协议。
+若当前协议失败（连接超时/TLS 握手失败），`TryProtocols()` 自动降级到下一个协议。此外，`ResolveAsyncWithFallback()` 支持跨提供商级联故障转移（最多 3 个提供商依次尝试）。
 
 ---
 
@@ -269,74 +316,61 @@ segments[1] 解析流程：
 
 出口 IP 按以下优先级获取，首个成功即使用：
 
-| 优先级 | 来源 | 延迟 | 外部依赖 | 说明 |
-|--------|------|------|----------|------|
-| 1 | `override_ip` 配置 | 0 | 无 | 用户手动指定，最高优先 |
-| 2 | 服务器返回 `ClientExitIP` | 0 | 无 | 复用会话握手，零额外流量 |
-| 3 | STUN 查询 | ~1 RTT | 公共 STUN 服务器 | 服务器未返回时的 fallback |
+| 优先级 | 来源 | 延迟 | 外部依赖 | 状态 | 说明 |
+|--------|------|------|----------|------|------|
+| 1 | `override-ip` 配置 | 0 | 无 | ✅ 已实现 | 用户手动指定，最高优先 |
+| 2 | 服务器返回 `ClientExitIP` | 0 | 无 | ✅ 已实现 | 复用会话握手，零额外流量 |
+| 3 | STUN 查询 | ~1 RTT | Google STUN 服务器 | ✅ 已实现 | 硬编码 `216.58.211.206:19302`，3 秒超时，仅 IPv4 |
+
+> **STUN fallback 已实现**：`DetectExitIPViaStun()` 发送 RFC 5389 STUN Binding Request 到硬编码的 Google STUN 服务器，解析 XOR-MAPPED-ADDRESS 获取公网 IPv4。该方法已集成到 `ResolveAsync()` 主路径中——当 ECS 已启用但 `GetEcsIp()` 返回 unspecified address 时，先尝试 STUN 检测，成功后注入 ECS 再继续协议降级链。
+>
+> **限制**：
+> - 仅使用单个硬编码 STUN 服务器（`216.58.211.206`，即 `stun.l.google.com:19302`）
+> - 仅支持 IPv4
+> - 3 秒超时（`PPP_DNS_RESOLVER_STUN_TIMEOUT_MS`）
+> - 无 fallback STUN 服务器
+> - STUN 检测会增加首次 ECS 查询的延迟（~1 RTT）
 
 #### 优先级 1：手动配置
 
 ```json
-{ "dns": { "ecs": { "override_ip": "123.45.67.89" } } }
+{ "dns": { "ecs": { "override-ip": "123.45.67.89" } } }
 ```
 
-直接使用，跳过后续检测。
+直接使用，跳过后续检测。实现在 `DnsResolver::GetEcsIp()` 中。
 
 #### 优先级 2：服务器返回
 
 **机制**：
 1. 客户端连接服务器时，服务器通过 `transmission->GetRemoteEndPoint()` 获取客户端的公网 IP 候选值
-2. 服务器在 `InformationEnvelope.Extensions` 中新增 `ClientExitIP` 字段，随会话建立响应返回；该值通常可用，但在多 WAN、代理链、透明代理等场景下不保证等于实际 DNS 出口 IP
-3. 客户端从 `information_extensions_.ClientExitIP` 读取，缓存供 ECS 使用
+2. 服务器在 `InformationEnvelope.Extensions` 中填充 `ClientExitIP` 字段，随会话建立响应返回；该值通常可用，但在多 WAN、代理链、透明代理等场景下不保证等于实际 DNS 出口 IP
+3. 客户端从 `extensions.ClientExitIP` 读取，调用 `dns_resolver_->SetExitIP()` 缓存供 ECS 使用
 
-**实现改动**：
-- `VirtualEthernetInformation.h` — `Extensions` 新增 `ClientExitIP` 字段
-- `VirtualEthernetInformation.cpp` — 序列化/反序列化 `ClientExitIP`
-- 服务器 `Establish()` 中从 `transmission->GetRemoteEndPoint()` 填充
+**实现改动**（均已实现）：
+- `VirtualEthernetInformation.h` 第 128 行 — `Extensions` 新增 `ClientExitIP` 字段
+- `VirtualEthernetInformation.cpp` 第 172–174 行 — 序列化为 JSON `"ClientExitIP"`
+- `VirtualEthernetInformation.cpp` 第 259–265 行 — 反序列化
+- 服务器 `VirtualEthernetSwitcher.cpp` 第 1709–1721 行 — 从 `GetRemoteEndPoint()` 填充
+- 客户端 `VEthernetNetworkSwitcher.cpp` 第 955–959 行、980–982 行 — 缓存到 `DnsResolver`
 
-#### 优先级 3：STUN Fallback
+#### 优先级 3：STUN Fallback（✅ 已实现）
 
-当服务器未返回 `ClientExitIP`（旧版本服务器、连接异常等）时，使用 STUN 协议（RFC 5389）获取公网 IP。
+当优先级 1 和 2 都不可用时，`ResolveAsync()` 自动调用 `DetectExitIPViaStun()` 作为最后手段。
 
-**为什么选 STUN 而不是 HTTP 探测**：
-- 单个 UDP 包往返（~1 RTT），比 HTTP 快得多
-- 协议极简：20 字节 Binding Request → 解析 XOR-MAPPED_ADDRESS
-- 无 TLS 握手开销，无 TCP 连接建立
-- 公共 STUN 服务器众多且免费
+**实现位置**：`DnsResolver.cpp` 第 1477–1657 行
 
-**STUN 服务器列表**：
+**工作流程**：
+1. 构造 20 字节 STUN Binding Request（RFC 5389 §6）
+2. 通过 UDP 发送到 `216.58.211.206:19302`（硬编码 IP，避免 DNS 循环依赖）
+3. 等待响应（3 秒超时）
+4. 解析响应中的 XOR-MAPPED-ADDRESS 属性，XOR 还原得到公网 IPv4
+5. 回调返回检测到的 IP（失败返回 unspecified address）
 
-| 服务器 | 地址 | 说明 |
-|--------|------|------|
-| Google | `stun.l.google.com:19302` | 最稳定 |
-| Cloudflare | `stun.cloudflare.com:3478` | 隐私友好 |
-| Twilio | `global.stun.twilio.com:3478` | 备用 |
-
-**实现**（内联在 DnsResolver.cpp，~50 行）：
-
-```cpp
-void DnsResolver::DetectExitIPViaStun(const ppp::function<void(boost::asio::ip::address)>& callback) {
-    // STUN Binding Request (RFC 5389 Section 6)
-    // 固定 20 字节，随机 Transaction ID
-    uint8_t request[20] = {
-        0x00, 0x01,             // Binding Request
-        0x00, 0x00,             // Length = 0 (no attributes)
-        0x21, 0x12, 0xA4, 0x42, // Magic Cookie
-        // Transaction ID (12 bytes random)
-    };
-    // Fill random transaction ID...
-    // 发送到 STUN 服务器（随机选一个）
-    // 解析响应中的 XOR-MAPPED-ADDRESS (0x0020) 属性
-    // callback(ip);
-}
-```
-
-**调用时机**：首次需要出口 IP 且服务器未返回时触发一次，结果缓存。
+**集成点**：`ResolveAsync()` 第 509–524 行 — 当 `ecs_enabled_ && domestic` 且 `GetEcsIp()` 无可用 IP 时触发 STUN，成功后注入 ECS 并继续 `TryProtocols()`。
 
 ### ECS 编码
 
-在 DNS 查询的 Additional Section 追加 OPT RR（RFC 7871），不引入独立 `ECSBuilder` 类，直接在 `DnsResolver.cpp` 中用 ~40 行代码构造：
+在 DNS 查询的 Additional Section 追加 OPT RR（RFC 7871），直接在 `DnsResolver.cpp` 中实现（`InjectEcsOptRr()`，约 300 行，含 ARCOUNT > 0 合并路径）：
 
 ```
 OPT RR 格式:
@@ -346,18 +380,33 @@ OPT RR 格式:
   TTL:    0
   RDATA:
     OPTION-CODE:  8 (Client Subnet)
-    OPTION-LENGTH: 4 + ceil(PREFIX-LENGTH / 8)
-    FAMILY:       1 (IPv4) 或 2 (IPv6)
-    PREFIX-LENGTH: 24 (IPv4) 或 48 (IPv6)
-    ADDRESS:      client_ip & mask，仅编码 prefix 覆盖的字节数
+    OPTION-LENGTH: 8
+    FAMILY:       1 (IPv4)
+    PREFIX-LENGTH: 24
+    SCOPE-PREFIX: 0
+    ADDRESS:      client_ip & 0xFFFFFF00（最后一字节清零）
 ```
 
-实现注意事项：
+**OPT RR 合并逻辑（ARCOUNT > 0，✅ 已实现）**：
 
-- 必须更新 DNS Header 的 Additional Record Count。
-- 若原请求已存在 OPT RR，应优先在现有 OPT RR 中追加或替换 ECS option，避免重复 OPT RR。
-- 若原请求已存在 ECS option，应采用“替换为本地策略”或“保留原值”的明确策略，首版建议替换为本地策略。
-- ECS 会暴露客户端网段信息，因此默认关闭。
+当原 DNS 查询已有 Additional Records（ARCOUNT > 0）时，`InjectEcsOptRr()` 不会跳过，而是：
+1. 安全遍历 QD、AN、NS 三个 section（使用 `SkipDnsQuestionSection()`/`SkipDnsRrSection()`）
+2. 扫描 Additional Records section 寻找现有 OPT RR（TYPE=41，root label）
+3. 如找到现有 OPT RR：
+   - 在其 RDATA 中扫描 ECS option（option-code 8）
+   - 如已有 ECS option → 替换为新的 ECS 数据
+   - 如无 ECS option → 追加到 RDATA 末尾
+   - 更新 RDLENGTH 和包尾部数据
+4. 如未找到现有 OPT RR → 返回 false（保守策略，不追加第二个 OPT RR 以避免某些解析器问题）
+
+**实现限制**：
+
+| 限制 | 说明 | 后续 |
+|------|------|------|
+| 仅 IPv4 | `if (!ecs_ip.is_v4()) return false;` | IPv6 支持为后续 |
+| 固定 /24 前缀 | 首版简化，不支持可配置前缀长度 | 后续可配置 |
+| ARCOUNT > 0 时无 OPT RR | 当附加 section 中无现有 OPT RR 时返回 false（不追加新的） | 后续可追加 |
+| 512 字节限制 | ARCOUNT == 0 快速路径确保注入后总大小不超过经典 UDP 限制 | 合理约束 |
 
 ---
 
@@ -368,18 +417,18 @@ OPT RR 格式:
 ```
 ppp/dns/
 ├── DnsResolver.h       # 配置结构 + 提供商表 + 异步解析接口 + socket protect 回调
-└── DnsResolver.cpp     # UDP/TCP/DoT/DoH 实现 + bootstrap + ECS 构造
+└── DnsResolver.cpp     # UDP/TCP/DoT/DoH 实现 + ECS 构造 + STUN 检测 + Bootstrap helper（1880 行）
 
 修改的现有文件:
-├── ppp/app/client/dns/Rule.cpp           # 扩展 Load() 支持提供商名称
-├── ppp/app/client/dns/Rule.h             # Rule 新增 ProviderName 字段
-├── ppp/app/client/VEthernetNetworkSwitcher.cpp  # RedirectDnsServer 增加新路径分支
-├── ppp/app/protocol/VirtualEthernetInformation.h/cpp  # Extensions 新增 ClientExitIP 字段
-├── ppp/configurations/AppConfiguration.h/cpp    # 新增 dns.* 配置解析
-└── CMakeLists.txt 与 builds/openppp2-linux-amd64-*  # 新源文件加入所有构建变体
+├── ppp/app/client/dns/Rule.cpp           # 扩展 Load() 支持提供商名称 ✅
+├── ppp/app/client/dns/Rule.h             # Rule 新增 ProviderName 字段 ✅
+├── ppp/app/client/VEthernetNetworkSwitcher.cpp  # RedirectDnsServer 增加新路径分支 ✅
+├── ppp/app/protocol/VirtualEthernetInformation.h/cpp  # Extensions 新增 ClientExitIP 字段 ✅
+├── ppp/configurations/AppConfiguration.h/cpp    # 新增 dns.* 配置解析 ✅
+└── CMakeLists.txt 与 builds/openppp2-linux-amd64-*  # 新源文件加入所有构建变体 ✅
 ```
 
-### 核心类设计
+### 核心类设计（实际代码）
 
 ```cpp
 namespace ppp::dns {
@@ -389,109 +438,97 @@ enum class Protocol {
     TCP,
     DoH,
     DoT,
+    // 注意：无 DoQ 枚举值
 };
 
 struct ServerEntry {
-    Protocol                protocol;
+    Protocol                protocol = Protocol::UDP;
     ppp::string             url;           // DoH
-    ppp::string             hostname;      // DoT
-    ppp::string             address;       // UDP/TCP ("IP" 或 "IP:Port")
-    ppp::vector<boost::asio::ip::address> bootstrap_ips;
+    ppp::string             hostname;      // DoT（SNI）
+    ppp::string             address;       // UDP/TCP/DoH/DoT（预解析的 "IP:Port"）
+    ppp::vector<boost::asio::ip::address> bootstrap_ips;  // 预留字段，当前未使用
 };
 
-class DnsResolver : public std::enable_shared_from_this<DnsResolver> {
+class DnsResolver final : public std::enable_shared_from_this<DnsResolver> {
 public:
-    explicit DnsResolver(boost::asio::io_context& context);
+    typedef ppp::function<bool(int native_handle)>  ProtectSocketCallback;
+    typedef ppp::function<void(ppp::vector<Byte>)>  ResolveCallback;
+    typedef ppp::function<void(boost::asio::ip::address)> ExitIpCallback;
 
-    // 加载配置（启动时调用一次）
-    bool LoadConfig(const ppp::string& domestic_name,
-                    const ppp::string& foreign_name);
+    explicit DnsResolver(boost::asio::io_context& context) noexcept;
 
-    // 异步解析（主入口）
-    void ResolveAsync(
-        const ppp::string&           provider_name,  // "doh.pub" / "cloudflare" / ...
-        bool                         domestic,        // true=国内, false=海外
-        const Byte*                  packet,
-        int                          length,
-        const ppp::function<void(ppp::vector<Byte>)>& callback);
+    void SetProtectSocketCallback(const ProtectSocketCallback& cb) noexcept;
+    void SetExitIP(const boost::asio::ip::address& ip) noexcept;
+    void SetEcsConfig(bool enabled, const ppp::string& override_ip) noexcept;
+    void SetTlsVerifyPeer(bool verify_peer) noexcept;
+    void SetDefaultProviders(const ppp::string& domestic, const ppp::string& foreign) noexcept;
 
-    // 设置出口 IP（从服务器返回的 Extensions.ClientExitIP 获取）
-    void SetExitIP(const boost::asio::ip::address& ip) { exit_ip_ = ip; }
+    // 单提供商解析（内部按 DoH→DoT→TCP→UDP 降级）
+    void ResolveAsync(const ppp::string& provider_name, bool domestic,
+                      const Byte* packet, int length,
+                      const ResolveCallback& callback) noexcept;
 
-    // Linux/Android VPN 场景下，新建 UDP/TCP/TLS/STUN/bootstrap socket
-    // 必须在 connect/send 前调用该回调，避免请求重新进入隧道。
-    using ProtectSocketCallback = ppp::function<bool(int native_handle)>;
-    void SetProtectSocketCallback(const ProtectSocketCallback& cb) { protect_socket_ = cb; }
+    // 多提供商级联故障转移（最多 3 个提供商）
+    void ResolveAsyncWithFallback(const ppp::string& provider_name,
+                                  const ppp::string& fallback1,
+                                  const ppp::string& fallback2,
+                                  const Byte* packet, int length,
+                                  const ResolveCallback& callback) noexcept;
 
-    // 内置提供商查询
-    static bool                                    HasProvider(const ppp::string& name);
-    static const ppp::vector<ServerEntry>*         GetProvider(const ppp::string& name);
+    static bool HasProvider(const ppp::string& name) noexcept;
+    static const ppp::vector<ServerEntry>* GetProvider(const ppp::string& name) noexcept;
 
 private:
-    // 协议发送（全部异步）
-    void SendDoh(const ServerEntry& entry, const Byte* packet, int length,
-                 const ppp::function<void(ppp::vector<Byte>)>& callback);
-    void SendDot(const ServerEntry& entry, const Byte* packet, int length,
-                 const ppp::function<void(ppp::vector<Byte>)>& callback);
-    void SendTcp(const ServerEntry& entry, const Byte* packet, int length,
-                 const ppp::function<void(ppp::vector<Byte>)>& callback);
-    void SendUdp(const ServerEntry& entry, const Byte* packet, int length,
-                 const ppp::function<void(ppp::vector<Byte>)>& callback);
-
-    // ECS 构造（内联，~40 行）
-    ppp::vector<Byte> BuildEcsPacket(const Byte* packet, int length,
-                                     const boost::asio::ip::address& client_ip);
-
-    // Bootstrap 解析
-    void ResolveHostnameWithBootstrap(
+    void TryProtocols(...);
+    void SendUdp(...);
+    void SendTcp(...);
+    void SendDoh(...);
+    void SendDot(...);
+    bool ProtectSocket(int native_handle) noexcept;
+    boost::asio::ip::address GetEcsIp() const noexcept;
+    static bool InjectEcsOptRr(ppp::vector<Byte>& packet,
+                               const boost::asio::ip::address& ecs_ip) noexcept;
+    // STUN 检测（✅ 已实现，已接入 ResolveAsync 主路径）
+    void DetectExitIPViaStun(const ExitIpCallback& callback) noexcept;
+    // Bootstrap DNS helper（✅ 已实现，但主路径未使用）
+    static void ResolveHostnameAsync(
+        boost::asio::io_context& context,
         const ppp::string& hostname,
-        const ppp::vector<boost::asio::ip::address>& bootstrap_ips,
-        const ppp::function<void(ppp::vector<boost::asio::ip::address>)>& callback);
+        const ExitIpCallback& callback) noexcept;
 
-    // STUN 出口 IP 检测（fallback，~50 行）
-    void DetectExitIPViaStun(const ppp::function<void(boost::asio::ip::address)>& callback);
-
-    // 按优先级尝试协议
-    void TryProtocols(ppp::vector<ServerEntry>& entries, size_t index,
-                      const Byte* packet, int length,
-                      const ppp::function<void(ppp::vector<Byte>)>& callback);
-
-    boost::asio::io_context& context_;
-
-    // 内置提供商表（静态）
-    static const ppp::unordered_map<ppp::string, ppp::vector<ServerEntry>> kProviders;
-
-    // 用户配置的 domestic/foreign 提供商名
-    ppp::string domestic_provider_;
-    ppp::string foreign_provider_;
-
-    // 客户端出口 IP（三级 fallback：override_ip > 服务器返回 > STUN）
-    boost::asio::ip::address exit_ip_;
-
-    // TLS 连接池（按 hostname 索引）
-    ppp::unordered_map<ppp::string, std::shared_ptr<boost::asio::ssl::context>> ssl_contexts_;
-
-    ProtectSocketCallback protect_socket_;
+    // 实际成员变量（无 ssl_contexts_ 连接池）
+    boost::asio::io_context&    context_;
+    ProtectSocketCallback       protect_socket_;
+    ppp::string                 default_domestic_;
+    ppp::string                 default_foreign_;
+    boost::asio::ip::address    exit_ip_;
+    bool                        ecs_enabled_ = false;
+    ppp::string                 ecs_override_ip_;
+    bool                        tls_verify_peer_ = true;
 };
 
 } // namespace ppp::dns
 ```
 
+> **与早期设计文档的差异**：实际代码中**没有** `ssl_contexts_`（TLS 连接池），每请求新建 TLS 连接。但 `DetectExitIPViaStun()`（STUN）和 `ResolveHostnameAsync()`（bootstrap helper）**均已实现**。提供商表中已预解析 IP 地址，bootstrap helper 暂未接入主路径。
+
 ### 关键实现细节
 
-#### DoH（基于 boost::beast::http，异步）
+#### DoH（基于 boost::beast::http，异步，HTTP/1.1）
 
 ```cpp
-void DnsResolver::SendDoh(const ServerEntry& entry, const Byte* packet,
-                          int length, const ppp::function<void(ppp::vector<Byte>)>& callback) {
-    // 1. 解析 bootstrap IP（若域名未缓存）
+void DnsResolver::SendDoh(const ServerEntry& entry, ..., const ResolveCallback& callback) noexcept {
+    // 1. 从 entry.address 解析预置 IP（无需动态 DNS 解析）
     // 2. 建立 TLS 连接（boost::asio::ssl::stream<tcp::socket>）
-    //    在 connect 前对 native_handle 调用 protect_socket_（如存在）
-    // 3. 构造 HTTP POST 请求:
+    //    - 创建 ssl::context，调用 CreateClientSslContext(tls_verify_peer_)
+    //    - 设置 SNI（entry.hostname 或 URL host）
+    //    - 如 tls_verify_peer_，设置 host_name_verification
+    //    - connect 前对 native_handle 调用 protect_socket_
+    // 3. 构造 HTTP/1.1 POST 请求:
     //    POST /dns-query HTTP/1.1
     //    Host: doh.pub
     //    Content-Type: application/dns-message
-    //    Content-Length: <len>
+    //    Accept: application/dns-message
     //    <binary DNS message>
     // 4. boost::beast::http::async_write / async_read
     // 5. 提取响应 body 作为原始 DNS message
@@ -502,135 +539,158 @@ void DnsResolver::SendDoh(const ServerEntry& entry, const Byte* packet,
 #### DoT（基于 boost::asio::ssl，异步）
 
 ```cpp
-void DnsResolver::SendDot(const ServerEntry& entry, const Byte* packet,
-                          int length, const ppp::function<void(ppp::vector<Byte>)>& callback) {
-    // 1. 建立 TLS 连接，SNI 设置为 entry.hostname
-    //    在 connect 前对 native_handle 调用 protect_socket_（如存在）
-    // 2. 发送 2 字节长度前缀 + DNS message（RFC 7858）
-    // 3. 先读 2 字节长度，再读完整响应
-    // 4. callback(response_bytes)
+void DnsResolver::SendDot(const ServerEntry& entry, ..., const ResolveCallback& callback) noexcept {
+    // 1. 从 entry.address 解析预置 IP
+    // 2. 建立 TLS 连接，SNI 设置为 entry.hostname
+    //    - connect 前对 native_handle 调用 protect_socket_
+    // 3. 发送 2 字节长度前缀 + DNS message（RFC 7858）
+    // 4. 先读 2 字节长度，再读完整响应
+    // 5. callback(response_bytes)
 }
 ```
 
 #### UDP/TCP（复用 Asio，与现有逻辑一致）
 
 ```cpp
-void DnsResolver::SendUdp(const ServerEntry& entry, const Byte* packet,
-                          int length, const ppp::function<void(ppp::vector<Byte>)>& callback) {
-    // 直接 UDP send_to / async_receive_from；send 前对 native_handle 调用 protect_socket_（如存在）
-    // 与现有 RedirectDnsServer 逻辑基本一致
+void DnsResolver::SendUdp(const ServerEntry& entry, ..., const ResolveCallback& callback) noexcept {
+    // 直接 UDP send_to / async_receive_from
+    // send 前对 native_handle 调用 protect_socket_
+    // 5 秒超时
 }
 
-void DnsResolver::SendTcp(const ServerEntry& entry, const Byte* packet,
-                          int length, const ppp::function<void(ppp::vector<Byte>)>& callback) {
+void DnsResolver::SendTcp(const ServerEntry& entry, ..., const ResolveCallback& callback) noexcept {
     // TCP 连接 + 2 字节长度前缀 + DNS message
+    // 5 秒超时
 }
 ```
 
-#### Bootstrap DNS 解析
-
-DoH/DoT 的服务器域名本身需要 DNS 解析。使用配置中的 `bootstrap` IP 数组：
+#### STUN 检测（✅ 已实现，已接入主路径）
 
 ```cpp
-void DnsResolver::ResolveHostnameWithBootstrap(const ppp::string& hostname,
-                                               const ppp::vector<boost::asio::ip::address>& bootstrap_ips,
-                                               ...) {
-    // 1. 若 hostname 已是 IP，直接返回
-    // 2. 若 bootstrap 为空，可按配置选择系统 DNS 或失败降级
-    // 3. 用 bootstrap IP 进行简化 UDP A/AAAA 查询或受控复用 vdns::ResolveAsync()
-    // 4. 缓存解析结果（TTL 与 vdns 一致）
+void DnsResolver::DetectExitIPViaStun(const ExitIpCallback& callback) noexcept {
+    // 1. 构造 20 字节 STUN Binding Request（RFC 5389 §6）
+    //    - Message Type: 0x0001 (Binding Request)
+    //    - Magic Cookie: 0x2112A442
+    //    - Transaction ID: 12 字节静态模式
+    // 2. UDP 发送到 216.58.211.206:19302（硬编码 IP）
+    // 3. socket 保护（protect_socket_）
+    // 4. 3 秒超时
+    // 5. 解析响应中的 XOR-MAPPED-ADDRESS (0x0020) 属性
+    // 6. XOR 还原得到公网 IPv4 地址
+    // 7. callback(ip) 或 callback(unspecified) on failure
 }
 ```
 
-> 注意：bootstrap 解析应避免和业务查询形成循环依赖，并且它创建的 socket 同样要执行 protect。
+**集成位置**：`ResolveAsync()` 中，当 `ecs_enabled_ && domestic` 且 `GetEcsIp()` 无可用 IPv4 时触发。
+
+#### Bootstrap DNS helper（⚠️ helper 已有，主路径未使用）
+
+```cpp
+static void DnsResolver::ResolveHostnameAsync(
+    boost::asio::io_context& context,
+    const ppp::string& hostname,
+    const ExitIpCallback& callback) noexcept {
+    // 1. 构造最小 DNS A-record 查询包
+    // 2. UDP 发送到 8.8.8.8:53（硬编码 Google DNS）
+    // 3. socket 保护
+    // 4. 5 秒超时
+    // 5. 解析第一个 A-record 应答
+    // 6. callback(ip) 或 callback(unspecified) on failure
+}
+```
+
+**当前状态**：该方法已完整实现（`DnsResolver.cpp` 第 1674–1877 行），作为 `static` 方法可独立于 DnsResolver 实例使用。但由于所有 12 个内置提供商条目都已包含硬编码 IP 地址，该 helper 在正常解析流程中**未被调用**。未来当 object/array 配置支持自定义提供商（用户指定域名形式的 `address`/`url`）时，该 helper 将用于解析 bootstrap 域名。
 
 #### 故障转移
 
+**协议级故障转移**（已实现）：
+
 ```cpp
-void DnsResolver::TryProtocols(ppp::vector<ServerEntry>& entries, size_t index,
-                               const Byte* packet, int length,
-                               const ppp::function<void(ppp::vector<Byte>)>& callback) {
-    if (index >= entries.size()) {
+void DnsResolver::TryProtocols(entries, index, packet, callback) noexcept {
+    if (index >= entries->size()) {
         callback({});  // 全部失败
         return;
     }
 
-    auto next = [this, entries, index, packet, length, callback]() {
-        TryProtocols(entries, index + 1, packet, length, callback);
+    auto next = [this, entries, index, packet, callback]() {
+        TryProtocols(entries, index + 1, packet, callback);
     };
 
     switch (entries[index].protocol) {
         case Protocol::DoH:
-            SendDoh(entries[index], packet, length, [callback, next](ppp::vector<Byte> resp) {
+            SendDoh(entries[index], packet, [callback, next](ppp::vector<Byte> resp) {
                 if (resp.empty()) next(); else callback(std::move(resp));
             });
             break;
-        // ... DoT, TCP, UDP 同理
+        // DoT, TCP, UDP 同理
     }
 }
 ```
+
+**提供商级故障转移**（已实现）：
+
+`ResolveAsyncWithFallback()` 接受最多 3 个提供商名称，按顺序尝试。每个提供商内部再走协议级降级。在 `RedirectDnsServer` 中，`intercept-unmatched` 路径使用 `foreign → domestic → cloudflare` 三级 fallback。
 
 ---
 
 ## 修改现有代码的详细方案
 
-### 1. `dns/Rule.h` — 新增 ProviderName 字段
+### 1. `dns/Rule.h` — 新增 ProviderName 字段 ✅ 已实现
 
 ```cpp
 struct Rule final {
     ppp::string                         Host;
     bool                                Nic = false;
     boost::asio::ip::address            Server;
-    ppp::string                         ProviderName;  // 新增：非空时走 DnsResolver 路径
+    ppp::string                         ProviderName;  // 非空时走 DnsResolver 路径
     // ...
 };
 ```
 
-### 2. `dns/Rule.cpp` — 扩展 Load() 解析逻辑
+### 2. `dns/Rule.cpp` — 扩展 Load() 解析逻辑 ✅ 已实现
 
 在现有 `StringToAddress` 失败后，增加提供商名称检查：
 
 ```cpp
-// 现有代码（保留）:
 boost::asio::ip::address address = StringToAddress(segments[1], ec);
 if (ec) {
     // 新增：检查是否为内置提供商名称
     if (ppp::dns::DnsResolver::HasProvider(segments[1])) {
-        // 创建规则，ProviderName 存提供商名
         Ptr rule = make_shared_object<Rule>(Rule{ host, nic, {}, segments[1] });
-        rules[host] = rule;
+        // 根据 host 类型插入对应规则表
     }
     continue;  // 既不是 IP 也不是提供商名，跳过
 }
 ```
 
-### 3. `VEthernetNetworkSwitcher.cpp` — RedirectDnsServer 增加新路径
-
-在 `Rule::Get()` 返回结果后，检查是否走新路径：
+### 3. `VEthernetNetworkSwitcher.cpp` — RedirectDnsServer 增加新路径 ✅ 已实现
 
 ```cpp
-// 现有代码获取 rulePtr 后:
-ppp::app::client::dns::Rule::Ptr rulePtr = ppp::app::client::dns::Rule::Get(...);
-if (NULLPTR != rulePtr) {
-    if (!rulePtr->ProviderName.empty()) {
-        // 新路径：走 DnsResolver 多协议解析
-        bool domestic = rulePtr->Nic;
-        dns_resolver_->ResolveAsync(
-            rulePtr->ProviderName, domestic,
-            messages->Buffer.get(), messages->Length,
-            [sourceEP, destinationEP, destinationIP, this](ppp::vector<Byte> response) {
-                if (!response.empty()) {
-                    DatagramOutput(sourceEP,
-                        boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT),
-                        response.data(), response.size(), false);
-                }
-            });
-        return true;
-    }
-    // 原有逻辑：rulePtr->Server 是 IP，直接 UDP 转发
-    serverIP = rulePtr->Server;
-    // ...
+if (!rulePtr->ProviderName.empty()) {
+    // 新路径：走 DnsResolver 多协议解析
+    bool domestic = rulePtr->Nic;
+    dns_resolver_->ResolveAsync(
+        rulePtr->ProviderName, domestic,
+        messages->Buffer.get(), messages->Length,
+        [self, sourceEP, destEP](ppp::vector<Byte> response) {
+            if (!response.empty()) {
+                vdns::AddCache(response.data(), response.size());
+                self->DatagramOutput(sourceEP, destEP, response.data(), response.size(), false);
+            }
+        });
+    return true;
 }
+// 原有逻辑：rulePtr->Server 是 IP，直接 UDP 转发
+```
+
+### 4. `AppConfiguration.cpp` — DNS 配置解析 ✅ 已实现
+
+`dns.servers.domestic`/`foreign` 支持三种 JSON 形式：
+
+```cpp
+// ParseDnsServerSpec() — string / object / array 统一入口
+// ParseDnsServerEntry() — object 形式解析 protocol/url/hostname/address/bootstrap
+// NormalizeDnsProtocol() — doq → dot 归一化
 ```
 
 ---
@@ -638,105 +698,91 @@ if (NULLPTR != rulePtr) {
 ## 出口 IP 获取
 
 ```cpp
-// 三级 fallback：override_ip > 服务器返回 > STUN
-// DnsResolver 内部维护 exit_ip_ 成员，首次使用时初始化
+// 三级 fallback：override-ip > 服务器返回 > STUN
+// DnsResolver 内部维护 exit_ip_ 成员
 
 // 优先级 1：客户端在 OnInformation 回调中缓存服务器返回的出口 IP
-bool VEthernetNetworkSwitcher::OnInformation(
-    const std::shared_ptr<VirtualEthernetInformation>& info,
-    const VirtualEthernetInformationExtensions& extensions) noexcept {
-    // ... 现有逻辑 ...
-
-    // 缓存出口 IP 供 DnsResolver 使用
-    if (extensions.ClientExitIP.is_v4()) {
-        dns_resolver_->SetExitIP(extensions.ClientExitIP);
-    }
-
-    // ...
+if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
+    dns_resolver_->SetExitIP(extensions.ClientExitIP);
 }
 
 // 优先级 2：服务器在 Establish() 中填充 ClientExitIP
 // VirtualEthernetSwitcher::Establish():
-InformationEnvelope envelope = BuildInformationEnvelope(session_id, *established_information);
-boost::system::error_code ec;
-boost::asio::ip::tcp::endpoint remote_ep = transmission->GetRemoteEndPoint();
-if (!ec) {
-    envelope.Extensions.ClientExitIP = remote_ep.address();
+{
+    boost::asio::ip::tcp::endpoint remote_ep = transmission->GetRemoteEndPoint();
+    if (!remote_ep.address().is_unspecified()) {
+        envelope.Extensions.ClientExitIP = remote_ep.address();
+    }
 }
-envelope.ExtendedJson = envelope.Extensions.ToJson();
 
-// 优先级 3：STUN fallback（仅在服务器未返回时触发）
-// ResolveAsync 内部逻辑：
-if (exit_ip_.is_unspecified()) {
-    // 服务器未返回出口 IP，尝试 STUN
-    DetectExitIPViaStun([this, ...](boost::asio::ip::address ip) {
-        if (ip.is_v4()) exit_ip_ = ip;
-        // 继续执行 ECS + DNS 查询...
-    });
-    return;
-}
+// GetEcsIp() 内部逻辑：
+// 1. ecs_override_ip_ 非空 → 解析为 IPv4 地址 → 使用
+// 2. exit_ip_ 是有效 IPv4 → 使用
+// 3. 都不可用 → 返回 unspecified → 触发 DetectExitIPViaStun()
 ```
 
 ---
 
-## 实现步骤
+## 遥测（Telemetry）
 
-### Phase 1: 基础框架与 UDP provider 闭环（1-2 天）
+`DnsResolver` 本身不包含遥测调用——没有计数器、直方图或日志。遥测通过外部组件（`VEthernetNetworkSwitcher`）集成：
 
-1. 创建 `ppp/dns/DnsResolver.h` — 配置结构、提供商表、接口声明、socket protect 回调
-2. 创建 `ppp/dns/DnsResolver.cpp` — 先实现 UDP 协议与请求包复制
-3. 扩展 `dns::Rule` — 新增 `ProviderName` 字段，扩展 `Load()`
-4. `RedirectDnsServer` 匹配 provider 时走新路径，旧 IP 规则路径保持不变
-5. 集成测试：UDP provider + 现有 dns-rules.txt 格式
+| 指标 | 类型 | 来源 | 说明 |
+|------|------|------|------|
+| `client.dns.apply` | Span | VEthernetNetworkSwitcher | DNS 配置应用耗时 |
+| `client.dns.setup` | Count | VEthernetNetworkSwitcher | DNS 设置完成计数 |
+| `client.ipv6.apply.us` | Histogram | VEthernetNetworkSwitcher | IPv6 应用耗时（含 DNS） |
 
-### Phase 2: TCP DNS + 平台 socket protect（1-2 天）
+后续可考虑添加的 DNS 专用遥测：
 
-1. 实现 TCP DNS 2 字节长度前缀协议
-2. 增加响应大小上限和超时
-3. 为 UDP/TCP/bootstrap/STUN/DoT/DoH 预留统一 protect socket 回调
-4. 集成测试：UDP/TCP 协议 + 旧路径兼容
-
-### Phase 3: DoT 实现（1-2 天）
-
-1. 基于 `boost::asio::ssl::stream<tcp::socket>` 实现 DoT 客户端
-2. Bootstrap DNS 解析
-3. SNI 与证书校验策略
-4. 集成测试
-
-### Phase 4: DoH HTTP/1.1 实现（2-3 天）
-
-1. 基于 `boost::beast::http` 实现异步 DoH 客户端
-2. 首版仅 HTTP/1.1；HTTP/2 不纳入本阶段
-3. Bootstrap DNS 解析（复用 Phase 2 逻辑）
-4. 集成测试
-
-### Phase 5: ECS + 出口 IP（1 天）
-
-1. `VirtualEthernetInformation` 新增 `ClientExitIP` 字段（服务器填/客户端读）
-2. STUN fallback 实现（~50 行，内联在 DnsResolver.cpp）
-3. ECS OPT RR 构造（内联在 DnsResolver.cpp 中）
-4. 国内查询自动添加 ECS
-5. 集成测试
-
-### Phase 6: 集成 + 故障转移 + 连接池优化（1 天+）
-
-1. 修改 `RedirectDnsServer` 增加新路径分支
-2. 实现协议降级故障转移
-3. 端到端测试：dns-rules.txt → DoH/DoT → vdns 缓存 → 响应注入
-4. 性能测试
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `dns.resolve.us` | Histogram | 单次 DNS 解析耗时（按协议分） |
+| `dns.resolve.ok` | Count | 解析成功计数 |
+| `dns.resolve.fail` | Count | 解析失败计数（全部协议/提供商均失败） |
+| `dns.protocol.fallback` | Count | 协议降级触发计数 |
+| `dns.ecs.injected` | Count | ECS OPT RR 注入计数 |
+| `dns.stun.detected` | Count | STUN 出口 IP 检测成功计数 |
 
 ---
 
-## 性能优化
+## 后续阶段计划
 
-| 优化项 | 说明 |
-|--------|------|
-| **TLS 连接池** | 后续优化项：按 hostname 复用 SSL context 和连接，避免重复握手；首版可先每请求新建连接保证正确性 |
-| **Bootstrap 缓存** | 解析结果缓存，与 vdns TTL 一致 |
-| **减少拷贝** | 异步请求包必须复制以保证生命周期；响应路径尽量减少不必要复制 |
-| **出口 IP 三级 fallback** | 服务器返回(0 RTT) > STUN(1 RTT) > 手动配置，绝大多数情况走第一条路径 |
-| **协议降级** | 首选协议超时后立即尝试下一个，不等待太久 |
-| **UDP 优先** | 简写配置时优先尝试 DoH，但若用户明确指定 `udp` 则跳过 TLS 开销 |
+### Phase A：自定义提供商接入主路径
+
+- `RedirectDnsServer` 适配 `DnsServerEntry` 结构化条目（当前仅使用内置提供商简写名匹配）
+- 使 object/array 配置中定义的自定义 DoH/DoT 端点能通过 `DnsResolver` 使用
+- `ResolveHostnameAsync()` bootstrap helper 接入自定义提供商解析路径
+
+### Phase B：TLS 连接池
+
+- 按 hostname 复用 SSL context 和/或连接
+- 减少 DoH/DoT 首次查询延迟
+- 需评估连接生命周期管理复杂度
+
+### Phase C：ECS IPv6 支持
+
+- 支持 IPv6 地址的 ECS 注入
+- PREFIX-LENGTH 48
+- FAMILY 值 2
+
+### Phase D：STUN 多服务器 fallback
+
+- 增加 fallback STUN 服务器（Cloudflare、Twilio）
+- STUN 服务器可配置
+- 超时与重试策略优化
+
+### Phase E：DoQ / DoH3（远期）
+
+- 需引入 QUIC 库（如 msquic 或 ngtcp2）
+- 新增 `Protocol::DoQ` 枚举值
+- 配置解析支持 `doh3` 协议值
+- 实现 DoQ→DoT、DoH3→DoH 真正传输级降级
+
+### Phase F：DNS 专用遥测
+
+- 在 `DnsResolver` 内部添加解析耗时、成功/失败、协议降级等遥测点
+- STUN 检测耗时和结果计数
 
 ---
 
@@ -770,29 +816,45 @@ github.com         /cloudflare/tun
 {
     "dns": {
         "servers": {
-            "domestic": { "protocol": "udp", "address": "119.29.29.29" },
-            "foreign": { "protocol": "udp", "address": "1.1.1.1" }
+            "domestic": "114",
+            "foreign": "cloudflare"
         }
     }
 }
 ```
 
-### 故障转移
+> 使用 `"114"` 简写时，代码按 DoH→TCP→UDP 顺序尝试（114 无 DoT）。如需纯 UDP，当前只能使用内置提供商的 UDP 条目（自动降级最终会到达 UDP）。
+
+### 故障转移（使用内置提供商的多协议降级）
 
 ```json
 {
     "dns": {
         "servers": {
-            "domestic": [
-                { "protocol": "doh", "url": "https://doh.pub/dns-query", "bootstrap": ["119.29.29.29"] },
-                { "protocol": "dot", "hostname": "dot.pub", "bootstrap": ["119.29.29.29"] },
-                { "protocol": "udp", "address": "119.29.29.29" }
-            ],
-            "foreign": [
-                { "protocol": "doh", "url": "https://cloudflare-dns.com/dns-query", "bootstrap": ["1.1.1.1"] },
-                { "protocol": "dot", "hostname": "cloudflare-dns.com", "bootstrap": ["1.1.1.1"] },
-                { "protocol": "tcp", "address": "1.1.1.1" }
-            ]
+            "domestic": "doh.pub",
+            "foreign": "cloudflare"
+        },
+        "intercept-unmatched": true
+    }
+}
+```
+
+当 `doh.pub` 的 DoH 失败时，自动降级到 DoT→TCP→UDP。`intercept-unmatched: true` 确保所有未命中规则的查询也走多协议路径。
+
+### 自定义 DoH 端点（object 形式）
+
+```json
+{
+    "dns": {
+        "servers": {
+            "domestic": {
+                "protocol": "doh",
+                "url": "https://custom-dns.example.com/dns-query",
+                "hostname": "custom-dns.example.com",
+                "address": "203.0.113.1:443",
+                "bootstrap": ["203.0.113.1"]
+            },
+            "foreign": "cloudflare"
         }
     }
 }
@@ -807,9 +869,10 @@ github.com         /cloudflare/tun
 - [RFC 8484 - DNS over HTTPS](https://tools.ietf.org/html/rfc8484)
 - [RFC 7858 - DNS over TLS](https://tools.ietf.org/html/rfc7858)
 - [RFC 7871 - Client Subnet in DNS](https://tools.ietf.org/html/rfc7871)
+- [RFC 5389 - STUN](https://tools.ietf.org/html/rfc5389)（STUN fallback 已实现参考）
 
 ---
 
 ## 标签
 
-`dns` `doh` `dot` `ecs` `feature`
+`dns` `doh` `dot` `ecs` `stun` `feature`

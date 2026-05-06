@@ -315,6 +315,8 @@ namespace ppp {
 
             config.dns.servers.domestic = "";
             config.dns.servers.foreign = "";
+            config.dns.servers.domestic_entries.clear();
+            config.dns.servers.foreign_entries.clear();
             config.dns.intercept_unmatched = false;
             config.dns.ecs.enabled = false;
             config.dns.ecs.override_ip = "";
@@ -543,6 +545,24 @@ namespace ppp {
 
             LRTrim(config, 0);
             LRTrim(config, 1);
+
+            // Trim string fields inside structured DNS server entries.
+            for (auto* entries : { &config.dns.servers.domestic_entries, &config.dns.servers.foreign_entries }) {
+                for (auto& entry : *entries) {
+                    entry.protocol  = LTrim(RTrim(entry.protocol));
+                    entry.url       = LTrim(RTrim(entry.url));
+                    entry.hostname  = LTrim(RTrim(entry.hostname));
+                    entry.address   = LTrim(RTrim(entry.address));
+                    for (auto& b : entry.bootstrap) {
+                        b = LTrim(RTrim(b));
+                    }
+                    // Remove empty bootstrap entries.
+                    entry.bootstrap.erase(
+                        std::remove_if(entry.bootstrap.begin(), entry.bootstrap.end(),
+                            [](const ppp::string& s) noexcept { return s.empty(); }),
+                        entry.bootstrap.end());
+                }
+            }
 
             if (config.client.guid.empty()) {
                 config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
@@ -1131,6 +1151,169 @@ namespace ppp {
         }
 
         /**
+         * @brief Normalizes a DNS protocol string and applies DoQ→DoT fallback.
+         * @param raw_protocol Raw protocol string from JSON.
+         * @return Normalized lowercase protocol string.
+         *
+         * DoQ is downgraded to "dot" because the resolver does not yet
+         * implement QUIC transport, so advertising DoQ would be an
+         * empty promise.
+         */
+        static ppp::string NormalizeDnsProtocol(const ppp::string& raw_protocol) noexcept {
+            ppp::string proto = ToLower(LTrim(RTrim(raw_protocol)));
+            if (proto == "doq") {
+                return "dot";
+            }
+            return proto;
+        }
+
+        /**
+         * @brief Parses a single DNS server entry from a JSON object.
+         * @param entry Output DnsServerEntry.
+         * @param json Source JSON node (must be an object).
+         * @return True when at least one meaningful field is populated.
+         */
+        static bool ParseDnsServerEntry(AppConfiguration::DnsServerEntry& entry, const Json::Value& json) noexcept {
+            if (!json.isObject()) {
+                return false;
+            }
+
+            entry.protocol  = NormalizeDnsProtocol(JsonAuxiliary::AsValue<ppp::string>(json["protocol"]));
+            entry.url       = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["url"])));
+            entry.hostname  = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["hostname"])));
+            entry.address   = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["address"])));
+            entry.bootstrap.clear();
+
+            // Parse bootstrap list: accept array, object values, or single string.
+            const Json::Value& bootstrap_json = json["bootstrap"];
+            if (bootstrap_json.isArray()) {
+                for (Json::ArrayIndex i = 0; i < bootstrap_json.size(); i++) {
+                    ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(bootstrap_json[i])));
+                    if (!s.empty()) {
+                        entry.bootstrap.emplace_back(std::move(s));
+                    }
+                }
+            }
+            elif(bootstrap_json.isString()) {
+                ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(bootstrap_json)));
+                if (!s.empty()) {
+                    entry.bootstrap.emplace_back(std::move(s));
+                }
+            }
+
+            // Accept if any identifying field is present.
+            return !entry.protocol.empty() || !entry.url.empty() ||
+                   !entry.hostname.empty() || !entry.address.empty();
+        }
+
+        /**
+         * @brief Parses a DNS server specification that may be a string, object, or array.
+         *
+         * - **string**: Stored in the legacy shorthand field and also as a single entry
+         *   with address field populated.
+         * - **object**: Parsed as a structured DnsServerEntry into the entries list.
+         * - **array**: Each element is parsed individually; strings go to legacy shorthand
+         *   (first element only) and entries list, objects go to entries list only.
+         *
+         * @param shorthand Output legacy string shorthand (single string or first of array).
+         * @param entries   Output structured entry list.
+         * @param json      Source JSON node.
+         * @return True when at least one entry or shorthand was produced.
+         */
+        static bool ParseDnsServerSpec(ppp::string& shorthand, ppp::vector<AppConfiguration::DnsServerEntry>& entries, const Json::Value& json) noexcept {
+            using DnsServerEntry = AppConfiguration::DnsServerEntry;
+
+            shorthand.clear();
+            entries.clear();
+
+            if (json.isNull()) {
+                return false;
+            }
+
+            // --- string shorthand: "cloudflare", "1.1.1.1:53", etc. ---
+            if (json.isString()) {
+                shorthand = LTrim(RTrim(JsonAuxiliary::AsString(json)));
+                if (!shorthand.empty()) {
+                    DnsServerEntry entry;
+                    entry.address = shorthand;
+                    entries.emplace_back(std::move(entry));
+                    return true;
+                }
+                return false;
+            }
+
+            // --- object: single structured entry ---
+            if (json.isObject()) {
+                DnsServerEntry entry;
+                if (ParseDnsServerEntry(entry, json)) {
+                    entries.emplace_back(std::move(entry));
+                    return true;
+                }
+                return false;
+            }
+
+            // --- array: mixed string/object entries ---
+            if (json.isArray()) {
+                bool first_string = true;
+                for (Json::ArrayIndex i = 0; i < json.size(); i++) {
+                    const Json::Value& element = json[i];
+
+                    if (element.isString()) {
+                        ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(element)));
+                        if (!s.empty()) {
+                            // First string element also populates the legacy shorthand.
+                            if (first_string) {
+                                shorthand = s;
+                                first_string = false;
+                            }
+                            DnsServerEntry entry;
+                            entry.address = s;
+                            entries.emplace_back(std::move(entry));
+                        }
+                    }
+                    elif(element.isObject()) {
+                        DnsServerEntry entry;
+                        if (ParseDnsServerEntry(entry, element)) {
+                            entries.emplace_back(std::move(entry));
+                        }
+                    }
+                }
+                return !entries.empty();
+            }
+
+            return false;
+        }
+
+        /**
+         * @brief Serializes a DnsServerEntry to a JSON object.
+         * @param entry Source entry.
+         * @return JSON object with populated fields only.
+         */
+        static Json::Value DnsServerEntryToJson(const AppConfiguration::DnsServerEntry& entry) noexcept {
+            Json::Value jo;
+            if (!entry.protocol.empty()) {
+                jo["protocol"] = entry.protocol;
+            }
+            if (!entry.url.empty()) {
+                jo["url"] = entry.url;
+            }
+            if (!entry.hostname.empty()) {
+                jo["hostname"] = entry.hostname;
+            }
+            if (!entry.address.empty()) {
+                jo["address"] = entry.address;
+            }
+            if (!entry.bootstrap.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& b : entry.bootstrap) {
+                    arr.append(b);
+                }
+                jo["bootstrap"] = arr;
+            }
+            return jo;
+        }
+
+        /**
          * @brief Loads configuration from a JSON object.
          * @param json Source JSON object.
          * @return True when loading and normalization succeed.
@@ -1271,13 +1454,23 @@ namespace ppp {
             AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
 
             // DNS resolver extension configuration.
-            // The domestic/foreign fields accept string shorthand (provider names),
-            // simple object, or array forms.  AsValue<ppp::string> safely returns
-            // an empty string for object/array/number JSON nodes, so object and
-            // array forms will not crash; they are simply treated as "not configured"
-            // until the full DnsResolver parser is implemented in a later phase.
-            config.dns.servers.domestic = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["servers"]["domestic"]);
-            config.dns.servers.foreign = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["servers"]["foreign"]);
+            // domestic/foreign accept three forms:
+            //   string  → legacy shorthand stored in domestic/foreign + single entry
+            //   object  → structured DnsServerEntry
+            //   array   → mixed string/object entries, first string → legacy shorthand
+            {
+                ppp::string domestic_shorthand;
+                ppp::vector<DnsServerEntry> domestic_entries;
+                ParseDnsServerSpec(domestic_shorthand, domestic_entries, json["dns"]["servers"]["domestic"]);
+                config.dns.servers.domestic = domestic_shorthand;
+                config.dns.servers.domestic_entries = std::move(domestic_entries);
+
+                ppp::string foreign_shorthand;
+                ppp::vector<DnsServerEntry> foreign_entries;
+                ParseDnsServerSpec(foreign_shorthand, foreign_entries, json["dns"]["servers"]["foreign"]);
+                config.dns.servers.foreign = foreign_shorthand;
+                config.dns.servers.foreign_entries = std::move(foreign_entries);
+            }
             AssignBoolIfPresent(config.dns.intercept_unmatched, json["dns"]["intercept-unmatched"]);
             AssignBoolIfPresent(config.dns.ecs.enabled, json["dns"]["ecs"]["enabled"]);
             config.dns.ecs.override_ip = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["ecs"]["override-ip"]);
@@ -1513,8 +1706,29 @@ namespace ppp {
             root["telemetry"] = telemetry;
 
             Json::Value dns;
-            dns["servers"]["domestic"] = config.dns.servers.domestic;
-            dns["servers"]["foreign"] = config.dns.servers.foreign;
+            // Serialize domestic/foreign: emit structured array when entries exist,
+            // otherwise emit legacy string shorthand.
+            if (!config.dns.servers.domestic_entries.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const DnsServerEntry& entry : config.dns.servers.domestic_entries) {
+                    arr.append(DnsServerEntryToJson(entry));
+                }
+                dns["servers"]["domestic"] = arr;
+            }
+            else {
+                dns["servers"]["domestic"] = config.dns.servers.domestic;
+            }
+
+            if (!config.dns.servers.foreign_entries.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const DnsServerEntry& entry : config.dns.servers.foreign_entries) {
+                    arr.append(DnsServerEntryToJson(entry));
+                }
+                dns["servers"]["foreign"] = arr;
+            }
+            else {
+                dns["servers"]["foreign"] = config.dns.servers.foreign;
+            }
             dns["intercept-unmatched"] = config.dns.intercept_unmatched;
             dns["ecs"]["enabled"] = config.dns.ecs.enabled;
             dns["ecs"]["override-ip"] = config.dns.ecs.override_ip;

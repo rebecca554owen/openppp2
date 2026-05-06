@@ -29,6 +29,7 @@ namespace ppp {
         public:
             typedef ppp::function<bool(int native_handle)>  ProtectSocketCallback;
             typedef ppp::function<void(ppp::vector<Byte>)>  ResolveCallback;
+            typedef ppp::function<void(boost::asio::ip::address)> ExitIpCallback;
 
         public:
             explicit DnsResolver(boost::asio::io_context& context) noexcept;
@@ -60,7 +61,7 @@ namespace ppp {
              *
              * @details When enabled, DnsResolver verifies the upstream certificate
              *          chain using the project's bundled roots, optional cacert.pem,
-             *          and system default CA locations. Hostname verification is
+             *          and system default CA locations.  Hostname verification is
              *          also applied when SNI/hostname is available.
              */
             void                                            SetTlsVerifyPeer(bool verify_peer) noexcept { tls_verify_peer_ = verify_peer; }
@@ -152,19 +153,51 @@ namespace ppp {
             boost::asio::ip::address                        GetEcsIp() const noexcept;
 
             /**
-             * @brief Appends an EDNS Client Subnet OPT RR to a raw DNS query packet.
+             * @brief Appends or merges an EDNS Client Subnet OPT RR into a raw DNS query packet.
              *
-             * @details Modifies @p packet in-place.  If the packet already contains
-             *          additional records (ARCOUNT > 0) or is too short, the packet
-             *          is left unchanged and the function returns false.  This
-             *          conservative guard avoids generating illegal double-OPT packets.
+             * @details Modifies @p packet in-place.  When ARCOUNT == 0, a fresh OPT RR is
+             *          appended.  When ARCOUNT > 0, the additional-section is scanned for
+             *          an existing OPT RR (TYPE=41 at root label); if found, its ECS option
+             *          (option-code 8) is replaced or appended within the OPT RDATA.
+             *          If the packet cannot be safely parsed, it is left unchanged.
              *
              * @param packet  DNS query packet bytes (modified in-place on success).
              * @param ecs_ip  IPv4 address to embed in the ECS option; last byte is
              *                zeroed to represent a /24 prefix.
-             * @return true if the OPT RR was appended; false on error or skip.
+             * @return true if the OPT RR was injected or merged; false on error or skip.
              */
             static bool                                     InjectEcsOptRr(ppp::vector<Byte>& packet, const boost::asio::ip::address& ecs_ip) noexcept;
+
+            /**
+             * @brief Detects the client's public IPv4 address via STUN Binding Request.
+             *
+             * @details Sends a STUN Binding Request (RFC 5389) to a well-known STUN
+             *          server and parses the XOR-MAPPED-ADDRESS from the response.
+             *          Used as a last-resort fallback when ECS is enabled but no
+             *          override_ip or exit_ip is configured.
+             *
+             * @param callback  Invoked with the detected public IPv4 address, or an
+             *                  unspecified address on failure/timeout.
+             */
+            void                                            DetectExitIPViaStun(const ExitIpCallback& callback) noexcept;
+
+            /**
+             * @brief Resolves a hostname to an IPv4 address using the system DNS resolver.
+             *
+             * @details A reusable bootstrap DNS helper that does NOT depend on the
+             *          provider infrastructure.  Sends a raw DNS A-record query
+             *          to well-known public DNS servers (e.g. 8.8.8.8) via UDP.
+             *          Intended for resolving DoH/DoT hostnames during bootstrap
+             *          when provider IPs are not yet known.
+             *
+             * @param hostname  The hostname to resolve.
+             * @param callback  Invoked with the first resolved IPv4 address, or
+             *                  an unspecified address on failure/timeout.
+             */
+            static void                                     ResolveHostnameAsync(
+                boost::asio::io_context&                    context,
+                const ppp::string&                          hostname,
+                const ExitIpCallback&                       callback) noexcept;
 
         private:
             boost::asio::io_context&                        context_;
