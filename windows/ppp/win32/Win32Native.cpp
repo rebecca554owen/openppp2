@@ -1098,7 +1098,11 @@ namespace ppp
         {
             int s1, s2, s3, s4;
 
-#if _WIN64
+#if defined(_M_ARM64)
+            // ARM64 Windows: CPUID not available, return fixed values
+            // Could use IsProcessorFeaturePresent() for feature detection
+            s1 = s2 = s3 = s4 = 0;
+#elif _WIN64
             int sn[4];
             __cpuid(sn, 0);
             s1 = sn[0];
@@ -1355,16 +1359,15 @@ namespace ppp
         {
             if (NULLPTR != handle)
             {
-                boost::system::error_code ec;
                 try
                 {
-                    handle->cancel(ec);
+                    handle->cancel();
                 }
                 catch (const std::exception&) {}
 
                 try
                 {
-                    handle->close(ec);
+                    handle->close();
                 }
                 catch (const std::exception&) {}
             }

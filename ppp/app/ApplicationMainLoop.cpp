@@ -5,7 +5,9 @@
 
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/diagnostics/Telemetry.h>
+#include <cstdio>
 
 namespace ppp::app {
 
@@ -68,7 +70,10 @@ static const char* ToNetworkStateString(VEthernetExchanger::NetworkState state) 
  * @brief Builds full runtime environment lines mirrored from legacy foreground console output.
  * @param lines Output line vector receiving formatted environment rows.
  */
-void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines) noexcept {
+void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines,
+    uint64_t incoming_traffic,
+    uint64_t outgoing_traffic,
+    const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept {
     lines.clear();
     lines.reserve(160u);
 
@@ -77,7 +82,14 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
 
     ppp::string hosting_environment = BuildHostingEnvironmentText(client_mode_);
 
-    AppendEnvLine(lines, "Application", "started. Press Ctrl+C to shut down.");
+    ppp::string app_label = PPP_APPLICATION_NAME;
+    app_label += " v";
+    app_label += PPP_APPLICATION_VERSION;
+    app_label += " (";
+    app_label += client_mode_ ? "client" : "server";
+    app_label += ")";
+
+    AppendEnvLine(lines, "Application", app_label);
     AppendEnvLine(lines, "Max Concurrent", stl::to_string<ppp::string>(
         configuration_ ? configuration_->concurrent : 0));
     AppendEnvLine(lines, "Process", stl::to_string<ppp::string>(
@@ -105,7 +117,7 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
             const char* link_state = "connecting";
             if (managed_server->LinkIsAvailable()) {
                 link_state = "established";
-            } elif (managed_server->LinkIsReconnecting()) {
+            } else if (managed_server->LinkIsReconnecting()) {
                 link_state = "reconnecting";
             }
 
@@ -114,11 +126,13 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
     }
 
     if (NULLPTR != client) {
+#if !defined(_ANDROID) && !defined(_IPHONE)
         if (ppp::string remote_uri = client->GetRemoteUri(); !remote_uri.empty()) {
             std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
             ppp::string mode_text = (NULLPTR != exchanger && exchanger->StaticEchoAllocated()) ? "static" : "dynamic";
             AppendEnvLine(lines, "VPN Server", remote_uri + " [" + mode_text + "]");
         }
+#endif
 
         struct {
             const char* tab;
@@ -136,9 +150,11 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
             boost::asio::ip::tcp::endpoint localEP = switcher->GetLocalEndPoint();
             boost::asio::ip::address localIP = localEP.address();
             if (localIP.is_unspecified()) {
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 if (auto ni = client->GetUnderlyingNetworkInterface(); NULLPTR != ni) {
                     localIP = ni->IPAddress;
                 }
+#endif
             }
 
             ppp::string endpoint_text = IPEndPoint::ToEndPoint(boost::asio::ip::tcp::endpoint(localIP, localEP.port())).ToString();
@@ -191,6 +207,7 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
     AppendEnvLine(lines, "Hosting Environment", hosting_environment);
     lines.emplace_back(ppp::string());
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
     if (NULLPTR != client) {
         struct {
             std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> ni;
@@ -306,15 +323,7 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
             lines.emplace_back(ppp::string());
         }
     }
-
-    uint64_t incoming_traffic = 0;
-    uint64_t outgoing_traffic = 0;
-    std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
-    if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
-        incoming_traffic = 0;
-        outgoing_traffic = 0;
-        statistics_snapshot = NULLPTR;
-    }
+#endif
 
     lines.emplace_back("VPN");
     lines.emplace_back(section_separator);
@@ -329,6 +338,59 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
         AppendEnvLine(lines, "IN", ppp::StrFormatByteSize(static_cast<Int64>(statistics_snapshot->IncomingTraffic.load())));
         AppendEnvLine(lines, "OUT", ppp::StrFormatByteSize(static_cast<Int64>(statistics_snapshot->OutgoingTraffic.load())));
     }
+
+    /**
+     * @brief Link Telemetry section — displayed in right column (two-column mode)
+     * or appended after info lines (single-column mode).
+     */
+    ppp::vector<ppp::string> telemetry_lines;
+    telemetry_lines.emplace_back("Link Telemetry");
+    telemetry_lines.emplace_back(section_separator);
+
+    {
+        ppp::diagnostics::LinkTelemetry& lt = ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal();
+        ppp::diagnostics::LinkTelemetrySnapshot snap = lt.GetSnapshot();
+
+        {
+            char quality_buf[64];
+            std::snprintf(quality_buf, sizeof(quality_buf), "%.2f%% %s",
+                snap.quality_percent,
+                ppp::diagnostics::LinkTelemetry::GetQualityGradeName(snap.grade));
+            AppendEnvLine(telemetry_lines, "Quality", ppp::string(quality_buf));
+        }
+
+        AppendEnvLine(telemetry_lines, "Error Count",
+            stl::to_string<ppp::string>(static_cast<Int64>(snap.error_count)));
+
+        AppendEnvLine(telemetry_lines, "Success Count",
+            stl::to_string<ppp::string>(static_cast<Int64>(snap.success_count)));
+
+        AppendEnvLine(telemetry_lines, "Total Events",
+            stl::to_string<ppp::string>(static_cast<Int64>(snap.total_count)));
+
+        {
+            double error_rate = 0.0;
+            if (snap.success_count > 0) {
+                error_rate = (static_cast<double>(snap.error_count) / static_cast<double>(snap.success_count)) * 100.0;
+            } else if (snap.error_count > 0) {
+                error_rate = 100.0;
+            }
+            char rate_buf[64];
+            std::snprintf(rate_buf, sizeof(rate_buf), "%.2f%% (relative to OK)", error_rate);
+            AppendEnvLine(telemetry_lines, "Error Rate", ppp::string(rate_buf));
+        }
+
+        if (snap.grade >= ppp::diagnostics::LinkQualityGrade::Good &&
+            snap.grade != ppp::diagnostics::LinkQualityGrade::Unknown) {
+            telemetry_lines.emplace_back("  !! Report to OPENPPP2 when quality <= 95%");
+        }
+
+        if (snap.grade == ppp::diagnostics::LinkQualityGrade::Unusable) {
+            telemetry_lines.emplace_back("  !! CRITICAL: Quality < 90% — STOP OPENPPP2!");
+        }
+    }
+
+    ConsoleUI::GetInstance().SetTelemetryLines(telemetry_lines);
 }
 
 /**
@@ -355,9 +417,8 @@ void PppApplication::Dispose() noexcept {
 
     ClearTickAlwaysTimeout();
 
-#if PPP_TELEMETRY
     ppp::telemetry::Flush(3000);
-#endif
+    ppp::telemetry::Shutdown();
 }
 
 /**
@@ -381,7 +442,7 @@ bool PppApplication::GetTransmissionStatistics(
         std::shared_ptr<ppp::transmissions::ITransmissionStatistics> transmission_statistics;
         if (NULLPTR != client) {
             transmission_statistics = client->GetStatistics();
-        } elif (NULLPTR != server) {
+        } else if (NULLPTR != server) {
             transmission_statistics = server->GetStatistics();
         }
 
@@ -409,7 +470,7 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
 
     uint64_t incoming_traffic = 0;
     uint64_t outgoing_traffic = 0;
-    
+
     std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
     std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
     std::shared_ptr<VEthernetExchanger> exchanger = NULLPTR;
@@ -422,18 +483,18 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         outgoing_traffic = 0;
     }
 
-    ppp::string vpn_state = "down";
+    ppp::string vpn_state = "disconnected";
     if (NULLPTR != client) {
         if (NULLPTR == exchanger) {
-            vpn_state = "init";
+            vpn_state = "connecting";
         } else {
             NetworkState network_state = exchanger->GetNetworkState();
             if (network_state == NetworkState::NetworkState_Established) {
-                vpn_state = "up";
-            } elif (network_state == NetworkState::NetworkState_Reconnecting) {
-                vpn_state = "reconnect";
+                vpn_state = "established";
+            } else if (network_state == NetworkState::NetworkState_Reconnecting) {
+                vpn_state = "reconnecting";
             } else {
-                vpn_state = "connect";
+                vpn_state = "connecting";
             }
         }
     }
@@ -441,10 +502,21 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     ppp::string status = "vpn=" + vpn_state;
     status += " rx=" + ppp::StrFormatByteSize((Int64)incoming_traffic);
     status += " tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
+
+    {
+        double quality = ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().GetQualityPercent();
+        ppp::diagnostics::LinkQualityGrade grade = ppp::diagnostics::LinkTelemetry::ClassifyQuality(quality);
+        char quality_buf[32];
+        std::snprintf(quality_buf, sizeof(quality_buf), " link=%.1f%%", quality);
+        status += quality_buf;
+        status += " ";
+        status += ppp::diagnostics::LinkTelemetry::GetQualityGradeName(grade);
+    }
+
     ConsoleUI::GetInstance().UpdateStatus(status);
 
     ppp::vector<ppp::string> info;
-    GetEnvironmentInformationLines(info);
+    GetEnvironmentInformationLines(info, incoming_traffic, outgoing_traffic, statistics_snapshot);
     ConsoleUI::GetInstance().SetInfoLines(info);
 
 #if defined(_WIN32)
@@ -593,9 +665,9 @@ bool Windows_PreferredNetwork(int argc, const char* argv[]) noexcept {
     bool ok = false;
     if (ppp::HasCommandArgument("--system-network-preferred-ipv4", argc, argv)) {
         ok = ppp::net::proxies::HttpProxy::PreferredNetwork(true);
-    } elif (ppp::HasCommandArgument("--system-network-preferred-ipv6", argc, argv)) {
+    } else if (ppp::HasCommandArgument("--system-network-preferred-ipv6", argc, argv)) {
         ok = ppp::net::proxies::HttpProxy::PreferredNetwork(false);
-    } elif (ppp::HasCommandArgument("--system-network-reset", argc, argv)) {
+    } else if (ppp::HasCommandArgument("--system-network-reset", argc, argv)) {
         ok = ppp::win32::network::ResetNetworkEnvironment();
     } else {
         return false;

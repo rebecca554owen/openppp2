@@ -1133,8 +1133,8 @@ namespace ppp {
                 return false;
             }
 
-            boost::asio::ip::tcp::resolver::query q(hostname.data(), stl::to_string<ppp::string>(port).data());
-            resolver->async_resolve(q,
+            ppp::string service = stl::to_string<ppp::string>(port);
+            resolver->async_resolve(hostname, service,
                 [resolver, callback, port](const boost::system::error_code& ec, const auto& r) noexcept {
                     if (ec) {
                         callback(NULLPTR);

@@ -340,9 +340,9 @@ namespace ppp
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
             }
 
-            if (!tap->IsOpen())
+            if (!tap->IsOpen() && !tap->Open())
             {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
+                return false;
             }
 
             std::shared_ptr<IPFragment> fragment = NewFragment();
@@ -734,7 +734,7 @@ namespace ppp
                         boost::system::error_code ec;
                         SetThreadName("ssmt");
 
-                        boost::asio::io_context::work work(*context);
+                        auto work = boost::asio::make_work_guard(*context);
                         context->restart();
 
                         boost::asio::post(*context, 

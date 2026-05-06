@@ -406,7 +406,7 @@ namespace ppp {
                 }
 
                 // Store all data read so far (headers + possibly partial body) into messages_
-                boost::asio::const_buffers_1 buf = response->data();
+                auto buf = response->data();
                 if (NULLPTR == buf.data()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                     return false;

@@ -39,6 +39,7 @@
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/mux/vmux_net.h>
 #include <ppp/cryptography/Ciphertext.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/Int128.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
@@ -213,6 +214,14 @@ namespace ppp {
                  * @return Non-negative reconnection counter; reset on successful establishment.
                  */
                 int                                                                     GetReconnectionCount()  noexcept { return reconnection_count_; }
+
+                /**
+                 * @brief Gets the link telemetry object for this session.
+                 *
+                 * Tracks unexpected RST faults, clean closes, and tunnel quality.
+                 * @return Reference to the session-level LinkTelemetry instance.
+                 */
+                ppp::diagnostics::LinkTelemetry&                                           GetLinkTelemetry()      noexcept { return link_telemetry_; }
 
                 /**
                  * @brief Gets the VMUX network state derived from the vmux_net lifecycle.
@@ -1051,6 +1060,9 @@ namespace ppp {
                 
                 /** @brief Number of reconnect attempts since the last established state. */
                 int                                                                     reconnection_count_ = 0;
+
+                /** @brief Per-session link fault telemetry (unexpected RST, link drops, quality). */
+                ppp::diagnostics::LinkTelemetry                                             link_telemetry_;
 
                 /** @brief Cached remote server endpoint metadata resolved by GetRemoteEndPoint(). */
                 struct {

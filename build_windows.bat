@@ -22,8 +22,8 @@ goto :start
 echo Usage:
 echo   build_windows.bat help
 echo   build_windows.bat /?
-echo   build_windows.bat [Debug^|Release] [x86^|x64^|all]
-echo   build_windows.bat [x86^|x64^|all] [Debug^|Release]
+echo   build_windows.bat [Debug^|Release] [x86^|x64^|arm64^|all]
+echo   build_windows.bat [x86^|x64^|arm64^|all] [Debug^|Release]
 echo.
 echo Examples:
 echo   build_windows.bat
@@ -31,10 +31,12 @@ echo   build_windows.bat Debug
 echo   build_windows.bat Release
 echo   build_windows.bat x86
 echo   build_windows.bat x64
+echo   build_windows.bat arm64
 echo   build_windows.bat all
 echo   build_windows.bat Debug x86
 echo   build_windows.bat x86 Release
 echo   build_windows.bat Release x64
+echo   build_windows.bat Release arm64
 echo   build_windows.bat help
 echo   build_windows.bat /?
 echo.
@@ -66,8 +68,8 @@ if /I not "%CONFIG%"=="Debug" if /I not "%CONFIG%"=="Release" (
     exit /b 1
 )
 
-if /I not "%TARGET%"=="x86" if /I not "%TARGET%"=="x64" if /I not "%TARGET%"=="all" (
-    echo Build target must be x86, x64, or all.
+if /I not "%TARGET%"=="x86" if /I not "%TARGET%"=="x64" if /I not "%TARGET%"=="arm64" if /I not "%TARGET%"=="all" (
+    echo Build target must be x86, x64, arm64, or all.
     exit /b 1
 )
 
@@ -76,6 +78,7 @@ if errorlevel 1 exit /b 1
 
 if /I "%TARGET%"=="x86" goto :x86
 if /I "%TARGET%"=="x64" goto :x64
+if /I "%TARGET%"=="arm64" goto :arm64
 
 :x86
 echo Building x86 %CONFIG%
@@ -91,6 +94,15 @@ echo Building x64 %CONFIG%
 call :prepare_env x64
 if errorlevel 1 exit /b 1
 call :build_one x64 x64-windows-static
+if errorlevel 1 exit /b 1
+if /I not "%TARGET%"=="all" exit /b 0
+goto :arm64
+
+:arm64
+echo Building arm64 %CONFIG%
+call :prepare_env arm64
+if errorlevel 1 exit /b 1
+call :build_one arm64 arm64-windows-static
 exit /b %errorlevel%
 
 :parse_args
@@ -252,7 +264,13 @@ if not defined VCVARS (
     exit /b 1
 )
 
-call "%VCVARS%" %TARGET_ARCH%
+rem Map target architecture to vcvarsall argument
+rem For ARM64 cross-compilation from x64 host, use amd64_arm64
+if /I "%TARGET_ARCH%"=="arm64" (
+    call "%VCVARS%" amd64_arm64
+) else (
+    call "%VCVARS%" %TARGET_ARCH%
+)
 exit /b %errorlevel%
 
 :find_vs_install

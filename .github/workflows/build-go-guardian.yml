@@ -1,0 +1,108 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – Go Guardian daemon & TUI builds.
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: Build · Go Guardian
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-go-guardian-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.22"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Guardian ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build WebUI
+        working-directory: go/guardian/webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build guardian daemon
+        working-directory: go/guardian
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          EXT=""
+          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+          go build -ldflags="-s -w" -o "guardian${EXT}" .
+
+      - name: Build guardian TUI
+        working-directory: go/guardian/cmd/tui
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          EXT=""
+          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+          go build -ldflags="-s -w" -o "guardian-tui${EXT}" .
+
+      - name: Package artifact
+        working-directory: go/guardian
+        run: |
+          SUFFIX="${{ matrix.goos }}-${{ matrix.goarch }}"
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          ARTIFACT="guardian-${SUFFIX}.tar.gz"
+          echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
+
+          mkdir -p staging
+          cp "guardian${EXT}" staging/
+          cp "cmd/tui/guardian-tui${EXT}" staging/
+          cp appsettings.json staging/ 2>/dev/null || true
+
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            (cd staging && zip -r "../guardian-${SUFFIX}.zip" .)
+            echo "ARTIFACT=guardian-${SUFFIX}.zip" >> $GITHUB_ENV
+          else
+            tar czf "$ARTIFACT" -C staging .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: go/guardian/${{ env.ARTIFACT }}
+          if-no-files-found: error

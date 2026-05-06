@@ -138,15 +138,20 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
             ethernet->Ssmt(&network_interface->Ssmt);
 #if defined(_LINUX)
             ethernet->SsmtMQ(&network_interface->SsmtMQ);
+#if !defined(_ANDROID) && !defined(_IPHONE)
             ethernet->ProtectMode(&network_interface->ProtectNetwork);
+#endif
 #endif
 #endif
             ethernet->Mux(&network_interface->Mux);
             ethernet->MuxAcceleration(&network_interface->MuxAcceleration);
             ethernet->StaticMode(&network_interface->StaticMode);
+#if !defined(_ANDROID) && !defined(_IPHONE)
             ethernet->PreferredNgw(network_interface->Ngw);
             ethernet->PreferredNic(network_interface->Nic);
+#endif
 
+#if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_LINUX)
             for (auto&& bypass_path : *network_interface->Bypass) {
                 ethernet->AddLoadIPList(bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
@@ -168,6 +173,7 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
                 ethernet->AddLoadIPList(path, Ipep::ToAddress(route.ngw), route.vbgp);
 #endif
             }
+#endif
 
             if (!network_interface->DNSRules.empty()) {
                 ppp::string dns_rules_path = File::GetFullPath(File::RewritePath(network_interface->DNSRules.data()).data());
@@ -180,7 +186,11 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
                 }
             }
             if (!ethernet->Open(tap)) {
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 auto ni = ethernet->GetUnderlyingNetworkInterface();
+#else
+                auto ni = NULLPTR;
+#endif
                 if (NULLPTR != ni) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                 } else {
@@ -221,8 +231,10 @@ bool PppApplication::PreparedLoopbackEnvironment(const std::shared_ptr<NetworkIn
 
 #if defined(_WIN32)
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId);
-#else
+#elif defined(_LINUX)
             ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId, network_interface->Ssmt, network_interface->SsmtMQ);
+#else
+            ethernet = ppp::make_shared_object<VirtualEthernetSwitcher>(configuration, network_interface->ComponentId, network_interface->Ssmt);
 #endif
             if (NULLPTR == ethernet) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
@@ -348,7 +360,7 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
              * pseudo-terminal) is treated as a warning rather than an error.
              * The process continues with plain-text output mode.
              */
-            fprintf(stdout,
+            ppp::ConsoleWrite(
                 "Warning: ConsoleUI initialization failed. "
                 "Continuing in plain-text mode.\n");
             tui_enabled = false;
@@ -362,22 +374,21 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
          * Printed once at startup so that log files and pipes receive at least
          * basic identification information about this process instance.
          */
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "PPP PRIVATE NETWORK(TM) 2  version: %s\n",
             PPP_APPLICATION_VERSION);
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Mode    : %s\n",
             client_mode_ ? "client" : "server");
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Process : %d\n",
             static_cast<int>(ppp::GetCurrentProcessId()));
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Config  : %s\n",
             configuration_path_.data());
-        fprintf(stdout,
+        ppp::ConsoleFormat(
             "Cwd     : %s\n",
             ppp::GetCurrentDirectoryPath().data());
-        std::fflush(stdout);
     }
 
     stopwatch_.Restart();

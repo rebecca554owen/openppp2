@@ -1,0 +1,78 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – CI summary dashboard.
+#              Waits until ALL build workflows complete for the same commit,
+#              then emits a single summary table.
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: CI · Summary
+
+on:
+  workflow_run:
+    workflows:
+      - "Build · Linux amd64"
+      - "Build · Linux Cross"
+      - "Build · Windows x64"
+      - "Build · macOS"
+      - "Build · Android"
+      - "Build · Go Guardian"
+    types: [completed]
+
+permissions:
+  actions: read
+
+jobs:
+  summary:
+    name: Build result dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for all builds to complete
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          REPO="${{ github.repository }}"
+
+          EXPECTED_WORKFLOWS=(
+            "Build · Linux amd64"
+            "Build · Linux Cross"
+            "Build · Windows x64"
+            "Build · macOS"
+            "Build · Android"
+            "Build · Go Guardian"
+          )
+
+          ALL_DONE=true
+          for wf in "${EXPECTED_WORKFLOWS[@]}"; do
+            STATUS=$(gh run list --repo "$REPO" --workflow "$wf" --commit "$SHA" \
+              --limit 1 --json status,conclusion --jq '.[0].status // "not_found"')
+            CONCLUSION=$(gh run list --repo "$REPO" --workflow "$wf" --commit "$SHA" \
+              --limit 1 --json status,conclusion --jq '.[0].conclusion // "unknown"')
+
+            if [ "$STATUS" != "completed" ]; then
+              echo "Waiting for: $wf (status=$STATUS)"
+              ALL_DONE=false
+            fi
+          done
+
+          if [ "$ALL_DONE" = "false" ]; then
+            echo "Not all workflows completed yet. Skipping summary."
+            exit 0
+          fi
+
+          echo "All workflows completed. Generating summary..."
+
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow | Conclusion |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          for wf in "${EXPECTED_WORKFLOWS[@]}"; do
+            CONCLUSION=$(gh run list --repo "$REPO" --workflow "$wf" --commit "$SHA" \
+              --limit 1 --json conclusion --jq '.[0].conclusion // "unknown"')
+            echo "| $wf | $CONCLUSION |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`$SHA\`" >> $GITHUB_STEP_SUMMARY

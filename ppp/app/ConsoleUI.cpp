@@ -38,7 +38,6 @@
 namespace ppp::app {
 
 namespace {
-#if PPP_TELEMETRY
     static bool HandleTelemetryHotkey(char ch) noexcept {
         auto emit_state = []() noexcept {
             ppp::string msg = "Telemetry filter: ";
@@ -94,7 +93,6 @@ namespace {
                 return false;
         }
     }
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +774,14 @@ void ConsoleUI::SetInfoLines(const ppp::vector<ppp::string>& lines) noexcept {
     MarkDirty();
 }
 
+void ConsoleUI::SetTelemetryLines(const ppp::vector<ppp::string>& lines) noexcept {
+    {
+        std::lock_guard<std::mutex> scope(lock_);
+        telemetry_lines_ = lines;
+    }
+    MarkDirty();
+}
+
 // ---------------------------------------------------------------------------
 // Internal: drain status queue
 // ---------------------------------------------------------------------------
@@ -959,30 +965,23 @@ void ConsoleUI::RenderFrame() noexcept {
     //    -5: input separator
     //  => kFooterRows = 5
     //
-    //  Middle = height - 10 - 5 = height - 15
+    //  Middle = height - kHeaderRows - kFooterRows
     //  Split:  info_h + 1 (separator) + cmd_h = middle
     // -----------------------------------------------------------------------
-    static constexpr int kHeaderRows = 10;
     static constexpr int kFooterRows = 5;
+    const int kHeaderRows = (height >= 35) ? 10 : 4;
 
     int middle = height - kHeaderRows - kFooterRows;
     if (0 > middle) {
         middle = 0;
     }
 
-    int info_h, cmd_h;
-    if (3 > middle) {
-        info_h = middle > 0 ? 1 : 0;
-        cmd_h  = middle > 1 ? 1 : 0;
-    } else {
-        info_h = std::max(2, (middle - 1) * 3 / 5);
-        cmd_h  = std::max(1, middle - 1 - info_h);
-    }
-
     // -----------------------------------------------------------------------
-    // 3.  Snapshot guarded state
+    // 2b. Snapshot guarded state BEFORE computing layout so we can
+    //     dynamically balance info/cmd based on actual content sizes.
     // -----------------------------------------------------------------------
     ppp::vector<ppp::string> info_snap;
+    ppp::vector<ppp::string> telemetry_snap;
     int                      info_scroll;
     std::deque<ppp::string>  cmd_snap;
     int                      cmd_scroll;
@@ -991,20 +990,102 @@ void ConsoleUI::RenderFrame() noexcept {
 
     {
         std::lock_guard<std::mutex> scope(lock_);
-        info_snap     = info_lines_;
-        info_scroll   = info_scroll_;
-        cmd_snap      = cmd_lines_;
-        cmd_scroll    = cmd_scroll_;
-        input_snap    = input_buffer_;
-        cursor_snap   = input_cursor_;
+        info_snap      = info_lines_;
+        telemetry_snap = telemetry_lines_;
+        info_scroll    = info_scroll_;
+        cmd_snap       = cmd_lines_;
+        cmd_scroll     = cmd_scroll_;
+        input_snap     = input_buffer_;
+        cursor_snap    = input_cursor_;
     }
 
     // -----------------------------------------------------------------------
-    // 4.  Clamp scroll offsets
+    // 2c. Dynamic split: allocate middle rows between info and cmd based
+    //     on their actual content sizes, avoiding one panel starving the other.
+    // -----------------------------------------------------------------------
+    int info_total  = static_cast<int>(info_snap.size());
+    int tele_total  = static_cast<int>(telemetry_snap.size());
+    int cmd_total   = static_cast<int>(cmd_snap.size());
+
+    int info_h, cmd_h;
+
+    if (3 > middle) {
+        info_h = middle > 0 ? 1 : 0;
+        cmd_h  = middle > 1 ? 1 : 0;
+    } else if (0 == info_total && 0 == cmd_total) {
+        // Both empty: default 60/40 split.
+        info_h = std::max(2, (middle - 1) * 3 / 5);
+        cmd_h  = std::max(1, middle - 1 - info_h);
+    } else if (0 == cmd_total) {
+        // No command output — give info all remaining space (minus the
+        // separator), capped so cmd keeps at least 1 row placeholder.
+        info_h = std::max(2, middle - 2);   // 1 for separator, 1 for cmd placeholder
+        cmd_h  = middle - 1 - info_h;       // <= 1
+        if (0 > cmd_h) { cmd_h = 0; }
+        if (cmd_h > 1) { cmd_h = 1; }
+    } else if (0 == info_total) {
+        // No info lines — give cmd most of the space.
+        info_h = 1;
+        cmd_h  = middle - 1 - info_h;
+        if (1 > cmd_h) { cmd_h = 1; }
+    } else {
+        // Both have content.  Use a content-proportional split but
+        // guarantee each side gets at least 1 visible line and at most
+        // 80% of the available middle area.
+        int avail = middle - 1;  // one row for the separator
+
+        // Compute ideal heights proportional to content depth.
+        int sum = info_total + cmd_total;
+        int info_prop = (info_total * avail) / sum;
+        int cmd_prop  = avail - info_prop;
+
+        // Enforce minimums.
+        if (1 > info_prop)  { info_prop = 1; }
+        if (1 > cmd_prop)   { cmd_prop  = 1; }
+
+        // Enforce maximums (80% cap) so one panel can never totally
+        // eclipse the other.
+        int max_each = (avail * 4) / 5;   // 80% of available
+        if (info_prop > max_each) {
+            info_prop = max_each;
+            cmd_prop  = avail - info_prop;
+            if (1 > cmd_prop) { cmd_prop = 1; }
+        }
+        if (cmd_prop > max_each) {
+            cmd_prop  = max_each;
+            info_prop = avail - cmd_prop;
+            if (1 > info_prop) { info_prop = 1; }
+        }
+
+        // Ensure both fit exactly in avail.
+        if (info_prop + cmd_prop > avail) {
+            // Reduce the larger one.
+            if (info_prop > cmd_prop) {
+                info_prop = avail - cmd_prop;
+            } else {
+                cmd_prop = avail - info_prop;
+            }
+        }
+        if (info_prop + cmd_prop < avail) {
+            cmd_prop = avail - info_prop;
+        }
+
+        info_h = info_prop;
+        cmd_h  = cmd_prop;
+    }
+
+    // -----------------------------------------------------------------------
+    // 3.  Clamp scroll offsets using the dynamically computed panel heights.
+    //     In two-column mode the info panel can display 2*info_h lines.
     // -----------------------------------------------------------------------
     {
         int total       = static_cast<int>(info_snap.size());
-        int max_scroll  = std::max(0, total - info_h);
+        static constexpr int kTwoColMinInner = 76;
+        const bool two_col = ((width - 2) >= kTwoColMinInner) && (tele_total > 0);
+        // In two-column mode only the left column scrolls; right column is static.
+        // In single-column mode info + telemetry are combined and scroll together.
+        int combined    = two_col ? total : (total + tele_total);
+        int max_scroll  = std::max(0, combined - info_h);
         if (info_scroll > max_scroll) {
             info_scroll = max_scroll;
             std::lock_guard<std::mutex> s(lock_);
@@ -1023,7 +1104,7 @@ void ConsoleUI::RenderFrame() noexcept {
     }
 
     // -----------------------------------------------------------------------
-    // 5.  Build frame string
+    // 4.  Build frame string
     //
     // The cursor is permanently hidden by Start(); the editor line embeds a
     // reverse-video block at the caret position, so no per-frame cursor
@@ -1084,27 +1165,71 @@ void ConsoleUI::RenderFrame() noexcept {
     }
 
     // --- Rows 3-7: ASCII art (5 lines) ---
-    for (int i = 0; i < 5; ++i) {
-        frame += RenderArtLine(ppp::string(kArtLines[i]), inner, vt_enabled_);
-    }
+    // Skip art when terminal is short to free space for info content.
+    const bool show_art = (height >= 35);
+    if (show_art) {
+        for (int i = 0; i < 5; ++i) {
+            frame += RenderArtLine(ppp::string(kArtLines[i]), inner, vt_enabled_);
+        }
 
-    // --- Row 8: empty row ---
-    frame += BoxContentRow("", width);
+        // --- Row 8: empty row ---
+        frame += BoxContentRow("", width);
+    }
 
     // --- Row 9: header separator ---
     frame += BoxSepRow(width);
 
     // --- Info section (info_h rows) ---
+    // Two-column mode when inner width >= 96 display columns.
+    // Left column shows lines [0..mid), right column shows [mid..end).
+    // This doubles the visible info capacity on wide terminals.
     {
         int total  = static_cast<int>(info_snap.size());
         int start  = info_scroll;  // 0 = top of info content
 
-        for (int i = 0; i < info_h; ++i) {
-            int idx = start + i;
-            if (0 <= idx && idx < total) {
-                frame += BoxContentRow(" " + info_snap[static_cast<std::size_t>(idx)], width);
-            } else {
-                frame += BoxContentRow("", width);
+        // Minimum inner width needed for two-column mode:
+        // Each column needs at least 40 chars of content + 1 separator + 2 borders.
+        static constexpr int kTwoColMinInner = 76;
+        const bool two_col = (inner >= kTwoColMinInner) && (tele_total > 0);
+
+        if (two_col) {
+            // Left column: environment info from info_snap.
+            // Right column: telemetry lines from telemetry_snap.
+            // ALL rows use BoxSplitRow so the center │ aligns consistently.
+            int split_col = inner / 2 + 1;  // display column for center │
+            int tele_start = 0;  // telemetry has its own independent content
+
+            for (int i = 0; i < info_h; ++i) {
+                int left_idx = start + i;
+                int right_idx = tele_start + i;
+
+                ppp::string left_text;
+                if (0 <= left_idx && left_idx < total) {
+                    left_text = " " + info_snap[static_cast<std::size_t>(left_idx)];
+                }
+
+                ppp::string right_text;
+                if (0 <= right_idx && right_idx < tele_total) {
+                    right_text = " " + telemetry_snap[static_cast<std::size_t>(right_idx)];
+                }
+
+                frame += BoxSplitRow(left_text, right_text, width, split_col);
+            }
+        } else {
+            // Single column: info lines, then telemetry lines appended.
+            for (int i = 0; i < info_h; ++i) {
+                int idx = start + i;
+                if (0 <= idx && idx < total) {
+                    frame += BoxContentRow(" " + info_snap[static_cast<std::size_t>(idx)], width);
+                } else {
+                    // After info lines, show telemetry lines.
+                    int tele_idx = idx - total;
+                    if (tele_idx >= 0 && tele_idx < tele_total) {
+                        frame += BoxContentRow(" " + telemetry_snap[static_cast<std::size_t>(tele_idx)], width);
+                    } else {
+                        frame += BoxContentRow("", width);
+                    }
+                }
             }
         }
     }
@@ -1177,9 +1302,11 @@ void ConsoleUI::RenderFrame() noexcept {
     }
 
     // --- Status separator ---
-    frame += BoxSepRow(width);
+    frame += BoxSplitSepRow(width, width * 3 / 5);
 
-    // --- Status bar (error only) ---
+    // --- Status bar: split row ---
+    // Left panel  = error severity info (existing logic)
+    // Right panel = VPN state + speed text from DrainStatusQueue()
     {
         auto select_status_color = [](ppp::diagnostics::ErrorSeverity severity) noexcept -> const char* {
             switch (severity) {
@@ -1200,31 +1327,17 @@ void ConsoleUI::RenderFrame() noexcept {
             }
         };
 
-        auto build_status_row = [&](const ppp::string& plain_text, const char* color_code) noexcept -> ppp::string {
-            if (2 > width) {
-                return ppp::string();
-            }
+        // Snapshot vpn_state_text_ and speed_text_ under the same lock
+        // that DrainStatusQueue() writes them.
+        ppp::string vpn_snap;
+        ppp::string speed_snap;
+        {
+            std::lock_guard<std::mutex> scope(lock_);
+            vpn_snap   = vpn_state_text_;
+            speed_snap = speed_text_;
+        }
 
-            int inner = width - 2;
-            ppp::string fitted = FitWidth(plain_text, inner - 1);
-            ppp::string row;
-            row.reserve(static_cast<std::size_t>(width) + fitted.size() + 32u);
-            row += kVV;
-
-            if (vt_enabled_ && NULLPTR != color_code && '\0' != color_code[0]) {
-                row += color_code;
-                row += fitted;
-                row += kColorReset;
-            } else {
-                row += fitted;
-            }
-
-            row += ' ';
-            row += kVV;
-            row += "\n";
-            return row;
-        };
-
+        // Build left panel: error severity text
         ppp::string status_text;
         const char* status_color = NULLPTR;
         {
@@ -1245,7 +1358,6 @@ void ConsoleUI::RenderFrame() noexcept {
                 status_text += " (" + FormatAge(now_ms, err_ts) + ")";
             }
 
-#if PPP_TELEMETRY
             status_text += "  | T:";
             status_text += ppp::telemetry::IsConsoleLogEnabled() ? "L" : "-";
             status_text += ppp::telemetry::IsConsoleMetricEnabled() ? "M" : "-";
@@ -1253,14 +1365,48 @@ void ConsoleUI::RenderFrame() noexcept {
             status_text += " @";
             status_text += std::to_string(ppp::telemetry::GetMinLevel());
             status_text += " [?]";
-#endif
         }
 
-        frame += build_status_row(status_text, status_color);
+        // Build right panel: "VPN: state  ↑ tx  ↓ rx"
+        ppp::string right_text = "VPN: ";
+        if (!vpn_snap.empty()) {
+            right_text += vpn_snap;
+        } else {
+            right_text += "n/a";
+        }
+        if (!speed_snap.empty()) {
+            right_text += "  ";
+            right_text += speed_snap;
+        }
+
+        // Use BoxSplitRow with ~60/40 split
+        int split_col = width * 3 / 5;
+
+        if (vt_enabled_ && NULLPTR != status_color && '\0' != status_color[0]) {
+            // Colorize the left panel content inside the split row.
+            // BoxSplitRow is static and doesn't know about colors, so we
+            // build the row manually with color codes on the left panel.
+            int left_inner  = split_col - 1;
+            int right_inner = width - split_col - 2;
+
+            ppp::string row;
+            row.reserve(static_cast<std::size_t>(width) * 4u + 64u);
+            row += kVV;
+            row += status_color;
+            row += FitWidth(status_text, left_inner);
+            row += kColorReset;
+            row += kVV;
+            row += FitWidth(right_text, right_inner);
+            row += kVV;
+            row += "\n";
+            frame += row;
+        } else {
+            frame += BoxSplitRow(status_text, right_text, width, split_col);
+        }
     }
 
-    // --- Bottom border ---
-    frame += BoxBotRow(width);
+    // --- Bottom border (split to match status bar divider) ---
+    frame += BoxBotSplitRow(width, width * 3 / 5);
 
     // The real cursor stays hidden; no trailing cursor-position or
     // show-cursor escape is needed — the synthetic reverse-video block
@@ -1321,7 +1467,7 @@ void ConsoleUI::HandleHistoryUp() noexcept {
         if (-1 == history_index_) {
             history_edit_backup_ = input_buffer_;
             history_index_       = static_cast<int>(history_.size()) - 1;
-        } elif (0 < history_index_) {
+        } else if (0 < history_index_) {
             --history_index_;
         }
 
@@ -1429,14 +1575,12 @@ void ConsoleUI::EraseAtCursor() noexcept {
 // ---------------------------------------------------------------------------
 
 void ConsoleUI::ScrollInfoBy(int delta) noexcept {
-    // Compute the visible info panel height so max_scroll clamps to the last
-    // page boundary rather than the last individual line.
     int w = 120;
     int h = 46;
     ppp::GetConsoleWindowSize(w, h);
 
-    static constexpr int kHdrRows = 10;
     static constexpr int kFtrRows = 5;
+    const int kHdrRows = (h >= 35) ? 10 : 4;
     int middle = std::max(0, h - kHdrRows - kFtrRows);
     int info_h  = (3 <= middle) ? std::max(2, (middle - 1) * 3 / 5)
                                 : (middle > 0 ? 1 : 0);
@@ -1444,14 +1588,21 @@ void ConsoleUI::ScrollInfoBy(int delta) noexcept {
         info_h = 1;
     }
 
+    int inner = w - 2;
     {
         std::lock_guard<std::mutex> scope(lock_);
+        int total = static_cast<int>(info_lines_.size());
+        int tele  = static_cast<int>(telemetry_lines_.size());
+        static constexpr int kTwoColMinInner = 76;
+        const bool two_col = (inner >= kTwoColMinInner) && (tele > 0);
+        int combined = two_col ? total : (total + tele);
+
         int next = info_scroll_ + delta;
         if (0 > next) {
             next = 0;
         }
 
-        int max_scroll = std::max(0, static_cast<int>(info_lines_.size()) - info_h);
+        int max_scroll = std::max(0, combined - info_h);
         if (next > max_scroll) {
             next = max_scroll;
         }
@@ -1466,8 +1617,8 @@ void ConsoleUI::ScrollInfoPage(int direction) noexcept {
     int h = 46;
     ppp::GetConsoleWindowSize(w, h);
 
-    static constexpr int kHeaderRows = 10;
     static constexpr int kFooterRows = 5;
+    const int kHeaderRows = (h >= 35) ? 10 : 4;
     int middle = h - kHeaderRows - kFooterRows;
     if (3 > middle) {
         middle = 3;
@@ -1553,7 +1704,7 @@ void ConsoleUI::ExecuteCommand(const ppp::string& command_line) noexcept {
     if (0u == lower.find(kNS)) {
         if (lower.size() == kNSLen) {
             openppp2_sub = "help";
-        } elif (lower.size() > kNSLen && ' ' == lower[kNSLen]) {
+        } else if (lower.size() > kNSLen && ' ' == lower[kNSLen]) {
             openppp2_sub = ppp::LTrim(lower.substr(kNSLen + 1u));
         }
     }
@@ -1691,21 +1842,21 @@ void ConsoleUI::InputLoop() noexcept {
             int key = ::_getch();
             if (72 == key) {            // Up arrow
                 HandleHistoryUp();
-            } elif (80 == key) {        // Down arrow
+            } else if (80 == key) {        // Down arrow
                 HandleHistoryDown();
-            } elif (75 == key) {        // Left arrow
+            } else if (75 == key) {        // Left arrow
                 MoveCursorLeft();
-            } elif (77 == key) {        // Right arrow
+            } else if (77 == key) {        // Right arrow
                 MoveCursorRight();
-            } elif (71 == key) {        // Home — scroll info to top
+            } else if (71 == key) {        // Home — scroll info to top
                 ScrollInfoBy(-999999);
-            } elif (79 == key) {        // End — scroll info to bottom
+            } else if (79 == key) {        // End — scroll info to bottom
                 ScrollInfoBy(999999);
-            } elif (83 == key) {        // Delete
+            } else if (83 == key) {        // Delete
                 EraseAtCursor();
-            } elif (73 == key) {        // PageUp — scroll cmd up
+            } else if (73 == key) {        // PageUp — scroll cmd up
                 ScrollCmdPage(1);
-            } elif (81 == key) {        // PageDown — scroll cmd down
+            } else if (81 == key) {        // PageDown — scroll cmd down
                 ScrollCmdPage(-1);
             }
             continue;
@@ -1732,12 +1883,10 @@ void ConsoleUI::InputLoop() noexcept {
         }
 
         if (32 <= ch && 126 >= ch) {
-#if PPP_TELEMETRY
             if (HandleTelemetryHotkey(static_cast<char>(ch))) {
                 MarkDirty();
                 continue;
             }
-#endif
             InsertInputChar(static_cast<char>(ch));
         }
     }
@@ -1810,35 +1959,33 @@ void ConsoleUI::InputLoop() noexcept {
 
             if ("[A" == key || "OA" == key) {       // Up
                 HandleHistoryUp();
-            } elif ("[B" == key || "OB" == key) {   // Down
+            } else if ("[B" == key || "OB" == key) {   // Down
                 HandleHistoryDown();
-            } elif ("[C" == key || "OC" == key) {   // Right
+            } else if ("[C" == key || "OC" == key) {   // Right
                 MoveCursorRight();
-            } elif ("[D" == key || "OD" == key) {   // Left
+            } else if ("[D" == key || "OD" == key) {   // Left
                 MoveCursorLeft();
-            } elif ("[H" == key || "[1~" == key ||  // Home — scroll info to top
+            } else if ("[H" == key || "[1~" == key ||  // Home — scroll info to top
                     "[7~" == key || "OH" == key) {
                 ScrollInfoBy(-999999);
-            } elif ("[F" == key || "[4~" == key ||  // End — scroll info to bottom
+            } else if ("[F" == key || "[4~" == key ||  // End — scroll info to bottom
                     "[8~" == key || "OF" == key) {
                 ScrollInfoBy(999999);
-            } elif ("[3~" == key) {                 // Delete
+            } else if ("[3~" == key) {                 // Delete
                 EraseAtCursor();
-            } elif ("[5~" == key) {                 // PageUp — scroll cmd up
+            } else if ("[5~" == key) {                 // PageUp — scroll cmd up
                 ScrollCmdPage(1);
-            } elif ("[6~" == key) {                 // PageDown — scroll cmd down
+            } else if ("[6~" == key) {                 // PageDown — scroll cmd down
                 ScrollCmdPage(-1);
             }
             continue;
         }
 
         if (32 <= static_cast<unsigned char>(ch) && 126 >= static_cast<unsigned char>(ch)) {
-#if PPP_TELEMETRY
             if (HandleTelemetryHotkey(ch)) {
                 MarkDirty();
                 continue;
             }
-#endif
             InsertInputChar(ch);
         }
     }

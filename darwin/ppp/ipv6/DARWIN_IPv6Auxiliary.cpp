@@ -1,4 +1,5 @@
 #include <darwin/ppp/ipv6/IPv6Auxiliary.h>
+#include <ppp/ipv6/IPv6Packet.h>
 #include <ppp/diagnostics/Error.h>
 
 #include <common/unix/UnixAfx.h>
@@ -46,7 +47,7 @@ namespace ppp {
                         }
                     }
 
-                    return boost::asio::ip::address_v6(bytes).to_string();
+                    return stl::transform<ppp::string>(boost::asio::ip::address_v6(bytes).to_string());
                 }
 
                 void ReadPrimaryDefaultRoute(ppp::string& interface_name, ppp::string& gateway) noexcept {
@@ -95,7 +96,7 @@ namespace ppp {
 
                     char buffer[1024];
                     while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
-                        ppp::string line = ATrim(buffer);
+                        ppp::string line = ATrim<ppp::string>(buffer);
                         if (line.empty()) {
                             continue;
                         }
@@ -108,11 +109,11 @@ namespace ppp {
                             continue;
                         }
 
-                        std::istringstream stream(line);
+                        std::istringstream stream(std::string(line.data(), line.size()));
                         ppp::vector<ppp::string> tokens;
-                        ppp::string token;
+                        std::string token;
                         while (stream >> token) {
-                            tokens.emplace_back(token);
+                            tokens.emplace_back(token.data(), token.size());
                         }
 
                         if (tokens.size() < 2 || tokens[0] != "default") {
@@ -294,11 +295,11 @@ namespace ppp {
                     }
 
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-                    if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && addr_v6 == ComputeNetworkAddress(addr_v6, prefix_length)) {
+                    if (prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && addr_v6 == ppp::ipv6::ComputeNetworkAddress(addr_v6, prefix_length)) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6AddressUnsafe);
                     }
 
-                    ppp::string addr_str = address.to_string();
+                    ppp::string addr_str = stl::transform<ppp::string>(address.to_string());
                     char cmd[600];
                     snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s prefixlen %d alias > /dev/null 2>&1", context.InterfaceName.data(), addr_str.data(), prefix_length);
                     
@@ -319,7 +320,7 @@ namespace ppp {
 
                     ppp::string gateway_string;
                     if (gateway.is_v6()) {
-                        gateway_string = gateway.to_string();
+                        gateway_string = stl::transform<ppp::string>(gateway.to_string());
                     }
                     elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
@@ -347,13 +348,13 @@ namespace ppp {
 
                     ppp::string gateway_string;
                     if (gateway.is_v6()) {
-                        gateway_string = gateway.to_string();
+                        gateway_string = stl::transform<ppp::string>(gateway.to_string());
                     }
                     elif (!nat_mode) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6GatewayMissing);
                     }
 
-                    ppp::string prefix_string = prefix.to_string();
+                    ppp::string prefix_string = stl::transform<ppp::string>(prefix.to_string());
                     prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
                     if (!SetRoute(context.InterfaceName, prefix_string, prefix_length, gateway_string)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ClientRouteApplyFailed);

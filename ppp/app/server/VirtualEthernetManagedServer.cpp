@@ -894,6 +894,11 @@ namespace ppp {
                 }
                 
                 boost::asio::ip::address remoteIP = remoteEP.address();
+                if (!socket->is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
+                    return NULLPTR;
+                }
+
                 ppp::net::Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration_->tcp.cwnd, configuration_->tcp.rwnd);
                 ppp::net::Socket::AdjustSocketOptional(*socket, remoteIP.is_v4(), configuration_->tcp.fast_open, configuration_->tcp.turbo);
 

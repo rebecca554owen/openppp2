@@ -275,7 +275,7 @@ static ppp::function<void()> http_easy_timeout(const std::shared_ptr<boost::asio
         return NULLPTR;
     }
     
-    t->expires_from_now(ppp::threading::Timer::DurationTime(milliseconds));
+    t->expires_after(ppp::threading::Timer::DurationTime(milliseconds));
     t->async_wait(
         [t, socket](const boost::system::error_code& ec) noexcept {
             if (ec == boost::system::errc::success) {
@@ -285,9 +285,8 @@ static ppp::function<void()> http_easy_timeout(const std::shared_ptr<boost::asio
 
     return [t]() noexcept
         {
-            boost::system::error_code ec;
             try {
-                t->cancel(ec);
+                t->cancel();
             }
             catch (const std::exception&) {}
         };
@@ -547,10 +546,12 @@ ppp::string chnroutes2_getiplist() noexcept { // Must run on the default thread.
         std::thread(
             [context]() noexcept {
                 ppp::SetThreadName("apnic");
-                boost::asio::io_context::work work(*context);
-                boost::system::error_code ec;
+                auto work = boost::asio::make_work_guard(*context);
                 context->restart();
-                context->run(ec);
+                try {
+                    context->run();
+                }
+                catch (const std::exception&) {}
             }).detach();
     }
 

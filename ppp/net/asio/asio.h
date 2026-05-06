@@ -24,8 +24,8 @@ namespace ppp {
                 boost::asio::ip::basic_endpoint<TProtocol>                      GetAddressByHostName(const TIterator& i, const TIterator& l, int port) noexcept {
                     typedef boost::asio::ip::basic_resolver<TProtocol> protocol_resolver;
 
-                    typename protocol_resolver::iterator tail = i;
-                    typename protocol_resolver::iterator endl = l;
+                    auto tail = i;
+                    auto endl = l;
                     for (; tail != endl; ++tail) {
                         boost::asio::ip::basic_endpoint<TProtocol> localEP = *tail;
                         boost::asio::ip::address localIP = localEP.address();
@@ -57,20 +57,12 @@ namespace ppp {
                 boost::asio::ip::basic_endpoint<TProtocol>                      GetAddressByHostName(const TResult& results, int port) noexcept {
                     typedef boost::asio::ip::basic_resolver<TProtocol> protocol_resolver;
                     
-#if !defined(_WIN32)
-                    typename protocol_resolver::iterator i = results;
-                    typename protocol_resolver::iterator l;
-                    if (i == l) {
-                        return ppp::net::IPEndPoint::AnyAddressV4<TProtocol>(ppp::net::IPEndPoint::MinPort);
-                    }
-#else
                     if (results.empty()) {
                         return ppp::net::IPEndPoint::AnyAddressV4<TProtocol>(ppp::net::IPEndPoint::MinPort);
                     }
 
-                    typename protocol_resolver::iterator i = results.begin();
-                    typename protocol_resolver::iterator l = results.end();
-#endif
+                    auto i = results.begin();
+                    auto l = results.end();
                     return GetAddressByHostName<TProtocol>(i, l, port);
                 }
 
@@ -91,15 +83,10 @@ namespace ppp {
                     }
 
                     boost::system::error_code ec;
-                    typename protocol_resolver::query q(hostname, stl::to_string<ppp::string>(port).data());
-
-#if !defined(_WIN32)
-                    typename protocol_resolver::iterator results;
-#else
+                    ppp::string service = stl::to_string<ppp::string>(port);
                     typename protocol_resolver::results_type results;
-#endif
                     try {
-                        results = resolver_resolve(resolver, q, ec);
+                        results = resolver_resolve(resolver, hostname, service.data(), ec);
                         if (ec) {
                             return ppp::net::IPEndPoint::AnyAddressV4<TProtocol>(ppp::net::IPEndPoint::MinPort);
                         }
@@ -229,8 +216,8 @@ namespace ppp {
                 typedef boost::asio::ip::basic_resolver<TProtocol> protocol_resolver;
 
                 return ppp::net::asio::internal::GetAddressByHostName(resolver, hostname, port,
-                    [](protocol_resolver& resolver, typename protocol_resolver::query& q, boost::system::error_code& ec) noexcept {
-                        return resolver.resolve(q, ec);
+                    [](protocol_resolver& resolver, const char* hostname, const char* service, boost::system::error_code& ec) noexcept {
+                        return resolver.resolve(hostname, service, ec);
                     });
             }
 
@@ -247,8 +234,8 @@ namespace ppp {
                 typedef boost::asio::ip::basic_resolver<TProtocol> protocol_resolver;
 
                 return ppp::net::asio::internal::GetAddressByHostName(resolver, hostname, port,
-                    [&y](protocol_resolver& resolver, typename protocol_resolver::query& q, boost::system::error_code& ec) noexcept {
-                        return resolver.async_resolve(q, y[ec]);
+                    [&y](protocol_resolver& resolver, const char* hostname, const char* service, boost::system::error_code& ec) noexcept {
+                        return resolver.async_resolve(hostname, service, y[ec]);
                     });
             }
         }

@@ -6,10 +6,11 @@ PROJECT(${NAME} C CXX) # CMAKE_CURRENT_SOURCE_DIR
 
 # C/CXX compiler configurations.
 SET(CMAKE_C_FLAGS "-fPIC -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
-SET(CMAKE_CXX_FLAGS "-fPIC -stdlib=libc++ -fvisibility=hidden -Wno-#pragma-messages -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
+SET(CMAKE_CXX_FLAGS "-fPIC -stdlib=libc++ -fvisibility=hidden -Ulinux -Wno-#pragma-messages -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
 
 # Configure predefined compilation macros.
 ADD_DEFINITIONS(-D_ANDROID)
+ADD_DEFINITIONS(-D_LINUX)
 ADD_DEFINITIONS(-DBUDDY_ALLOC_IMPLEMENTATION)
 ADD_DEFINITIONS(-D_ANDROID_REDEF_STD_IN_OUT_ERR)
 SET(PROJECT_ROOT_DIR "${PROJECT_SOURCE_DIR}/../")
@@ -77,7 +78,7 @@ SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic") 
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/android)
+SET(THIRD_PARTY_LIBRARY_DIR /root/android CACHE PATH "Third-party library root directory")
 
 # Set the compiled header file search directorys.
 INCLUDE_DIRECTORIES(

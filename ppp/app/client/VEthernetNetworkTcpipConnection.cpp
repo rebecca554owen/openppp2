@@ -5,6 +5,7 @@
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
@@ -41,8 +42,8 @@ namespace ppp {
 
             /** @brief Disposes any active VPN/rinetd/vmux connection objects. */
             void VEthernetNetworkTcpipConnection::Finalize() noexcept {
-                std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_); 
-                std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_); 
+                std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_);
+                std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_);
                 std::shared_ptr<vmux::vmux_skt> connection_mux = std::move(connection_mux_);
 
                 if (NULLPTR != connection) {
@@ -67,10 +68,10 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                auto socket = GetSocket(); 
+                auto socket = GetSocket();
 
                 if (NULLPTR != socket) {
-                    boost::asio::post(socket->get_executor(), 
+                    boost::asio::post(socket->get_executor(),
                         [self, this, socket]() noexcept {
                             Finalize();
                         });
@@ -79,7 +80,7 @@ namespace ppp {
                     ppp::threading::Executors::ContextPtr context = GetContext();
                     ppp::threading::Executors::StrandPtr strand = GetStrand();
 
-                    ppp::threading::Executors::Post(context, strand, 
+                    ppp::threading::Executors::Post(context, strand,
                         [self, this, context, strand]() noexcept {
                             Finalize();
                         });
@@ -93,14 +94,14 @@ namespace ppp {
              * @return true when forwarding loop runs successfully.
              */
             bool VEthernetNetworkTcpipConnection::Loopback(ppp::coroutines::YieldContext& y) noexcept {
-                // If the connection is interrupted while the coroutine is working, 
+                // If the connection is interrupted while the coroutine is working,
                 // Or closed during other asynchronous processes or coroutines, do not perform meaningless processing.
                 if (IsDisposed()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
-                // If rinetd local loopback link forwarding is not used, failure will be returned, 
+                // If rinetd local loopback link forwarding is not used, failure will be returned,
                 // Otherwise the link to the peer will be processed successfully.
                 if (std::shared_ptr<RinetdConnection> connection_rinetd = connection_rinetd_; NULLPTR != connection_rinetd) {
                     return connection_rinetd->Run();
@@ -128,7 +129,7 @@ namespace ppp {
             bool VEthernetNetworkTcpipConnection::ConnectToPeer(ppp::coroutines::YieldContext& y) noexcept {
                 using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<TapTcpClient>;
 
-                // Create a link and correctly establish a link between remote peers, 
+                // Create a link and correctly establish a link between remote peers,
                 // Indicating whether to use VPN link or Rinetd local loopback forwarding.
                 do {
                     std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
@@ -167,6 +168,8 @@ namespace ppp {
                     int rinetd_status = Rinetd(self, exchanger, context, strand, configuration, socket, remoteEP, connection_rinetd_, y);
                     if (rinetd_status < 1) {
                         if (rinetd_status < 0) {
+                            ppp::telemetry::Count("tcpip.peer_connect.fail.rinetd", 1);
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=rinetd remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                             if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                             }
@@ -177,6 +180,8 @@ namespace ppp {
                     int mux_status = Mux(self, exchanger, remoteEP, socket, connection_mux_, y);
                     if (mux_status < 1) {
                         if (mux_status < 0) {
+                            ppp::telemetry::Count("tcpip.peer_connect.fail.mux", 1);
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=mux remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                             if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                             }
@@ -186,6 +191,8 @@ namespace ppp {
 
                     std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger->ConnectTransmission(context, strand, y);
                     if (NULLPTR == transmission) {
+                        ppp::telemetry::Count("tcpip.peer_connect.fail.transport", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=transport remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         return false;
                     }
@@ -199,7 +206,7 @@ namespace ppp {
                     }
 
 #if defined(_LINUX)
-                    auto switcher = exchanger->GetSwitcher(); 
+                    auto switcher = exchanger->GetSwitcher();
                     if (NULLPTR != switcher) {
                         connection->ProtectorNetwork = switcher->GetProtectorNetwork();
                     }
@@ -207,6 +214,8 @@ namespace ppp {
 
                     bool ok = connection->Connect(y, transmission, ppp::net::Ipep::ToAddressString<ppp::string>(remoteEP), remoteEP.port());
                     if (!ok) {
+                        ppp::telemetry::Count("tcpip.peer_connect.fail.vpn", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=vpn remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                         IDisposable::DisposeReferences(connection, transmission);
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                         return false;
@@ -291,16 +300,16 @@ namespace ppp {
                 auto self = shared_from_this();
                 ppp::threading::Executors::StrandPtr strand = GetStrand();
 
-                auto post_work = 
+                auto post_work =
                     [self, this, context, strand, coroutine, configuration]() noexcept {
-                        auto spawn_work = 
+                        auto spawn_work =
                             [self, this, context, strand, coroutine](ppp::coroutines::YieldContext& y) noexcept {
                                bool ok = coroutine(y);
                                if (!ok) {
                                    Dispose();
                                }
                            };
-                        
+
                         auto allocator = configuration->GetBufferAllocator();
                         bool spawned = ppp::coroutines::YieldContext::Spawn(allocator.get(), *context, strand.get(), spawn_work);
                         if (!spawned) {
@@ -335,6 +344,11 @@ namespace ppp {
                     return false;
                 }
 
+                if (!socket->is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
+                    return false;
+                }
+
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
@@ -346,7 +360,7 @@ namespace ppp {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     return false;
                 }
-                
+
                 ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration->tcp.turbo);
                 ppp::net::Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration->tcp.cwnd, configuration->tcp.rwnd);
 

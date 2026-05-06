@@ -133,12 +133,14 @@ namespace lwip {
                     ppp::SetThreadPriorityToMaxLevel();
                 }
 
-                boost::system::error_code ec_;
                 ppp::SetThreadName("vnet");
 
-                boost::asio::io_context::work work_(context);
+                auto work_ = boost::asio::make_work_guard(context);
                 context.restart();
-                context.run(ec_);
+                try {
+                    context.run();
+                }
+                catch (const std::exception&) {}
             };
 
         // The executor thread is intentionally detached because the netstack owns the context lifetime.
@@ -797,7 +799,7 @@ namespace lwip {
     static void netstack_check_timeouts() noexcept {
         std::shared_ptr<boost::asio::steady_timer> timeout = timeout_;
         if (timeout) {
-            timeout->expires_from_now(std::chrono::milliseconds(TCP_TMR_INTERVAL));
+            timeout->expires_after(std::chrono::milliseconds(TCP_TMR_INTERVAL));
             timeout->async_wait(
                 [](const boost::system::error_code& ec) noexcept {
                     sys_check_timeouts();

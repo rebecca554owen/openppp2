@@ -1,6 +1,6 @@
 #include <ppp/diagnostics/Telemetry.h>
 
-#if PPP_TELEMETRY
+#include <ppp/stdafx.h>
 
 #include <mutex>
 #include <condition_variable>
@@ -121,6 +121,15 @@ namespace ppp {
 #endif
             }
 
+            std::string Hex64(uint64_t value) {
+                std::ostringstream oss;
+                oss << std::hex << std::nouppercase;
+                oss.width(16);
+                oss.fill('0');
+                oss << value;
+                return oss.str();
+            }
+
             std::string ShortHex64(uint64_t value) {
                 std::string full = Hex64(value);
                 return full.size() > 8 ? full.substr(0, 8) : full;
@@ -155,15 +164,6 @@ namespace ppp {
 
             const char* ResetColor() noexcept {
                 return "\x1b[0m";
-            }
-
-            std::string Hex64(uint64_t value) {
-                std::ostringstream oss;
-                oss << std::hex << std::nouppercase;
-                oss.width(16);
-                oss.fill('0');
-                oss << value;
-                return oss.str();
             }
         }
 
@@ -209,24 +209,6 @@ namespace ppp {
 
         int GetMinLevel() noexcept {
             return g_min_level.load(std::memory_order_relaxed);
-        }
-
-        void Configure(const char* endpoint) noexcept {
-            if (endpoint && endpoint[0]) {
-                g_endpoint = endpoint;
-            } else {
-                g_endpoint.clear();
-            }
-            GetBackend().RefreshConfig();
-        }
-
-        void SetLogFile(const char* path) noexcept {
-            if (path && path[0]) {
-                g_log_file = path;
-            } else {
-                g_log_file.clear();
-            }
-            GetBackend().RefreshConfig();
         }
 
         namespace {
@@ -586,6 +568,7 @@ namespace ppp {
                         copied_attrs.emplace_back(attr.key, attr.value);
                     }
                     std::lock_guard<std::mutex> lock(mutex_);
+                    if (!running_.load()) return;
                     if (log_queue_.size() >= kMaxQueueSize) { dropped_logs_++; return; }
                     log_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, level, component, message, std::move(copied_attrs)});
                     cv_.notify_one();
@@ -596,6 +579,7 @@ namespace ppp {
                     TraceContext ctx{};
                     const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
+                    if (!running_.load()) return;
                     if (counter_queue_.size() >= kMaxQueueSize) { dropped_counters_++; return; }
                     counter_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, metric, delta});
                     cv_.notify_one();
@@ -604,6 +588,7 @@ namespace ppp {
                 void EnqueueSpan(const char* name, const char* session_id) {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
+                    if (!running_.load()) return;
                     if (span_queue_.size() >= kMaxQueueSize) { dropped_spans_++; return; }
                     span_queue_.push({NowUnixNano(), NowUnixNano(), CurrentThreadId(), name, session_id, 0, 0, 0, 0});
                     cv_.notify_one();
@@ -614,6 +599,7 @@ namespace ppp {
                     TraceContext ctx{};
                     const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
+                    if (!running_.load()) return;
                     if (gauge_queue_.size() >= kMaxQueueSize) { dropped_gauges_++; return; }
                     gauge_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, metric, value});
                     cv_.notify_one();
@@ -624,6 +610,7 @@ namespace ppp {
                     TraceContext ctx{};
                     const bool has_ctx = TryGetCurrentTraceContext(ctx);
                     std::lock_guard<std::mutex> lock(mutex_);
+                    if (!running_.load()) return;
                     if (histogram_queue_.size() >= kMaxQueueSize) { dropped_histograms_++; return; }
                     histogram_queue_.push({NowUnixNano(), CurrentThreadId(), ctx.trace_id_hi, ctx.trace_id_lo, ctx.span_id, has_ctx, metric, value});
                     cv_.notify_one();
@@ -633,6 +620,7 @@ namespace ppp {
                     const char* session_id, uint64_t trace_id_hi, uint64_t trace_id_lo, uint64_t span_id, uint64_t parent_span_id) {
                     if (!running_.load()) return;
                     std::lock_guard<std::mutex> lock(mutex_);
+                    if (!running_.load()) return;
                     if (span_queue_.size() >= kMaxQueueSize) { dropped_spans_++; return; }
                     span_queue_.push({start_time_ns, end_time_ns, CurrentThreadId(), name ? name : "", session_id ? session_id : "", trace_id_hi, trace_id_lo, span_id, parent_span_id});
                     cv_.notify_one();
@@ -640,8 +628,7 @@ namespace ppp {
 
                 void SetOtlpEndpoint(const std::string& url) {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    use_otlp_ = !url.empty();
-                    exporter_.SetEndpoint(url);
+                    SetOtlpEndpointLocked(url);
                 }
 
                 void SetLogFile(const std::string& path) {
@@ -650,7 +637,7 @@ namespace ppp {
 
                 void RefreshConfig() {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    SetOtlpEndpoint(g_endpoint);
+                    SetOtlpEndpointLocked(g_endpoint);
                     file_sink_.Open(g_log_file);
                 }
 
@@ -670,11 +657,20 @@ namespace ppp {
                 static constexpr size_t kMaxQueueSize = 4096;
                 static constexpr size_t kBatchSize    = 256;
 
+                void SetOtlpEndpointLocked(const std::string& url) {
+                    use_otlp_ = !url.empty();
+                    exporter_.SetEndpoint(url);
+                }
+
                 void Run() noexcept {
-                    while (running_.load() || !log_queue_.empty() || !counter_queue_.empty() || !span_queue_.empty() || !gauge_queue_.empty() || !histogram_queue_.empty()) {
+                    for (;;) {
                         std::unique_lock<std::mutex> lock(mutex_);
                         cv_.wait_for(lock, std::chrono::milliseconds(100),
-                            [this] { return !log_queue_.empty() || !counter_queue_.empty() || !span_queue_.empty() || !gauge_queue_.empty() || !histogram_queue_.empty() || !running_.load(); });
+                            [this] { return HasPendingLocked() || !running_.load(); });
+
+                        if (!running_.load() && !HasPendingLocked()) {
+                            break;
+                        }
 
                         if (use_otlp_) {
                             DispatchOtlp(lock);
@@ -682,6 +678,10 @@ namespace ppp {
                             DispatchLocal(lock);
                         }
                     }
+                }
+
+                bool HasPendingLocked() const noexcept {
+                    return !log_queue_.empty() || !counter_queue_.empty() || !span_queue_.empty() || !gauge_queue_.empty() || !histogram_queue_.empty();
                 }
 
                 void DispatchOtlp(std::unique_lock<std::mutex>& lock) {
@@ -889,12 +889,18 @@ namespace ppp {
                     file_sink_.Write(line.c_str());
                 }
 
-                void Stop() {
-                    running_.store(false);
+            public:
+                void Stop() noexcept {
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        running_.store(false);
+                    }
                     cv_.notify_all();
                     if (worker_.joinable()) worker_.join();
+                    file_sink_.Close();
                 }
 
+            private:
                 std::mutex                    mutex_;
                 std::condition_variable       cv_;
                 std::queue<LogEvent>          log_queue_;
@@ -915,9 +921,27 @@ namespace ppp {
             };
 
             TelemetryBackend& GetBackend() noexcept {
-                static TelemetryBackend backend;
-                return backend;
+                static TelemetryBackend* backend = new TelemetryBackend();
+                return *backend;
             }
+        }
+
+        void Configure(const char* endpoint) noexcept {
+            if (endpoint && endpoint[0]) {
+                g_endpoint = endpoint;
+            } else {
+                g_endpoint.clear();
+            }
+            GetBackend().RefreshConfig();
+        }
+
+        void SetLogFile(const char* path) noexcept {
+            if (path && path[0]) {
+                g_log_file = path;
+            } else {
+                g_log_file.clear();
+            }
+            GetBackend().RefreshConfig();
         }
 
         void Log(Level level, const char* component, const char* fmt, ...) noexcept {
@@ -1028,7 +1052,12 @@ namespace ppp {
             GetBackend().Flush(timeout_ms);
         }
 
+        void Shutdown() noexcept {
+            g_enabled.store(false, std::memory_order_relaxed);
+            g_enabled_count.store(false, std::memory_order_relaxed);
+            g_enabled_span.store(false, std::memory_order_relaxed);
+            GetBackend().Stop();
+        }
+
     }
 }
-
-#endif // PPP_TELEMETRY

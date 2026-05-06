@@ -158,6 +158,10 @@
 #define __ORDER_LITTLE_ENDIAN__     1
 #define __ORDER_BIG_ENDIAN__        0
 #define __BYTE_ORDER__              __ORDER_LITTLE_ENDIAN__
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+#define __ORDER_LITTLE_ENDIAN__     1
+#define __ORDER_BIG_ENDIAN__        0
+#define __BYTE_ORDER__              __ORDER_LITTLE_ENDIAN__
 #else
 #define __ORDER_LITTLE_ENDIAN__     0
 #define __ORDER_BIG_ENDIAN__        1
@@ -243,6 +247,7 @@
 #include <malloc.h>
 #endif
 
+#include <algorithm>
 #include <type_traits>
 #include <condition_variable>
 #include <limits>
@@ -266,9 +271,6 @@
 
 #ifndef BOOST_BEAST_VERSION_HPP
 #define BOOST_BEAST_VERSION_HPP
-
-#include <boost/beast/core/detail/config.hpp>
-#include <boost/config.hpp>
 
 /*  BOOST_BEAST_VERSION
 
@@ -1643,6 +1645,19 @@ namespace ppp {
     const char*                                                             GetPlatformCode() noexcept;
 
     const char*                                                             GetDefaultCipherSuites() noexcept;
+
+    /**
+     * @brief Writes a UTF-8 string to the console, auto-adapting to the
+     *        active Windows console code-page (uses WriteConsoleW when attached
+     *        to a real console, falls back to raw UTF-8 for file/pipe stdout).
+     */
+    void                                                                    ConsoleWrite(const char* utf8String) noexcept;
+
+    /**
+     * @brief printf-style console output with the same adaptive encoding
+     *        behaviour as ConsoleWrite.
+     */
+    void                                                                    ConsoleFormat(const char* fmt, ...) noexcept;
 
     bool                                                                    IfVersion(const ppp::vector<uint64_t>& now, const ppp::vector<uint64_t> min) noexcept;
 

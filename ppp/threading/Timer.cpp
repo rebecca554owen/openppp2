@@ -121,7 +121,7 @@ namespace ppp {
 
             std::shared_ptr<Timer> self = GetReference();
             boost::asio::steady_timer::duration durationTime = Timer::DurationTime(_interval);
-            t->expires_from_now(durationTime);
+            t->expires_after(durationTime);
             /**
              * @brief Wait callback that raises tick and chains subsequent scheduling.
              */
@@ -349,7 +349,7 @@ namespace ppp {
             }
             else {
                 boost::asio::steady_timer::duration durationTime = Timer::DurationTime(milliseconds);
-                deadlineTimer->expires_from_now(durationTime);
+                deadlineTimer->expires_after(durationTime);
                 deadlineTimer->async_wait(
                     [&y, &ok](const boost::system::error_code& ec) noexcept {
                         if (ec == boost::system::errc::success) {

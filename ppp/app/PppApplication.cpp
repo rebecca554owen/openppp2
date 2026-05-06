@@ -1,5 +1,6 @@
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 namespace ppp::app {
 
@@ -58,6 +59,7 @@ int PppApplication::Run(int argc, char** argv) noexcept {
         const_cast<const char**>(argv));
 
     app->Release();
+    ppp::telemetry::Shutdown();
 
     if (GLOBAL_RESTART.load(std::memory_order_relaxed)) {
 #if defined(_WIN32)

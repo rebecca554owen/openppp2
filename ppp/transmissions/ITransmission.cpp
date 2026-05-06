@@ -1197,7 +1197,7 @@ namespace ppp {
          */
         std::shared_ptr<Byte> ITransmission::Read(YieldContext& y, int& outlen) noexcept {
             std::shared_ptr<Byte> result = ITransmissionBridge::Read(this, y, outlen);
-            if (NULLPTR == result) {
+            if (NULLPTR == result && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 // Distinguish disposed state from a normal I/O failure.
                 if (disposed_) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
@@ -1215,7 +1215,7 @@ namespace ppp {
          */
         bool ITransmission::Write(YieldContext& y, const void* packet, int packet_length) noexcept {
             bool ok = ITransmissionBridge::Write(this, y, packet, packet_length);
-            if (!ok) {
+            if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 if (disposed_) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
@@ -1232,7 +1232,7 @@ namespace ppp {
          */
         bool ITransmission::Write(const void* packet, int packet_length, const AsynchronousWriteCallback& cb) noexcept {
             bool ok = ITransmissionBridge::Write(this, packet, packet_length, cb);
-            if (!ok) {
+            if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 if (disposed_) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
@@ -1451,7 +1451,7 @@ namespace ppp {
             // so we cast to the concrete type to access ITransmission members in the lambda.
             std::shared_ptr<ITransmission> self =
                 std::static_pointer_cast<ITransmission>(shared_from_this());
-            timer->expires_from_now(std::chrono::milliseconds(expire_ms));
+            timer->expires_after(std::chrono::milliseconds(expire_ms));
 
             timer->async_wait(
                 [self](boost::system::error_code ec) noexcept {

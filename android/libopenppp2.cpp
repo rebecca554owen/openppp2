@@ -70,6 +70,9 @@
 #include <iostream>
 #include <string>
 #include <memory>
+#include <exception>
+#include <atomic>
+#include <mutex>
 
 #ifndef __LIBOPENPPP2__
 #define __LIBOPENPPP2__(JNIType)                                            extern "C" JNIEXPORT __unused JNIType JNICALL
@@ -667,10 +670,10 @@ static int                                                                  libo
     if (network_state == NetworkState::NetworkState_Connecting) {
         return LIBOPENPPP2_LINK_STATE_CONNECTING;
     }
-    elif(network_state == NetworkState::NetworkState_Reconnecting) {
+    else if (network_state == NetworkState::NetworkState_Reconnecting) {
         return LIBOPENPPP2_LINK_STATE_RECONNECTING;
     }
-    elif(network_state == NetworkState::NetworkState_Established) {
+    else if (network_state == NetworkState::NetworkState_Established) {
         return LIBOPENPPP2_LINK_STATE_ESTABLISHED;
     }
 
@@ -781,7 +784,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1link_1stat
 
     libopenppp2_set_last_error_for_result(err);
 
-    elif(err == LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED || err == LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING) {
+    if (err == LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED || err == LIBOPENPPP2_ERROR_VETHERNET_PPPD_THREAD_NOT_RUNING) {
         return LIBOPENPPP2_LINK_STATE_APPLICATIION_UNINITIALIZED;
     }
     else {
@@ -808,9 +811,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1aggligator
 
     libopenppp2_set_last_error_for_result(err);
 
-    else {
-        return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
-    }
+    return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
 }
 
 // package: supersocksr.ppp.android.c
@@ -1010,7 +1011,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_set_1network_1i
         if (prefix < 16) {
             return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::NetworkMaskInvalid, LIBOPENPPP2_ERROR_ARG_MASK_SUBNET_IP_RANGE_GREATER_65535);
         }
-        elif(prefix > 30) {
+        else if (prefix > 30) {
             addresses[1] = IPEndPoint::NetmaskToPrefix(prefix);
             mask_address = Ipep::ToAddress(addresses[1]);
         }
@@ -1058,11 +1059,8 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1bypass
     }
 
     std::shared_ptr<ppp::string> bypass_ip_list = JNIENV_GetStringUTFChars(env, iplist);
-    int err = libopenppp2_application::Invoke(
-        [&app, &bypass_ip_list]() noexcept {
-            app->bypass_ip_list_ = bypass_ip_list;
-            return LIBOPENPPP2_ERROR_SUCCESS;
-        });
+    int err = LIBOPENPPP2_ERROR_SUCCESS;
+    app->bypass_ip_list_ = bypass_ip_list;
     if (err != LIBOPENPPP2_ERROR_SUCCESS) {
         libopenppp2_set_last_error_for_result(err);
     }
@@ -1082,11 +1080,8 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1dns_1r
     }
 
     std::shared_ptr<ppp::string> dns_rules_list = JNIENV_GetStringUTFChars(env, rules);
-    int err = libopenppp2_application::Invoke(
-        [&app, &dns_rules_list]() noexcept {
-            app->dns_rules_list_ = dns_rules_list;
-            return LIBOPENPPP2_ERROR_SUCCESS;
-        });
+    int err = LIBOPENPPP2_ERROR_SUCCESS;
+    app->dns_rules_list_ = dns_rules_list;
     if (err != LIBOPENPPP2_ERROR_SUCCESS) {
         libopenppp2_set_last_error_for_result(err);
     }
@@ -1263,6 +1258,7 @@ static int                                                                      
     
     client = ppp::make_shared_object<VEthernetNetworkSwitcher>(context, lwip, network_interface->VNet, max_concurrent > 1, configuration);
     if (NULLPTR == client) {
+        __android_log_print(ANDROID_LOG_ERROR, "libopenppp2", "open_switcher: create client failed");
         return LIBOPENPPP2_ERROR_ALLOCATED_MEMORY;
     }
     else {
@@ -1280,7 +1276,14 @@ static int                                                                      
         client->LoadAllDnsRules(std::move(*dns_rules_list), false);
     }
 
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2",
+        "open_switcher: before client->Open tap=%p vnet=%d static=%d mux=%d",
+        tap.get(), network_interface->VNet ? 1 : 0, network_interface->StaticMode ? 1 : 0, network_interface->VMux);
     bool ok = client->Open(tap);
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2",
+        "open_switcher: client->Open result=%d last_error=%d",
+        ok ? 1 : 0,
+        (int)static_cast<uint32_t>(ppp::diagnostics::GetLastErrorCodeSnapshot()));
     if (!ok) {
         if (ppp::diagnostics::GetLastErrorCodeSnapshot() == ppp::diagnostics::ErrorCode::Success) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
@@ -1291,6 +1294,7 @@ static int                                                                      
 
     VEthernetNetworkSwitcher::ProtectorNetworkPtr protector = client->GetProtectorNetwork();
     if (NULLPTR == protector) {
+        __android_log_print(ANDROID_LOG_ERROR, "libopenppp2", "open_switcher: protector is null");
         if (ppp::diagnostics::GetLastErrorCodeSnapshot() == ppp::diagnostics::ErrorCode::Success) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
         }
@@ -1300,10 +1304,13 @@ static int                                                                      
 
     app->client_ = client;
     libopenppp2_application::Timeout();
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "open_switcher: success");
     return LIBOPENPPP2_ERROR_SUCCESS;
 }
 
-static int                                                                          libopenppp2_try_open_ethernet_switcher(std::shared_ptr<VEthernetNetworkSwitcher>& ethernet) noexcept {
+static int                                                                          libopenppp2_try_open_ethernet_switcher(
+    std::shared_ptr<boost::asio::io_context>                                            context,
+    std::shared_ptr<VEthernetNetworkSwitcher>&                                          ethernet) noexcept {
     std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
     if (NULLPTR == app) {
         return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
@@ -1324,9 +1331,16 @@ static int                                                                      
         return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppConfigurationMissing, LIBOPENPPP2_ERROR_APP_CONFIGURATION_NOT_CONFIGURED);
     }
 
-    std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
     std::shared_ptr<ITap> tap = libopenppp2_from_tuntap_driver_new(context, network_interface);
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2",
+        "try_open_switcher: tap=%p fd=%d ip=%s mask=%s gw=%s",
+        tap.get(),
+        network_interface->VTun,
+        network_interface->IPAddress.to_string().c_str(),
+        network_interface->SubmaskAddress.to_string().c_str(),
+        network_interface->GatewayServer.to_string().c_str());
     if (NULLPTR == tap) {
+        __android_log_print(ANDROID_LOG_ERROR, "libopenppp2", "try_open_switcher: tap create failed");
         return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::TunnelOpenFailed, LIBOPENPPP2_ERROR_OPEN_TUNTAP_FAIL);
     }
 
@@ -1349,13 +1363,45 @@ static int                                                                      
 // public native int run(int key)
 __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env, jobject* this_, jint key_) noexcept {
     __LIBOPENPPP2_MAIN__;
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() called with key=%d", key_);
+
+    // Install a process-wide terminate handler the first time run() is called.
+    // boost::asio handlers running on internal worker threads (e.g. ITap reader,
+    // Executors::GetDefault() thread pool) may throw boost::system::system_error
+    // such as "cancel: Bad file descriptor" when a TUN/socket descriptor becomes
+    // invalid. Without a handler, such exceptions bypass the io_context try/catch
+    // below and call std::terminate() -> SIGABRT, which kills the :vpn process and
+    // causes the Android service to be re-created in a loop. We log and force a
+    // graceful _exit instead so the service stays in the disconnected state.
+    static std::once_flag s_install_terminate_once;
+    std::call_once(s_install_terminate_once, []() {
+        std::set_terminate([]() noexcept {
+            const char* what = "<unknown>";
+            try {
+                if (auto eptr = std::current_exception()) {
+                    std::rethrow_exception(eptr);
+                }
+            } catch (const std::exception& e) {
+                what = e.what();
+            } catch (...) {
+                what = "<non-std exception>";
+            }
+            __android_log_print(ANDROID_LOG_ERROR, "libopenppp2",
+                "[set_terminate] uncaught exception: %s", what);
+            // Use _exit to avoid running global destructors which may double-free
+            // resources already in an inconsistent state.
+            _exit(0);
+        });
+    });
 
     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
-    
+
     std::shared_ptr<boost::asio::io_context> context = ppp::make_shared_object<boost::asio::io_context>();
     if (NULLPTR == context) {
+        __android_log_print(ANDROID_LOG_ERROR, "libopenppp2", "run() failed to create io_context");
         return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, LIBOPENPPP2_ERROR_ALLOCATED_MEMORY);
     }
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() io_context created");
 
     int err = LIBOPENPPP2_ERROR_SUCCESS;
     boost::asio::post(*context, 
@@ -1366,7 +1412,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                         return LIBOPENPPP2_ERROR_IT_IS_RUNING;
                     }
 
-                    int err = libopenppp2_try_open_ethernet_switcher(ethernet);
+                    int err = libopenppp2_try_open_ethernet_switcher(context, ethernet);
                     if (err != LIBOPENPPP2_ERROR_SUCCESS) {
                         return err;
                     }
@@ -1383,33 +1429,48 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                     return LIBOPENPPP2_ERROR_SUCCESS;
                 };
 
-            err = libopenppp2_application::Invoke(
-                [start, context, key_]() noexcept -> int {
-                    std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
-                    if (NULLPTR == app) {
-                        return LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED;
-                    }
-
-                    int err = start(app);
-                    if (err == LIBOPENPPP2_ERROR_SUCCESS) {
-                        app->PostJNI(
-                            [app, key_](JNIEnv* env) noexcept {
-                                app->StartJNI(env, key_);
-                            });
-                    }
-                    elif(err != LIBOPENPPP2_ERROR_IT_IS_RUNING) {
-                        app->Release();
-                        context->stop();
-                    }
-
-                    return err;
-                });
+            std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
+            if (NULLPTR == app) {
+                err = LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED;
+            } else {
+                err = start(app);
+                if (err == LIBOPENPPP2_ERROR_SUCCESS) {
+                    app->PostJNI(
+                        [app, key_](JNIEnv* env) noexcept {
+                            app->StartJNI(env, key_);
+                        });
+                }
+                else if (err != LIBOPENPPP2_ERROR_IT_IS_RUNING) {
+                    app->Release();
+                    context->stop();
+                }
+            }
         });
 
-    boost::asio::io_context::work work(*context);
+    auto work = boost::asio::make_work_guard(*context);
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() work guard created, about to call context->run()");
     boost::system::error_code ec;
     context->restart();
-    context->run(ec);
+
+    // boost::asio handlers may throw (e.g. boost::system::system_error on
+    // descriptor cancel/close after fd becomes invalid). When a handler throws
+    // out of run(), the default behavior is std::terminate which kills the
+    // process. We catch and log here, then continue running the io_context
+    // until normal completion or stop. This matches the recommended pattern
+    // in boost::asio docs (basic_io_context overview - exception handling).
+    for (;;) {
+        try {
+            context->run(ec);
+            break;
+        } catch (const std::exception& e) {
+            __android_log_print(ANDROID_LOG_ERROR, "libopenppp2",
+                "run() handler exception: %s", e.what());
+        } catch (...) {
+            __android_log_print(ANDROID_LOG_ERROR, "libopenppp2",
+                "run() handler exception: <unknown>");
+        }
+    }
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() context->run() returned, ec=%d", ec.value());
 
     return libopenppp2_set_last_error_for_result(err);
 }
@@ -1497,7 +1558,7 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_if_1subnet(
         nip2 &= nmask;
         return nip1 == nip2;
     }
-    elif(ip1.is_v6() && ip2.is_v6() && mask.is_v6()) {
+    else if (ip1.is_v6() && ip2.is_v6() && mask.is_v6()) {
         ppp::Int128 nip1 = *(ppp::Int128*)(ip1.to_v6().to_bytes().data());
         ppp::Int128 nip2 = *(ppp::Int128*)(ip2.to_v6().to_bytes().data());
         ppp::Int128 nmask = *(ppp::Int128*)(mask.to_v6().to_bytes().data());
@@ -1716,7 +1777,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_link_1of(JNI
         json["proto"] = "ws";
         json["protocol"] = "ppp+ws";
     }
-    elif(protocol == ProtocolType::ProtocolType_HttpSSL || protocol == ProtocolType::ProtocolType_WebSocketSSL) {
+    else if (protocol == ProtocolType::ProtocolType_HttpSSL || protocol == ProtocolType::ProtocolType_WebSocketSSL) {
         json["proto"] = "wss";
         json["protocol"] = "ppp+wss";
     }
@@ -1836,7 +1897,7 @@ __LIBOPENPPP2__(jbyteArray) Java_supersocksr_ppp_android_c_libopenppp2_string_1t
             af = AF_INET;
             *(uint32_t*)bytes = htonl(ip.to_v4().to_uint());
         }
-        elif(ip.is_v6()) {
+        else if (ip.is_v6()) {
             boost::asio::ip::address_v6::bytes_type tb = ip.to_v6().to_bytes();
             af = AF_INET6;
             memcpy(bytes, tb.data(), tb.size());

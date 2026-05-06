@@ -3,6 +3,7 @@
 #include <ppp/app/client/VEthernetDatagramPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
@@ -642,6 +643,20 @@ namespace ppp {
                                         StaticEchoClean();
                                     }
 
+                                    /**
+                                     * @brief Link telemetry: the connection was established but has now ended.
+                                     *
+                                     * When Run() returns, the link has dropped — this is an unexpected
+                                     * interruption from the tunnel's perspective (the underlying transport
+                                     * returned EOF or an error).  Record as a fault.
+                                     *
+                                     * Note: Clean FIN with 0-byte payload that leads to Run() returning
+                                     * is still counted as a fault here because the tunnel link itself was
+                                     * interrupted, not a single TCP connection within the tunnel.
+                                     */
+                                    link_telemetry_.RecordFault();
+                                    ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordFault();
+
                                     ppp::telemetry::Count("client_exchanger.disconnect", 1);
                                     ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger disconnecting");
                                     UnregisterAllMappingPorts();
@@ -924,7 +939,7 @@ namespace ppp {
                 auto self = shared_from_this();
                 boost::asio::steady_timer* deadline_timer = t.get();
 
-                t->expires_from_now(Timer::DurationTime(timeout));
+                t->expires_after(Timer::DurationTime(timeout));
                 t->async_wait(
                     [self, this, deadline_timer, event](const boost::system::error_code& ec) noexcept {
                         ReleaseDeadlineTimer(deadline_timer);
@@ -1987,7 +2002,7 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                context->post(
+                boost::asio::post(*context,
                     [self, this, context, timeout, status, &y]() noexcept {
                         bool ok = NewDeadlineTimer(context, timeout, 
                             [status, &y](bool b) noexcept {

@@ -58,7 +58,9 @@ struct ReadyWintunAdapter
         if (!DLL_HANDLE) {
             DLL_HANDLE = LoadLibraryW(L"Driver\\wintun.dll");
             if (!DLL_HANDLE) {
-#ifdef _WIN64
+#ifdef _M_ARM64
+                LPCWSTR wzDllPath = L"Driver\\arm64\\wintun.dll";
+#elif defined(_WIN64)
                 LPCWSTR wzDllPath = L"Driver\\x64\\wintun.dll";
 #else
                 LPCWSTR wzDllPath = L"Driver\\x86\\wintun.dll";

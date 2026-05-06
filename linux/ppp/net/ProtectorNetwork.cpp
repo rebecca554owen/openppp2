@@ -49,6 +49,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/threading/Executors.h>
 
 #include "ProtectorNetwork.h"
@@ -289,11 +290,15 @@ namespace ppp
             // The signature is roughly: public static boolean protect(int sockfd) { return false; }
             if (fd == -1) /* https://blog.csdn.net/u010126792/article/details/82348438 */
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+                ppp::telemetry::Count("protect.android.fail.invalid_fd", 1);
                 return false;
             }
 
             if (NULLPTR == env)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                ppp::telemetry::Count("protect.android.fail.env", 1);
                 return false;
             }
 
@@ -305,6 +310,8 @@ namespace ppp
 
             if (NULLPTR == clazz)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                ppp::telemetry::Count("protect.android.fail.class", 1);
                 return false;
             }
 
@@ -321,11 +328,23 @@ namespace ppp
                 {
                     env->ExceptionDescribe();
                     env->ExceptionClear();
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                    ppp::telemetry::Count("protect.android.fail.exception", 1);
                     result = false;
                 }
             }
+            else {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                ppp::telemetry::Count("protect.android.fail.method", 1);
+            }
 
             env->DeleteLocalRef(clazz);
+            if (!result) {
+                ppp::telemetry::Count("protect.android.fail.false", 1);
+            }
+            else {
+                ppp::telemetry::Count("protect.android.success", 1);
+            }
             return result;
         }
 
@@ -333,6 +352,8 @@ namespace ppp
         {
             if (NULLPTR == context || NULLPTR == env)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                ppp::telemetry::Count("protect.android.join.fail", 1);
                 return false;
             }
             

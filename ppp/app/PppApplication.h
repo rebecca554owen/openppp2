@@ -223,7 +223,10 @@ public:
      *
      * @param lines Output vector receiving one formatted line per row.
      */
-    void GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines) noexcept;
+    void GetEnvironmentInformationLines(ppp::vector<ppp::string>& lines,
+        uint64_t incoming_traffic,
+        uint64_t outgoing_traffic,
+        const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept;
 
     /**
      * @brief Pulls and applies an IP list from the given command string or URL.

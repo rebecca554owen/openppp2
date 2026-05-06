@@ -43,6 +43,7 @@
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/mux/vmux_net.h>
+#include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/Firewall.h>
@@ -175,6 +176,8 @@ namespace ppp {
                 VirtualEthernetManagedServerPtr                                             GetManagedServer() noexcept { return managed_server_; }
                 /** @brief Returns the traffic statistics object for this session. */
                 ITransmissionStatisticsPtr                                                  GetStatistics() noexcept    { return statistics_; }
+                /** @brief Returns the link telemetry object for this session. */
+                ppp::diagnostics::LinkTelemetry&                                             GetLinkTelemetry() noexcept { return link_telemetry_; }
                 /** @brief Returns the VMUX instance when sub-channel multiplexing is active. */
                 std::shared_ptr<vmux::vmux_net>                                             GetMux() noexcept           { return mux_; }
                 /**
@@ -657,6 +660,7 @@ namespace ppp {
                 ITransmissionStatisticsPtr                                                  statistics_last_;           ///< Statistics snapshot from the previous upload tick.
                 VirtualEthernetMappingPortTable                                             mappings_;                  ///< Active FRP port-mapping objects.
                 ITransmissionStatisticsPtr                                                  statistics_;                ///< Current traffic statistics for this session.
+                ppp::diagnostics::LinkTelemetry                                             link_telemetry_;            ///< Per-session link fault telemetry.
                 std::shared_ptr<vmux::vmux_net>                                             mux_;                       ///< VMUX multiplexed sub-channel instance (may be null).
 
                 SynchronizedObject                                                          static_echo_syncobj_;               ///< Guards all static_echo_* members below.

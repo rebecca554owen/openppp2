@@ -465,13 +465,21 @@ namespace ppp
                 {
                     std::vector<ppp::string> dllPaths;
                     std::vector<ppp::string> libPaths;
+#if defined(_M_ARM64)
+                    // ARM64 Windows
+                    ppp::string winddir = ppp::win32::Win32Native::GetFolderPathWithWindows();
+                    dllPaths.emplace_back(winddir + "/System32/PaperAirplane.dll");
+                    libPaths.emplace_back("./Driver/arm64/PaperAirplane.dll");
+#elif !defined(_WIN64)
                     if (!lsp::paper_airplane::IsWow64System())
                     {
                         ppp::string winddir = ppp::win32::Win32Native::GetFolderPathWithWindows();
                         dllPaths.emplace_back(winddir + "/System32/PaperAirplane.dll");
                         libPaths.emplace_back("./Driver/x86/PaperAirplane.dll");
                     }
-                    elif(ppp::win32::Win32Native::IsWow64Process())
+                    else
+#endif
+                    if (ppp::win32::Win32Native::IsWow64Process())
                     {
                         ppp::string winddir = ppp::win32::Win32Native::GetFolderPathWithWindows();
                         dllPaths.emplace_back(winddir + "/System32/PaperAirplane.dll");

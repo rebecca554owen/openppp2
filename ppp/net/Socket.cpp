@@ -235,9 +235,8 @@ namespace ppp {
         void Socket::Cancel(const boost::asio::ip::udp::socket& socket) noexcept {
             boost::asio::ip::udp::socket& s = constantof(socket);
             if (s.is_open()) {
-                boost::system::error_code ec;
                 try {
-                    s.cancel(ec);
+                    s.cancel();
                 }
                 catch (const std::exception&) {}
             }
@@ -247,9 +246,8 @@ namespace ppp {
         void Socket::Cancel(const boost::asio::ip::tcp::socket& socket) noexcept {
             boost::asio::ip::tcp::socket& s = constantof(socket);
             if (s.is_open()) {
-                boost::system::error_code ec;
                 try {
-                    s.cancel(ec);
+                    s.cancel();
                 }
                 catch (const std::exception&) {}
             }
@@ -259,9 +257,8 @@ namespace ppp {
         void Socket::Cancel(const boost::asio::ip::tcp::acceptor& acceptor) noexcept {
             boost::asio::ip::tcp::acceptor& s = constantof(acceptor);
             if (s.is_open()) {
-                boost::system::error_code ec;
                 try {
-                    s.cancel(ec);
+                    s.cancel();
                 }
                 catch (const std::exception&) {}
             }
@@ -288,9 +285,8 @@ namespace ppp {
         /** @brief Cancels pending steady (monotonic) timer operations. */
         void Socket::Cancel(const boost::asio::steady_timer& deadline_timer) noexcept {
             boost::asio::steady_timer& t = constantof(deadline_timer);
-            boost::system::error_code ec;
             try {
-                t.cancel(ec);
+                t.cancel();
             }
             catch (const std::exception&) {}
         }
@@ -698,13 +694,13 @@ namespace ppp {
          * @brief Applies send/receive socket buffer sizes when values are provided.
          */
         bool Socket::SetWindowSizeIfNotZero(int sockfd, int cwnd, int rwnd) noexcept {
+            if (cwnd < 1 && rwnd < 1) {
+                return true;
+            }
+
             if (-1 == sockfd) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketInvalidHandle);
                 return false;
-            }
-
-            if (cwnd < 1 && rwnd < 1) {
-                return true;
             }
 
             bool any = false;
@@ -803,8 +799,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
-            return false;
+            return true;
         }
 
         /**
@@ -825,8 +820,7 @@ namespace ppp {
                 }
                 catch (const std::exception&) {}
             }
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
-            return false;
+            return true;
         }
 
         /**
@@ -1122,6 +1116,14 @@ namespace ppp {
             ppp::net::Socket::SetSignalPipeline(handle, false);
             ppp::net::Socket::ReuseSocketAddress(handle, true);
 
+#if defined(__APPLE__) && defined(SO_REUSEPORT)
+            int reuse_port = 1;
+            if (0 != ::setsockopt(handle, SOL_SOCKET, SO_REUSEPORT, (char*)&reuse_port, sizeof(reuse_port))) {
+                Closesocket(acceptor_);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            }
+#endif
+
             acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
             if (ec) {
                 Closesocket(acceptor_);  // Clean up opened acceptor
@@ -1305,19 +1307,15 @@ namespace ppp {
 
             boost::system::error_code ec;
             if (stream->is_open()) {
-                try {
-                    stream->cancel(ec);
-                }
-                catch (const std::exception&) {}
+                stream->cancel(ec);
+                ec.clear();
             }
 
-            try {
-                stream->close(ec);
-                if (boost::system::errc::success == ec) {
-                    return true;
-                }
+            stream->close(ec);
+            if (boost::system::errc::success == ec || !stream->is_open()) {
+                return true;
             }
-            catch (const std::exception&) {}
+
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
             return false;
         }

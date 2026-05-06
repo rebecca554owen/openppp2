@@ -70,6 +70,9 @@ namespace ppp {
             /** @brief Returns established inactivity timeout in milliseconds. */
             uint64_t VEthernetNetworkTcpipStack::GetMaxEstablishedTimeout() noexcept {
                 uint64_t tcp_inactive_timeout = (uint64_t)configuration_->tcp.inactive.timeout;
+                if (tcp_inactive_timeout < PPP_TCP_INACTIVE_TIMEOUT) {
+                    tcp_inactive_timeout = PPP_TCP_INACTIVE_TIMEOUT;
+                }
                 return (tcp_inactive_timeout + 1) * 1000;
             }
         }
