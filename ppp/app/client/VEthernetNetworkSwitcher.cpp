@@ -119,6 +119,91 @@ using ppp::net::packet::BufferSegment;
 using ppp::transmissions::ITransmission;
 using ppp::telemetry::Level;
 
+/**
+ * @brief Converts AppConfiguration::DnsServerEntry to dns::ServerEntry.
+ *
+ * @param ce  Configuration-layer DNS server entry.
+ * @return Resolver-layer server entry with protocol, address, hostname, and url populated.
+ */
+static ppp::dns::ServerEntry DnsServerEntryToResolverEntry(
+    const ppp::configurations::AppConfiguration::DnsServerEntry& ce) noexcept {
+
+    ppp::dns::ServerEntry se;
+    ppp::string proto = ToLower(ce.protocol);
+    if (proto == "doh") {
+        se.protocol = ppp::dns::Protocol::DoH;
+    } else if (proto == "dot") {
+        se.protocol = ppp::dns::Protocol::DoT;
+    } else if (proto == "tcp") {
+        se.protocol = ppp::dns::Protocol::TCP;
+    } else {
+        se.protocol = ppp::dns::Protocol::UDP;
+    }
+    se.url      = ce.url;
+    se.hostname = ce.hostname;
+    se.address  = ce.address;
+    for (const auto& b : ce.bootstrap) {
+        boost::system::error_code ec;
+        boost::asio::ip::address addr = ppp::StringToAddress(b.data(), ec);
+        if (!ec && !addr.is_unspecified()) {
+            se.bootstrap_ips.push_back(addr);
+        }
+    }
+    return se;
+}
+
+/**
+ * @brief Builds a dns::ServerEntry vector from AppConfiguration::DnsServerEntry list.
+ */
+static ppp::vector<ppp::dns::ServerEntry> BuildResolverEntries(
+    const ppp::vector<ppp::configurations::AppConfiguration::DnsServerEntry>& config_entries) noexcept {
+
+    ppp::vector<ppp::dns::ServerEntry> result;
+    result.reserve(config_entries.size());
+    for (const auto& ce : config_entries) {
+        result.emplace_back(DnsServerEntryToResolverEntry(ce));
+    }
+    return result;
+}
+
+/**
+ * @brief Parses a STUN candidate string ("ip:port" or "hostname:port") into StunCandidate.
+ *
+ * Only IP-literal candidates are accepted (returns false for hostnames to
+ * avoid blocking DNS resolution at config time).
+ */
+static bool ParseStunCandidate(const ppp::string& s, ppp::dns::StunCandidate& out) noexcept {
+    ppp::string text = ATrim(s);
+    if (text.empty()) {
+        return false;
+    }
+
+    int port = 3478;
+    ppp::string host;
+
+    std::size_t colon = text.rfind(':');
+    if (colon != ppp::string::npos && colon > 0) {
+        host = text.substr(0, colon);
+        ppp::string port_str = text.substr(colon + 1);
+        int p = atoi(port_str.data());
+        if (p > 0 && p <= 65535) {
+            port = p;
+        }
+    } else {
+        host = text;
+    }
+
+    boost::system::error_code ec;
+    boost::asio::ip::address ip = ppp::StringToAddress(host.data(), ec);
+    if (ec || ip.is_unspecified()) {
+        return false;
+    }
+
+    out.ip   = ip;
+    out.port = port;
+    return true;
+}
+
 namespace ppp {
     namespace app {
         namespace client {
@@ -130,7 +215,7 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 route_added_     = false;
-#if defined(_LINUX)   
+#if defined(_LINUX)
                 protect_mode_    = false;
 #endif
 #endif
@@ -163,22 +248,22 @@ namespace ppp {
                     return false;
                 }
 
-                std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_; 
+                std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_;
                 if (NULLPTR != qos) {
                     qos->Update(now);
                 }
 
-                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_; 
+                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR != exchanger) {
                     exchanger->Update();
                 }
 
-                std::shared_ptr<IForwarding> forwarding = forwarding_; 
+                std::shared_ptr<IForwarding> forwarding = forwarding_;
                 if (NULLPTR != forwarding) {
                     forwarding->Update(now);
                 }
 
-                ppp::vector<int> releases_icmppackets; 
+                ppp::vector<int> releases_icmppackets;
                 for (;;) {
                     SynchronizedObjectScope scope(GetSynchronizedObject());
                     for (auto&& kv : icmppackets_) {
@@ -197,7 +282,7 @@ namespace ppp {
                     break;
                 }
 
-                VEthernetTickEventHandler tick_event = TickEvent; 
+                VEthernetTickEventHandler tick_event = TickEvent;
                 if (tick_event) {
                     tick_event(this, now);
                 }
@@ -363,9 +448,9 @@ namespace ppp {
 #endif
                 }
 
-                // If the current need to prohibit the transfer of QUIC IETF control protocol traffic, 
-                // then the outgoing traffic sent to the 443 two ports through the UDP protocol can be directly discarded, 
-                // simple and rough processing, if the remote sensing of all UDP port traffic, 
+                // If the current need to prohibit the transfer of QUIC IETF control protocol traffic,
+                // then the outgoing traffic sent to the 443 two ports through the UDP protocol can be directly discarded,
+                // simple and rough processing, if the remote sensing of all UDP port traffic,
                 // it will produce unnecessary burden and overhead on the performance of the program itself.
                 if (block_quic_ && destinationPort == PPP_HTTPS_SYS_PORT) {
                     return false;
@@ -553,7 +638,7 @@ namespace ppp {
             /** @brief Tracks ICMP packet by ACK ID and triggers remote gateway echo flow. */
             bool VEthernetNetworkSwitcher::EchoGatewayServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 static constexpr int max_icmp_packets_aid = (1 << 24) - 1;
-                
+
                 if (NULLPTR == exchanger) {
                     return false;
                 }
@@ -629,7 +714,7 @@ namespace ppp {
             void VEthernetNetworkSwitcher::Dispose() noexcept {
                 auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
-                boost::asio::dispatch(*context, 
+                boost::asio::dispatch(*context,
                     [self, this, context]() noexcept {
                         Finalize();
                     });
@@ -989,19 +1074,19 @@ namespace ppp {
                     qos->SetBandwidth(bandwidth);
                 }
 
-                // If the user still has the remaining incoming/outgoing traffic and the expiration time is not reached, 
+                // If the user still has the remaining incoming/outgoing traffic and the expiration time is not reached,
                 // The VPN link is regarded as successful. Otherwise, the VPN link needs to be disconnected.
                 if (info->Valid()) {
                     return true;
                 }
 
-                // If the VPN link needs to be disconnected, the client requires the active end, and the server forcibly disconnects. 
+                // If the VPN link needs to be disconnected, the client requires the active end, and the server forcibly disconnects.
                 // This prevents you from bypassing the disconnection problem by modifying the code of the client switch.
-                std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger->GetTransmission(); 
+                std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger->GetTransmission();
                 if (NULLPTR != transmission) {
                     transmission->Dispose();
                 }
-                
+
                 return false;
             }
 
@@ -1020,7 +1105,7 @@ namespace ppp {
             /** @brief Creates Linux protector network instance for socket protection. */
             VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::NewProtectorNetwork() noexcept {
 #if defined(_ANDROID)
-                // Embedding the so framework into the Android platform does not use sendfd/recvfd unix to share fd across processes, 
+                // Embedding the so framework into the Android platform does not use sendfd/recvfd unix to share fd across processes,
                 // So you cannot pass in network cards or unix path names.
                 ppp::string dev;
                 return make_shared_object<ProtectorNetwork>(dev);
@@ -1044,7 +1129,7 @@ namespace ppp {
 
                 return exchanger->GetInformation();
             }
-            
+
             /** @brief Creates transmission statistics collector instance. */
             VEthernetNetworkSwitcher::ITransmissionStatisticsPtr VEthernetNetworkSwitcher::NewStatistics() noexcept {
                 return make_shared_object<ITransmissionStatistics>();
@@ -1137,12 +1222,12 @@ namespace ppp {
                 const std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface>&  underlying_ni,
                 ppp::unordered_map<uint32_t, ppp::string>&                          nics) noexcept {
 
-                auto f = 
+                auto f =
                     [tap_if, tap_ni, underlying_ni, &nics](ppp::net::native::RouteEntry& entry) noexcept {
                         if (entry.NextHop == tap_if->GatewayServer) {
                             return tap_ni->Name;
                         }
-                        
+
                         ppp::string nic;
                         if (Dictionary::TryGetValue(nics, entry.NextHop, nic)) {
                             if (!nic.empty()) {
@@ -1191,12 +1276,12 @@ namespace ppp {
                 ni->SubmaskAddress = IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(IPEndPoint(tap->SubmaskAddress, IPEndPoint::MinPort)).address();
 
 #if defined(_MACOS)
-                ppp::tap::TapDarwin* darwin_tap = dynamic_cast<ppp::tap::TapDarwin*>(tap.get()); 
+                ppp::tap::TapDarwin* darwin_tap = dynamic_cast<ppp::tap::TapDarwin*>(tap.get());
                 if (NULLPTR != darwin_tap) {
                     ni->DnsAddresses = darwin_tap->GetDnsAddresses();
                 }
 #else
-                ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get()); 
+                ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
                 ni->Id = ppp::tap::TapLinux::GetDeviceId(interface_name);
 
                 if (NULLPTR != linux_tap) {
@@ -1336,8 +1421,8 @@ namespace ppp {
                 cidr = htonl(cidr);
                 rib->AddRoute(cidr, IPEndPoint::NetmaskToPrefix(tap->SubmaskAddress), tap->GatewayServer);
 
-                // Why does Android/APPLE-IOS load routing table information? 
-                // This is to implement the IP diversion function of the HTTP proxy to prevent all traffic from going to the VPN server, 
+                // Why does Android/APPLE-IOS load routing table information?
+                // This is to implement the IP diversion function of the HTTP proxy to prevent all traffic from going to the VPN server,
                 // Because there are some scenarios that do not want to go through the VPN server.
                 if (ppp::string bypass_ip_list = std::move(bypass_ip_list_); bypass_ip_list.size() > 0) {
                     // IP address of the virtual network card is used here to make it inconsistent with the condition of determining
@@ -1392,7 +1477,7 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                 }
 
-                std::shared_ptr<aggligator::aggligator> aggligator = 
+                std::shared_ptr<aggligator::aggligator> aggligator =
                     make_shared_object<aggligator::aggligator>(*context, buffer, PPP_BUFFER_SIZE, PPP_AGGLIGATOR_CONGESTIONS);
                 if (NULLPTR == aggligator) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
@@ -1438,7 +1523,7 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 }
 
-                // Compatibility by all means try to check and fix the gateway route of the physical network card once, 
+                // Compatibility by all means try to check and fix the gateway route of the physical network card once,
                 // Otherwise there will be no network with all kinds of chain problems!
                 FixUnderlyingNgw();
 #endif
@@ -1476,7 +1561,7 @@ namespace ppp {
                 }
 
 #if defined(_LINUX)
-                // This section describes how to instantiate the physical network instance protector required by ppp to 
+                // This section describes how to instantiate the physical network instance protector required by ppp to
                 // Prevent VPN virtual switcher crashes caused by IP route loopback.
                 ProtectorNetworkPtr protector_network;
 #if defined(_ANDROID)
@@ -1601,6 +1686,25 @@ namespace ppp {
                             configuration_->dns.ecs.enabled,
                             configuration_->dns.ecs.override_ip);
                         dns_resolver_->SetTlsVerifyPeer(configuration_->dns.tls.verify_peer);
+
+                        // Configure STUN candidates for exit IP detection (Phase D).
+                        // When dns.stun.candidates is non-empty, the resolver uses
+                        // these instead of the built-in defaults.
+                        if (!configuration_->dns.stun.candidates.empty()) {
+                            ppp::vector<ppp::dns::StunCandidate> stun_cands;
+                            for (const ppp::string& cs : configuration_->dns.stun.candidates) {
+                                ppp::dns::StunCandidate sc;
+                                if (ParseStunCandidate(cs, sc)) {
+                                    stun_cands.emplace_back(std::move(sc));
+                                }
+                                else {
+                                    ppp::telemetry::Log(Level::kInfo, "client", "DNS STUN candidate ignored: %s", cs.c_str());
+                                }
+                            }
+                            if (!stun_cands.empty()) {
+                                dns_resolver_->SetStunCandidates(std::move(stun_cands));
+                            }
+                        }
                     }
                 }
 
@@ -1666,24 +1770,24 @@ namespace ppp {
 
 #if defined(_WIN32)
                         // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
-                        auto tun_ni = tun_ni_; 
+                        auto tun_ni = tun_ni_;
                         if (NULLPTR != tun_ni) {
                             ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
                         }
 
-                        // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after 
-                        // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record 
+                        // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after
+                        // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record
                         // Available in the region where the VPN server is located.
                         ppp::tap::TapWindows::DnsFlushResolverCache();
 
                         // Delete the default route of a physical network card in a single attempt without a reason.
-                        auto underlying_ni = underlying_ni_; 
+                        auto underlying_ni = underlying_ni_;
                         if (NULLPTR != underlying_ni) {
                             ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
                         }
 #else
                         // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
-                        auto tun_ni = tun_ni_; 
+                        auto tun_ni = tun_ni_;
                         if (NULLPTR != tun_ni) {
                             ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
                         }
@@ -1704,7 +1808,7 @@ namespace ppp {
 #if defined(_WIN32)
             /** @brief Starts optional PaperAirplane helper service on Windows. */
             bool VEthernetNetworkSwitcher::UsePaperAirplaneController() noexcept {
-                // Open the [PaperAirplane NSP/LSP] paper airplane server controller, 
+                // Open the [PaperAirplane NSP/LSP] paper airplane server controller,
                 // Depending on the configuration and whether it is a CLI command line hosted network flag.
                 if (configuration_->client.paper_airplane.tcp) {
                     PaperAirplaneControllerPtr controller = NewPaperAirplaneController();
@@ -1713,9 +1817,9 @@ namespace ppp {
                     }
 
                     // Clean up resources constructed by the current function when opening the server side of the paper plane fails.
-                    auto tun_ni = tun_ni_; 
+                    auto tun_ni = tun_ni_;
                     if (NULLPTR != tun_ni) {
-                        auto tap = GetTap(); 
+                        auto tap = GetTap();
                         if (NULLPTR != tap) {
                             if (!controller->Open(tun_ni->Index, tap->IPAddress, tap->SubmaskAddress)) {
                                 IDisposable::DisposeReferences(controller);
@@ -1724,7 +1828,7 @@ namespace ppp {
                         }
                     }
 
-                    // Open the paper plane successfully when you move the created instance on the local variable to 
+                    // Open the paper plane successfully when you move the created instance on the local variable to
                     // The virtual ethernet switch hosted fields.
                     paper_airplane_ctrl_ = std::move(controller);
                 }
@@ -1740,7 +1844,7 @@ namespace ppp {
                     return false;
                 }
 
-                auto gw = ni->GatewayServer; 
+                auto gw = ni->GatewayServer;
                 if (gw.is_v4() && !IPEndPoint::IsInvalid(gw) && !gw.is_loopback()) {
                     uint32_t next_hop = htonl(gw.to_v4().to_uint());
 #if defined(_WIN32)
@@ -1842,7 +1946,7 @@ namespace ppp {
                     if (NULLPTR != unix_tap && !unix_tap->IsPromisc()) {
 #if defined(_MACOS)
                         // Find and delete all disallowed macos gateway routes.
-                        auto rib = ppp::tap::TapDarwin::FindAllDefaultGatewayRoutes({ tap->GatewayServer }); 
+                        auto rib = ppp::tap::TapDarwin::FindAllDefaultGatewayRoutes({ tap->GatewayServer });
                         if (NULLPTR != rib) {
                             for (auto&& [ip, gw] : *rib) {
                                 ppp::darwin::tun::utun_del_route(ip, gw);
@@ -1850,7 +1954,7 @@ namespace ppp {
                         }
 #else
                         // Find and delete all disallowed linux gateway routes.
-                        auto rib = ppp::tap::TapLinux::FindAllDefaultGatewayRoutes({ tap->GatewayServer }); 
+                        auto rib = ppp::tap::TapLinux::FindAllDefaultGatewayRoutes({ tap->GatewayServer });
                         if (NULLPTR != rib) {
                             ppp::tap::TapLinux::DeleteAllRoutes2(rib);
                         }
@@ -1873,8 +1977,8 @@ namespace ppp {
                 // Add and delete all windows default route information!
                 ppp::win32::network::AddAllRoutes(default_routes_);
 
-                // Force to set the network card gateway server, not just manually add the routing table, 
-                // In the previous system can add routes, 
+                // Force to set the network card gateway server, not just manually add the routing table,
+                // In the previous system can add routes,
                 // The system will automatically set the network card, but the latest WIN11 can not.
                 if (std::shared_ptr<NetworkInterface> ni = underlying_ni_; NULLPTR != ni) {
                     ppp::win32::network::SetDefaultIPGateway(ni->Index, { ni->GatewayServer });
@@ -1938,10 +2042,10 @@ namespace ppp {
 
             /** @brief Registers IP-list file or URL source for later route loading. */
             bool VEthernetNetworkSwitcher::AddLoadIPList(
-                const ppp::string&                                              path, 
-#if defined(_LINUX) 
+                const ppp::string&                                              path,
+#if defined(_LINUX)
                 const ppp::string&                                              nic,
-#endif  
+#endif
                 const boost::asio::ip::address&                                 gw,
                 const ppp::string&                                              url) noexcept {
 
@@ -1973,11 +2077,11 @@ namespace ppp {
 
                     return false;
                 }
-                
+
                 uint32_t ngw = IPEndPoint::AnyAddress;
                 if (
-#if defined(_LINUX) 
-                    !nic.empty() && 
+#if defined(_LINUX)
+                    !nic.empty() &&
 #endif
                     gw.is_v4() && !IPEndPoint::IsInvalid(gw)) {
                     ngw = htonl(gw.to_v4().to_uint());
@@ -2016,12 +2120,12 @@ namespace ppp {
                     vbgp->emplace(std::make_pair(fullpath, url));
                 }
 
-#if defined(_LINUX) 
+#if defined(_LINUX)
                 if (ngw != IPEndPoint::AnyAddress) {
                     nics_.emplace(std::make_pair(ngw, nic));
                 }
 #endif
-                
+
                 ribs->emplace_back(std::make_pair(fullpath, ngw));
                 return true;
             }
@@ -2293,10 +2397,10 @@ namespace ppp {
                 }
             }
 
-            // Routes need to be protected on Windows to prevent third - party programs(such as network card drivers) 
-            // From silently modifying the current gateway route and forcing out the VPN virtual gateway route.According to our observation, 
-            // In some PC and network production environments, third - party programs will destroy VPN deployment routing table information 
-            // At certain times.In PPP PRIVATE NETWORK™ 1, this NETWORK route protector exists by default, but PPP PRIVATE Network ™ 2 does 
+            // Routes need to be protected on Windows to prevent third - party programs(such as network card drivers)
+            // From silently modifying the current gateway route and forcing out the VPN virtual gateway route.According to our observation,
+            // In some PC and network production environments, third - party programs will destroy VPN deployment routing table information
+            // At certain times.In PPP PRIVATE NETWORK™ 1, this NETWORK route protector exists by default, but PPP PRIVATE Network ™ 2 does
             // Not currently exist, so a new implementation of this section is needed.
             /** @brief Starts background default-route protector worker. */
             bool VEthernetNetworkSwitcher::ProtectDefaultRoute() noexcept {
@@ -2426,13 +2530,13 @@ namespace ppp {
 
                 return dwInterfaceIndex != (DWORD)tap->GetInterfaceIndex();
 #else
-                // OS X provides basic routing table processing so that the HTTP proxy provided by the VPN can route 
+                // OS X provides basic routing table processing so that the HTTP proxy provided by the VPN can route
                 // The traffic instead of having to deliver it to the VPN server for processing.
-                // 
-                // It is only supported when the VPN opens the network card promisbity mode, 
-                // Which is to support the PC only a single network card can provide a reliable VPN virtual network 
+                //
+                // It is only supported when the VPN opens the network card promisbity mode,
+                // Which is to support the PC only a single network card can provide a reliable VPN virtual network
                 // For the local area network through the kernel SNAT mechanism.
-                // 
+                //
                 // Note: Google Android and Huawei HarmonyOS platforms (the VPN network adapter promiscuous mode must be enabled)
                 // Snat: iptables -t nat -I POSTROUTING -s 192.168.0.24 -j SNAT --to-source 10.0.0.2
                 return ppp::net::Socket::GetBestInterfaceIP(nip) != tap->IPAddress;
@@ -2505,8 +2609,8 @@ namespace ppp {
                     // Restore all dns servers addresses that have been configured when VPN routes are enabled.
                     ppp::win32::network::SetAllNicsDnsAddresses(ni_dns_servers_);
 
-                    // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after 
-                    // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record 
+                    // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after
+                    // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record
                     // Available in the region where the VPN server is located.
                     ppp::tap::TapWindows::DnsFlushResolverCache();
 #else
@@ -2516,12 +2620,12 @@ namespace ppp {
 #endif
                 }
 
-                // To clean up the managed and unmanaged data currently held by the class, 
+                // To clean up the managed and unmanaged data currently held by the class,
                 // You need to go through the complete construct fill process again after the Release of this function.
-                ribs_.reset(); 
+                ribs_.reset();
                 tun_ni_.reset();
                 underlying_ni_.reset();
-                
+
                 // Clear the reference pointers of the held vBGP without making specific clarification, as this may pose thread safety issues.
                 vbgp_ = NULLPTR;
 
@@ -2624,7 +2728,7 @@ namespace ppp {
 
                 // Obtaining the IP endpoint address of the VPN remote server may involve synchronizing the network, as it may be in domain-name format.
                 static constexpr ppp::coroutines::YieldContext* y = NULLPTR;
-                
+
                 if (!exchanger->GetRemoteEndPoint(y, hostname, address, path, port, protocol_type, server, remoteEP)) {
                     return false;
                 }
@@ -2684,7 +2788,7 @@ namespace ppp {
                         if (NULLPTR == rib) {
                             return false;
                         }
-                        
+
                         bool processed = gw.is_v4() && remoteIP.is_v4();
                         if (!processed) {
                             return false;
@@ -2701,7 +2805,7 @@ namespace ppp {
                 // Check whether the static tunnel specifies an IP address endpoint (required for transit).
                 ppp::unordered_set<boost::asio::ip::tcp::endpoint> servers;
                 /** @brief Parses and registers one static tunnel server endpoint. */
-                auto StaticEchoAddRemoteEndPoint = 
+                auto StaticEchoAddRemoteEndPoint =
                     [this, &servers, &fib_add_route_ipv4, &exchanger](const ppp::string& server_string) noexcept {
                         if (server_string.empty()) {
                             return false;
@@ -2734,7 +2838,7 @@ namespace ppp {
                                 IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(remoteEP));
                             return r.second;
                         }
-                       
+
                         return exchanger->StaticEchoAddRemoteEndPoint(ep);
                     };
 
@@ -2803,7 +2907,7 @@ namespace ppp {
                 // IPV6 does not need to be linked, because VPN is IPV4,
                 // And IPV6 does not affect the physical layer network communication of the VPN.
                 if (!serverIP.is_loopback()) {
-                    auto protector_network = GetProtectorNetwork(); 
+                    auto protector_network = GetProtectorNetwork();
                     if (NULLPTR != protector_network) {
                         if (!protector_network->Protect(handle, y)) {
 #if defined(_ANDROID)
@@ -2849,7 +2953,7 @@ namespace ppp {
 
                 const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
                 const std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                
+
                 const auto self = shared_from_this();
                 const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
                     [self, socket_weak, handle](Timer*) noexcept {
@@ -2877,7 +2981,7 @@ namespace ppp {
                 const auto max_buffer_size = PPP_BUFFER_SIZE;
                 boost::asio::ip::udp::endpoint sourceEP = IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                 boost::asio::ip::udp::endpoint destinationEP(destinationIP, frame->Destination.Port);
-                
+
                 const auto serverEPPtr = make_shared_object<boost::asio::ip::udp::endpoint>();
                 if (NULLPTR == serverEPPtr) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
@@ -2930,7 +3034,7 @@ namespace ppp {
 #endif
                     return false;
                 }
-                
+
                 boost::asio::ip::address destinationIP = Ipep::ToAddress(packet->Destination);
                 ::dns::QuestionSection& qs = *m.questions.data();
 #if defined(_ANDROID)
@@ -2944,7 +3048,7 @@ namespace ppp {
                     ppp::net::asio::vdns::AddressFamily::kA : ppp::net::asio::vdns::AddressFamily::kAAAA).empty()) {
 
                     std::size_t dns_size = 0;
-                    char dns_packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE]; 
+                    char dns_packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE];
 
                     if (m.encode(dns_packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE, dns_size) == ::dns::BufferResult::NoError && dns_size > 0) {
 #if defined(_ANDROID)
@@ -2953,7 +3057,7 @@ namespace ppp {
                             (int)dns_size);
 #endif
                         return DatagramOutput(
-                            IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source), 
+                            IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source),
                             boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT), dns_packet, dns_size, false);
                     }
                 }
@@ -2980,9 +3084,9 @@ namespace ppp {
                     ppp::app::client::dns::Rule::Ptr rulePtr = ppp::app::client::dns::Rule::Get(stl::transform<ppp::string>(qs.mName), dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
                     if (NULLPTR == rulePtr) {
 #if defined(_ANDROID)
-                        // On Android: if intercept_unmatched is enabled, use DnsResolver
-                        // with foreign→domestic→cloudflare fallback.  Otherwise fall back
-                        // to destinationIP (legacy behaviour).
+                        // On Android: if intercept_unmatched is enabled, use DnsResolver.
+                        // Prefer configured entries first (foreign/domestic), then
+                        // fall back to provider-based ResolveAsyncWithFallback.
                         if (configuration_->dns.intercept_unmatched && NULLPTR != dns_resolver_) {
                             ppp::string domestic = configuration_->dns.servers.domestic;
                             ppp::string foreign  = configuration_->dns.servers.foreign;
@@ -2994,6 +3098,60 @@ namespace ppp {
                             auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
                                 shared_from_this());
 
+                            // Phase A: prefer structured entries from config.
+                            ppp::vector<ppp::dns::ServerEntry> foreign_entries =
+                                BuildResolverEntries(configuration_->dns.servers.foreign_entries);
+                            ppp::vector<ppp::dns::ServerEntry> domestic_entries =
+                                BuildResolverEntries(configuration_->dns.servers.domestic_entries);
+
+                            if (!foreign_entries.empty()) {
+                                // Unmatched queries prefer foreign entries first, preserving the
+                                // legacy no-ECS behaviour of the foreign tier.
+                                dns_resolver_->ResolveAsyncWithEntries(
+                                    foreign_entries, false,
+                                    static_cast<const Byte*>(messages->Buffer.get()),
+                                    messages->Length,
+                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                        if (!response.empty()) {
+                                            ppp::net::asio::vdns::AddCache(
+                                                response.data(),
+                                                static_cast<int>(response.size()));
+
+                                            self->DatagramOutput(
+                                                sourceEP, destEP,
+                                                response.data(),
+                                                static_cast<int>(response.size()),
+                                                false);
+                                        }
+                                    });
+                                return true;
+                            }
+
+                            if (!domestic_entries.empty()) {
+                                // If only domestic structured entries are configured, treat the
+                                // query as domestic so ECS injection semantics match the
+                                // provider-based domestic fallback path.
+                                dns_resolver_->ResolveAsyncWithEntries(
+                                    domestic_entries, true,
+                                    static_cast<const Byte*>(messages->Buffer.get()),
+                                    messages->Length,
+                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                        if (!response.empty()) {
+                                            ppp::net::asio::vdns::AddCache(
+                                                response.data(),
+                                                static_cast<int>(response.size()));
+
+                                            self->DatagramOutput(
+                                                sourceEP, destEP,
+                                                response.data(),
+                                                static_cast<int>(response.size()),
+                                                false);
+                                        }
+                                    });
+                                return true;
+                            }
+
+                            // Fallback: no structured entries, use legacy provider-based path.
                             dns_resolver_->ResolveAsyncWithFallback(
                                 foreign, domestic, "cloudflare",
                                 static_cast<const Byte*>(messages->Buffer.get()),
@@ -3019,9 +3177,9 @@ namespace ppp {
                             serverIP.to_string().c_str(),
                             qs.mName.c_str());
 #else
-                        // Desktop: if intercept_unmatched is enabled, use DnsResolver
-                        // with foreign→domestic→cloudflare fallback.  Otherwise the
-                        // packet passes through without DNS interception (legacy behaviour).
+                        // Desktop: if intercept_unmatched is enabled, use DnsResolver.
+                        // Prefer configured entries first (foreign/domestic), then
+                        // fall back to provider-based ResolveAsyncWithFallback.
                         if (configuration_->dns.intercept_unmatched && NULLPTR != dns_resolver_) {
                             ppp::string domestic = configuration_->dns.servers.domestic;
                             ppp::string foreign  = configuration_->dns.servers.foreign;
@@ -3033,6 +3191,60 @@ namespace ppp {
                             auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
                                 shared_from_this());
 
+                            // Phase A: prefer structured entries from config.
+                            ppp::vector<ppp::dns::ServerEntry> foreign_entries =
+                                BuildResolverEntries(configuration_->dns.servers.foreign_entries);
+                            ppp::vector<ppp::dns::ServerEntry> domestic_entries =
+                                BuildResolverEntries(configuration_->dns.servers.domestic_entries);
+
+                            if (!foreign_entries.empty()) {
+                                // Unmatched queries prefer foreign entries first, preserving the
+                                // legacy no-ECS behaviour of the foreign tier.
+                                dns_resolver_->ResolveAsyncWithEntries(
+                                    foreign_entries, false,
+                                    static_cast<const Byte*>(messages->Buffer.get()),
+                                    messages->Length,
+                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                        if (!response.empty()) {
+                                            ppp::net::asio::vdns::AddCache(
+                                                response.data(),
+                                                static_cast<int>(response.size()));
+
+                                            self->DatagramOutput(
+                                                sourceEP, destEP,
+                                                response.data(),
+                                                static_cast<int>(response.size()),
+                                                false);
+                                        }
+                                    });
+                                return true;
+                            }
+
+                            if (!domestic_entries.empty()) {
+                                // If only domestic structured entries are configured, treat the
+                                // query as domestic so ECS injection semantics match the
+                                // provider-based domestic fallback path.
+                                dns_resolver_->ResolveAsyncWithEntries(
+                                    domestic_entries, true,
+                                    static_cast<const Byte*>(messages->Buffer.get()),
+                                    messages->Length,
+                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
+                                        if (!response.empty()) {
+                                            ppp::net::asio::vdns::AddCache(
+                                                response.data(),
+                                                static_cast<int>(response.size()));
+
+                                            self->DatagramOutput(
+                                                sourceEP, destEP,
+                                                response.data(),
+                                                static_cast<int>(response.size()),
+                                                false);
+                                        }
+                                    });
+                                return true;
+                            }
+
+                            // Fallback: no structured entries, use legacy provider-based path.
                             dns_resolver_->ResolveAsyncWithFallback(
                                 foreign, domestic, "cloudflare",
                                 static_cast<const Byte*>(messages->Buffer.get()),
@@ -3197,7 +3409,7 @@ namespace ppp {
                 return false;
             }
 
-#if !defined(_ANDROID) && !defined(_IPHONE)   
+#if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_LINUX)
             /** @brief Gets current Linux protect mode and optionally updates it. */
             bool VEthernetNetworkSwitcher::ProtectMode(bool* protect_mode) noexcept {

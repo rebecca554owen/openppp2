@@ -6,6 +6,7 @@
  */
 
 #include <ppp/stdafx.h>
+#include <atomic>
 
 namespace ppp {
     namespace dns {
@@ -23,6 +24,14 @@ namespace ppp {
             ppp::string                                     hostname;
             ppp::string                                     address;
             ppp::vector<boost::asio::ip::address>           bootstrap_ips;
+        };
+
+        /**
+         * @brief A STUN server candidate with pre-resolved IP and port.
+         */
+        struct StunCandidate {
+            boost::asio::ip::address                        ip;
+            int                                             port = 19302;
         };
 
         class DnsResolver final : public std::enable_shared_from_this<DnsResolver> {
@@ -78,6 +87,17 @@ namespace ppp {
                 const ppp::string&                          foreign) noexcept;
 
             /**
+             * @brief Configures the STUN candidate list for exit IP detection.
+             *
+             * @details Replaces the built-in STUN server list with user-provided
+             *          candidates.  Candidates that are IP:port literals are used
+             *          directly; hostnames are resolved at call time via bootstrap.
+             *
+             * @param candidates  Vector of "ip:port" or "hostname:port" strings.
+             */
+            void                                            SetStunCandidates(ppp::vector<StunCandidate> candidates) noexcept;
+
+            /**
              * @brief Resolves a DNS query through a named provider, with up to two
              *        additional fallback providers tried in order on failure.
              *
@@ -113,6 +133,28 @@ namespace ppp {
                 int                                         length,
                 const ResolveCallback&                      callback) noexcept;
 
+            /**
+             * @brief Resolves a DNS query using explicit server entries.
+             *
+             * @details Unlike ResolveAsync which looks up a provider by name,
+             *          this method uses the supplied entries directly.  Protocol
+             *          cascade (DoH → DoT → TCP → UDP) is applied per-entry.
+             *          ECS injection is applied when the query is domestic and
+             *          ECS is enabled.
+             *
+             * @param entries   Explicit server entries to resolve through.
+             * @param domestic  True if this is a domestic query (ECS eligible).
+             * @param packet    Raw DNS query bytes.
+             * @param length    Length of @p packet in bytes.
+             * @param callback  Completion callback; invoked exactly once.
+             */
+            void                                            ResolveAsyncWithEntries(
+                const ppp::vector<ServerEntry>&             entries,
+                bool                                        domestic,
+                const Byte*                                 packet,
+                int                                         length,
+                const ResolveCallback&                      callback) noexcept;
+
             static bool                                     HasProvider(const ppp::string& name) noexcept;
             static const ppp::vector<ServerEntry>*          GetProvider(const ppp::string& name) noexcept;
 
@@ -121,7 +163,8 @@ namespace ppp {
                 std::shared_ptr<ppp::vector<ServerEntry> >  entries,
                 std::size_t                                 index,
                 std::shared_ptr<ppp::vector<Byte> >         packet,
-                const ResolveCallback&                      callback) noexcept;
+                const ResolveCallback&                      callback,
+                bool                                        domestic = false) noexcept;
 
             void                                            SendUdp(
                 const ServerEntry&                          entry,
@@ -176,10 +219,25 @@ namespace ppp {
              *          Used as a last-resort fallback when ECS is enabled but no
              *          override_ip or exit_ip is configured.
              *
+             *          When custom STUN candidates are configured (via SetStunCandidates),
+             *          candidates are tried in round-robin order.  On each call the
+             *          starting index is rotated so that repeated calls distribute
+             *          load across candidates.
+             *
              * @param callback  Invoked with the detected public IPv4 address, or an
              *                  unspecified address on failure/timeout.
              */
             void                                            DetectExitIPViaStun(const ExitIpCallback& callback) noexcept;
+
+            /**
+             * @brief Attempts STUN detection against a single candidate.
+             *
+             * @param candidate  STUN server IP and port.
+             * @param callback   Invoked with the detected address or unspecified on failure.
+             */
+            void                                            TryStunCandidate(
+                const StunCandidate&                        candidate,
+                const ExitIpCallback&                       callback) noexcept;
 
             /**
              * @brief Resolves a hostname to an IPv4 address using the system DNS resolver.
@@ -208,6 +266,8 @@ namespace ppp {
             bool                                            ecs_enabled_ = false;
             ppp::string                                     ecs_override_ip_;
             bool                                            tls_verify_peer_ = true;
+            ppp::vector<StunCandidate>                      stun_candidates_;
+            std::atomic<std::size_t>                        stun_rotation_{ 0 };
         };
 
     } // namespace dns

@@ -259,6 +259,9 @@ namespace ppp {
             struct {
                 bool                                                verify_peer;     ///< Verify DoH/DoT server certificates with system/bundled CA roots; default true.
             }                                                       tls;             ///< TLS verification configuration for encrypted DNS upstreams.
+            struct {
+                ppp::vector<ppp::string>                            candidates;      ///< STUN server candidates for exit IP detection (ip:port or hostname:port).
+            }                                                       stun;            ///< STUN server configuration for ECS fallback.
         }                                                           dns;             ///< DNS resolver extension configuration.
         public:
             /**

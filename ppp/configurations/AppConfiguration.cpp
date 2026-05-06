@@ -111,7 +111,7 @@ namespace {
         }
 
         prefix = cidr.substr(0, slash);
-        
+
         /**
          * @brief Validate prefix length using strtol for proper error detection.
          * @note Reject invalid numeric strings and out-of-range values.
@@ -124,7 +124,7 @@ namespace {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
             return false;
         }
-        
+
         prefix_length = static_cast<int>(parsed);
         return !prefix.empty();
     }
@@ -155,7 +155,7 @@ namespace {
         }
         return false;
     }
-                                            
+
     /**
      * @brief Checks whether an IPv6 prefix is globally routable unicast.
      * @param prefix IPv6 prefix address.
@@ -165,7 +165,7 @@ namespace {
         boost::asio::ip::address_v6::bytes_type bytes = prefix.to_bytes();
         return (bytes[0] & 0xe0) == 0x20;
     }
-                                            
+
     /**
      * @brief Clears all server IPv6 runtime settings.
      * @param config Configuration object to update.
@@ -321,6 +321,7 @@ namespace ppp {
             config.dns.ecs.enabled = false;
             config.dns.ecs.override_ip = "";
             config.dns.tls.verify_peer = true;
+            config.dns.stun.candidates.clear();
 
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
@@ -1476,6 +1477,20 @@ namespace ppp {
             config.dns.ecs.override_ip = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["ecs"]["override-ip"]);
             AssignBoolIfPresent(config.dns.tls.verify_peer, json["dns"]["tls"]["verify-peer"]);
 
+            // STUN candidates: array of "ip:port" or "hostname:port" strings.
+            {
+                const Json::Value& stun_json = json["dns"]["stun"]["candidates"];
+                if (stun_json.isArray()) {
+                    config.dns.stun.candidates.clear();
+                    for (Json::ArrayIndex i = 0; i < stun_json.size(); i++) {
+                        ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(stun_json[i])));
+                        if (!s.empty()) {
+                            config.dns.stun.candidates.emplace_back(std::move(s));
+                        }
+                    }
+                }
+            }
+
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
@@ -1733,6 +1748,13 @@ namespace ppp {
             dns["ecs"]["enabled"] = config.dns.ecs.enabled;
             dns["ecs"]["override-ip"] = config.dns.ecs.override_ip;
             dns["tls"]["verify-peer"] = config.dns.tls.verify_peer;
+            if (!config.dns.stun.candidates.empty()) {
+                Json::Value stun_cands(Json::arrayValue);
+                for (const ppp::string& c : config.dns.stun.candidates) {
+                    stun_cands.append(c);
+                }
+                dns["stun"]["candidates"] = stun_cands;
+            }
             root["dns"] = dns;
 
             return root;

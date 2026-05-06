@@ -18,15 +18,16 @@
 | 协议降级故障转移 | ✅ 已实现 | `TryProtocols()` 按条目顺序尝试 |
 | 多提供商级联故障转移 | ✅ 已实现 | `ResolveAsyncWithFallback()` 支持三级提供商 |
 | Socket protect（Android VPN） | ✅ 已实现 | `SetProtectSocketCallback()` 已接线 |
-| STUN 出口 IP 检测 | ✅ 已实现 | `DetectExitIPViaStun()` 完整实现，已接入 `ResolveAsync()` 主路径；限制见下文 |
+| STUN 出口 IP 检测 | ✅ 已实现 | `DetectExitIPViaStun()` 已接入 ECS fallback，支持多候选与轮询；限制见下文 |
 | object/array 配置解析 | ✅ 已实现 | `ParseDnsServerSpec()` 支持 string/object/array 三种形式；含 `protocol`、`url`、`hostname`、`address`、`bootstrap` 字段 |
+| structured entries 主路径 | ✅ 已实现 | `ResolveAsyncWithEntries()` 接入 `RedirectDnsServer` unmatched 路径，array/object 配置会真实生效 |
 | Bootstrap DNS helper | ⚠️ helper 已有 | `ResolveHostnameAsync()` 已实现，但主路径尚未使用；提供商表中已硬编码 IP，无需动态解析 |
 | OPT RR 合并（ARCOUNT > 0） | ✅ 已实现 | `InjectEcsOptRr()` 完整实现 OPT RR 扫描与 ECS option 合并 |
 | TLS 连接池 | ❌ 未实现 | 每请求新建 TLS 连接，无复用 |
 | ECS IPv6 支持 | ❌ 未实现 | 首版仅 IPv4，IPv6 地址会被跳过 |
 | DoQ（DNS over QUIC） | ❌ 未来 | 无 QUIC 传输；配置层 `doq` 值会归一化为 `dot`（见下文） |
 | DoH3（DNS over HTTP/3） | ❌ 未来 | 无代码、无引用 |
-| 遥测（Telemetry） | ⚠️ 外部已集成 | `DnsResolver` 本身无内部遥测调用；外部（`VEthernetNetworkSwitcher`）使用 `ppp::telemetry::*` 记录 DNS 配置应用事件 |
+| 遥测（Telemetry） | ✅ 已实现 | `DnsResolver` 内部记录解析开始/成功/失败、协议 fallback、STUN 结果；外部继续记录 DNS 配置应用事件 |
 
 ---
 
@@ -188,7 +189,7 @@
 }
 ```
 
-> **注意**：当 `domestic`/`foreign` 传入 object/array 时，解析后的结构化条目存储在 `dns.servers.domestic_entries`/`foreign_entries` 中。但当前 `RedirectDnsServer` 主路径使用 `dns.servers.domestic`/`foreign` 简写字段匹配内置提供商表，因此自定义 object/array 条目**需要 DnsResolver 侧的适配才能作为自定义提供商使用**。使用字符串简写即可获得等效的多协议降级能力（代码内置提供商表已包含完整的 DoH/DoT/TCP/UDP 条目，按优先级自动降级）。
+> **注意**：当 `domestic`/`foreign` 传入 object/array 时，解析后的结构化条目存储在 `dns.servers.domestic_entries`/`foreign_entries` 中，并在 `dns.intercept-unmatched=true` 的未命中规则路径中通过 `DnsResolver::ResolveAsyncWithEntries()` 直接使用。未命中规则优先使用 `foreign_entries`（不注入 ECS）；如果只配置了 `domestic_entries`，则按国内查询处理并在 `dns.ecs.enabled=true` 时注入 ECS。`dns-rules.txt` 中命中的提供商名称仍走内置提供商表。
 
 ### 配置字段说明
 
@@ -202,6 +203,7 @@
 | `dns.ecs.enabled` | `dns.ecs.enabled` | bool | `false` | ✅ 已实现 | 启用 ECS（仅国内查询）；涉及隐私，默认关闭 |
 | `dns.ecs.override-ip` | `dns.ecs.override_ip` | string | `""` | ✅ 已实现 | 手动指定出口 IP（最高优先，跳过自动检测） |
 | `dns.tls.verify-peer` | `dns.tls.verify_peer` | bool | `true` | ✅ 已实现 | DoH/DoT 是否校验证书链与主机名；默认开启，使用 `cacert.pem`、内置根证书和系统默认 CA 路径 |
+| `dns.stun.candidates` | `dns.stun.candidates` | string[] | `[]` | ✅ 已实现 | STUN 出口 IP 检测候选；当前运行时仅接受 IP literal，可带端口；hostname 会被日志提示后跳过 |
 
 缓存 TTL 和开关复用现有配置，不再重复定义：
 
@@ -320,15 +322,14 @@ segments[1] 解析流程：
 |--------|------|------|----------|------|------|
 | 1 | `override-ip` 配置 | 0 | 无 | ✅ 已实现 | 用户手动指定，最高优先 |
 | 2 | 服务器返回 `ClientExitIP` | 0 | 无 | ✅ 已实现 | 复用会话握手，零额外流量 |
-| 3 | STUN 查询 | ~1 RTT | Google STUN 服务器 | ✅ 已实现 | 硬编码 `216.58.211.206:19302`，3 秒超时，仅 IPv4 |
+| 3 | STUN 查询 | ~1 RTT | 多个公网 STUN 候选 | ✅ 已实现 | 内置 Google/Cloudflare/Twilio IP 候选，支持 `dns.stun.candidates` 覆盖，3 秒超时，仅 IPv4 |
 
-> **STUN fallback 已实现**：`DetectExitIPViaStun()` 发送 RFC 5389 STUN Binding Request 到硬编码的 Google STUN 服务器，解析 XOR-MAPPED-ADDRESS 获取公网 IPv4。该方法已集成到 `ResolveAsync()` 主路径中——当 ECS 已启用但 `GetEcsIp()` 返回 unspecified address 时，先尝试 STUN 检测，成功后注入 ECS 再继续协议降级链。
+> **STUN fallback 已实现**：`DetectExitIPViaStun()` 发送 RFC 5389 STUN Binding Request 到候选 STUN 服务器，解析 XOR-MAPPED-ADDRESS 获取公网 IPv4。该方法已集成到 `ResolveAsync()` / `ResolveAsyncWithEntries()` 主路径中——当 ECS 已启用但 `GetEcsIp()` 返回 unspecified address 时，先尝试 STUN 检测，成功后注入 ECS 再继续协议降级链。
 >
 > **限制**：
-> - 仅使用单个硬编码 STUN 服务器（`216.58.211.206`，即 `stun.l.google.com:19302`）
+> - 自定义 `dns.stun.candidates` 当前仅接受 IP literal（如 `1.2.3.4:3478`）；hostname 候选会被日志提示后跳过
 > - 仅支持 IPv4
 > - 3 秒超时（`PPP_DNS_RESOLVER_STUN_TIMEOUT_MS`）
-> - 无 fallback STUN 服务器
 > - STUN 检测会增加首次 ECS 查询的延迟（~1 RTT）
 
 #### 优先级 1：手动配置
@@ -360,11 +361,12 @@ segments[1] 解析流程：
 **实现位置**：`DnsResolver.cpp` 第 1477–1657 行
 
 **工作流程**：
-1. 构造 20 字节 STUN Binding Request（RFC 5389 §6）
-2. 通过 UDP 发送到 `216.58.211.206:19302`（硬编码 IP，避免 DNS 循环依赖）
-3. 等待响应（3 秒超时）
-4. 解析响应中的 XOR-MAPPED-ADDRESS 属性，XOR 还原得到公网 IPv4
-5. 回调返回检测到的 IP（失败返回 unspecified address）
+1. 从内置候选或 `dns.stun.candidates` 配置中取得 STUN IP:port 列表
+2. 使用原子轮询选择本次起始候选，失败时顺序尝试后续候选
+3. 构造 20 字节 STUN Binding Request（RFC 5389 §6）
+4. 等待响应（3 秒超时）
+5. 解析响应中的 XOR-MAPPED-ADDRESS 属性，XOR 还原得到公网 IPv4
+6. 回调返回检测到的 IP（全部失败返回 unspecified address）
 
 **集成点**：`ResolveAsync()` 第 509–524 行 — 当 `ecs_enabled_ && domestic` 且 `GetEcsIp()` 无可用 IP 时触发 STUN，成功后注入 ECS 并继续 `TryProtocols()`。
 
@@ -462,6 +464,7 @@ public:
     void SetEcsConfig(bool enabled, const ppp::string& override_ip) noexcept;
     void SetTlsVerifyPeer(bool verify_peer) noexcept;
     void SetDefaultProviders(const ppp::string& domestic, const ppp::string& foreign) noexcept;
+    void SetStunCandidates(ppp::vector<StunCandidate> candidates) noexcept;
 
     // 单提供商解析（内部按 DoH→DoT→TCP→UDP 降级）
     void ResolveAsync(const ppp::string& provider_name, bool domestic,
@@ -474,6 +477,12 @@ public:
                                   const ppp::string& fallback2,
                                   const Byte* packet, int length,
                                   const ResolveCallback& callback) noexcept;
+
+    // 显式 structured entries 解析（用于 dns.servers object/array）
+    void ResolveAsyncWithEntries(const ppp::vector<ServerEntry>& entries,
+                                 bool domestic,
+                                 const Byte* packet, int length,
+                                 const ResolveCallback& callback) noexcept;
 
     static bool HasProvider(const ppp::string& name) noexcept;
     static const ppp::vector<ServerEntry>* GetProvider(const ppp::string& name) noexcept;
@@ -488,8 +497,10 @@ private:
     boost::asio::ip::address GetEcsIp() const noexcept;
     static bool InjectEcsOptRr(ppp::vector<Byte>& packet,
                                const boost::asio::ip::address& ecs_ip) noexcept;
-    // STUN 检测（✅ 已实现，已接入 ResolveAsync 主路径）
+    // STUN 检测（✅ 已实现，已接入 ResolveAsync/ResolveAsyncWithEntries 主路径）
     void DetectExitIPViaStun(const ExitIpCallback& callback) noexcept;
+    void TryStunCandidate(const StunCandidate& candidate,
+                          const ExitIpCallback& callback) noexcept;
     // Bootstrap DNS helper（✅ 已实现，但主路径未使用）
     static void ResolveHostnameAsync(
         boost::asio::io_context& context,
@@ -505,12 +516,14 @@ private:
     bool                        ecs_enabled_ = false;
     ppp::string                 ecs_override_ip_;
     bool                        tls_verify_peer_ = true;
+    ppp::vector<StunCandidate>  stun_candidates_;
+    std::atomic<std::size_t>    stun_rotation_;
 };
 
 } // namespace ppp::dns
 ```
 
-> **与早期设计文档的差异**：实际代码中**没有** `ssl_contexts_`（TLS 连接池），每请求新建 TLS 连接。但 `DetectExitIPViaStun()`（STUN）和 `ResolveHostnameAsync()`（bootstrap helper）**均已实现**。提供商表中已预解析 IP 地址，bootstrap helper 暂未接入主路径。
+> **与早期设计文档的差异**：实际代码中**没有** `ssl_contexts_`（TLS 连接池），每请求新建 TLS 连接。但 `DetectExitIPViaStun()`（STUN）和 `ResolveHostnameAsync()`（bootstrap helper）**均已实现**。提供商表中已预解析 IP 地址，bootstrap helper 暂未接入主路径；object/array 配置则通过 `ResolveAsyncWithEntries()` 接入未命中规则路径。
 
 ### 关键实现细节
 
@@ -568,20 +581,22 @@ void DnsResolver::SendTcp(const ServerEntry& entry, ..., const ResolveCallback& 
 
 ```cpp
 void DnsResolver::DetectExitIPViaStun(const ExitIpCallback& callback) noexcept {
-    // 1. 构造 20 字节 STUN Binding Request（RFC 5389 §6）
+    // 1. 选择内置或配置的 STUN 候选列表
+    // 2. 通过 stun_rotation_ 轮询本次起始候选
+    // 3. 构造 20 字节 STUN Binding Request（RFC 5389 §6）
     //    - Message Type: 0x0001 (Binding Request)
     //    - Magic Cookie: 0x2112A442
     //    - Transaction ID: 12 字节静态模式
-    // 2. UDP 发送到 216.58.211.206:19302（硬编码 IP）
-    // 3. socket 保护（protect_socket_）
-    // 4. 3 秒超时
-    // 5. 解析响应中的 XOR-MAPPED-ADDRESS (0x0020) 属性
-    // 6. XOR 还原得到公网 IPv4 地址
-    // 7. callback(ip) 或 callback(unspecified) on failure
+    // 4. UDP 发送到当前候选 IP:port
+    // 5. socket 保护（protect_socket_）
+    // 6. 3 秒超时，失败后尝试下一个候选
+    // 7. 解析响应中的 XOR-MAPPED-ADDRESS (0x0020) 属性
+    // 8. XOR 还原得到公网 IPv4 地址
+    // 9. callback(ip) 或 callback(unspecified) on failure
 }
 ```
 
-**集成位置**：`ResolveAsync()` 中，当 `ecs_enabled_ && domestic` 且 `GetEcsIp()` 无可用 IPv4 时触发。
+**集成位置**：`ResolveAsync()` / `ResolveAsyncWithEntries()` 中，当 `ecs_enabled_ && domestic` 且 `GetEcsIp()` 无可用 IPv4 时触发。
 
 #### Bootstrap DNS helper（⚠️ helper 已有，主路径未使用）
 
@@ -630,6 +645,10 @@ void DnsResolver::TryProtocols(entries, index, packet, callback) noexcept {
 **提供商级故障转移**（已实现）：
 
 `ResolveAsyncWithFallback()` 接受最多 3 个提供商名称，按顺序尝试。每个提供商内部再走协议级降级。在 `RedirectDnsServer` 中，`intercept-unmatched` 路径使用 `foreign → domestic → cloudflare` 三级 fallback。
+
+**结构化 entries 路径**（已实现）：
+
+`ResolveAsyncWithEntries()` 接受 `dns.servers.domestic_entries` / `foreign_entries` 转换后的 `ServerEntry` 列表，不查内置 provider 表。`intercept-unmatched` 未命中规则时先使用 `foreign_entries`；如果未配置 foreign entries 但配置了 domestic entries，则以 `domestic=true` 调用并允许 ECS 注入。
 
 ---
 
@@ -725,34 +744,42 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 
 ## 遥测（Telemetry）
 
-`DnsResolver` 本身不包含遥测调用——没有计数器、直方图或日志。遥测通过外部组件（`VEthernetNetworkSwitcher`）集成：
+`DnsResolver` 内部已接入轻量级 `ppp::telemetry::*` 计数与日志，外部组件（`VEthernetNetworkSwitcher`）仍保留 DNS 配置应用事件：
 
 | 指标 | 类型 | 来源 | 说明 |
 |------|------|------|------|
 | `client.dns.apply` | Span | VEthernetNetworkSwitcher | DNS 配置应用耗时 |
 | `client.dns.setup` | Count | VEthernetNetworkSwitcher | DNS 设置完成计数 |
 | `client.ipv6.apply.us` | Histogram | VEthernetNetworkSwitcher | IPv6 应用耗时（含 DNS） |
+| `dns.resolve.start` | Count | DnsResolver | 解析开始计数（provider 与 entries 路径） |
+| `dns.resolve.success` | Count | DnsResolver | 任一协议/条目返回响应 |
+| `dns.resolve.failure` | Count | DnsResolver | 所有条目耗尽仍失败 |
+| `dns.resolve.fallback` | Count | DnsResolver | 单条目失败后进入下一条目/协议 |
+| `dns.resolve.provider_miss` | Count | DnsResolver | provider 名称未命中内置表 |
+| `dns.stun.start` | Count | DnsResolver | STUN 检测开始 |
+| `dns.stun.success` | Count | DnsResolver | STUN 返回可用 XOR-MAPPED-ADDRESS |
+| `dns.stun.timeout` / `send_fail` / `recv_fail` | Count | DnsResolver | STUN 单候选失败原因 |
 
-后续可考虑添加的 DNS 专用遥测：
+后续可考虑继续细化的 DNS 专用遥测：
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
 | `dns.resolve.us` | Histogram | 单次 DNS 解析耗时（按协议分） |
-| `dns.resolve.ok` | Count | 解析成功计数 |
-| `dns.resolve.fail` | Count | 解析失败计数（全部协议/提供商均失败） |
-| `dns.protocol.fallback` | Count | 协议降级触发计数 |
 | `dns.ecs.injected` | Count | ECS OPT RR 注入计数 |
-| `dns.stun.detected` | Count | STUN 出口 IP 检测成功计数 |
+| `dns.transport.connect_fail` | Count | TCP/DoT/DoH 连接失败细分 |
+| `dns.transport.tls_fail` | Count | TLS 握手/证书校验失败细分 |
+| `dns.transport.http_status` | Count | DoH HTTP 非 200 状态细分 |
 
 ---
 
 ## 后续阶段计划
 
-### Phase A：自定义提供商接入主路径
+### Phase A：自定义提供商接入主路径（✅ 已实现）
 
-- `RedirectDnsServer` 适配 `DnsServerEntry` 结构化条目（当前仅使用内置提供商简写名匹配）
-- 使 object/array 配置中定义的自定义 DoH/DoT 端点能通过 `DnsResolver` 使用
-- `ResolveHostnameAsync()` bootstrap helper 接入自定义提供商解析路径
+- `RedirectDnsServer` 已适配 `DnsServerEntry` 结构化条目
+- object/array 配置中定义的自定义 DoH/DoT/TCP/UDP 端点可通过 `ResolveAsyncWithEntries()` 使用
+- 未命中规则路径优先使用 `foreign_entries`；若仅配置 `domestic_entries`，按国内查询处理并允许 ECS
+- 剩余 backlog：`ResolveHostnameAsync()` bootstrap helper 尚未接入 hostname 形式的自定义 endpoint 动态解析
 
 ### Phase B：TLS 连接池
 
@@ -766,11 +793,12 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 - PREFIX-LENGTH 48
 - FAMILY 值 2
 
-### Phase D：STUN 多服务器 fallback
+### Phase D：STUN 多服务器 fallback（✅ 已实现）
 
-- 增加 fallback STUN 服务器（Cloudflare、Twilio）
-- STUN 服务器可配置
-- 超时与重试策略优化
+- 已增加 Google / Cloudflare / Twilio 等内置 IP 候选
+- 已支持 `dns.stun.candidates` 覆盖候选列表
+- 已使用 `stun_rotation_` 做简单轮询，单候选失败后尝试下一候选
+- 剩余 backlog：hostname 候选目前不解析，只记录日志并跳过；可后续接入 bootstrap helper
 
 ### Phase E：DoQ / DoH3（远期）
 
@@ -779,10 +807,11 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 - 配置解析支持 `doh3` 协议值
 - 实现 DoQ→DoT、DoH3→DoH 真正传输级降级
 
-### Phase F：DNS 专用遥测
+### Phase F：DNS 专用遥测（✅ 已实现，持续细化）
 
-- 在 `DnsResolver` 内部添加解析耗时、成功/失败、协议降级等遥测点
-- STUN 检测耗时和结果计数
+- `DnsResolver` 内部已添加解析开始、成功、失败、provider miss、协议/条目 fallback 计数
+- STUN 检测已添加 start/success/no-candidates/timeout/send-fail/recv-fail/invalid-response/no-xmapped 计数
+- 剩余 backlog：SendUdp/SendTcp/SendDoh/SendDot 内部失败原因可继续细分，例如连接拒绝、TLS 握手失败、HTTP 非 200、读写超时
 
 ---
 
