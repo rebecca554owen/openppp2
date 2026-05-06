@@ -66,7 +66,7 @@ jobs:
       - name: Install vcpkg dependencies
         shell: pwsh
         run: |
-          vcpkg install `
+          vcpkg install --allow-unsupported `
             boost-system:$env:VCPKG_DEFAULT_TRIPLET `
             boost-asio:$env:VCPKG_DEFAULT_TRIPLET `
             boost-beast:$env:VCPKG_DEFAULT_TRIPLET `
