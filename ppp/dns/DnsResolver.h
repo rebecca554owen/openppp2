@@ -158,6 +158,48 @@ namespace ppp {
             static bool                                     HasProvider(const ppp::string& name) noexcept;
             static const ppp::vector<ServerEntry>*          GetProvider(const ppp::string& name) noexcept;
 
+            /**
+             * @brief Controls whether AAAA (IPv6) responses are propagated to clients.
+             *
+             * @details When the VPN session has not been assigned a managed IPv6
+             *          address by the server, returning AAAA records to local
+             *          applications causes 30+ second connect delays because the
+             *          OS will attempt the IPv6 destination before falling back to
+             *          IPv4. Setting allow=false makes the resolver synthesize an
+             *          immediate empty NOERROR response for any AAAA query, which
+             *          eliminates that latency without changing A-record behaviour.
+             *          The default is false: AAAA queries are filtered until the
+             *          server confirms an IPv6 assignment via OnInformation. This
+             *          is the safer default because most VPN sessions are IPv4-only
+             *          and an unsolicited AAAA pass-through would cause client
+             *          applications to attempt unreachable IPv6 destinations.
+             *
+             * @param allow  Pass false to filter AAAA queries; true to permit them.
+             */
+            void                                            SetAllowIPv6Response(bool allow) noexcept { allow_ipv6_response_.store(allow, std::memory_order_relaxed); }
+            bool                                            IsAllowIPv6Response() const noexcept { return allow_ipv6_response_.load(std::memory_order_relaxed); }
+
+            /**
+             * @brief Returns true when the supplied DNS query is asking for AAAA records.
+             *
+             * @param packet  Raw DNS wire-format query bytes.
+             * @param length  Length of @p packet.
+             */
+            static bool                                     IsAaaaQuery(const Byte* packet, int length) noexcept;
+
+            /**
+             * @brief Builds an empty NOERROR response for the supplied AAAA query.
+             *
+             * @details Copies the question section verbatim, flips QR=1, sets RA=1,
+             *          and zeros all answer counts. Used to short-circuit AAAA
+             *          queries when IPv6 is not available end-to-end.
+             *
+             * @param packet  Original AAAA query bytes.
+             * @param length  Length of @p packet.
+             * @return Synthesised response bytes; empty vector on parse failure.
+             */
+            static ppp::vector<Byte>                        BuildAaaaBlockedResponse(const Byte* packet, int length) noexcept;
+
         private:
             void                                            TryProtocols(
                 std::shared_ptr<ppp::vector<ServerEntry> >  entries,
@@ -268,6 +310,7 @@ namespace ppp {
             bool                                            tls_verify_peer_ = true;
             ppp::vector<StunCandidate>                      stun_candidates_;
             std::atomic<std::size_t>                        stun_rotation_{ 0 };
+            std::atomic<bool>                               allow_ipv6_response_{ false }; ///< When false, AAAA queries are answered with empty NOERROR. Default false; promoted to true by OnInformation when the server assigns IPv6.
         };
 
     } // namespace dns

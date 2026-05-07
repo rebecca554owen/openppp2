@@ -311,12 +311,42 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
                 }
             }
 
+            /**
+             * @brief Resolve a friendly label for a DNS server IP by matching
+             *        against the application-level NetworkInterface labels.
+             *
+             * Labels were captured at GetDnsAddresses() time and may carry the
+             * DoH/DoT hostname (e.g. "cloudflare-dns.com (DoH)"). When no label
+             * is found we fall back to the literal IP rendering.
+             */
+            auto resolve_dns_label = [this](const boost::asio::ip::address& ip) noexcept -> ppp::string {
+                if (NULLPTR == network_interface_) {
+                    return ppp::string();
+                }
+                const std::size_t n = std::min(network_interface_->DnsAddresses.size(),
+                                               network_interface_->DnsLabels.size());
+                for (std::size_t k = 0; k < n; ++k) {
+                    if (network_interface_->DnsAddresses[k] == ip) {
+                        return network_interface_->DnsLabels[k];
+                    }
+                }
+                return ppp::string();
+            };
+
             for (std::size_t i = 0, l = ni->DnsAddresses.size(); i < l; ++i) {
                 ppp::string dns_key = "DNS Server ";
                 dns_key += stl::to_string<ppp::string>(i + 1u);
                 dns_key = ppp::PaddingRight<ppp::string>(dns_key, 22u, ' ');
                 dns_key += ": ";
-                dns_key += Ipep::ToAddressString<ppp::string>(ni->DnsAddresses[i]);
+                ppp::string label = sti.tun ? resolve_dns_label(ni->DnsAddresses[i]) : ppp::string();
+                if (!label.empty()) {
+                    dns_key += label;
+                    dns_key += " [";
+                    dns_key += Ipep::ToAddressString<ppp::string>(ni->DnsAddresses[i]);
+                    dns_key += "]";
+                } else {
+                    dns_key += Ipep::ToAddressString<ppp::string>(ni->DnsAddresses[i]);
+                }
                 lines.emplace_back(std::move(dns_key));
             }
 

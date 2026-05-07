@@ -164,14 +164,27 @@ boost::asio::ip::address PppApplication::GetNetworkAddress(const char* name, int
  * @param argv Argument vector.
  */
 void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addresses, int argc, const char* argv[]) noexcept {
+    GetDnsAddresses(addresses, NULLPTR, argc, argv);
+}
+
+void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addresses, ppp::vector<ppp::string>* labels, int argc, const char* argv[]) noexcept {
 #if defined(_WIN32)
     bool at_least_two = client_mode_;
 #else
     bool at_least_two = false;
 #endif
 
+    auto append_padding = [labels](std::size_t target_size) noexcept {
+        if (NULLPTR != labels) {
+            while (labels->size() < target_size) {
+                labels->emplace_back();
+            }
+        }
+    };
+
     ppp::string dns = ppp::GetCommandArgument("--dns", argc, argv);
     if (Ipep::ToDnsAddresses(dns, addresses, at_least_two) >= 1) {
+        append_padding(addresses.size());
         return;
     }
 
@@ -181,41 +194,95 @@ void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addr
      *        matches what ppp actually queries via DoH/DoT/UDP.
      *
      * Order: foreign first, domestic second. For each side we try in turn:
-     *   1) the first structured DnsServerEntry with a literal IP[:port] address;
-     *   2) the first UDP entry of the built-in provider registered as that name
-     *      (e.g. "cloudflare" -> 1.1.1.1, "doh.pub" -> 119.29.29.29);
-     *   3) the field treated as a literal IP.
+     *   1) the first structured DnsServerEntry; the entry's literal IP is
+     *      pushed and, when the protocol is DoH/DoT, the optional hostname
+     *      is recorded as the parallel display label;
+     *   2) the first UDP entry of the built-in provider registered as that
+     *      name (e.g. "cloudflare" -> 1.1.1.1, "doh.pub" -> 119.29.29.29) -
+     *      the corresponding DoH/DoT hostname (when present in the same
+     *      provider entry list) is recorded as the display label;
+     *   3) the field treated as a literal IP (no label).
      * Falls back to the legacy 8.8.8.8 / 8.8.4.4 placeholders only when
      * nothing useful can be derived from configuration.
      */
-    auto pick_first_ip = [](const ppp::string& provider_or_ip,
-                            const ppp::vector<AppConfiguration::DnsServerEntry>& entries,
-                            ppp::vector<boost::asio::ip::address>& out) noexcept -> bool {
-        auto try_push = [&out](const ppp::string& host) noexcept -> bool {
-            if (host.empty()) {
-                return false;
+    auto try_push_address = [&addresses, labels, &append_padding](const boost::asio::ip::address& addr, const ppp::string& label) noexcept -> bool {
+        if (addr.is_unspecified()) {
+            return false;
+        }
+        for (const boost::asio::ip::address& existing : addresses) {
+            if (existing == addr) {
+                return false; // dedupe
             }
-            boost::system::error_code ec;
-            boost::asio::ip::address addr = ppp::StringToAddress(host.data(), ec);
-            if (ec || addr.is_unspecified()) {
-                return false;
-            }
-            for (const boost::asio::ip::address& existing : out) {
-                if (existing == addr) {
-                    return false; // dedupe
-                }
-            }
-            out.emplace_back(addr);
-            return true;
-        };
+        }
+        addresses.emplace_back(addr);
+        if (NULLPTR != labels) {
+            append_padding(addresses.size() - 1u);
+            labels->emplace_back(label);
+        }
+        return true;
+    };
 
+    auto host_to_address = [](const ppp::string& host) noexcept -> boost::asio::ip::address {
+        if (host.empty()) {
+            return boost::asio::ip::address();
+        }
+        boost::system::error_code ec;
+        boost::asio::ip::address addr = ppp::StringToAddress(host.data(), ec);
+        if (ec) {
+            return boost::asio::ip::address();
+        }
+        return addr;
+    };
+
+    auto build_protocol_label = [](ppp::dns::Protocol protocol, const ppp::string& hostname) noexcept -> ppp::string {
+        if (hostname.empty()) {
+            return ppp::string();
+        }
+        const char* tag = NULLPTR;
+        if (protocol == ppp::dns::Protocol::DoH) {
+            tag = " (DoH)";
+        } else if (protocol == ppp::dns::Protocol::DoT) {
+            tag = " (DoT)";
+        }
+        if (NULLPTR == tag) {
+            return ppp::string();
+        }
+        ppp::string out = hostname;
+        out += tag;
+        return out;
+    };
+
+    auto pick_first = [&](const ppp::string& provider_or_ip,
+                          const ppp::vector<AppConfiguration::DnsServerEntry>& entries) noexcept -> bool {
         for (const auto& e : entries) {
             if (e.address.empty()) {
                 continue;
             }
             ppp::string host;
             int port = 0;
-            if (Ipep::ParseEndPoint(e.address, host, port) && try_push(host)) {
+            if (!Ipep::ParseEndPoint(e.address, host, port)) {
+                continue;
+            }
+            boost::asio::ip::address addr = host_to_address(host);
+            if (addr.is_unspecified()) {
+                continue;
+            }
+
+            ppp::dns::Protocol proto = ppp::dns::Protocol::UDP;
+            ppp::string proto_lower = e.protocol;
+            for (char& c : proto_lower) {
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            }
+            if (proto_lower == "doh") {
+                proto = ppp::dns::Protocol::DoH;
+            } else if (proto_lower == "dot" || proto_lower == "doq") {
+                proto = ppp::dns::Protocol::DoT;
+            } else if (proto_lower == "tcp") {
+                proto = ppp::dns::Protocol::TCP;
+            }
+
+            ppp::string label = build_protocol_label(proto, e.hostname);
+            if (try_push_address(addr, label)) {
                 return true;
             }
         }
@@ -226,28 +293,38 @@ void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addr
 
         const ppp::vector<ppp::dns::ServerEntry>* provider = ppp::dns::DnsResolver::GetProvider(provider_or_ip);
         if (NULLPTR != provider) {
+            ppp::string preferred_label;
+            for (const ppp::dns::ServerEntry& se : *provider) {
+                if ((se.protocol == ppp::dns::Protocol::DoH || se.protocol == ppp::dns::Protocol::DoT) &&
+                    !se.hostname.empty() && preferred_label.empty()) {
+                    preferred_label = build_protocol_label(se.protocol, se.hostname);
+                }
+            }
+
             for (const ppp::dns::ServerEntry& se : *provider) {
                 if (se.protocol != ppp::dns::Protocol::UDP || se.address.empty()) {
                     continue;
                 }
                 ppp::string host;
                 int port = 0;
-                if (Ipep::ParseEndPoint(se.address, host, port) && try_push(host)) {
+                if (!Ipep::ParseEndPoint(se.address, host, port)) {
+                    continue;
+                }
+                boost::asio::ip::address addr = host_to_address(host);
+                if (try_push_address(addr, preferred_label)) {
                     return true;
                 }
             }
         }
 
-        return try_push(provider_or_ip);
+        return try_push_address(host_to_address(provider_or_ip), ppp::string());
     };
 
     if (NULLPTR != configuration_) {
-        pick_first_ip(configuration_->dns.servers.foreign,
-                      configuration_->dns.servers.foreign_entries,
-                      addresses);
-        pick_first_ip(configuration_->dns.servers.domestic,
-                      configuration_->dns.servers.domestic_entries,
-                      addresses);
+        pick_first(configuration_->dns.servers.foreign,
+                   configuration_->dns.servers.foreign_entries);
+        pick_first(configuration_->dns.servers.domestic,
+                   configuration_->dns.servers.domestic_entries);
     }
 
     boost::system::error_code ec;
@@ -257,6 +334,7 @@ void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addr
     if (at_least_two && addresses.size() < 2) {
         addresses.emplace_back(ppp::StringToAddress(PPP_PREFERRED_DNS_SERVER_2, ec));
     }
+    append_padding(addresses.size());
 }
 
 /**
@@ -276,7 +354,7 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         ni->Nic = ppp::RTrim(ppp::LTrim(ppp::GetCommandArgument("--nic", argc, argv)));
         ni->BlockQUIC = ppp::ToBoolean(ppp::GetCommandArgument("--block-quic", argc, argv).data());
 
-        GetDnsAddresses(ni->DnsAddresses, argc, argv);
+        GetDnsAddresses(ni->DnsAddresses, &ni->DnsLabels, argc, argv);
         if (!ni->DnsAddresses.empty()) {
             auto dns_servers = ppp::net::asio::vdns::servers;
             dns_servers->clear();

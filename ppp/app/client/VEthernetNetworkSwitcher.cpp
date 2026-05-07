@@ -1045,6 +1045,18 @@ namespace ppp {
                 }
 
                 bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
+
+                /**
+                 * @brief Tell the DNS resolver whether AAAA records may safely be
+                 *        propagated to local applications. We allow them only when
+                 *        the server has actually assigned a usable IPv6 address;
+                 *        otherwise AAAA queries are answered with empty NOERROR to
+                 *        avoid 30+ second IPv6-first connect stalls.
+                 */
+                if (NULLPTR != dns_resolver_) {
+                    dns_resolver_->SetAllowIPv6Response(valid_ipv6_assignment);
+                }
+
                 if (!valid_ipv6_assignment && ipv6_applied_) {
                     RestoreAssignedIPv6();
                 }
@@ -1065,6 +1077,14 @@ namespace ppp {
                 // Propagate ClientExitIP for ECS on mobile platforms as well.
                 if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
                     dns_resolver_->SetExitIP(extensions.ClientExitIP);
+                }
+
+                // Mirror desktop behaviour: enable AAAA propagation only when the
+                // server has assigned a usable IPv6 address. The mobile data plane
+                // does not currently apply the assignment, but the gating policy
+                // should remain consistent so AAAA queries do not stall connect().
+                if (NULLPTR != dns_resolver_) {
+                    dns_resolver_->SetAllowIPv6Response(HasManagedIPv6Assignment(extensions));
                 }
 #endif
 
@@ -3213,6 +3233,28 @@ namespace ppp {
                     (int)qs.mType,
                     destinationIP.to_string().c_str());
 #endif
+
+                /**
+                 * @brief Short-circuit AAAA queries when the VPN session has no
+                 *        managed IPv6 assignment. Returning a synthetic empty
+                 *        NOERROR response immediately avoids a 30+ second
+                 *        connect stall when the OS resolver tries an IPv6
+                 *        destination it cannot reach. Behaviour is gated by
+                 *        DnsResolver::SetAllowIPv6Response() which is driven
+                 *        from the server's information envelope.
+                 */
+                if (qs.mType == ::dns::RecordType::kAAAA && NULLPTR != dns_resolver_ && !dns_resolver_->IsAllowIPv6Response()) {
+                    ppp::vector<Byte> synthesized = ppp::dns::DnsResolver::BuildAaaaBlockedResponse(
+                        static_cast<const Byte*>(messages->Buffer.get()),
+                        messages->Length);
+                    if (!synthesized.empty()) {
+                        ppp::telemetry::Count("dns.redirect.aaaa_blocked", 1);
+                        return DatagramOutput(
+                            IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source),
+                            boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT),
+                            synthesized.data(), static_cast<int>(synthesized.size()), false);
+                    }
+                }
 
                 if (!ppp::net::asio::vdns::QueryCache2(qs.mName.data(), m, qs.mType == ::dns::RecordType::kA ?
                     ppp::net::asio::vdns::AddressFamily::kA : ppp::net::asio::vdns::AddressFamily::kAAAA).empty()) {

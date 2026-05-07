@@ -553,6 +553,88 @@ namespace ppp {
         }
 
         /* ========================================================================
+         * AAAA short-circuit helpers
+         *
+         * Walk the DNS query header + question section to identify AAAA queries
+         * (QTYPE == 28) and synthesize an empty NOERROR response that mirrors
+         * the original question. This lets callers avoid an upstream round-trip
+         * when the local data plane has no IPv6 connectivity.
+         * ======================================================================== */
+
+        /**
+         * @brief Parses the question section to locate QTYPE/QCLASS offsets.
+         * @return Offset just past QTYPE+QCLASS (i.e. end of question section), or 0 on failure.
+         */
+        static int LocateQuestionEnd(const Byte* packet, int length) noexcept {
+            if (NULLPTR == packet || length < 12) {
+                return 0;
+            }
+            int idx = 12;
+            while (idx < length) {
+                Byte label_len = packet[idx];
+                if (label_len == 0) {
+                    idx += 1;
+                    if (idx + 4 > length) {
+                        return 0;
+                    }
+                    return idx + 4; // QTYPE(2) + QCLASS(2)
+                }
+                if ((label_len & 0xC0) != 0) {
+                    // Compression pointer in question section is unusual; not supported here.
+                    return 0;
+                }
+                idx += 1 + label_len;
+                if (idx > length) {
+                    return 0;
+                }
+            }
+            return 0;
+        }
+
+        bool DnsResolver::IsAaaaQuery(const Byte* packet, int length) noexcept {
+            int qend = LocateQuestionEnd(packet, length);
+            if (qend == 0) {
+                return false;
+            }
+            // QDCOUNT must equal 1 to safely interpret a single question.
+            int qdcount = (static_cast<int>(packet[4]) << 8) | static_cast<int>(packet[5]);
+            if (qdcount != 1) {
+                return false;
+            }
+            // QR bit must be 0 (it is a query, not a response).
+            if ((packet[2] & 0x80) != 0) {
+                return false;
+            }
+            int qtype_off = qend - 4;
+            int qtype = (static_cast<int>(packet[qtype_off]) << 8) | static_cast<int>(packet[qtype_off + 1]);
+            return qtype == 28; // AAAA
+        }
+
+        ppp::vector<Byte> DnsResolver::BuildAaaaBlockedResponse(const Byte* packet, int length) noexcept {
+            int qend = LocateQuestionEnd(packet, length);
+            if (qend == 0) {
+                return ppp::vector<Byte>();
+            }
+
+            ppp::vector<Byte> response(static_cast<std::size_t>(qend));
+            std::memcpy(response.data(), packet, static_cast<std::size_t>(qend));
+
+            // Header rewrite: QR=1, AA=0, TC=0, RA=1, Z=0, RCODE=0 (NOERROR).
+            // Preserve the original ID and the RD bit (bit 0 of byte 2).
+            Byte rd = static_cast<Byte>(response[2] & 0x01);
+            response[2] = static_cast<Byte>(0x80 | rd); // QR=1 + RD copied
+            response[3] = 0x80;                          // RA=1, Z=0, RCODE=NOERROR
+
+            // Counts: QDCOUNT=1 (echoed), ANCOUNT=NSCOUNT=ARCOUNT=0.
+            response[4] = 0; response[5] = 1;
+            response[6] = 0; response[7] = 0;
+            response[8] = 0; response[9] = 0;
+            response[10] = 0; response[11] = 0;
+
+            return response;
+        }
+
+        /* ========================================================================
          * ResolveAsync — single-provider, protocol-cascading resolution
          *
          * When ECS is enabled and the query is domestic, the ECS OPT RR is
