@@ -6,6 +6,7 @@
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
+#include <ppp/dns/DnsResolver.h>
 
 namespace ppp::app {
 
@@ -54,14 +55,20 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
         }
     }
 
+    /**
+     * @brief Publish configuration before constructing the network interface so
+     *        downstream helpers (e.g. GetDnsAddresses) can derive defaults
+     *        from the loaded dns.servers settings.
+     */
+    configuration_path_ = path;
+    configuration_ = configuration;
+
     std::shared_ptr<NetworkInterface> network_interface = GetNetworkInterface(argc, argv);
     if (NULLPTR == network_interface) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
         return -1;
     }
 
-    configuration_path_ = path;
-    configuration_ = configuration;
     network_interface_ = network_interface;
 
     ppp::net::asio::vdns::ttl = configuration->udp.dns.ttl;
@@ -164,9 +171,90 @@ void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addr
 #endif
 
     ppp::string dns = ppp::GetCommandArgument("--dns", argc, argv);
-    if (Ipep::ToDnsAddresses(dns, addresses, at_least_two) < 1) {
-        boost::system::error_code ec;
+    if (Ipep::ToDnsAddresses(dns, addresses, at_least_two) >= 1) {
+        return;
+    }
+
+    /**
+     * @brief Derive the OS-pushed DNS from the configured upstream providers
+     *        so the value displayed in TUN status (and used by leak/fallback)
+     *        matches what ppp actually queries via DoH/DoT/UDP.
+     *
+     * Order: foreign first, domestic second. For each side we try in turn:
+     *   1) the first structured DnsServerEntry with a literal IP[:port] address;
+     *   2) the first UDP entry of the built-in provider registered as that name
+     *      (e.g. "cloudflare" -> 1.1.1.1, "doh.pub" -> 119.29.29.29);
+     *   3) the field treated as a literal IP.
+     * Falls back to the legacy 8.8.8.8 / 8.8.4.4 placeholders only when
+     * nothing useful can be derived from configuration.
+     */
+    auto pick_first_ip = [](const ppp::string& provider_or_ip,
+                            const ppp::vector<AppConfiguration::DnsServerEntry>& entries,
+                            ppp::vector<boost::asio::ip::address>& out) noexcept -> bool {
+        auto try_push = [&out](const ppp::string& host) noexcept -> bool {
+            if (host.empty()) {
+                return false;
+            }
+            boost::system::error_code ec;
+            boost::asio::ip::address addr = ppp::StringToAddress(host.data(), ec);
+            if (ec || addr.is_unspecified()) {
+                return false;
+            }
+            for (const boost::asio::ip::address& existing : out) {
+                if (existing == addr) {
+                    return false; // dedupe
+                }
+            }
+            out.emplace_back(addr);
+            return true;
+        };
+
+        for (const auto& e : entries) {
+            if (e.address.empty()) {
+                continue;
+            }
+            ppp::string host;
+            int port = 0;
+            if (Ipep::ParseEndPoint(e.address, host, port) && try_push(host)) {
+                return true;
+            }
+        }
+
+        if (provider_or_ip.empty()) {
+            return false;
+        }
+
+        const ppp::vector<ppp::dns::ServerEntry>* provider = ppp::dns::DnsResolver::GetProvider(provider_or_ip);
+        if (NULLPTR != provider) {
+            for (const ppp::dns::ServerEntry& se : *provider) {
+                if (se.protocol != ppp::dns::Protocol::UDP || se.address.empty()) {
+                    continue;
+                }
+                ppp::string host;
+                int port = 0;
+                if (Ipep::ParseEndPoint(se.address, host, port) && try_push(host)) {
+                    return true;
+                }
+            }
+        }
+
+        return try_push(provider_or_ip);
+    };
+
+    if (NULLPTR != configuration_) {
+        pick_first_ip(configuration_->dns.servers.foreign,
+                      configuration_->dns.servers.foreign_entries,
+                      addresses);
+        pick_first_ip(configuration_->dns.servers.domestic,
+                      configuration_->dns.servers.domestic_entries,
+                      addresses);
+    }
+
+    boost::system::error_code ec;
+    if (addresses.empty()) {
         addresses.emplace_back(ppp::StringToAddress(PPP_PREFERRED_DNS_SERVER_1, ec));
+    }
+    if (at_least_two && addresses.size() < 2) {
         addresses.emplace_back(ppp::StringToAddress(PPP_PREFERRED_DNS_SERVER_2, ec));
     }
 }
