@@ -911,6 +911,19 @@ namespace ppp {
                  * @brief Restores the original IPv6 configuration if it was previously modified.
                  */
                 void                                                                RestoreAssignedIPv6() noexcept;
+
+                /**
+                 * @brief Applies the server-assigned IPv4 address to the TAP interface.
+                 *
+                 * @param extensions  Extended information containing IPv4 assignment parameters.
+                 * @return true if the IPv4 address was applied; false otherwise.
+                 */
+                bool                                                                ApplyAssignedIPv4(const VirtualEthernetInformationExtensions& extensions) noexcept;
+
+                /**
+                 * @brief Restores the original IPv4 configuration if it was previously modified.
+                 */
+                void                                                                RestoreAssignedIPv4() noexcept;
 #endif
 
             private:
@@ -1050,6 +1063,15 @@ namespace ppp {
                  *          unspecified address; callers must check is_v6() before use.
                  */
                 boost::asio::ip::address                                            last_assigned_ipv6_;
+
+                /** @brief Whether a server-assigned IPv4 configuration is currently applied to the TAP interface. */
+                bool                                                                ipv4_applied_ = false;
+                /** @brief Server-assigned IPv4 address currently applied to the TAP interface. */
+                boost::asio::ip::address                                            assigned_ipv4_address_;
+                /** @brief Server-assigned IPv4 gateway currently applied to the TAP interface. */
+                boost::asio::ip::address                                            assigned_ipv4_gateway_;
+                /** @brief Server-assigned IPv4 mask currently applied to the TAP interface. */
+                boost::asio::ip::address                                            assigned_ipv4_mask_;
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 /** @brief Mutex guarding the default-route guard worker. */

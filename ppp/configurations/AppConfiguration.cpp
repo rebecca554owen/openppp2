@@ -283,6 +283,10 @@ namespace ppp {
             config.server.ipv6.lease_time = 300;
             config.server.ipv6.static_addresses.clear();
 
+            config.server.ipv4_pool.configured = false;
+            config.server.ipv4_pool.network = "";
+            config.server.ipv4_pool.mask = "";
+
             config.client.mappings.clear();
             config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
             config.client.server = "";
@@ -373,6 +377,8 @@ namespace ppp {
                     &config.server.ipv6.gateway,
                     &config.server.ipv6.dns1,
                     &config.server.ipv6.dns2,
+                    &config.server.ipv4_pool.network,
+                    &config.server.ipv4_pool.mask,
                     &config.client.guid,
                     &config.client.server,
                     &config.client.server_proxy,
@@ -1457,6 +1463,16 @@ namespace ppp {
                 }
             }
 
+            // Parse server.ipv4-pool: presence alone enables IPv4 assignment.
+            {
+                const Json::Value& ipv4_pool_json = json["server"]["ipv4-pool"];
+                if (ipv4_pool_json.isObject()) {
+                    config.server.ipv4_pool.configured = true;
+                    config.server.ipv4_pool.network = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(ipv4_pool_json["network"])));
+                    config.server.ipv4_pool.mask    = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(ipv4_pool_json["mask"])));
+                }
+            }
+
             LoadAllMappings(config, json["client"]["mappings"]);
             LoadAllRoutes(config.client.routes, json["client"]["routes"]);
 
@@ -1742,6 +1758,12 @@ namespace ppp {
                 static_addresses[kv.first] = kv.second;
             }
             server["ipv6"]["static-addresses"] = static_addresses;
+            if (config.server.ipv4_pool.configured) {
+                Json::Value ipv4_pool;
+                ipv4_pool["network"] = config.server.ipv4_pool.network;
+                ipv4_pool["mask"]    = config.server.ipv4_pool.mask;
+                server["ipv4-pool"] = ipv4_pool;
+            }
             root["server"] = server;
 
             // Set client structure

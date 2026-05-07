@@ -725,6 +725,9 @@ namespace ppp {
 
             /** @brief Releases objects, packets, and timeout handlers. */
             void VEthernetNetworkSwitcher::Finalize() noexcept {
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                RestoreAssignedIPv4();
+#endif
                 ReleaseAllObjects();
                 ReleaseAllPackets();
                 ReleaseAllTimeouts();
@@ -1012,6 +1015,141 @@ namespace ppp {
                 ipv6_state_.Clear();
             }
 
+            /** @brief Applies the server-assigned IPv4 address to the TAP interface. */
+            bool VEthernetNetworkSwitcher::ApplyAssignedIPv4(const VirtualEthernetInformationExtensions& extensions) noexcept {
+                if (ipv4_applied_) {
+                    return false;
+                }
+
+                const auto& ipv4 = extensions.ClientIPv4Assign;
+                if (!ipv4.enabled || !ipv4.accepted) {
+                    return false;
+                }
+
+                if (ipv4.address.empty() || ipv4.mask.empty()) {
+                    return false;
+                }
+
+                auto tun_ni = tun_ni_;
+                if (NULLPTR == tun_ni || tun_ni->Name.empty()) {
+                    return false;
+                }
+
+                boost::system::error_code ec;
+                boost::asio::ip::address addr = StringToAddress(ipv4.address.data(), ec);
+                if (ec || !addr.is_v4()) {
+                    return false;
+                }
+
+                ec.clear();
+                boost::asio::ip::address mask = StringToAddress(ipv4.mask.data(), ec);
+                if (ec || !mask.is_v4()) {
+                    return false;
+                }
+
+                ppp::telemetry::SpanScope span("client.ipv4.apply");
+                struct ScopedIPv4ApplyHistogram final {
+                    std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                    ~ScopedIPv4ApplyHistogram() noexcept {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                        ppp::telemetry::Histogram("client.ipv4.apply.us", elapsed);
+                    }
+                } ipv4_apply_histogram;
+
+                bool applied = false;
+#if defined(_LINUX)
+                applied = ppp::tap::TapLinux::SetIPAddress(tun_ni->Name, ipv4.address, ipv4.mask);
+#elif defined(_MACOS)
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof(cmd),
+                        "ifconfig %s inet %s %s netmask %s up > /dev/null 2>&1",
+                        tun_ni->Name.data(), ipv4.address.data(), ipv4.gateway.data(), ipv4.mask.data());
+                    applied = system(cmd) == 0;
+                }
+#elif defined(_WIN32)
+                {
+                    uint32_t nip = htonl(addr.to_v4().to_uint());
+                    uint32_t nmask = htonl(mask.to_v4().to_uint());
+                    ec.clear();
+                    boost::asio::ip::address gw = StringToAddress(ipv4.gateway.data(), ec);
+                    uint32_t ngw = (!ec && gw.is_v4()) ? htonl(gw.to_v4().to_uint()) : IPEndPoint::NoneAddress;
+                    applied = ppp::tap::TapWindows::SetAddresses(tun_ni->Index, nip, nmask, ngw);
+                }
+#endif
+
+                if (applied) {
+                    ipv4_applied_ = true;
+                    assigned_ipv4_address_ = addr;
+                    assigned_ipv4_mask_ = mask;
+
+                    ec.clear();
+                    boost::asio::ip::address gw = StringToAddress(ipv4.gateway.data(), ec);
+                    if (!ec && gw.is_v4()) {
+                        assigned_ipv4_gateway_ = gw;
+                    }
+
+                    ppp::telemetry::Log(Level::kDebug, "client", "IPv4 applied: %s/%s gw=%s",
+                        ipv4.address.c_str(), ipv4.mask.c_str(), ipv4.gateway.c_str());
+                    ppp::telemetry::Count("client.ipv4.apply", 1);
+                }
+
+                return applied;
+            }
+
+            /** @brief Restores the original IPv4 configuration on the TAP interface. */
+            void VEthernetNetworkSwitcher::RestoreAssignedIPv4() noexcept {
+                ppp::telemetry::SpanScope span("client.ipv4.restore");
+                if (!ipv4_applied_) {
+                    return;
+                }
+
+                ppp::telemetry::Log(Level::kDebug, "client", "IPv4 removed");
+
+                auto tun_ni = tun_ni_;
+                if (NULLPTR == tun_ni || tun_ni->Name.empty()) {
+                    ipv4_applied_ = false;
+                    assigned_ipv4_address_ = boost::asio::ip::address();
+                    assigned_ipv4_gateway_ = boost::asio::ip::address();
+                    assigned_ipv4_mask_ = boost::asio::ip::address();
+                    return;
+                }
+
+                // Restore the original TAP-created IPv4 address captured during Open().
+                ppp::string orig_addr(tun_ni->IPAddress.to_string().c_str());
+                ppp::string orig_mask(tun_ni->SubmaskAddress.to_string().c_str());
+#if defined(_LINUX)
+                if (!orig_addr.empty() && !orig_mask.empty()) {
+                    ppp::tap::TapLinux::SetIPAddress(tun_ni->Name, orig_addr, orig_mask);
+                }
+#elif defined(_MACOS)
+                if (!orig_addr.empty() && !orig_mask.empty()) {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof(cmd),
+                        "ifconfig %s inet %s netmask %s up > /dev/null 2>&1",
+                        tun_ni->Name.data(), orig_addr.data(), orig_mask.data());
+                    system(cmd);
+                }
+#elif defined(_WIN32)
+                if (!orig_addr.empty() && !orig_mask.empty()) {
+                    uint32_t nip = htonl(tun_ni->IPAddress.to_v4().to_uint());
+                    uint32_t nmask = htonl(tun_ni->SubmaskAddress.to_v4().to_uint());
+                    uint32_t ngw = tun_ni->GatewayServer.is_v4() ? htonl(tun_ni->GatewayServer.to_v4().to_uint()) : IPEndPoint::NoneAddress;
+                    ppp::tap::TapWindows::SetAddresses(tun_ni->Index, nip, nmask, ngw);
+                }
+#endif
+
+                ipv4_applied_ = false;
+                assigned_ipv4_address_ = boost::asio::ip::address();
+                assigned_ipv4_gateway_ = boost::asio::ip::address();
+                assigned_ipv4_mask_ = boost::asio::ip::address();
+
+                auto elapsed = 0;
+                ppp::telemetry::Histogram("client.ipv4.restore.us", elapsed);
+                ppp::telemetry::Count("client.ipv4.restore", 1);
+            }
+
 #endif
 
             /** @brief Adapts base information callback to extension-aware overload. */
@@ -1072,6 +1210,19 @@ namespace ppp {
                         ApplyAssignedIPv6(extensions);
                     }
                 }
+
+                // Apply server-assigned IPv4 address to TAP interface.
+                {
+                    const auto& ipv4 = extensions.ClientIPv4Assign;
+                    if (ipv4.enabled && ipv4.accepted) {
+                        if (!ipv4_applied_) {
+                            ApplyAssignedIPv4(extensions);
+                        }
+                    }
+                    elif (ipv4_applied_) {
+                        RestoreAssignedIPv4();
+                    }
+                }
 #else
                 information_extensions_ = extensions;
 
@@ -1088,6 +1239,25 @@ namespace ppp {
                     dns_resolver_->SetAllowIPv6Response(HasManagedIPv6Assignment(extensions));
                 }
 #endif
+
+                // Parse and log IPv4 assignment response from server.
+                // The assignment is stored in information_extensions_ (already saved above)
+                // and logged here for telemetry.  TAP application of the assigned IPv4
+                // address is intentionally deferred to a future phase.
+                if (extensions.ClientIPv4Assign.enabled) {
+                    const auto& ipv4 = extensions.ClientIPv4Assign;
+                    if (ipv4.accepted) {
+                        ppp::telemetry::Count("client.ipv4.assigned", 1);
+                        ppp::telemetry::Log(Level::kInfo, "client", "ipv4 assigned: %s/%s gw=%s (mode=%s conflict=%d)",
+                            ipv4.address.c_str(), ipv4.mask.c_str(), ipv4.gateway.c_str(),
+                            ipv4.mode.c_str(), static_cast<int>(ipv4.conflict));
+                    }
+                    else {
+                        ppp::telemetry::Count("client.ipv4.rejected", 1);
+                        ppp::telemetry::Log(Level::kInfo, "client", "ipv4 request rejected: reason=%s mode=%s",
+                            ipv4.reason.c_str(), ipv4.mode.c_str());
+                    }
+                }
 
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_;
                 if (NULLPTR != qos) {

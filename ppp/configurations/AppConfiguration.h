@@ -191,6 +191,20 @@ namespace ppp {
                     int                                                     lease_time;     ///< IPv6 address lease duration in seconds.
                     ppp::map<ppp::string, ppp::string>                      static_addresses; ///< Map of client GUID to statically assigned IPv6 address string.
                 }                                                           ipv6;
+                /**
+                 * @brief Server-side IPv4 address pool configuration.
+                 *
+                 * When present in the JSON configuration file, the server
+                 * enables automatic IPv4 address assignment for connected
+                 * clients.  The @c configured flag is set to true whenever
+                 * the @c server.ipv4-pool JSON object exists, even if
+                 * individual fields are missing.
+                 */
+                struct {
+                    bool                                            configured;  ///< True when @c server.ipv4-pool was present in the JSON config.
+                    ppp::string                                     network;     ///< IPv4 network address (e.g. "10.0.0.0").
+                    ppp::string                                     mask;        ///< IPv4 subnet mask (e.g. "255.255.255.0").
+                }                                                           ipv4_pool;
             }                                                               server;         ///< Server-mode specific parameters.
             struct {
                 ppp::string                                                 guid;           ///< Client GUID string used for authentication and session tracking.

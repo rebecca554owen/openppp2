@@ -42,6 +42,7 @@
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
+#include <ppp/app/server/IPv4LeasePool.h>
 #include <ppp/tap/ITap.h>
 
 namespace ppp {
@@ -596,11 +597,11 @@ namespace ppp {
                  */
                 bool                                                    TryGetAssignedIPv6Extensions(const Int128& session_id, VirtualEthernetInformationExtensions& extensions) noexcept;
                 /**
-                 * @brief Processes an IPv6 address request and fills the response structure.
-                 * @param session_id Session that sent the request.
-                 * @param request    Client-supplied request extensions.
-                 * @param response   Filled with the server's response extensions.
-                 * @return True if the request is processed (accepted or rejected).
+                 * @brief Updates stored client IPv6 request and recomputes assignment.
+                 * @param session_id Session identifier.
+                 * @param request Client-requested extension fields.
+                 * @param response Receives updated server response extension fields.
+                 * @return true when response contains any extension value.
                  */
                 bool                                                    UpdateIPv6Request(const Int128& session_id, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept;
                 /**
@@ -613,6 +614,24 @@ namespace ppp {
                  * @param session_id Session whose lease should be revoked.
                  */
                 void                                                    RevokeIPv6Lease(const Int128& session_id) noexcept;
+                /**
+                 * @brief Releases the IPv4 lease held by the specified session.
+                 * @param session_id Session whose IPv4 lease should be released.
+                 */
+                void                                                    DeleteIPv4Lease(const Int128& session_id) noexcept;
+                /**
+                 * @brief Processes a client IPv4 address request and fills the response.
+                 *
+                 * @details If the pool is configured, allocates (auto or manual) and
+                 *          fills the ClientIPv4Assignment in @p response.  If the pool
+                 *          is not configured, this is a no-op and returns false.
+                 *
+                 * @param session_id Session that sent the request.
+                 * @param request    Client-supplied IPv4 request extensions.
+                 * @param response   Filled with the server's IPv4 assignment response.
+                 * @return true if an IPv4 assignment was processed (pool is configured).
+                 */
+                bool                                                    UpdateIPv4Request(const Int128& session_id, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept;
                 /**
                  * @brief Adds an IPv6 exchanger mapping derived from extension data.
                  * @param session_id Session identifier.
@@ -798,6 +817,7 @@ namespace ppp {
                 std::shared_ptr<Byte>                                   static_echo_buffers_;           ///< Receive buffer for static-echo socket.
                 boost::asio::ip::udp::endpoint                          static_echo_source_ep_;         ///< Most-recently-received static-echo source EP.
                 VirtualEthernetStaticEchoAllocatedTable                 static_echo_allocateds_;        ///< Active static-echo allocation slots.
+                IPv4LeasePool                                           ipv4_pool_;                     ///< IPv4 address lease pool for automatic/manual client assignment.
 
                 std::shared_ptr<boost::asio::ip::tcp::acceptor>         acceptors_[NetworkAcceptorCategories_Max]; ///< One acceptor per category.
             };

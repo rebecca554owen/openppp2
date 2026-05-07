@@ -17,11 +17,11 @@ namespace ppp {
             /**
              * @brief Contains traffic quota and expiration metadata for a virtual ethernet session.
              */
-            struct  
+            struct
 #if defined(__GNUC__) || defined(__clang__)
-                __attribute__((packed)) 
+                __attribute__((packed))
 #endif
-            VirtualEthernetInformation 
+            VirtualEthernetInformation
             {
             public:
                 /** @brief Maximum QoS throughput in Kbps units; 0 means unlimited. */
@@ -68,6 +68,101 @@ namespace ppp {
                 static std::shared_ptr<VirtualEthernetInformation>  FromJson(const Json::Value& json) noexcept;
             };
 #pragma pack(pop)
+
+            /**
+             * @brief IPv4 address request from client to server.
+             *
+             * Sent by the client during handshake to indicate whether it
+             * wants automatic IPv4 assignment ("auto") or has a manual
+             * preference ("manual") with a specific address/gateway/mask.
+             *
+             * Wire-format JSON (kebab-case):
+             * @code
+             * {
+             *   "client-ipv4-request": {
+             *     "mode": "auto",
+             *     "address": "10.0.0.2",
+             *     "gateway": "10.0.0.1",
+             *     "mask": "255.255.255.252"
+             *   }
+             * }
+             * @endcode
+             *
+             * Backward compatibility: when the @c client-ipv4-request key is
+             * absent from the handshake JSON, @c enabled remains false.
+             */
+            struct ClientIPv4Request {
+                bool        enabled = false;  ///< True when the client sends this request.
+                ppp::string mode;             ///< "auto" or "manual".
+                ppp::string address;          ///< Requested IPv4 address (manual mode only).
+                ppp::string gateway;          ///< Requested gateway (manual mode only).
+                ppp::string mask;             ///< Requested subnet mask (manual mode only).
+
+                /** @brief Resets all fields to defaults. */
+                void                                                Clear() noexcept;
+                /** @brief Returns true when any field is populated beyond defaults. */
+                bool                                                HasAny() const noexcept;
+                /** @brief Serializes into a JSON value object. */
+                void                                                ToJson(Json::Value& json) const noexcept;
+                /** @brief Serializes into compact JSON text. */
+                ppp::string                                         ToJson() const noexcept;
+                /** @brief Deserializes from JSON text. */
+                static bool                                         FromJson(ClientIPv4Request& value, const ppp::string& json) noexcept;
+                /** @brief Deserializes from a JSON value object. */
+                static bool                                         FromJson(ClientIPv4Request& value, const Json::Value& json) noexcept;
+            };
+
+            /**
+             * @brief IPv4 address assignment response from server to client.
+             *
+             * Returned by the server in the handshake response to indicate
+             * the outcome of the IPv4 address allocation.  The client must
+             * use the @c address / @c gateway / @c mask from this response
+             * when @c accepted is true.
+             *
+             * Wire-format JSON (kebab-case):
+             * @code
+             * {
+             *   "client-ipv4": {
+             *     "enabled": true,
+             *     "accepted": true,
+             *     "conflict": false,
+             *     "mode": "auto",
+             *     "address": "10.0.0.2",
+             *     "gateway": "10.0.0.1",
+             *     "mask": "255.255.255.0"
+             *   }
+             * }
+             * @endcode
+             *
+             * Backward compatibility: when the @c client-ipv4 key is absent,
+             * @c enabled defaults to false and the client preserves legacy
+             * IPv4 behavior.
+             */
+            struct ClientIPv4Assignment {
+                bool        enabled = false;   ///< True when server processed an IPv4 request.
+                bool        accepted = false;  ///< True when the assigned address is accepted.
+                bool        conflict = false;  ///< True when the requested address conflicted.
+                ppp::string mode;              ///< "auto" or "manual".
+                ppp::string reason;            ///< "conflict", "pool-exhausted", "pool-unavailable", or empty.
+                ppp::string requested_address; ///< Original address requested by the client (kebab-case: "requested-address").
+                ppp::string address;           ///< Assigned IPv4 address.
+                ppp::string gateway;           ///< Assigned gateway.
+                ppp::string mask;              ///< Assigned subnet mask.
+
+                /** @brief Resets all fields to defaults. */
+                void                                                Clear() noexcept;
+                /** @brief Returns true when any field is populated beyond defaults. */
+                bool                                                HasAny() const noexcept;
+                /** @brief Serializes into a JSON value object. */
+                void                                                ToJson(Json::Value& json) const noexcept;
+                /** @brief Serializes into compact JSON text. */
+                ppp::string                                         ToJson() const noexcept;
+                /** @brief Deserializes from JSON text. */
+                static bool                                         FromJson(ClientIPv4Assignment& value, const ppp::string& json) noexcept;
+                /** @brief Deserializes from a JSON value object. */
+                static bool                                         FromJson(ClientIPv4Assignment& value, const Json::Value& json) noexcept;
+            };
 
             /**
              * @brief Holds optional IPv6 assignment and status extensions for a session.
@@ -127,6 +222,25 @@ namespace ppp {
                  */
                 boost::asio::ip::address                            ClientExitIP;
 
+                /** @brief Client IPv4 address request sent to the server.
+                 *
+                 * Populated by the client during handshake to request either
+                 * automatic ("auto") or manual ("manual") IPv4 assignment.
+                 * Transmitted inside the INFORMATION envelope as JSON key
+                 * "client-ipv4-request".  Absent when the client does not
+                 * request an IPv4 address from the server.
+                 */
+                ClientIPv4Request                                   ClientIPv4Req;
+
+                /** @brief Server IPv4 assignment response for the client.
+                 *
+                 * Returned by the server in the INFORMATION envelope so
+                 * the client can determine the outcome of its IPv4 request.
+                 * Transmitted as JSON key "client-ipv4".  Absent when the
+                 * server did not process an IPv4 request.
+                 */
+                ClientIPv4Assignment                                ClientIPv4Assign;
+
                 /** @brief Detailed IPv6 provisioning outcomes.
                  *
                  * Returned by the server in the INFO envelope so the client can
@@ -156,6 +270,7 @@ namespace ppp {
                 /** @brief Deserializes extensions from a JSON value object. */
                 static bool                                         FromJson(VirtualEthernetInformationExtensions& value, const Json::Value& json) noexcept;
             };
+
         }
     }
 }
