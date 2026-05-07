@@ -387,6 +387,7 @@
     <ClCompile Include="ppp\app\ConsoleUI.cpp" />
     <ClCompile Include="ppp\app\PppApplication.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
+    <ClCompile Include="ppp\app\client\GeoRuleGenerator.cpp" />
     <ClCompile Include="ppp\dns\DnsResolver.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.cpp" />
@@ -438,6 +439,7 @@
     <ClCompile Include="ppp\app\server\VirtualEthernetManagedServer.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetNetworkTcpipConnection.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetSwitcher.cpp" />
+    <ClCompile Include="ppp\app\server\IPv4LeasePool.cpp" />
     <ClCompile Include="ppp\app\server\VirtualInternetControlMessageProtocol.cpp" />
     <ClCompile Include="ppp\auxiliary\JsonAuxiliary.cpp" />
     <ClCompile Include="ppp\auxiliary\StringAuxiliary.cpp" />
@@ -693,6 +695,7 @@
     <ClInclude Include="common\lwip\my\arch\epstruct.h" />
     <ClInclude Include="common\lwip\my\lwipopts.h" />
     <ClInclude Include="ppp\app\client\dns\Rule.h" />
+    <ClInclude Include="ppp\app\client\GeoRuleGenerator.h" />
     <ClInclude Include="ppp\dns\DnsResolver.h" />
     <ClInclude Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.h" />
     <ClInclude Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.h" />
@@ -736,6 +739,7 @@
     <ClInclude Include="ppp\app\server\VirtualEthernetManagedServer.h" />
     <ClInclude Include="ppp\app\server\VirtualEthernetNetworkTcpipConnection.h" />
     <ClInclude Include="ppp\app\server\VirtualEthernetSwitcher.h" />
+    <ClInclude Include="ppp\app\server\IPv4LeasePool.h" />
     <ClInclude Include="ppp\app\server\VirtualInternetControlMessageProtocol.h" />
     <ClInclude Include="ppp\auxiliary\JsonAuxiliary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h" />
