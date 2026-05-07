@@ -36,6 +36,7 @@
 
 #if defined(_ANDROID)
 #include <android/log.h>
+#include <android/OpenPPP2VpnProtectBridge.h>
 #endif
 
 /**
@@ -1652,17 +1653,14 @@ namespace ppp {
                         dns_resolver_ = make_shared_object<ppp::dns::DnsResolver>(*resolver_ctx);
 
 #if defined(_ANDROID)
-                        // Android VPNService socket protection normally requires
-                        // Java/Kotlin protect(fd) or a coroutine JNI context.  The
-                        // pure-async DnsResolver path cannot safely fabricate a
-                        // YieldContext, and ProtectEvent is not wired on this object
-                        // today.  Do not fail all provider-DNS sockets here; rely on
-                        // route-based protection and keep a clear TODO for a future
-                        // synchronous VPNService.protect bridge.
+                        // Android provider-DNS sockets must be protected before
+                        // connect/send so resolver traffic does not re-enter the
+                        // VPN tunnel.  The JNI bridge delegates to the active
+                        // VpnService.protect(fd) wrapper on the Kotlin side.
                         if (NULLPTR != dns_resolver_) {
                             dns_resolver_->SetProtectSocketCallback(
-                                [](int /*handle*/) noexcept -> bool {
-                                    return true;
+                                [](int handle) noexcept -> bool {
+                                    return ppp::android::ProtectSocketFd(handle);
                                 });
                         }
 #elif defined(_LINUX)

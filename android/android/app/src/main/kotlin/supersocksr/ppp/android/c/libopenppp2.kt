@@ -20,12 +20,14 @@ class libopenppp2 {
         fun protect(sockfd: Int): Boolean {
             val service = PppVpnService.instance
             if (service == null) {
-                android.util.Log.w("openppp2", "protect failed: service missing fd=$sockfd")
+                android.util.Log.w("openppp2", "protect failed: service missing")
                 return false
             }
 
             val ok = service.protect(sockfd)
-            android.util.Log.i("openppp2", "protect fd=$sockfd result=$ok")
+            if (!ok) {
+                android.util.Log.w("openppp2", "protect returned false")
+            }
             return ok
         }
 
@@ -151,6 +153,12 @@ class libopenppp2 {
 
         @JvmStatic
         external fun post(sequence: Int): Boolean
+
+        @JvmStatic
+        external fun set_protect_enabled(enabled: Boolean): Boolean
+
+        @JvmStatic
+        external fun protect_socket_fd(fd: Int): Boolean
 
         @JvmStatic
         external fun set_default_flash_type_of_service(flash_mode: Boolean): Boolean

@@ -39,6 +39,99 @@ namespace ppp {
         typedef boost::asio::ip::udp udp;
         typedef boost::asio::ip::tcp tcp;
 
+        enum class DnsTransportStage {
+            Attempt,
+            Success,
+            Socket,
+            Connect,
+            Send,
+            Recv,
+            Parse,
+            Tls,
+            Http,
+            Bootstrap,
+            Timeout,
+        };
+
+        enum class DnsTransportReason {
+            None,
+            Failed,
+            Invalid,
+            Empty,
+            AllocFailed,
+            OpenFailed,
+            ProtectFailed,
+            BuildFailed,
+            VerifyFailed,
+            CacheHit,
+            CacheMiss,
+            ReuseAttempt,
+            Reused,
+            NotReused,
+            BadStatus,
+            Timeout,
+        };
+
+        static const char* DnsTransportToString(Protocol protocol) noexcept {
+            switch (protocol) {
+            case Protocol::UDP: return "udp";
+            case Protocol::TCP: return "tcp";
+            case Protocol::DoH: return "doh";
+            case Protocol::DoT: return "dot";
+            default:            return "unknown";
+            }
+        }
+
+        static const char* DnsTransportStageToString(DnsTransportStage stage) noexcept {
+            switch (stage) {
+            case DnsTransportStage::Attempt:   return "attempt";
+            case DnsTransportStage::Success:   return "success";
+            case DnsTransportStage::Socket:    return "socket";
+            case DnsTransportStage::Connect:   return "connect";
+            case DnsTransportStage::Send:      return "send";
+            case DnsTransportStage::Recv:      return "recv";
+            case DnsTransportStage::Parse:     return "parse";
+            case DnsTransportStage::Tls:       return "tls";
+            case DnsTransportStage::Http:      return "http";
+            case DnsTransportStage::Bootstrap: return "bootstrap";
+            case DnsTransportStage::Timeout:   return "timeout";
+            default:                           return "unknown";
+            }
+        }
+
+        static const char* DnsTransportReasonToString(DnsTransportReason reason) noexcept {
+            switch (reason) {
+            case DnsTransportReason::None:         return "";
+            case DnsTransportReason::Failed:       return "failed";
+            case DnsTransportReason::Invalid:      return "invalid";
+            case DnsTransportReason::Empty:        return "empty";
+            case DnsTransportReason::AllocFailed:  return "alloc_failed";
+            case DnsTransportReason::OpenFailed:   return "open_failed";
+            case DnsTransportReason::ProtectFailed: return "protect_failed";
+            case DnsTransportReason::BuildFailed:  return "build_failed";
+            case DnsTransportReason::VerifyFailed: return "verify_failed";
+            case DnsTransportReason::CacheHit:     return "cache_hit";
+            case DnsTransportReason::CacheMiss:    return "cache_miss";
+            case DnsTransportReason::ReuseAttempt: return "reuse_attempt";
+            case DnsTransportReason::Reused:       return "reused";
+            case DnsTransportReason::NotReused:    return "not_reused";
+            case DnsTransportReason::BadStatus:    return "bad_status";
+            case DnsTransportReason::Timeout:      return "timeout";
+            default:                               return "unknown";
+            }
+        }
+
+        static void CountDnsTransport(Protocol protocol, DnsTransportStage stage, DnsTransportReason reason = DnsTransportReason::None) noexcept {
+            ppp::string metric = "dns.transport.";
+            metric.append(DnsTransportToString(protocol)).append(".").append(DnsTransportStageToString(stage));
+            if (reason != DnsTransportReason::None) {
+                metric.append(".").append(DnsTransportReasonToString(reason));
+            }
+            ppp::telemetry::Count(metric.c_str(), 1);
+            ppp::telemetry::Log(Level::kTrace, "dns", "transport event transport=%s stage=%s reason=%s",
+                DnsTransportToString(protocol), DnsTransportStageToString(stage), DnsTransportReasonToString(reason));
+        }
+
         /* ========================================================================
          * STUN protocol constants (RFC 5389)
          * ======================================================================== */
@@ -944,9 +1037,11 @@ namespace ppp {
          * ======================================================================== */
 
         void DnsResolver::SendDoh(const ServerEntry& entry, std::shared_ptr<ppp::vector<Byte> > packet, const ResolveCallback& callback) noexcept {
+            CountDnsTransport(Protocol::DoH, DnsTransportStage::Attempt);
             /* Parse the DoH URL to extract host and path. */
             ppp::string url = ATrim(entry.url);
             if (url.empty()) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Bootstrap, DnsTransportReason::Empty);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -958,6 +1053,7 @@ namespace ppp {
                 const char* https_prefix = "https://";
                 std::size_t scheme_pos = url.find(https_prefix);
                 if (scheme_pos == ppp::string::npos) {
+                    CountDnsTransport(Protocol::DoH, DnsTransportStage::Bootstrap, DnsTransportReason::Invalid);
                     boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                     return;
                 }
@@ -981,6 +1077,7 @@ namespace ppp {
                 }
 
                 if (host.empty()) {
+                    CountDnsTransport(Protocol::DoH, DnsTransportStage::Bootstrap, DnsTransportReason::Empty);
                     boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                     return;
                 }
@@ -989,6 +1086,7 @@ namespace ppp {
             boost::system::error_code ec;
             boost::asio::ip::address ip = ParseAddressOnly(entry.address, ec);
             if (ec || ip.is_unspecified()) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Bootstrap, DnsTransportReason::Invalid);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -998,12 +1096,14 @@ namespace ppp {
             std::shared_ptr<boost::asio::steady_timer> timer = make_shared_object<boost::asio::steady_timer>(context_);
             std::shared_ptr<CompletionState> state = make_shared_object<CompletionState>(callback);
             if (NULLPTR == socket || NULLPTR == timer || NULLPTR == state) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Socket, DnsTransportReason::AllocFailed);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
 
             socket->open(remote.protocol(), ec);
             if (ec) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Socket, DnsTransportReason::OpenFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
@@ -1013,6 +1113,7 @@ namespace ppp {
             ppp::net::Socket::SetSignalPipeline(socket->native_handle(), false);
             ppp::net::Socket::ReuseSocketAddress(socket->native_handle(), true);
             if (!ProtectSocket(socket->native_handle())) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Socket, DnsTransportReason::ProtectFailed);
                 ppp::net::Socket::Closesocket(socket);
                 state->Complete(ppp::vector<Byte>());
                 return;
@@ -1022,6 +1123,7 @@ namespace ppp {
             std::shared_ptr<boost::asio::ssl::context> ssl_ctx = ppp::ssl::SSL::CreateClientSslContext(
                 ppp::ssl::SSL::SSL_METHOD::tlsv12, tls_verify_peer_, std::string());
             if (NULLPTR == ssl_ctx) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::AllocFailed);
                 ppp::net::Socket::Closesocket(socket);
                 state->Complete(ppp::vector<Byte>());
                 return;
@@ -1030,6 +1132,7 @@ namespace ppp {
             std::shared_ptr<boost::asio::ssl::stream<tcp::socket> > stream =
                 make_shared_object<boost::asio::ssl::stream<tcp::socket> >(std::move(*socket), *ssl_ctx);
             if (NULLPTR == stream) {
+                CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::AllocFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
@@ -1060,12 +1163,18 @@ namespace ppp {
                     SSL_set_session(stream->native_handle(), cached);
                     SSL_SESSION_free(cached);
                     ppp::telemetry::Count("dns.tls.session_reuse_attempt", 1);
+                    CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::CacheHit);
+                    CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::ReuseAttempt);
+                }
+                else {
+                    CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::CacheMiss);
                 }
             }
 
             timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TLS_TIMEOUT_MS));
             timer->async_wait([stream, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
+                    CountDnsTransport(Protocol::DoH, DnsTransportStage::Timeout);
                     boost::system::error_code ignored;
                     stream->lowest_layer().close(ignored);
                     state->Complete(ppp::vector<Byte>());
@@ -1076,6 +1185,7 @@ namespace ppp {
             stream->lowest_layer().async_connect(remote,
                 [weak_self, stream, timer, packet, state, host, path, sni_name, host_key](const boost::system::error_code& connect_ec) noexcept {
                     if (connect_ec) {
+                        CountDnsTransport(Protocol::DoH, DnsTransportStage::Connect, DnsTransportReason::Failed);
                         boost::system::error_code ignored;
                         stream->lowest_layer().close(ignored);
                         ppp::net::Socket::Cancel(*timer);
@@ -1086,6 +1196,8 @@ namespace ppp {
                     stream->async_handshake(boost::asio::ssl::stream_base::client,
                         [weak_self, stream, timer, packet, state, host, path, sni_name, host_key](const boost::system::error_code& handshake_ec) noexcept {
                             if (handshake_ec) {
+                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls,
+                                    handshake_ec == boost::asio::error::operation_aborted ? DnsTransportReason::Failed : DnsTransportReason::VerifyFailed);
                                 boost::system::error_code ignored;
                                 stream->lowest_layer().close(ignored);
                                 ppp::net::Socket::Cancel(*timer);
@@ -1101,6 +1213,10 @@ namespace ppp {
                                     self->StoreTlsSession(host_key, reinterpret_cast<ssl_session_st*>(fresh));
                                     if (SSL_session_reused(stream->native_handle())) {
                                         ppp::telemetry::Count("dns.tls.session_reused", 1);
+                                        CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::Reused);
+                                    }
+                                    else {
+                                        CountDnsTransport(Protocol::DoH, DnsTransportStage::Tls, DnsTransportReason::NotReused);
                                     }
                                 }
                             }
@@ -1112,6 +1228,7 @@ namespace ppp {
                             std::shared_ptr<boost::beast::http::response<boost::beast::http::string_body> > http_res =
                                 make_shared_object<boost::beast::http::response<boost::beast::http::string_body> >();
                             if (NULLPTR == http_req || NULLPTR == read_buf || NULLPTR == http_res) {
+                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Http, DnsTransportReason::AllocFailed);
                                 boost::system::error_code ignored;
                                 stream->lowest_layer().close(ignored);
                                 ppp::net::Socket::Cancel(*timer);
@@ -1130,6 +1247,7 @@ namespace ppp {
                                 http_req->prepare_payload();
                             }
                             catch (const std::exception&) {
+                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Http, DnsTransportReason::BuildFailed);
                                 boost::system::error_code ignored;
                                 stream->lowest_layer().close(ignored);
                                 ppp::net::Socket::Cancel(*timer);
@@ -1141,6 +1259,7 @@ namespace ppp {
                             boost::beast::http::async_write(*stream, *http_req,
                                 [stream, timer, http_req, read_buf, http_res, state](const boost::system::error_code& write_ec, std::size_t) noexcept {
                                     if (write_ec) {
+                                        CountDnsTransport(Protocol::DoH, DnsTransportStage::Send, DnsTransportReason::Failed);
                                         boost::system::error_code ignored;
                                         stream->lowest_layer().close(ignored);
                                         ppp::net::Socket::Cancel(*timer);
@@ -1155,11 +1274,14 @@ namespace ppp {
                                             stream->lowest_layer().close(ignored);
                                             ppp::net::Socket::Cancel(*timer);
                                             if (read_ec) {
+                                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Recv, DnsTransportReason::Failed);
                                                 state->Complete(ppp::vector<Byte>());
                                                 return;
                                             }
 
                                             if (http_res->result_int() != 200 || http_res->body().empty()) {
+                                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Http,
+                                                    http_res->result_int() != 200 ? DnsTransportReason::BadStatus : DnsTransportReason::Empty);
                                                 state->Complete(ppp::vector<Byte>());
                                                 return;
                                             }
@@ -1167,9 +1289,11 @@ namespace ppp {
                                             const std::string& body = http_res->body();
                                             try {
                                                 ppp::vector<Byte> response(body.begin(), body.end());
+                                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Success);
                                                 state->Complete(std::move(response));
                                             }
                                             catch (const std::exception&) {
+                                                CountDnsTransport(Protocol::DoH, DnsTransportStage::Parse, DnsTransportReason::Failed);
                                                 state->Complete(ppp::vector<Byte>());
                                             }
                                         });
@@ -1183,9 +1307,11 @@ namespace ppp {
          * ======================================================================== */
 
         void DnsResolver::SendDot(const ServerEntry& entry, std::shared_ptr<ppp::vector<Byte> > packet, const ResolveCallback& callback) noexcept {
+            CountDnsTransport(Protocol::DoT, DnsTransportStage::Attempt);
             boost::system::error_code ec;
             boost::asio::ip::address ip = ParseAddressOnly(entry.address, ec);
             if (ec || ip.is_unspecified()) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Bootstrap, DnsTransportReason::Invalid);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -1197,6 +1323,7 @@ namespace ppp {
             std::shared_ptr<ppp::vector<Byte> > request = make_shared_object<ppp::vector<Byte> >();
             std::shared_ptr<std::array<Byte, 2> > length_buffer = make_shared_object<std::array<Byte, 2> >();
             if (NULLPTR == socket || NULLPTR == timer || NULLPTR == state || NULLPTR == request || NULLPTR == length_buffer) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Socket, DnsTransportReason::AllocFailed);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -1209,12 +1336,14 @@ namespace ppp {
                 memcpy(request->data() + 2, packet->data(), packet->size());
             }
             catch (const std::exception&) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Parse, DnsTransportReason::BuildFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
 
             socket->open(remote.protocol(), ec);
             if (ec) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Socket, DnsTransportReason::OpenFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
@@ -1224,6 +1353,7 @@ namespace ppp {
             ppp::net::Socket::SetSignalPipeline(socket->native_handle(), false);
             ppp::net::Socket::ReuseSocketAddress(socket->native_handle(), true);
             if (!ProtectSocket(socket->native_handle())) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Socket, DnsTransportReason::ProtectFailed);
                 ppp::net::Socket::Closesocket(socket);
                 state->Complete(ppp::vector<Byte>());
                 return;
@@ -1233,6 +1363,7 @@ namespace ppp {
             std::shared_ptr<boost::asio::ssl::context> ssl_ctx = ppp::ssl::SSL::CreateClientSslContext(
                 ppp::ssl::SSL::SSL_METHOD::tlsv12, tls_verify_peer_, std::string());
             if (NULLPTR == ssl_ctx) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::AllocFailed);
                 ppp::net::Socket::Closesocket(socket);
                 state->Complete(ppp::vector<Byte>());
                 return;
@@ -1241,6 +1372,7 @@ namespace ppp {
             std::shared_ptr<boost::asio::ssl::stream<tcp::socket> > stream =
                 make_shared_object<boost::asio::ssl::stream<tcp::socket> >(std::move(*socket), *ssl_ctx);
             if (NULLPTR == stream) {
+                CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::AllocFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
@@ -1263,12 +1395,18 @@ namespace ppp {
                     SSL_set_session(stream->native_handle(), cached);
                     SSL_SESSION_free(cached);
                     ppp::telemetry::Count("dns.tls.session_reuse_attempt", 1);
+                    CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::CacheHit);
+                    CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::ReuseAttempt);
+                }
+                else {
+                    CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::CacheMiss);
                 }
             }
 
             timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TLS_TIMEOUT_MS));
             timer->async_wait([stream, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
+                    CountDnsTransport(Protocol::DoT, DnsTransportStage::Timeout);
                     boost::system::error_code ignored;
                     stream->lowest_layer().close(ignored);
                     state->Complete(ppp::vector<Byte>());
@@ -1279,6 +1417,7 @@ namespace ppp {
             stream->lowest_layer().async_connect(remote,
                 [weak_self, stream, timer, request, length_buffer, state, hostname = entry.hostname, host_key](const boost::system::error_code& connect_ec) noexcept {
                     if (connect_ec) {
+                        CountDnsTransport(Protocol::DoT, DnsTransportStage::Connect, DnsTransportReason::Failed);
                         boost::system::error_code ignored;
                         stream->lowest_layer().close(ignored);
                         ppp::net::Socket::Cancel(*timer);
@@ -1290,6 +1429,8 @@ namespace ppp {
                     stream->async_handshake(boost::asio::ssl::stream_base::client,
                         [weak_self, stream, timer, request, length_buffer, state, host_key](const boost::system::error_code& handshake_ec) noexcept {
                             if (handshake_ec) {
+                                CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls,
+                                    handshake_ec == boost::asio::error::operation_aborted ? DnsTransportReason::Failed : DnsTransportReason::VerifyFailed);
                                 boost::system::error_code ignored;
                                 stream->lowest_layer().close(ignored);
                                 ppp::net::Socket::Cancel(*timer);
@@ -1303,6 +1444,10 @@ namespace ppp {
                                     self->StoreTlsSession(host_key, reinterpret_cast<ssl_session_st*>(fresh));
                                     if (SSL_session_reused(stream->native_handle())) {
                                         ppp::telemetry::Count("dns.tls.session_reused", 1);
+                                        CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::Reused);
+                                    }
+                                    else {
+                                        CountDnsTransport(Protocol::DoT, DnsTransportStage::Tls, DnsTransportReason::NotReused);
                                     }
                                 }
                             }
@@ -1311,6 +1456,7 @@ namespace ppp {
                             boost::asio::async_write(*stream, boost::asio::buffer(request->data(), request->size()),
                                 [stream, timer, length_buffer, state](const boost::system::error_code& write_ec, std::size_t) noexcept {
                                     if (write_ec) {
+                                        CountDnsTransport(Protocol::DoT, DnsTransportStage::Send, DnsTransportReason::Failed);
                                         boost::system::error_code ignored;
                                         stream->lowest_layer().close(ignored);
                                         ppp::net::Socket::Cancel(*timer);
@@ -1322,6 +1468,7 @@ namespace ppp {
                                     boost::asio::async_read(*stream, boost::asio::buffer(length_buffer->data(), length_buffer->size()),
                                         [stream, timer, length_buffer, state](const boost::system::error_code& read_len_ec, std::size_t) noexcept {
                                             if (read_len_ec) {
+                                                CountDnsTransport(Protocol::DoT, DnsTransportStage::Recv, DnsTransportReason::Failed);
                                                 boost::system::error_code ignored;
                                                 stream->lowest_layer().close(ignored);
                                                 ppp::net::Socket::Cancel(*timer);
@@ -1331,6 +1478,7 @@ namespace ppp {
 
                                             int response_size = (static_cast<int>((*length_buffer)[0]) << 8) | static_cast<int>((*length_buffer)[1]);
                                             if (response_size <= 0 || response_size > PPP_DNS_RESOLVER_TCP_MAX_SIZE) {
+                                                CountDnsTransport(Protocol::DoT, DnsTransportStage::Parse, DnsTransportReason::Invalid);
                                                 boost::system::error_code ignored;
                                                 stream->lowest_layer().close(ignored);
                                                 ppp::net::Socket::Cancel(*timer);
@@ -1340,6 +1488,7 @@ namespace ppp {
 
                                             std::shared_ptr<ppp::vector<Byte> > response = make_shared_object<ppp::vector<Byte> >(response_size);
                                             if (NULLPTR == response) {
+                                                CountDnsTransport(Protocol::DoT, DnsTransportStage::Parse, DnsTransportReason::AllocFailed);
                                                 boost::system::error_code ignored;
                                                 stream->lowest_layer().close(ignored);
                                                 ppp::net::Socket::Cancel(*timer);
@@ -1354,10 +1503,12 @@ namespace ppp {
                                                     stream->lowest_layer().close(ignored);
                                                     ppp::net::Socket::Cancel(*timer);
                                                     if (read_body_ec) {
+                                                        CountDnsTransport(Protocol::DoT, DnsTransportStage::Recv, DnsTransportReason::Failed);
                                                         state->Complete(ppp::vector<Byte>());
                                                         return;
                                                     }
 
+                                                    CountDnsTransport(Protocol::DoT, DnsTransportStage::Success);
                                                     state->Complete(std::move(*response));
                                                 });
                                         });
@@ -1371,9 +1522,11 @@ namespace ppp {
          * ======================================================================== */
 
         void DnsResolver::SendUdp(const ServerEntry& entry, std::shared_ptr<ppp::vector<Byte> > packet, const ResolveCallback& callback) noexcept {
+            CountDnsTransport(Protocol::UDP, DnsTransportStage::Attempt);
             boost::system::error_code ec;
             boost::asio::ip::address ip = ParseAddressOnly(entry.address, ec);
             if (ec || ip.is_unspecified()) {
+                CountDnsTransport(Protocol::UDP, DnsTransportStage::Bootstrap, DnsTransportReason::Invalid);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -1385,12 +1538,14 @@ namespace ppp {
             std::shared_ptr<udp::endpoint> source = make_shared_object<udp::endpoint>();
             std::shared_ptr<CompletionState> state = make_shared_object<CompletionState>(callback);
             if (NULLPTR == socket || NULLPTR == timer || NULLPTR == buffer || NULLPTR == source || NULLPTR == state) {
+                CountDnsTransport(Protocol::UDP, DnsTransportStage::Socket, DnsTransportReason::AllocFailed);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
 
             socket->open(remote.protocol(), ec);
             if (ec) {
+                CountDnsTransport(Protocol::UDP, DnsTransportStage::Socket, DnsTransportReason::OpenFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
@@ -1400,6 +1555,7 @@ namespace ppp {
             ppp::net::Socket::SetSignalPipeline(socket->native_handle(), false);
             ppp::net::Socket::ReuseSocketAddress(socket->native_handle(), true);
             if (!ProtectSocket(socket->native_handle())) {
+                CountDnsTransport(Protocol::UDP, DnsTransportStage::Socket, DnsTransportReason::ProtectFailed);
                 ppp::net::Socket::Closesocket(socket);
                 state->Complete(ppp::vector<Byte>());
                 return;
@@ -1408,6 +1564,8 @@ namespace ppp {
             timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS));
             timer->async_wait([socket, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
+                    CountDnsTransport(Protocol::UDP, DnsTransportStage::Recv, DnsTransportReason::Timeout);
+                    CountDnsTransport(Protocol::UDP, DnsTransportStage::Timeout);
                     ppp::net::Socket::Closesocket(socket);
                     state->Complete(ppp::vector<Byte>());
                 }
@@ -1416,6 +1574,7 @@ namespace ppp {
             socket->async_send_to(boost::asio::buffer(packet->data(), packet->size()), remote,
                 [socket, timer, buffer, source, state](const boost::system::error_code& send_ec, std::size_t) noexcept {
                     if (send_ec) {
+                        CountDnsTransport(Protocol::UDP, DnsTransportStage::Send, DnsTransportReason::Failed);
                         ppp::net::Socket::Closesocket(socket);
                         ppp::net::Socket::Cancel(*timer);
                         state->Complete(ppp::vector<Byte>());
@@ -1427,15 +1586,19 @@ namespace ppp {
                             ppp::net::Socket::Cancel(*timer);
                             ppp::net::Socket::Closesocket(socket);
                             if (recv_ec || size < 1) {
+                                CountDnsTransport(Protocol::UDP, DnsTransportStage::Recv,
+                                    recv_ec ? DnsTransportReason::Failed : DnsTransportReason::Empty);
                                 state->Complete(ppp::vector<Byte>());
                                 return;
                             }
 
                             try {
                                 buffer->resize(size);
+                                CountDnsTransport(Protocol::UDP, DnsTransportStage::Success);
                                 state->Complete(std::move(*buffer));
                             }
                             catch (const std::exception&) {
+                                CountDnsTransport(Protocol::UDP, DnsTransportStage::Parse, DnsTransportReason::Failed);
                                 state->Complete(ppp::vector<Byte>());
                             }
                         });
@@ -1447,9 +1610,11 @@ namespace ppp {
          * ======================================================================== */
 
         void DnsResolver::SendTcp(const ServerEntry& entry, std::shared_ptr<ppp::vector<Byte> > packet, const ResolveCallback& callback) noexcept {
+            CountDnsTransport(Protocol::TCP, DnsTransportStage::Attempt);
             boost::system::error_code ec;
             boost::asio::ip::address ip = ParseAddressOnly(entry.address, ec);
             if (ec || ip.is_unspecified()) {
+                CountDnsTransport(Protocol::TCP, DnsTransportStage::Bootstrap, DnsTransportReason::Invalid);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -1461,6 +1626,7 @@ namespace ppp {
             std::shared_ptr<ppp::vector<Byte> > request = make_shared_object<ppp::vector<Byte> >();
             std::shared_ptr<std::array<Byte, 2> > length_buffer = make_shared_object<std::array<Byte, 2> >();
             if (NULLPTR == socket || NULLPTR == timer || NULLPTR == state || NULLPTR == request || NULLPTR == length_buffer) {
+                CountDnsTransport(Protocol::TCP, DnsTransportStage::Socket, DnsTransportReason::AllocFailed);
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }
@@ -1472,12 +1638,14 @@ namespace ppp {
                 memcpy(request->data() + 2, packet->data(), packet->size());
             }
             catch (const std::exception&) {
+                CountDnsTransport(Protocol::TCP, DnsTransportStage::Parse, DnsTransportReason::BuildFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
 
             socket->open(remote.protocol(), ec);
             if (ec) {
+                CountDnsTransport(Protocol::TCP, DnsTransportStage::Socket, DnsTransportReason::OpenFailed);
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
@@ -1487,6 +1655,7 @@ namespace ppp {
             ppp::net::Socket::SetSignalPipeline(socket->native_handle(), false);
             ppp::net::Socket::ReuseSocketAddress(socket->native_handle(), true);
             if (!ProtectSocket(socket->native_handle())) {
+                CountDnsTransport(Protocol::TCP, DnsTransportStage::Socket, DnsTransportReason::ProtectFailed);
                 ppp::net::Socket::Closesocket(socket);
                 state->Complete(ppp::vector<Byte>());
                 return;
@@ -1495,6 +1664,7 @@ namespace ppp {
             timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TCP_TIMEOUT_MS));
             timer->async_wait([socket, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
+                    CountDnsTransport(Protocol::TCP, DnsTransportStage::Timeout);
                     ppp::net::Socket::Closesocket(socket);
                     state->Complete(ppp::vector<Byte>());
                 }
@@ -1502,6 +1672,7 @@ namespace ppp {
 
             socket->async_connect(remote, [socket, timer, request, length_buffer, state](const boost::system::error_code& connect_ec) noexcept {
                 if (connect_ec) {
+                    CountDnsTransport(Protocol::TCP, DnsTransportStage::Connect, DnsTransportReason::Failed);
                     ppp::net::Socket::Closesocket(socket);
                     ppp::net::Socket::Cancel(*timer);
                     state->Complete(ppp::vector<Byte>());
@@ -1511,6 +1682,7 @@ namespace ppp {
                 boost::asio::async_write(*socket, boost::asio::buffer(request->data(), request->size()),
                     [socket, timer, length_buffer, state](const boost::system::error_code& write_ec, std::size_t) noexcept {
                         if (write_ec) {
+                            CountDnsTransport(Protocol::TCP, DnsTransportStage::Send, DnsTransportReason::Failed);
                             ppp::net::Socket::Closesocket(socket);
                             ppp::net::Socket::Cancel(*timer);
                             state->Complete(ppp::vector<Byte>());
@@ -1520,6 +1692,7 @@ namespace ppp {
                         boost::asio::async_read(*socket, boost::asio::buffer(length_buffer->data(), length_buffer->size()),
                             [socket, timer, length_buffer, state](const boost::system::error_code& read_len_ec, std::size_t) noexcept {
                                 if (read_len_ec) {
+                                    CountDnsTransport(Protocol::TCP, DnsTransportStage::Recv, DnsTransportReason::Failed);
                                     ppp::net::Socket::Closesocket(socket);
                                     ppp::net::Socket::Cancel(*timer);
                                     state->Complete(ppp::vector<Byte>());
@@ -1528,6 +1701,7 @@ namespace ppp {
 
                                 int response_size = (static_cast<int>((*length_buffer)[0]) << 8) | static_cast<int>((*length_buffer)[1]);
                                 if (response_size <= 0 || response_size > PPP_DNS_RESOLVER_TCP_MAX_SIZE) {
+                                    CountDnsTransport(Protocol::TCP, DnsTransportStage::Parse, DnsTransportReason::Invalid);
                                     ppp::net::Socket::Closesocket(socket);
                                     ppp::net::Socket::Cancel(*timer);
                                     state->Complete(ppp::vector<Byte>());
@@ -1536,6 +1710,7 @@ namespace ppp {
 
                                 std::shared_ptr<ppp::vector<Byte> > response = make_shared_object<ppp::vector<Byte> >(response_size);
                                 if (NULLPTR == response) {
+                                    CountDnsTransport(Protocol::TCP, DnsTransportStage::Parse, DnsTransportReason::AllocFailed);
                                     ppp::net::Socket::Closesocket(socket);
                                     ppp::net::Socket::Cancel(*timer);
                                     state->Complete(ppp::vector<Byte>());
@@ -1547,10 +1722,12 @@ namespace ppp {
                                         ppp::net::Socket::Closesocket(socket);
                                         ppp::net::Socket::Cancel(*timer);
                                         if (read_body_ec) {
+                                            CountDnsTransport(Protocol::TCP, DnsTransportStage::Recv, DnsTransportReason::Failed);
                                             state->Complete(ppp::vector<Byte>());
                                             return;
                                         }
 
+                                        CountDnsTransport(Protocol::TCP, DnsTransportStage::Success);
                                         state->Complete(std::move(*response));
                                     });
                             });
