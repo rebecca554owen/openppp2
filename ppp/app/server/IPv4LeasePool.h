@@ -76,7 +76,7 @@ namespace ppp {
                 /**
                  * @brief Constructs an unconfigured lease pool.
                  */
-                IPv4LeasePool() noexcept                                    = default;
+                IPv4LeasePool() noexcept                                     {}
 
                 /**
                  * @brief Destroys the lease pool and releases all internal state.

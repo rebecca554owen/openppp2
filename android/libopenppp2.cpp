@@ -97,7 +97,7 @@ FILE* stderr = &__sF[2];
 #endif
 #endif
 
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) noexcept {
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     if (NULLPTR == vm) {
         return JNI_ERR;
     }
@@ -111,7 +111,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) noexcept {
     return JNI_VERSION_1_6;
 }
 
-JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* vm, void* reserved) noexcept {
+JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* vm, void* reserved) {
     JNIEnv* env = NULLPTR;
     if (NULLPTR != vm && JNI_OK == vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6)) {
         ppp::android::ShutdownProtectBridge(env);
