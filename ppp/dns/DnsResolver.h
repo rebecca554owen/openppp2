@@ -7,6 +7,12 @@
 
 #include <ppp/stdafx.h>
 #include <atomic>
+#include <mutex>
+
+/* Forward-declare OpenSSL session type so the public header does not pull in
+ * <openssl/ssl.h>. The cache stores opaque SSL_SESSION pointers, lifetime
+ * managed via SSL_SESSION_up_ref / SSL_SESSION_free in the implementation. */
+struct ssl_session_st;
 
 namespace ppp {
     namespace dns {
@@ -42,6 +48,7 @@ namespace ppp {
 
         public:
             explicit DnsResolver(boost::asio::io_context& context) noexcept;
+            ~DnsResolver() noexcept;
 
             void                                            SetProtectSocketCallback(const ProtectSocketCallback& cb) noexcept;
 
@@ -231,6 +238,29 @@ namespace ppp {
             bool                                            ProtectSocket(int native_handle) noexcept;
 
             /**
+             * @brief Looks up a previously cached TLS session for a given upstream.
+             *
+             * @details Returned pointer is up-ref'd; the caller takes ownership and
+             *          must release it via SSL_SESSION_free (or pass it to
+             *          SSL_set_session, which up-refs again — in that case the
+             *          caller must still free its own reference).
+             *
+             * @param host_key  Cache key composed from "<host>:<port>".
+             * @return SSL_SESSION* on cache hit; nullptr if no usable session is cached.
+             */
+            ssl_session_st*                                 AcquireTlsSession(const ppp::string& host_key) noexcept;
+
+            /**
+             * @brief Stores a TLS session for future resumption.
+             *
+             * @details Replaces any previously cached session for the same key.
+             *          Takes ownership of @p session (the caller's reference is
+             *          consumed; the cache will free it when evicted or on
+             *          DnsResolver destruction).
+             */
+            void                                            StoreTlsSession(const ppp::string& host_key, ssl_session_st* session) noexcept;
+
+            /**
              * @brief Returns the effective ECS IP address (override_ip > exit_ip).
              *
              * @return ECS IP address, or unspecified if none available.
@@ -311,6 +341,19 @@ namespace ppp {
             ppp::vector<StunCandidate>                      stun_candidates_;
             std::atomic<std::size_t>                        stun_rotation_{ 0 };
             std::atomic<bool>                               allow_ipv6_response_{ false }; ///< When false, AAAA queries are answered with empty NOERROR. Default false; promoted to true by OnInformation when the server assigns IPv6.
+
+            /**
+             * @brief Cache of OpenSSL session tickets keyed by "<host>:<port>".
+             *
+             * @details Populated after each successful DoH/DoT TLS handshake and
+             *          consumed before the next handshake to the same upstream so
+             *          that TLS 1.2/1.3 session resumption (1-RTT or 0-RTT) is
+             *          used in place of a full handshake. Lifetime of the stored
+             *          SSL_SESSION* is owned by this map; SSL_SESSION_free is
+             *          called on replace and on resolver destruction.
+             */
+            mutable std::mutex                              tls_session_mutex_;
+            ppp::unordered_map<ppp::string, ssl_session_st*> tls_session_cache_;
         };
 
     } // namespace dns

@@ -16,10 +16,23 @@
 namespace ppp {
     namespace dns {
 
-        static constexpr int PPP_DNS_RESOLVER_UDP_BUFFER_SIZE = 4096;
-        static constexpr int PPP_DNS_RESOLVER_TCP_MAX_SIZE    = 65535;
-        static constexpr int PPP_DNS_RESOLVER_TIMEOUT_MS      = 5000;
-        static constexpr int PPP_DNS_RESOLVER_STUN_TIMEOUT_MS = 3000;
+        static constexpr int PPP_DNS_RESOLVER_UDP_BUFFER_SIZE   = 4096;
+        static constexpr int PPP_DNS_RESOLVER_TCP_MAX_SIZE      = 65535;
+        /**
+         * @brief Per-protocol upstream timeouts (milliseconds).
+         *
+         * @details The original implementation used a single 5 s timeout for every
+         *          protocol. That meant a single failing DoH endpoint stalled the
+         *          fallback chain for 5 s before the next protocol was tried, and
+         *          UDP queries — which should normally complete in under 100 ms —
+         *          would also block their callers for 5 s on packet loss. The
+         *          values below give faster fallback while keeping enough headroom
+         *          for the slowest legitimate path (TLS handshake on lossy links).
+         */
+        static constexpr int PPP_DNS_RESOLVER_UDP_TIMEOUT_MS    = 2000;  ///< Plain UDP: short, retried via fallback.
+        static constexpr int PPP_DNS_RESOLVER_TCP_TIMEOUT_MS    = 3000;  ///< Plain TCP / DoT length-prefixed.
+        static constexpr int PPP_DNS_RESOLVER_TLS_TIMEOUT_MS    = 4000;  ///< DoH / DoT (TLS handshake + request).
+        static constexpr int PPP_DNS_RESOLVER_STUN_TIMEOUT_MS   = 3000;
 
         using ppp::telemetry::Level;
 
@@ -368,6 +381,70 @@ namespace ppp {
 
         DnsResolver::DnsResolver(boost::asio::io_context& context) noexcept
             : context_(context) {
+        }
+
+        DnsResolver::~DnsResolver() noexcept {
+            /* Release any cached SSL_SESSION references that survived to shutdown. */
+            std::lock_guard<std::mutex> lk(tls_session_mutex_);
+            for (auto& kv : tls_session_cache_) {
+                if (kv.second != NULLPTR) {
+                    SSL_SESSION_free(reinterpret_cast<SSL_SESSION*>(kv.second));
+                }
+            }
+            tls_session_cache_.clear();
+        }
+
+        /* ========================================================================
+         * TLS session cache — used by SendDoh / SendDot to enable session
+         * resumption (TLS 1.2 session ID or TLS 1.3 ticket) on subsequent queries
+         * to the same upstream. Cuts the TLS handshake from a full 2-RTT to
+         * roughly 1-RTT (resume) or 0-RTT depending on the peer.
+         * ======================================================================== */
+
+        ssl_session_st* DnsResolver::AcquireTlsSession(const ppp::string& host_key) noexcept {
+            if (host_key.empty()) {
+                return NULLPTR;
+            }
+
+            std::lock_guard<std::mutex> lk(tls_session_mutex_);
+            auto it = tls_session_cache_.find(host_key);
+            if (it == tls_session_cache_.end() || it->second == NULLPTR) {
+                return NULLPTR;
+            }
+
+            SSL_SESSION* session = reinterpret_cast<SSL_SESSION*>(it->second);
+            /* Up-ref so the cache keeps its reference; the caller now owns one
+             * additional reference and is responsible for SSL_SESSION_free. */
+            if (SSL_SESSION_up_ref(session) != 1) {
+                /* Failed to up-ref — drop the cache entry to avoid double-free. */
+                SSL_SESSION_free(session);
+                tls_session_cache_.erase(it);
+                return NULLPTR;
+            }
+            return reinterpret_cast<ssl_session_st*>(session);
+        }
+
+        void DnsResolver::StoreTlsSession(const ppp::string& host_key, ssl_session_st* session) noexcept {
+            if (host_key.empty()) {
+                if (session != NULLPTR) {
+                    SSL_SESSION_free(reinterpret_cast<SSL_SESSION*>(session));
+                }
+                return;
+            }
+            if (session == NULLPTR) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lk(tls_session_mutex_);
+            auto it = tls_session_cache_.find(host_key);
+            if (it != tls_session_cache_.end()) {
+                if (it->second != NULLPTR) {
+                    SSL_SESSION_free(reinterpret_cast<SSL_SESSION*>(it->second));
+                }
+                it->second = session;
+                return;
+            }
+            tls_session_cache_.emplace(host_key, session);
         }
 
         void DnsResolver::SetProtectSocketCallback(const ProtectSocketCallback& cb) noexcept {
@@ -966,7 +1043,27 @@ namespace ppp {
                 }
             }
 
-            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TIMEOUT_MS));
+            /* Cache key composed from the SNI name and remote port. Used to look
+             * up a previously stored TLS session for resumption (1-RTT instead
+             * of a full 2-RTT handshake) and to remember the new session after
+             * the handshake completes. */
+            ppp::string host_key;
+            if (!sni_name.empty()) {
+                host_key.append(sni_name).append(":").append(stl::to_string<ppp::string>(static_cast<int>(remote.port())));
+            }
+
+            /* Apply a previously cached SSL_SESSION before the handshake. The
+             * cache returns an up-ref'd pointer; SSL_set_session up-refs again
+             * internally, so we still need to free our own reference. */
+            if (!host_key.empty()) {
+                if (SSL_SESSION* cached = reinterpret_cast<SSL_SESSION*>(AcquireTlsSession(host_key))) {
+                    SSL_set_session(stream->native_handle(), cached);
+                    SSL_SESSION_free(cached);
+                    ppp::telemetry::Count("dns.tls.session_reuse_attempt", 1);
+                }
+            }
+
+            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TLS_TIMEOUT_MS));
             timer->async_wait([stream, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
                     boost::system::error_code ignored;
@@ -975,8 +1072,9 @@ namespace ppp {
                 }
             });
 
+            std::weak_ptr<DnsResolver> weak_self = weak_from_this();
             stream->lowest_layer().async_connect(remote,
-                [stream, timer, packet, state, host, path, sni_name](const boost::system::error_code& connect_ec) noexcept {
+                [weak_self, stream, timer, packet, state, host, path, sni_name, host_key](const boost::system::error_code& connect_ec) noexcept {
                     if (connect_ec) {
                         boost::system::error_code ignored;
                         stream->lowest_layer().close(ignored);
@@ -986,13 +1084,25 @@ namespace ppp {
                     }
 
                     stream->async_handshake(boost::asio::ssl::stream_base::client,
-                        [stream, timer, packet, state, host, path, sni_name](const boost::system::error_code& handshake_ec) noexcept {
+                        [weak_self, stream, timer, packet, state, host, path, sni_name, host_key](const boost::system::error_code& handshake_ec) noexcept {
                             if (handshake_ec) {
                                 boost::system::error_code ignored;
                                 stream->lowest_layer().close(ignored);
                                 ppp::net::Socket::Cancel(*timer);
                                 state->Complete(ppp::vector<Byte>());
                                 return;
+                            }
+
+                            /* Persist the negotiated session for the next query.
+                             * SSL_get1_session up-refs the session; the cache
+                             * takes ownership of that reference. */
+                            if (std::shared_ptr<DnsResolver> self = weak_self.lock(); self != NULLPTR && !host_key.empty()) {
+                                if (SSL_SESSION* fresh = SSL_get1_session(stream->native_handle())) {
+                                    self->StoreTlsSession(host_key, reinterpret_cast<ssl_session_st*>(fresh));
+                                    if (SSL_session_reused(stream->native_handle())) {
+                                        ppp::telemetry::Count("dns.tls.session_reused", 1);
+                                    }
+                                }
                             }
 
                             /* Build HTTP/1.1 POST request with DNS wire-format body. */
@@ -1143,7 +1253,20 @@ namespace ppp {
                 }
             }
 
-            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TIMEOUT_MS));
+            /* Cache key for the TLS session cache. See SendDoh for the policy. */
+            ppp::string host_key;
+            if (!entry.hostname.empty()) {
+                host_key.append(entry.hostname).append(":").append(stl::to_string<ppp::string>(static_cast<int>(remote.port())));
+            }
+            if (!host_key.empty()) {
+                if (SSL_SESSION* cached = reinterpret_cast<SSL_SESSION*>(AcquireTlsSession(host_key))) {
+                    SSL_set_session(stream->native_handle(), cached);
+                    SSL_SESSION_free(cached);
+                    ppp::telemetry::Count("dns.tls.session_reuse_attempt", 1);
+                }
+            }
+
+            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TLS_TIMEOUT_MS));
             timer->async_wait([stream, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
                     boost::system::error_code ignored;
@@ -1152,8 +1275,9 @@ namespace ppp {
                 }
             });
 
+            std::weak_ptr<DnsResolver> weak_self = weak_from_this();
             stream->lowest_layer().async_connect(remote,
-                [stream, timer, request, length_buffer, state, hostname = entry.hostname](const boost::system::error_code& connect_ec) noexcept {
+                [weak_self, stream, timer, request, length_buffer, state, hostname = entry.hostname, host_key](const boost::system::error_code& connect_ec) noexcept {
                     if (connect_ec) {
                         boost::system::error_code ignored;
                         stream->lowest_layer().close(ignored);
@@ -1164,13 +1288,23 @@ namespace ppp {
 
                     /* Protect the connected socket before TLS handshake. */
                     stream->async_handshake(boost::asio::ssl::stream_base::client,
-                        [stream, timer, request, length_buffer, state](const boost::system::error_code& handshake_ec) noexcept {
+                        [weak_self, stream, timer, request, length_buffer, state, host_key](const boost::system::error_code& handshake_ec) noexcept {
                             if (handshake_ec) {
                                 boost::system::error_code ignored;
                                 stream->lowest_layer().close(ignored);
                                 ppp::net::Socket::Cancel(*timer);
                                 state->Complete(ppp::vector<Byte>());
                                 return;
+                            }
+
+                            /* Persist negotiated session for the next query. */
+                            if (std::shared_ptr<DnsResolver> self = weak_self.lock(); self != NULLPTR && !host_key.empty()) {
+                                if (SSL_SESSION* fresh = SSL_get1_session(stream->native_handle())) {
+                                    self->StoreTlsSession(host_key, reinterpret_cast<ssl_session_st*>(fresh));
+                                    if (SSL_session_reused(stream->native_handle())) {
+                                        ppp::telemetry::Count("dns.tls.session_reused", 1);
+                                    }
+                                }
                             }
 
                             /* Send: 2-byte length prefix + DNS query. */
@@ -1271,7 +1405,7 @@ namespace ppp {
                 return;
             }
 
-            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TIMEOUT_MS));
+            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS));
             timer->async_wait([socket, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
                     ppp::net::Socket::Closesocket(socket);
@@ -1358,7 +1492,7 @@ namespace ppp {
                 return;
             }
 
-            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TIMEOUT_MS));
+            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TCP_TIMEOUT_MS));
             timer->async_wait([socket, state](const boost::system::error_code& ec_) noexcept {
                 if (!ec_) {
                     ppp::net::Socket::Closesocket(socket);
@@ -2186,7 +2320,7 @@ namespace ppp {
             ppp::net::Socket::ReuseSocketAddress(socket->native_handle(), true);
 
             /* Timeout. */
-            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_TIMEOUT_MS));
+            timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS));
             timer->async_wait([socket, done, callback](const boost::system::error_code& timer_ec) noexcept {
                 if (!timer_ec) {
                     bool expected = false;
