@@ -113,7 +113,7 @@ boost::asio::ip::address PppApplication::GetNetworkAddress(const char* name, int
         int prefix = atoll(address_string.data());
         if (prefix < 1 || prefix > MAX_PREFIX_ADDRESS) {
             prefix = MAX_PREFIX_ADDRESS;
-        } 
+        }
         elif (MIN_PREFIX_ADDRESS > 0 && prefix < MIN_PREFIX_ADDRESS) {
             prefix = MIN_PREFIX_ADDRESS;
         }

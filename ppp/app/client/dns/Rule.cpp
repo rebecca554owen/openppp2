@@ -92,9 +92,9 @@ namespace ppp
                         ppp::string line = lines[i];
                         // Strip inline comments and skip pure comment lines.
                         std::size_t index = line.find('#');
-                        if (index != ppp::string::npos) 
+                        if (index != ppp::string::npos)
                         {
-                            if (index == 0) 
+                            if (index == 0)
                             {
                                 continue;
                             }
@@ -161,23 +161,23 @@ namespace ppp
                         {
                             continue;
                         }
-                        
+
                         ppp::string& host = segments[0];
                         if (host.empty() || segments[1].empty())
                         {
                             continue;
                         }
-                       
+
                         std::size_t host_size = host.size();
                         bool regexp = host_size >= 7 && memcmp(host.data(), "regexp:", 7) == 0;
                         bool full = false;
                         // Parse host mode: regexp, full host, or relative domain.
-                        if (regexp) 
+                        if (regexp)
                         {
                             boost::regex pattern;
                             host = host.substr(7);
 
-                            try 
+                            try
                             {
                                 int err = pattern.set_expression(host.data(), host.data() + host.size(), boost::regex_constants::icase | boost::regex_constants::perl);
                                 if (err != boost::regex_constants::error_ok)
@@ -185,12 +185,12 @@ namespace ppp
                                     continue;
                                 }
                             }
-                            catch (const boost::exception&) 
+                            catch (const boost::exception&)
                             {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                                 continue;
                             }
-                            catch (const std::exception&) 
+                            catch (const std::exception&)
                             {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                                 continue;
@@ -200,7 +200,7 @@ namespace ppp
                         {
                             host = ToLower<ppp::string>(host.substr(5));
                         }
-                        else 
+                        else
                         {
                             host = ToLower<ppp::string>(host);
                         }
@@ -258,7 +258,7 @@ namespace ppp
                         {
                             continue;
                         }
-                    
+
                         Ptr rule = make_shared_object<Rule>(Rule{ host, nic, address });
                         if (NULLPTR == rule)
                         {
@@ -268,11 +268,11 @@ namespace ppp
                         {
                             regexp_rules[host] = rule;
                         }
-                        elif(full) 
+                        elif(full)
                         {
                             full_rules[host] = rule;
                         }
-                        else 
+                        else
                         {
                             rules[host] = rule;
                         }
@@ -290,7 +290,7 @@ namespace ppp
                  * @return Matched rule pointer, or null when not found.
                  * @note IP literal input is ignored and returns null.
                  */
-                Rule::Ptr Rule::Get(const ppp::string& s, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept 
+                Rule::Ptr Rule::Get(const ppp::string& s, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept
                 {
                     if (s.empty())
                     {
@@ -318,14 +318,14 @@ namespace ppp
                     }
 
                     Rule::Ptr rule = GetWithAbsoluteHost(host_lower, full_rules);
-                    if (NULLPTR != rule) 
+                    if (NULLPTR != rule)
                     {
                         return rule;
                     }
 
                     // Apply regexp matching after exact full-host lookup.
                     rule = GetWithRegExp(host_lower, regexp_rules);
-                    if (NULLPTR != rule) 
+                    if (NULLPTR != rule)
                     {
                         return rule;
                     }
@@ -366,7 +366,7 @@ namespace ppp
                     {
                         boost::regex pattern;
 
-                        try 
+                        try
                         {
                             int err = pattern.set_expression(r.data(), r.data() + r.size(), boost::regex_constants::icase | boost::regex_constants::perl);
                             if (err != boost::regex_constants::error_ok)
@@ -374,17 +374,17 @@ namespace ppp
                                 continue;
                             }
 
-                            if (boost::regex_search(s.begin(), s.end(), pattern)) 
+                            if (boost::regex_search(s.begin(), s.end(), pattern))
                             {
                                 return rule;
                             }
                         }
-                        catch (const boost::exception&) 
+                        catch (const boost::exception&)
                         {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                             continue;
                         }
-                        catch (const std::exception&) 
+                        catch (const std::exception&)
                         {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                             continue;

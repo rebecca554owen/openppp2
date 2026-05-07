@@ -105,7 +105,7 @@ namespace ppp {
                  * Used to match outbound ICMP Echo Requests with inbound Echo Replies.
                  * Records expire after a configurable interval to prevent stale entries.
                  */
-                typedef struct {    
+                typedef struct {
                     UInt64                                                          datetime;  ///< Tick count when the probe was sent.
                     IPFrame::IPFramePtr                                             packet;    ///< Original IP frame containing the ICMP echo.
                 }                                                                   VEthernetIcmpPacket;
@@ -135,7 +135,7 @@ namespace ppp {
                 /** @brief Shared pointer alias for proxy forwarding interface. */
                 typedef std::shared_ptr<IForwarding>                                IForwardingPtr;
 
-            public: 
+            public:
                 /** @brief Base server information type alias. */
                 typedef ppp::app::protocol::VirtualEthernetInformation              VirtualEthernetInformation;
                 /** @brief Extended server information type alias. */
@@ -165,16 +165,16 @@ namespace ppp {
                  * route management. On Windows the Description field identifies the adapter;
                  * on macOS DefaultRoutes tracks the pre-VPN default route entries.
                  */
-                class NetworkInterface {    
-                public: 
+                class NetworkInterface {
+                public:
                     ppp::string                                                     Name;       ///< Interface name (e.g. "eth0", "utun2").
-#if !defined(_MACOS)    
+#if !defined(_MACOS)
                     ppp::string                                                     Id;         ///< Interface GUID string (Windows) or sysfs id (Linux).
-#endif  
+#endif
                     int                                                             Index = -1; ///< OS interface index; -1 when unknown.
                     ppp::vector<boost::asio::ip::address>                           DnsAddresses; ///< DNS servers associated with this interface.
 
-                public: 
+                public:
                     /**
                      * @brief Initializes all interface metadata to safe defaults.
                      */
@@ -185,17 +185,17 @@ namespace ppp {
                      */
                     virtual ~NetworkInterface() noexcept = default;
 
-                public: 
+                public:
                     boost::asio::ip::address                                        IPAddress;      ///< Interface primary IPv4 address.
                     boost::asio::ip::address                                        GatewayServer;  ///< Default gateway for this interface.
                     boost::asio::ip::address                                        SubmaskAddress; ///< Subnet mask for this interface.
 
-#if defined(_WIN32) 
-                public: 
+#if defined(_WIN32)
+                public:
                     ppp::string                                                     Description;  ///< Windows adapter description string.
-#elif defined(_MACOS)   
+#elif defined(_MACOS)
                     ppp::unordered_map<uint32_t, uint32_t>                          DefaultRoutes; ///< Pre-VPN default route entries (macOS only).
-#endif  
+#endif
                 };
 
                 /** @brief Route information base type alias. */
@@ -216,14 +216,14 @@ namespace ppp {
                 typedef lsp::PaperAirplaneController                                PaperAirplaneController;
                 /** @brief Shared pointer alias for PaperAirplane controller. */
                 typedef std::shared_ptr<PaperAirplaneController>                    PaperAirplaneControllerPtr;
-#elif defined(_LINUX)   
+#elif defined(_LINUX)
                 /** @brief Linux socket-protection network type alias. */
                 typedef ppp::net::ProtectorNetwork                                  ProtectorNetwork;
                 /** @brief Shared pointer alias for Linux protector network. */
                 typedef std::shared_ptr<ProtectorNetwork>                           ProtectorNetworkPtr;
 #endif
 
-            public: 
+            public:
                 /**
                  * @brief Optional callback invoked on each periodic tick.
                  *
@@ -273,13 +273,13 @@ namespace ppp {
                  */
                 virtual bool                                                        ClearHttpProxyToSystemEnv()  noexcept;
 
-#elif defined(_LINUX)   
+#elif defined(_LINUX)
                 /**
                  * @brief Gets the optional Linux socket-protection network helper.
                  * @return Shared ProtectorNetwork; null if not created.
                  */
                 ProtectorNetworkPtr                                                 GetProtectorNetwork()        noexcept { return protect_network_; }
-#endif  
+#endif
 
                 /**
                  * @brief Gets the active runtime configuration.
@@ -407,7 +407,7 @@ namespace ppp {
                  */
                 bool                                                                IsBypassIpAddress(const boost::asio::ip::address& ip) noexcept;
 
-            public: 
+            public:
                 /**
                  * @brief Loads DNS rules from a file path or inline rule text string.
                  *
@@ -449,7 +449,7 @@ namespace ppp {
                  * @note Android/iOS only. Replaces the OS routing table approach.
                  */
                 void                                                                SetBypassIpList(ppp::string&& bypass_ip_list) noexcept;
-#else   
+#else
 #if defined(_LINUX)
                 /**
                  * @brief Gets or sets Linux socket-protect mode.
@@ -494,10 +494,10 @@ namespace ppp {
                  * @return true if the entry was accepted; false on validation failure.
                  */
                 virtual bool                                                        AddLoadIPList(
-                    const ppp::string&                                              path, 
-#if defined(_LINUX) 
+                    const ppp::string&                                              path,
+#if defined(_LINUX)
                     const ppp::string&                                              nic,
-#endif  
+#endif
                     const boost::asio::ip::address&                                 gw,
                     const ppp::string&                                              url) noexcept;
 
@@ -506,9 +506,9 @@ namespace ppp {
                  * @return Human-readable server URI (e.g. "wss://vpn.example.com:443/ws").
                  */
                 virtual ppp::string                                                 GetRemoteUri() noexcept;
-#endif  
+#endif
 
-            public: 
+            public:
                 /**
                  * @brief Opens the switcher and initializes all runtime services.
                  *
@@ -540,7 +540,7 @@ namespace ppp {
                  */
                 virtual bool                                                        BlockQUIC(bool value) noexcept;
 
-            protected:  
+            protected:
                 /**
                  * @brief Handles a raw IPv4 packet from the TAP device (native path).
                  *
@@ -605,7 +605,7 @@ namespace ppp {
                  */
                 virtual bool                                                        OnInformation(const std::shared_ptr<VirtualEthernetInformation>& information, const VirtualEthernetInformationExtensions& extensions) noexcept;
 
-            protected:  
+            protected:
                 /**
                  * @brief Creates the VEthernetExchanger instance for this switcher.
                  * @return New exchanger shared pointer; null on allocation failure.
@@ -648,19 +648,19 @@ namespace ppp {
                  */
                 virtual ITransmissionStatisticsPtr                                  NewStatistics() noexcept;
 
-#if defined(_WIN32) 
+#if defined(_WIN32)
                 /**
                  * @brief Creates the Windows PaperAirplane LSP controller.
                  * @return New PaperAirplaneController; null on failure.
                  */
                 virtual PaperAirplaneControllerPtr                                  NewPaperAirplaneController() noexcept;
-#elif defined(_LINUX)   
+#elif defined(_LINUX)
                 /**
                  * @brief Creates the Linux socket-protection network helper.
                  * @return New ProtectorNetwork; null on failure.
                  */
                 virtual ProtectorNetworkPtr                                         NewProtectorNetwork() noexcept;
-#endif  
+#endif
 
                 /**
                  * @brief Injects a UDP datagram back into the local virtual network path.
@@ -674,8 +674,8 @@ namespace ppp {
                  */
                 virtual bool                                                        DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching = true) noexcept;
 
-            protected:  
-#if !defined(_ANDROID) && !defined(_IPHONE)     
+            protected:
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 /**
                  * @brief Installs VPN-specific routes into the host OS routing table.
                  * @note Desktop platforms only. Not called on Android/iOS.
@@ -687,7 +687,7 @@ namespace ppp {
                  * @note Desktop platforms only. Called during Dispose().
                  */
                 virtual void                                                        DeleteRoute() noexcept;
-#endif  
+#endif
 
                 /**
                  * @brief Handles a UDP frame that arrived from the TAP device.
@@ -707,8 +707,8 @@ namespace ppp {
                  */
                 virtual bool                                                        OnIcmpPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept;
 
-            private:    
-#if !defined(_ANDROID) && !defined(_IPHONE) 
+            private:
+#if !defined(_ANDROID) && !defined(_IPHONE)
                 /**
                  * @brief Attempts to repair the underlying NIC's default gateway route.
                  * @return true if the gateway route was successfully restored; false otherwise.
@@ -720,7 +720,7 @@ namespace ppp {
                  * @return true if routes were cleaned up; false on error.
                  */
                 bool                                                                DeleteAllDefaultRoute() noexcept;
-#else   
+#else
                 /**
                  * @brief Builds the mobile platform bypass/VPN route table from the TAP interface.
                  *
@@ -729,7 +729,7 @@ namespace ppp {
                  * @note Android/iOS only.
                  */
                 bool                                                                AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept;
-#endif  
+#endif
 
             private:
                 /**
@@ -818,15 +818,15 @@ namespace ppp {
                 /** @brief Stops and clears all registered timeout handlers. */
                 void                                                                ReleaseAllTimeouts() noexcept;
 
-            private:    
-#if !defined(_ANDROID) && !defined(_IPHONE)     
-#if defined(_WIN32) 
+            private:
+#if !defined(_ANDROID) && !defined(_IPHONE)
+#if defined(_WIN32)
                 /**
                  * @brief Starts the optional Windows PaperAirplane LSP helper.
                  * @return true if started; false if unavailable or disabled.
                  */
                 bool                                                                UsePaperAirplaneController() noexcept;
-#endif  
+#endif
                 /**
                  * @brief Adds OS route entries for configured DNS server exception addresses.
                  * @note Ensures DNS server packets bypass the VPN tunnel.
@@ -848,7 +848,7 @@ namespace ppp {
                  */
                 bool                                                                AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept;
 
-#if defined(_WIN32) 
+#if defined(_WIN32)
                 /**
                  * @brief Deletes one host route from a Windows MIB_IPFORWARDTABLE snapshot.
                  *
@@ -859,7 +859,7 @@ namespace ppp {
                  * @return true if the route was removed; false otherwise.
                  */
                 bool                                                                DeleteRoute(const std::shared_ptr<MIB_IPFORWARDTABLE>& mib, uint32_t ip, uint32_t gw, int prefix) noexcept;
-#else   
+#else
                 /**
                  * @brief Deletes one host route from the Unix routing table.
                  *
@@ -869,7 +869,7 @@ namespace ppp {
                  * @return true if removed; false on error.
                  */
                 bool                                                                DeleteRoute(uint32_t ip, uint32_t gw, int prefix) noexcept;
-#endif  
+#endif
 
                 /**
                  * @brief Starts the default-route guard worker to detect and repair route loss.
@@ -898,7 +898,7 @@ namespace ppp {
                 bool                                                                AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept;
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-            private:    
+            private:
                 /**
                  * @brief Applies the server-assigned managed IPv6 configuration to the local NIC.
                  *
@@ -913,7 +913,7 @@ namespace ppp {
                 void                                                                RestoreAssignedIPv6() noexcept;
 #endif
 
-            private:    
+            private:
                 /**
                  * @brief Synthesizes and injects an ICMP Echo Reply or similar response.
                  *
@@ -1050,7 +1050,7 @@ namespace ppp {
                  *          unspecified address; callers must check is_v6() before use.
                  */
                 boost::asio::ip::address                                            last_assigned_ipv6_;
-                
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 /** @brief Mutex guarding the default-route guard worker. */
                 SynchronizedObject                                                  prdr_;
@@ -1086,7 +1086,7 @@ namespace ppp {
                 boost::asio::ip::address                                            preferred_ngw_;
                 /** @brief DNS server sets per tier (bypass/VPN/redirect). */
                 ppp::unordered_set<uint32_t>                                        dns_serverss_[3];
-                
+
 #if defined(_WIN32)
                 /** @brief Windows PaperAirplane LSP controller. */
                 PaperAirplaneControllerPtr                                          paper_airplane_ctrl_;

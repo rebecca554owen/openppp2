@@ -371,7 +371,7 @@ namespace ppp {
             if (fd == -1) {
                 return false;
             }
-            
+
             int flags = fcntl(fd, F_GETFD, 0);
             if (flags == -1) {
                 return false;
@@ -389,7 +389,7 @@ namespace ppp {
             static ShutdownApplicationEventHandler eeh = NULLPTR;
             static std::atomic<bool> shutdown_requested = false;
 
-            auto SIG_EEH = 
+            auto SIG_EEH =
                 [](int signo) noexcept {
                     static std::atomic<bool> processed = false;
 
@@ -668,7 +668,7 @@ namespace ppp {
                         if (line_complete) {
                             ppp::string line;
                             line.swap(accumulated);
-                            
+
                             accumulated.clear();
                             handler.process_line(std::move(line));
                         }
@@ -728,7 +728,7 @@ namespace ppp {
             if (!output.empty() && output.back() == '\n') {
                 output.pop_back();
             }
-            
+
             return output;
         }
 
