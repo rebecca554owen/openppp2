@@ -9,6 +9,9 @@
 
 #include <common/chnroutes2/chnroutes2.h>
 
+#include <boost/filesystem.hpp>
+#include <ctime>
+
 /**
  * @file GeoRuleGenerator.cpp
  * @brief Phase G: GeoIP/GeoSite rule generation implementation.
@@ -101,6 +104,38 @@ namespace ppp {
                 ppp::string full_path = File::GetFullPath(File::RewritePath(dat_path.data()).data());
                 if (full_path.empty()) {
                     full_path = dat_path;
+                }
+
+                /**
+                 * @brief Skip the download when the local cache is still fresh.
+                 *
+                 * @details The geo rule sources upstream (MetaCubeX/meta-rules-dat)
+                 *          publish updates roughly weekly but the data we consume
+                 *          (per-country CIDR/domain lists) is stable across releases.
+                 *          Re-downloading on every client startup wastes bandwidth
+                 *          and adds 5-30 seconds of cold-start latency. We treat the
+                 *          cache as fresh for 30 days from the file's last write
+                 *          time; outside that window the file is re-downloaded as
+                 *          before. Failures to read the timestamp fall through to
+                 *          the download path so behaviour is at worst unchanged.
+                 */
+                {
+                    boost::system::error_code ec_stat;
+                    if (boost::filesystem::is_regular_file(full_path.data(), ec_stat) && !ec_stat) {
+                        std::time_t mtime = boost::filesystem::last_write_time(full_path.data(), ec_stat);
+                        if (!ec_stat && mtime > 0) {
+                            constexpr std::time_t kCacheTtlSeconds = 30 * 24 * 60 * 60; // 30 days
+                            std::time_t now = std::time(nullptr);
+                            std::time_t age = (now > mtime) ? (now - mtime) : 0;
+                            if (age < kCacheTtlSeconds) {
+                                ppp::telemetry::Log(Level::kInfo, "geo-rules",
+                                    "%s dat cache is fresh, skipping download: %s (age=%lld s)",
+                                    label ? label : "geo", full_path.data(), static_cast<long long>(age));
+                                ppp::telemetry::Count("geo-rules.download_skipped_fresh", 1);
+                                return true;
+                            }
+                        }
+                    }
                 }
 
                 ppp::string host;
