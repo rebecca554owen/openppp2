@@ -1427,7 +1427,11 @@ namespace ppp {
                 if (ppp::string bypass_ip_list = std::move(bypass_ip_list_); bypass_ip_list.size() > 0) {
                     // IP address of the virtual network card is used here to make it inconsistent with the condition of determining
                     // The next hop gateway of the route in the IsBypassIpAddress function.
-                    rib->AddAllRoutes(bypass_ip_list, IPEndPoint::LoopbackAddress);
+                    bool bypass_loaded = rib->AddAllRoutes(bypass_ip_list, IPEndPoint::LoopbackAddress);
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "bypass_ip_list load len=%d ok=%d",
+                        (int)bypass_ip_list.size(), bypass_loaded ? 1 : 0);
+#endif
                     ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
                 }
 
@@ -2230,9 +2234,84 @@ namespace ppp {
                 add_dns_server_to_dns_servers(tun_ni_, dns_serverss_[0]);
                 add_dns_server_to_dns_servers(underlying_ni_, dns_serverss_[1]);
 
+                // Helper: add a single "ip[:port]" address literal to dns_serverss_[1]
+                // so that DnsResolver-created sockets (DoH/DoT/TCP/UDP) can reach the
+                // upstream IP directly through the underlying NIC, bypassing the TUN
+                // and avoiding the recursive DNS-redirect loop that would otherwise
+                // occur when the system default route still points at the VPN tunnel.
+                // (See docs/DNS_MODULE_DESIGN.md "Socket protection / bypass routing".)
+                auto add_bypass_ip_literal =
+                    [this](const ppp::string& address) noexcept -> bool {
+                        if (address.empty()) {
+                            return false;
+                        }
+
+                        ppp::string host;
+                        int port = 0;
+                        if (!ppp::net::Ipep::ParseEndPoint(address, host, port)) {
+                            // Treat the entire string as a bare IP literal as a fallback
+                            // (some configurations omit the :port suffix).
+                            host = address;
+                        }
+                        if (host.empty()) {
+                            return false;
+                        }
+
+                        boost::system::error_code ec;
+                        boost::asio::ip::address ip = ppp::StringToAddress(host.data(), ec);
+                        if (ec || !ip.is_v4() || ip.is_unspecified() || ip.is_loopback() || ip.is_multicast()) {
+                            return false;
+                        }
+
+                        uint32_t ipnet = htonl(ip.to_v4().to_uint());
+                        dns_serverss_[1].emplace(ipnet);
+                        return true;
+                    };
+
+                // Helper: expand a built-in provider short name (e.g. "doh.pub",
+                // "cloudflare") to its IPv4 endpoints and add them to the bypass set.
+                auto add_bypass_provider =
+                    [&add_bypass_ip_literal](const ppp::string& provider_name) noexcept {
+                        if (provider_name.empty()) {
+                            return;
+                        }
+
+                        const ppp::vector<ppp::dns::ServerEntry>* provider =
+                            ppp::dns::DnsResolver::GetProvider(provider_name);
+                        if (NULLPTR == provider) {
+                            return;
+                        }
+
+                        for (const ppp::dns::ServerEntry& entry : *provider) {
+                            add_bypass_ip_literal(entry.address);
+                        }
+                    };
+
+                // Helper: walk a list of structured DnsServerEntry objects and add
+                // both their primary address and any bootstrap_ips to the bypass set.
+                auto add_bypass_dns_entries =
+                    [&add_bypass_ip_literal](const ppp::vector<ppp::configurations::AppConfiguration::DnsServerEntry>& entries) noexcept {
+                        for (const auto& ce : entries) {
+                            add_bypass_ip_literal(ce.address);
+                            for (const auto& b : ce.bootstrap) {
+                                add_bypass_ip_literal(b);
+                            }
+                        }
+                    };
+
                 // Add dns route set rules.
                 for (auto&& dns_rules : dns_ruless_) {
                     for (auto& [_, r] : dns_rules) {
+                        // Provider-based rule: route DnsResolver upstream IPs via the
+                        // underlying NIC.  For these rules `Nic` is repurposed as the
+                        // domestic/foreign selector (see Rule.h) and MUST NOT be used
+                        // to choose dns_serverss_ slot — provider sockets always need
+                        // the host route bypass to function.
+                        if (!r->ProviderName.empty()) {
+                            add_bypass_provider(r->ProviderName);
+                            continue;
+                        }
+
                         boost::asio::ip::address server = r->Server;
                         if (!server.is_v4()) {
                             continue;
@@ -2246,6 +2325,21 @@ namespace ppp {
                             dns_serverss_[0].emplace(ip);
                         }
                     }
+                }
+
+                // Pre-register provider IPs for the unmatched-query interception path.
+                // When intercept_unmatched is enabled, RedirectDnsServer routes DNS
+                // queries that do not match any rule through DnsResolver using the
+                // dns.servers.{domestic,foreign} configuration.  Those upstream IPs
+                // need the same bypass treatment as rule-driven provider IPs.
+                // The hardcoded "cloudflare" final fallback in ResolveAsyncWithFallback
+                // is also covered so the failover chain remains reachable.
+                if (configuration_->dns.intercept_unmatched) {
+                    add_bypass_provider(configuration_->dns.servers.domestic);
+                    add_bypass_provider(configuration_->dns.servers.foreign);
+                    add_bypass_provider("cloudflare");
+                    add_bypass_dns_entries(configuration_->dns.servers.domestic_entries);
+                    add_bypass_dns_entries(configuration_->dns.servers.foreign_entries);
                 }
 
                 // Compare two lists and remove duplicate ip addresses that appear in both lists.
@@ -3017,6 +3111,82 @@ namespace ppp {
                 return true;
             }
 
+            /**
+             * @brief Centralised DnsResolver response handler for RedirectDnsServer().
+             *
+             * Hardens the Stage-1 tunnel fallback so that the original DNS query is
+             * always forwarded through the VPN tunnel when DnsResolver fails to
+             * deliver a usable response.  Failure modes covered:
+             *   1. DnsResolver returns an empty response (timeout, all protocols
+             *      exhausted, etc).
+             *   2. Non-empty response but DatagramOutput cannot inject it into TUN.
+             *   3. Any std::exception thrown in AddCache/DatagramOutput/SendTo
+             *      (the calling lambda is noexcept; an uncaught throw would
+             *      terminate the process).
+             *
+             * Telemetry counters: dns.redirect.success / .fallback / .dropped /
+             * .exception.  DnsResolver guarantees single-shot callback so no
+             * explicit re-entrance guard is required here.
+             */
+            void VEthernetNetworkSwitcher::HandleDnsResolverResponse(
+                const std::shared_ptr<VEthernetNetworkSwitcher>& self,
+                const std::shared_ptr<VEthernetExchanger>&       exchanger,
+                const std::shared_ptr<BufferSegment>&            messages,
+                const boost::asio::ip::udp::endpoint&            sourceEP,
+                const boost::asio::ip::udp::endpoint&            destEP,
+                ppp::vector<Byte>                                response) noexcept {
+                try {
+                    if (!response.empty() && NULLPTR != self) {
+                        try {
+                            ppp::net::asio::vdns::AddCache(
+                                response.data(),
+                                static_cast<int>(response.size()));
+                        }
+                        catch (...) { /* cache failure is non-fatal */ }
+
+                        bool injected = self->DatagramOutput(
+                            sourceEP, destEP,
+                            response.data(),
+                            static_cast<int>(response.size()),
+                            false);
+                        if (injected) {
+                            ppp::telemetry::Count("dns.redirect.success", 1);
+                            return;
+                        }
+
+                        ppp::telemetry::Log(Level::kDebug, "dns",
+                            "redirect inject failed; tunnel fallback dst=%s:%d bytes=%d",
+                            destEP.address().to_string().data(),
+                            (int)destEP.port(),
+                            (int)response.size());
+                    }
+
+                    /* Tunnel fallback: forward the original DNS query through the
+                     * VPN.  Preserves pre-DoH behaviour (docs/DNS_MODULE_DESIGN.md
+                     * "default zero-disruption changes"). */
+                    if (NULLPTR != exchanger && NULLPTR != messages &&
+                        NULLPTR != messages->Buffer.get() && messages->Length > 0) {
+                        ppp::telemetry::Count("dns.redirect.fallback", 1);
+                        ppp::telemetry::Log(Level::kDebug, "dns",
+                            "tunnel fallback dst=%s:%d bytes=%d",
+                            destEP.address().to_string().data(),
+                            (int)destEP.port(),
+                            (int)messages->Length);
+                        exchanger->SendTo(sourceEP, destEP,
+                            messages->Buffer.get(), messages->Length);
+                    }
+                    else {
+                        ppp::telemetry::Count("dns.redirect.dropped", 1);
+                    }
+                }
+                catch (const std::exception&) {
+                    ppp::telemetry::Count("dns.redirect.exception", 1);
+                }
+                catch (...) {
+                    ppp::telemetry::Count("dns.redirect.exception", 1);
+                }
+            }
+
             /** @brief Entry point for DNS redirection decision and async execution. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<BufferSegment>& messages) noexcept {
                 ::dns::Message m;
@@ -3111,18 +3281,8 @@ namespace ppp {
                                     foreign_entries, false,
                                     static_cast<const Byte*>(messages->Buffer.get()),
                                     messages->Length,
-                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                        if (!response.empty()) {
-                                            ppp::net::asio::vdns::AddCache(
-                                                response.data(),
-                                                static_cast<int>(response.size()));
-
-                                            self->DatagramOutput(
-                                                sourceEP, destEP,
-                                                response.data(),
-                                                static_cast<int>(response.size()),
-                                                false);
-                                        }
+                                    [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                        HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                     });
                                 return true;
                             }
@@ -3135,18 +3295,8 @@ namespace ppp {
                                     domestic_entries, true,
                                     static_cast<const Byte*>(messages->Buffer.get()),
                                     messages->Length,
-                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                        if (!response.empty()) {
-                                            ppp::net::asio::vdns::AddCache(
-                                                response.data(),
-                                                static_cast<int>(response.size()));
-
-                                            self->DatagramOutput(
-                                                sourceEP, destEP,
-                                                response.data(),
-                                                static_cast<int>(response.size()),
-                                                false);
-                                        }
+                                    [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                        HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                     });
                                 return true;
                             }
@@ -3156,18 +3306,8 @@ namespace ppp {
                                 foreign, domestic, "cloudflare",
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length,
-                                [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                    if (!response.empty()) {
-                                        ppp::net::asio::vdns::AddCache(
-                                            response.data(),
-                                            static_cast<int>(response.size()));
-
-                                        self->DatagramOutput(
-                                            sourceEP, destEP,
-                                            response.data(),
-                                            static_cast<int>(response.size()),
-                                            false);
-                                    }
+                                [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                    HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                 });
                             return true;
                         }
@@ -3204,18 +3344,8 @@ namespace ppp {
                                     foreign_entries, false,
                                     static_cast<const Byte*>(messages->Buffer.get()),
                                     messages->Length,
-                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                        if (!response.empty()) {
-                                            ppp::net::asio::vdns::AddCache(
-                                                response.data(),
-                                                static_cast<int>(response.size()));
-
-                                            self->DatagramOutput(
-                                                sourceEP, destEP,
-                                                response.data(),
-                                                static_cast<int>(response.size()),
-                                                false);
-                                        }
+                                    [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                        HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                     });
                                 return true;
                             }
@@ -3228,18 +3358,8 @@ namespace ppp {
                                     domestic_entries, true,
                                     static_cast<const Byte*>(messages->Buffer.get()),
                                     messages->Length,
-                                    [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                        if (!response.empty()) {
-                                            ppp::net::asio::vdns::AddCache(
-                                                response.data(),
-                                                static_cast<int>(response.size()));
-
-                                            self->DatagramOutput(
-                                                sourceEP, destEP,
-                                                response.data(),
-                                                static_cast<int>(response.size()),
-                                                false);
-                                        }
+                                    [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                        HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                     });
                                 return true;
                             }
@@ -3249,18 +3369,8 @@ namespace ppp {
                                 foreign, domestic, "cloudflare",
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length,
-                                [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                    if (!response.empty()) {
-                                        ppp::net::asio::vdns::AddCache(
-                                            response.data(),
-                                            static_cast<int>(response.size()));
-
-                                        self->DatagramOutput(
-                                            sourceEP, destEP,
-                                            response.data(),
-                                            static_cast<int>(response.size()),
-                                            false);
-                                    }
+                                [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                    HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                 });
                             return true;
                         }
@@ -3287,20 +3397,8 @@ namespace ppp {
                                 rulePtr->ProviderName, domestic,
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length,
-                                [self, sourceEP, destEP](ppp::vector<Byte> response) noexcept {
-                                    if (!response.empty()) {
-                                        // Populate the vdns cache before injecting the response.
-                                        ppp::net::asio::vdns::AddCache(
-                                            response.data(),
-                                            static_cast<int>(response.size()));
-
-                                        // Inject the DNS response back into the virtual network.
-                                        self->DatagramOutput(
-                                            sourceEP, destEP,
-                                            response.data(),
-                                            static_cast<int>(response.size()),
-                                            false);
-                                    }
+                                [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                    HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                 });
                             return true;
                         }

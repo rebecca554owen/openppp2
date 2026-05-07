@@ -67,15 +67,24 @@ namespace ppp
                         return 0;
                     }
 
+                    ppp::string normalized = s;
+                    for (char& ch : normalized)
+                    {
+                        if (ch == ',' || ch == ';' || ch == '\t')
+                        {
+                            ch = '\n';
+                        }
+                    }
+
                     ppp::vector<ppp::string> lines;
-                    Tokenize<ppp::string>(s, lines, "\r\n");
+                    Tokenize<ppp::string>(normalized, lines, "\r\n");
 
                     if (lines.empty())
                     {
                         return 0;
                     }
 
-                    std::size_t length = rules.size();
+                    std::size_t length = rules.size() + full_rules.size() + regexp_rules.size();
                     ppp::unordered_set<ppp::string> sets;
 
                     for (std::size_t i = 0, line_count = lines.size(); i < line_count; i++)
@@ -103,14 +112,54 @@ namespace ppp
                         Tokenize<ppp::string>(line, segments, "/");
 
                         std::size_t segment_size = segments.size();
-                        if (segment_size < 2)
-                        {
-                            continue;
-                        }
-
                         for (std::size_t j = 0; j < segment_size; j++)
                         {
                             segments[j] = ATrim<ppp::string>(segments[j]);
+                        }
+
+                        // Mobile UI historically described this field as a DNS
+                        // server list.  Accept a bare IP/provider line as a
+                        // wildcard rule so entries like "8.8.8.8" and
+                        // "cloudflare" actually take effect for all domains.
+                        if (segment_size == 1)
+                        {
+                            ppp::string upstream = segments[0];
+                            if (upstream.empty())
+                            {
+                                continue;
+                            }
+
+                            bool nic = false;
+                            boost::system::error_code ec;
+                            boost::asio::ip::address address = StringToAddress(upstream, ec);
+                            Ptr rule;
+                            if (!ec)
+                            {
+                                if (ppp::net::IPEndPoint::IsInvalid(address))
+                                {
+                                    continue;
+                                }
+
+                                rule = make_shared_object<Rule>(Rule{ ".*", nic, address });
+                            }
+                            elif(ppp::dns::DnsResolver::HasProvider(upstream))
+                            {
+                                rule = make_shared_object<Rule>(Rule{ ".*", nic, {}, upstream });
+                            }
+
+                            if (NULLPTR != rule)
+                            {
+                                if (regexp_rules.find(".*") == regexp_rules.end())
+                                {
+                                    regexp_rules[".*"] = rule;
+                                }
+                            }
+                            continue;
+                        }
+
+                        if (segment_size < 2)
+                        {
+                            continue;
                         }
                         
                         ppp::string& host = segments[0];
@@ -229,7 +278,7 @@ namespace ppp
                         }
                     }
 
-                    return rules.size() - length;
+                    return (rules.size() + full_rules.size() + regexp_rules.size()) - length;
                 }
 
                 /**

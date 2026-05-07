@@ -190,6 +190,55 @@ namespace ppp {
             return StringToAddress(text, ec);
         }
 
+        /**
+         * @brief Returns true when @p address_text is an IP literal with optional port.
+         */
+        static bool IsAddressLiteral(const ppp::string& address_text) noexcept {
+            boost::system::error_code ec;
+            boost::asio::ip::address ip = ParseAddressOnly(address_text, ec);
+            return !ec && !ip.is_unspecified();
+        }
+
+        /**
+         * @brief Appends built-in provider entries when text is a provider short-name.
+         */
+        static bool AppendProviderEntries(ppp::vector<ServerEntry>& entries, const ppp::string& provider_name) noexcept {
+            const ppp::vector<ServerEntry>* provider = DnsResolver::GetProvider(provider_name);
+            if (NULLPTR == provider) {
+                return false;
+            }
+
+            entries.insert(entries.end(), provider->begin(), provider->end());
+            return true;
+        }
+
+        /**
+         * @brief Expands structured entries that use provider shorthand addresses.
+         *
+         * Configuration accepts string shorthand for dns.servers.domestic/foreign.
+         * The config parser stores such strings as DnsServerEntry.address.  Without
+         * this expansion, ResolveAsyncWithEntries() treats "cloudflare" or
+         * "doh.pub" as UDP address literals, exhausts immediately, and unmatched
+         * domains can fail while system DNS has already been pointed at the tunnel.
+         */
+        static ppp::vector<ServerEntry> ExpandResolverEntries(const ppp::vector<ServerEntry>& explicit_entries) noexcept {
+            ppp::vector<ServerEntry> expanded;
+            expanded.reserve(explicit_entries.size());
+
+            for (const ServerEntry& entry : explicit_entries) {
+                ppp::string provider_name = ATrim(entry.address);
+                if (!provider_name.empty() && entry.url.empty() && entry.hostname.empty() && entry.bootstrap_ips.empty() && !IsAddressLiteral(provider_name)) {
+                    if (AppendProviderEntries(expanded, provider_name)) {
+                        continue;
+                    }
+                }
+
+                expanded.emplace_back(entry);
+            }
+
+            return expanded;
+        }
+
         static int ParsePort(const ppp::string& address_text, int default_port) noexcept {
             ppp::string text = ATrim(address_text);
             std::size_t colon = text.find(':');
@@ -457,7 +506,20 @@ namespace ppp {
                         return;
                     }
 
-                    resolver->ResolveAsync(name, false,
+                    // Preserve the domestic semantic across the fallback chain so
+                    // ECS injection is applied for the domestic tier (per
+                    // docs/DNS_MODULE_DESIGN.md).  The tier is classified as
+                    // domestic when its provider short-name matches the value
+                    // configured via SetDefaultProviders().  When SetDefaultProviders
+                    // has not been called the default is empty and the comparison
+                    // returns false, preserving prior behaviour.
+                    bool tier_domestic = false;
+                    if (!resolver->default_domestic_.empty()) {
+                        tier_domestic = NormalizeProviderName(name) ==
+                                        NormalizeProviderName(resolver->default_domestic_);
+                    }
+
+                    resolver->ResolveAsync(name, tier_domestic,
                         packet_copy->data(), static_cast<int>(packet_copy->size()),
                         [next](ppp::vector<Byte> inner_response) noexcept {
                             if (!inner_response.empty()) {
@@ -605,9 +667,14 @@ namespace ppp {
 
             try {
                 request->assign(packet, packet + length);
-                *entries = explicit_entries;
+                *entries = ExpandResolverEntries(explicit_entries);
             }
             catch (const std::exception&) {
+                boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
+                return;
+            }
+
+            if (entries->empty()) {
                 boost::asio::post(context_, [callback]() noexcept { callback(ppp::vector<Byte>()); });
                 return;
             }

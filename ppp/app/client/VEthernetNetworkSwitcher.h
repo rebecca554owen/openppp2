@@ -753,6 +753,24 @@ namespace ppp {
                 bool                                                                RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept;
 
                 /**
+                 * @brief Hardened DnsResolver response handler used by RedirectDnsServer().
+                 *
+                 * Centralised entry point that injects a non-empty response into the
+                 * TUN via DatagramOutput(), or falls back to forwarding the original
+                 * query through the VPN tunnel via VEthernetExchanger::SendTo() when
+                 * DnsResolver fails or injection cannot complete.  Always exception
+                 * safe; emits dns.redirect.{success,fallback,dropped,exception}
+                 * telemetry counters.
+                 */
+                static void                                                         HandleDnsResolverResponse(
+                    const std::shared_ptr<VEthernetNetworkSwitcher>&                self,
+                    const std::shared_ptr<VEthernetExchanger>&                      exchanger,
+                    const std::shared_ptr<ppp::net::packet::BufferSegment>&         messages,
+                    const boost::asio::ip::udp::endpoint&                           sourceEP,
+                    const boost::asio::ip::udp::endpoint&                           destEP,
+                    ppp::vector<Byte>                                               response) noexcept;
+
+                /**
                  * @brief Coroutine implementation of the DNS redirect exchange.
                  *
                  * @param y              Coroutine yield context.

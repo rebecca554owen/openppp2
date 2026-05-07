@@ -393,7 +393,61 @@ namespace ppp {
                 [](int signo) noexcept {
                     static std::atomic<bool> processed = false;
 
+                    /*
+                     * Determine whether this signal indicates an unrecoverable
+                     * synchronous fault (SIGSEGV / SIGBUS / SIGFPE / SIGILL /
+                     * SIGABRT / SIGTRAP / SIGSTKFLT / SIGSYS).  For such signals
+                     * the kernel re-executes the faulting instruction after the
+                     * handler returns; if we do not restore the default
+                     * disposition and re-raise (or _exit) the process spins
+                     * forever at 100 % CPU on the same fault, ignoring even
+                     * SIGTERM/SIGKILL from the user (since those are also
+                     * intercepted by this same handler before the fatal signal
+                     * is processed).  This was the root cause of the observed
+                     * "ppp 卡死 100 % CPU" behaviour where strace showed an
+                     * unbroken stream of SIGSEGV / rt_sigreturn pairs.
+                     */
+                    bool is_fatal_fault = false;
+                    switch (signo) {
+#ifdef SIGSEGV
+                        case SIGSEGV:   is_fatal_fault = true; break;
+#endif
+#ifdef SIGBUS
+                        case SIGBUS:    is_fatal_fault = true; break;
+#endif
+#ifdef SIGFPE
+                        case SIGFPE:    is_fatal_fault = true; break;
+#endif
+#ifdef SIGILL
+                        case SIGILL:    is_fatal_fault = true; break;
+#endif
+#ifdef SIGABRT
+                        case SIGABRT:   is_fatal_fault = true; break;
+#endif
+#ifdef SIGTRAP
+                        case SIGTRAP:   is_fatal_fault = true; break;
+#endif
+#ifdef SIGSTKFLT
+                        case SIGSTKFLT: is_fatal_fault = true; break;
+#endif
+#ifdef SIGSYS
+                        case SIGSYS:    is_fatal_fault = true; break;
+#endif
+                        default:        break;
+                    }
+
                     if (processed.exchange(true)) {
+                        /*
+                         * Re-entrant or recurring delivery.  For fatal faults
+                         * we must terminate the process here; simply returning
+                         * would let the kernel re-execute the broken
+                         * instruction and we would loop forever.
+                         */
+                        if (is_fatal_fault) {
+                            signal(signo, SIG_DFL);
+                            raise(signo);
+                            _exit(128 + signo);
+                        }
                         return;
                     }
 
@@ -407,6 +461,20 @@ namespace ppp {
                     else {
                         signal(signo, SIG_DFL);
                         raise(signo);
+                    }
+
+                    /*
+                     * For fatal synchronous faults the handler() above only
+                     * schedules an asynchronous graceful shutdown — control
+                     * still returns to the broken instruction.  Restore the
+                     * default disposition and re-raise so the kernel delivers
+                     * the killing blow; _exit() is the belt-and-suspenders
+                     * fallback in case raise() is somehow swallowed.
+                     */
+                    if (is_fatal_fault) {
+                        signal(signo, SIG_DFL);
+                        raise(signo);
+                        _exit(128 + signo);
                     }
                 };
 
