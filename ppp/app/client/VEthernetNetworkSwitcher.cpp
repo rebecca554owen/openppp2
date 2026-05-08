@@ -3550,7 +3550,8 @@ namespace ppp {
                                     foreign_entries, false,
                                     static_cast<const Byte*>(messages->Buffer.get()),
                                     messages->Length,
-                                    [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                    [self, sourceEP, destEP, exchanger, messages, packet](ppp::vector<Byte> response) noexcept {
+                                        (void)packet; // keep IPFrame alive until async resolve completes
                                         HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                     });
                                 return true;
@@ -3564,7 +3565,8 @@ namespace ppp {
                                     domestic_entries, true,
                                     static_cast<const Byte*>(messages->Buffer.get()),
                                     messages->Length,
-                                    [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                    [self, sourceEP, destEP, exchanger, messages, packet](ppp::vector<Byte> response) noexcept {
+                                        (void)packet;
                                         HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                     });
                                 return true;
@@ -3575,7 +3577,8 @@ namespace ppp {
                                 foreign, domestic, "cloudflare",
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length,
-                                [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                [self, sourceEP, destEP, exchanger, messages, packet](ppp::vector<Byte> response) noexcept {
+                                    (void)packet;
                                     HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                 });
                             return true;
@@ -3666,7 +3669,8 @@ namespace ppp {
                                 rulePtr->ProviderName, domestic,
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length,
-                                [self, sourceEP, destEP, exchanger, messages](ppp::vector<Byte> response) noexcept {
+                                [self, sourceEP, destEP, exchanger, messages, packet](ppp::vector<Byte> response) noexcept {
+                                    (void)packet; // keep IPFrame alive until async resolve completes
                                     HandleDnsResolverResponse(self, exchanger, messages, sourceEP, destEP, std::move(response));
                                 });
                             return true;
@@ -3726,7 +3730,8 @@ namespace ppp {
                 const auto allocator = configuration_->GetBufferAllocator();
 
                 return ppp::coroutines::YieldContext::Spawn(allocator.get(), *context,
-                    [self, this, socket, buffer, frame, messages, context, serverIP, destinationIP](ppp::coroutines::YieldContext& y) noexcept {
+                    [self, this, socket, buffer, frame, messages, packet, context, serverIP, destinationIP](ppp::coroutines::YieldContext& y) noexcept {
+                        (void)packet; // keep IPFrame alive until coroutine finishes
                         return RedirectDnsServer(y, socket, buffer, serverIP, frame, messages, context, destinationIP);
                     });
             }
