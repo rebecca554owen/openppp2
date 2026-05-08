@@ -1267,9 +1267,21 @@ namespace ppp {
                                         return;
                                     }
 
-                                    /* Read HTTP response. */
+                                    /* Read HTTP response.
+                                     *
+                                     * NOTE(lifetime): `read_buf` MUST be captured into this
+                                     * completion lambda. boost::beast::http::async_read holds a
+                                     * reference to the flat_buffer for the entire duration of
+                                     * the async op; the buffer's only owner here is this
+                                     * shared_ptr. If we don't capture it, the enclosing
+                                     * async_write completion lambda returns immediately after
+                                     * kicking off the read and destroys its local `read_buf`,
+                                     * leaving the parser to dereference freed memory.
+                                     * Symptom on Android: null deref in
+                                     * boost::beast::http::basic_parser::parse_start_line ~200ms
+                                     * after the first DoH query. */
                                     boost::beast::http::async_read(*stream, *read_buf, *http_res,
-                                        [stream, timer, http_res, state](const boost::system::error_code& read_ec, std::size_t) noexcept {
+                                        [stream, timer, read_buf, http_res, state](const boost::system::error_code& read_ec, std::size_t) noexcept {
                                             boost::system::error_code ignored;
                                             stream->lowest_layer().close(ignored);
                                             ppp::net::Socket::Cancel(*timer);
