@@ -1090,6 +1090,38 @@ namespace ppp {
                         assigned_ipv4_gateway_ = gw;
                     }
 
+                    // Capture the static (config-time) IPv4 values once, before we
+                    // overwrite the snapshots below.  RestoreAssignedIPv4 needs
+                    // these to roll the interface back to its original address.
+                    if (!static_ipv4_captured_) {
+                        static_ipv4_address_  = tun_ni->IPAddress;
+                        static_ipv4_gateway_  = tun_ni->GatewayServer;
+                        static_ipv4_mask_     = tun_ni->SubmaskAddress;
+                        static_ipv4_captured_ = true;
+                    }
+
+                    // Refresh the in-memory ITap and NetworkInterface snapshots so
+                    // external consumers (status panels / IPC clients reading
+                    // tun_ni_->IPAddress or tap->IPAddress) see the address that
+                    // was actually programmed onto the kernel interface, not the
+                    // static config IP captured at TAP creation.  Without these
+                    // updates the UI keeps showing the pre-assignment value
+                    // (e.g. 10.0.0.2/255.255.255.252) even when the live address
+                    // is the dynamically-allocated one (e.g. 10.0.0.3/24).
+                    tun_ni->IPAddress      = addr;
+                    tun_ni->SubmaskAddress = mask;
+                    if (!ec && gw.is_v4()) {
+                        tun_ni->GatewayServer = gw;
+                    }
+
+                    if (auto tap = GetTap(); NULLPTR != tap) {
+                        tap->IPAddress      = addr.to_v4().to_uint();
+                        tap->SubmaskAddress = mask.to_v4().to_uint();
+                        if (!ec && gw.is_v4()) {
+                            tap->GatewayServer = gw.to_v4().to_uint();
+                        }
+                    }
+
                     ppp::telemetry::Log(Level::kDebug, "client", "IPv4 applied: %s/%s gw=%s",
                         ipv4.address.c_str(), ipv4.mask.c_str(), ipv4.gateway.c_str());
                     ppp::telemetry::Count("client.ipv4.apply", 1);
@@ -1116,9 +1148,17 @@ namespace ppp {
                     return;
                 }
 
-                // Restore the original TAP-created IPv4 address captured during Open().
-                ppp::string orig_addr(tun_ni->IPAddress.to_string().c_str());
-                ppp::string orig_mask(tun_ni->SubmaskAddress.to_string().c_str());
+                // ApplyAssignedIPv4 overwrote tun_ni_->IPAddress with the dynamic
+                // value, so the original (config-time) values needed for restore
+                // come from the stash captured on the first Apply call.  Fall
+                // back to the current tun_ni_ values when nothing was stashed
+                // (e.g. Restore invoked without prior Apply).
+                boost::asio::ip::address restore_addr = static_ipv4_captured_ ? static_ipv4_address_ : tun_ni->IPAddress;
+                boost::asio::ip::address restore_mask = static_ipv4_captured_ ? static_ipv4_mask_    : tun_ni->SubmaskAddress;
+                boost::asio::ip::address restore_gw   = static_ipv4_captured_ ? static_ipv4_gateway_ : tun_ni->GatewayServer;
+
+                ppp::string orig_addr(restore_addr.is_v4() ? restore_addr.to_string().c_str() : "");
+                ppp::string orig_mask(restore_mask.is_v4() ? restore_mask.to_string().c_str() : "");
 #if defined(_LINUX)
                 if (!orig_addr.empty() && !orig_mask.empty()) {
                     ppp::tap::TapLinux::SetIPAddress(tun_ni->Name, orig_addr, orig_mask);
@@ -1133,12 +1173,31 @@ namespace ppp {
                 }
 #elif defined(_WIN32)
                 if (!orig_addr.empty() && !orig_mask.empty()) {
-                    uint32_t nip = htonl(tun_ni->IPAddress.to_v4().to_uint());
-                    uint32_t nmask = htonl(tun_ni->SubmaskAddress.to_v4().to_uint());
-                    uint32_t ngw = tun_ni->GatewayServer.is_v4() ? htonl(tun_ni->GatewayServer.to_v4().to_uint()) : IPEndPoint::NoneAddress;
+                    uint32_t nip = htonl(restore_addr.to_v4().to_uint());
+                    uint32_t nmask = htonl(restore_mask.to_v4().to_uint());
+                    uint32_t ngw = restore_gw.is_v4() ? htonl(restore_gw.to_v4().to_uint()) : IPEndPoint::NoneAddress;
                     ppp::tap::TapWindows::SetAddresses(tun_ni->Index, nip, nmask, ngw);
                 }
 #endif
+
+                // Mirror the kernel-level restore by rolling back the in-memory
+                // NetworkInterface and ITap snapshots to the original config-time
+                // values, so status panels reflect the post-restore reality.
+                tun_ni->IPAddress      = restore_addr;
+                tun_ni->SubmaskAddress = restore_mask;
+                tun_ni->GatewayServer  = restore_gw;
+
+                if (auto tap = GetTap(); NULLPTR != tap) {
+                    if (restore_addr.is_v4()) {
+                        tap->IPAddress = restore_addr.to_v4().to_uint();
+                    }
+                    if (restore_mask.is_v4()) {
+                        tap->SubmaskAddress = restore_mask.to_v4().to_uint();
+                    }
+                    if (restore_gw.is_v4()) {
+                        tap->GatewayServer = restore_gw.to_v4().to_uint();
+                    }
+                }
 
                 ipv4_applied_ = false;
                 assigned_ipv4_address_ = boost::asio::ip::address();

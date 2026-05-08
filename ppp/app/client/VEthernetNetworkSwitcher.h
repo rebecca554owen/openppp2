@@ -1073,6 +1073,24 @@ namespace ppp {
                 /** @brief Server-assigned IPv4 mask currently applied to the TAP interface. */
                 boost::asio::ip::address                                            assigned_ipv4_mask_;
 
+                /**
+                 * @brief Snapshot of the static IPv4 configuration captured the first
+                 *        time ApplyAssignedIPv4 runs.
+                 *
+                 * @details ApplyAssignedIPv4 overwrites tun_ni_->IPAddress (and the
+                 *          parallel ITap fields) so that status panels reading the
+                 *          NetworkInterface snapshot show the live, server-assigned
+                 *          address.  RestoreAssignedIPv4 needs the original config
+                 *          values to roll the kernel interface back, so we stash
+                 *          them here on the first Apply call.  static_ipv4_captured_
+                 *          guards against repeated Apply cycles clobbering the
+                 *          original with a previously-assigned dynamic value.
+                 */
+                bool                                                                static_ipv4_captured_ = false;
+                boost::asio::ip::address                                            static_ipv4_address_;
+                boost::asio::ip::address                                            static_ipv4_gateway_;
+                boost::asio::ip::address                                            static_ipv4_mask_;
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 /** @brief Mutex guarding the default-route guard worker. */
                 SynchronizedObject                                                  prdr_;

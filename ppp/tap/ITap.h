@@ -48,12 +48,22 @@ namespace ppp
             typedef ppp::function<bool(ITap*, PacketInputEventArgs&)>       PacketInputEventHandler;
 
         public:
-            /** @brief Local IPv4 address assigned to the virtual network interface. */
-            const uint32_t                                                  IPAddress      = ppp::net::IPEndPoint::AnyAddress;
-            /** @brief IPv4 address of the default gateway routed via this adapter. */
-            const uint32_t                                                  GatewayServer  = ppp::net::IPEndPoint::AnyAddress;
-            /** @brief Subnet mask applied to the local interface address. */
-            const uint32_t                                                  SubmaskAddress = ppp::net::IPEndPoint::AnyAddress;
+            /**
+             * @brief Local IPv4 address assigned to the virtual network interface.
+             *
+             * @note Initialised at construction from the static configuration but no
+             *       longer `const`: when the server pushes a dynamic IPv4 assignment
+             *       (see VEthernetNetworkSwitcher::ApplyAssignedIPv4) the field is
+             *       updated to match the address actually programmed onto the kernel
+             *       interface, so external consumers (e.g. UI status panels reading
+             *       this member) see the live value rather than the stale config IP.
+             *       RestoreAssignedIPv4 reverts the field to the original value.
+             */
+            uint32_t                                                        IPAddress      = ppp::net::IPEndPoint::AnyAddress;
+            /** @brief IPv4 address of the default gateway routed via this adapter. See note on IPAddress. */
+            uint32_t                                                        GatewayServer  = ppp::net::IPEndPoint::AnyAddress;
+            /** @brief Subnet mask applied to the local interface address. See note on IPAddress. */
+            uint32_t                                                        SubmaskAddress = ppp::net::IPEndPoint::AnyAddress;
 
         public:
             /** @brief Inbound packet event handler; invoked for every packet received from the device. */
