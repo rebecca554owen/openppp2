@@ -366,9 +366,23 @@ namespace ppp {
             }
 
             t->TickEvent = 
-                [handler](Timer* sender, Timer::TickEventArgs& e) noexcept {
+                [handler](Timer* sender, Timer::TickEventArgs& e) mutable noexcept {
                     sender->Dispose();
-                    handler(sender);
+                    /* Move the user handler into a stack local so its
+                     * destruction happens here on a fresh frame, not later
+                     * inside the deferred Callable<outer-lambda> teardown.
+                     * The deferred path runs several frames deep already
+                     * (io_context dispatch -> ~function -> reset -> LockScope
+                     * -> __on_zero_shared -> ~Callable<user_lambda> -> ...);
+                     * cascading shared_ptr decrements inside the user
+                     * handler's captures (e.g. shared_ptr<VEthernetNetworkSwitcher>
+                     * and its owned Timers) can recurse deep enough to trip
+                     * the kernel's stack-guard page (SIGSEGV, SI_KERNEL,
+                     * single-frame backtrace) under DNS load. */
+                    TimeoutEventHandler local = std::move(handler);
+                    local(sender);
+                    /* `local` destructs here, releasing user captures on
+                     * this near-empty stack. */
                 };
 
             bool ok = t->SetInterval(milliseconds) && t->Start();
