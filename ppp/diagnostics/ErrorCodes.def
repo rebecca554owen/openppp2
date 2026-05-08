@@ -689,3 +689,5 @@ X(ResourceExhaustedPorts, "Resource exhausted: ephemeral port range", ErrorSever
 X(Ipv6SubnetForwardingNotSupported, "IPv6 subnet forwarding is not supported on the current platform", ErrorSeverity::kWarning)
 X(Ipv6NdpProxyNotSupported, "IPv6 NDP neighbor proxy is not supported on the current platform", ErrorSeverity::kWarning)
 X(Ipv6ServerRoleNotSupportedOnPlatform, "IPv6 server role is not supported on the current platform; IPv6 features are limited to client mode", ErrorSeverity::kWarning)
+
+X(ObfuscationFlagsMismatch, "Transport obfuscation flags differ between peers (key.masked / key.plaintext / key.delta-encode / key.shuffle-data / key.kf); align both configs.", ErrorSeverity::kError)

@@ -804,6 +804,34 @@ namespace ppp {
                 return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
             }
 
+            /**
+             * @brief Logs an obfuscation-flag mismatch detected post-handshake.
+             *
+             * Emits a single JSON line of the form:
+             * `{"ts":..., "event":"obfuscation-mismatch", "source":"ip:port", "details":"..."}`
+             *
+             * Companion record to `transmission.handshake.flag_mismatch` in the
+             * telemetry pipeline; together they ensure that both the structured
+             * server event log AND the metric/text telemetry log surface the
+             * same diagnostic, regardless of which one the operator monitors.
+             */
+            bool VirtualEthernetLogger::Mismatch(const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const ppp::string& details) noexcept {
+                if (NULLPTR == transmission) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                }
+
+                ppp::DateTime now = ppp::threading::Executors::Now();
+                ppp::string line;
+                line += "{";
+                line += "\"ts\":\"" + LOGGER_JSON_ESCAPE(LOGGER_NOW_ISO(now)) + "\"";
+                line += ",\"event\":\"obfuscation-mismatch\"";
+                line += ",\"source\":\"" + LOGGER_JSON_ESCAPE(GetRemoteEndPoint(transmission)) + "\"";
+                line += ",\"details\":\"" + LOGGER_JSON_ESCAPE(details) + "\"";
+                line += "}\n";
+
+                return this->Write(line.data(), static_cast<int>(line.size()), NULLPTR);
+            }
+
             /** @brief Logs VPN session establishment event. */
             bool VirtualEthernetLogger::Vpn(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
                 if (NULLPTR == transmission) {

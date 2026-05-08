@@ -1110,6 +1110,117 @@ namespace ppp {
             }
         }
 
+        // -----------------------------------------------------------------------------
+        // Post-handshake obfuscation-flag fingerprint exchange.
+        //
+        // The four bool flags `key.masked / key.plaintext / key.delta_encode /
+        // key.shuffle_data` plus the 32-bit `key.kf` constant govern the post-
+        // handshake framing layer in `Transmission_Payload_Encrypt/Decrypt` and
+        // `Transmission_Header_Encrypt/Decrypt`.  When the two endpoints disagree
+        // on any of these values the handshake itself still succeeds (handshake
+        // packets always run in `safest=true` mode), but the very first data-plane
+        // packet is silently mis-framed and `transmission->Read()` blocks until
+        // the keep-alive deadline (~15s) tears the session down with no diagnostic.
+        //
+        // This helper closes that gap by performing one extra `SessionId` round-
+        // trip immediately after `handshaked_=true` (i.e. using the *configured*
+        // flags, not the safest-mode handshake encoding).  Both sides write a
+        // 128-bit canary whose low 64 bits encode the framing-relevant config
+        // bits and whose high 64 bits are random.  If the peer cannot decode our
+        // canary, or if the decoded low-half does not match our locally-computed
+        // canary, we know the framing layers disagree and we emit a structured
+        // diagnostic on every available log channel before tearing the session
+        // down with `ErrorCode::ObfuscationFlagsMismatch`.
+        // -----------------------------------------------------------------------------
+
+        /**
+         * @brief Builds a deterministic 64-bit canary that captures every
+         *        framing-relevant configuration bit.
+         *
+         * Layout:
+         *   bits  0..47 : 0xC0DEC0DEC0DE   (constant magic; detects total
+         *                                   handshake desync vs flag mismatch)
+         *   bits 48..51 : masked / plaintext / delta_encode / shuffle_data
+         *   bits 52..63 : low 12 bits of `key.kf`
+         */
+        static uint64_t Transmission_Handshake_FlagCanary(const AppConfigurationPtr& APP) noexcept {
+            uint64_t magic = 0xC0DEC0DEC0DEULL;
+
+            uint64_t flags = 0;
+            flags |= (APP->key.masked       ? 1ULL : 0ULL) << 0;
+            flags |= (APP->key.plaintext    ? 1ULL : 0ULL) << 1;
+            flags |= (APP->key.delta_encode ? 1ULL : 0ULL) << 2;
+            flags |= (APP->key.shuffle_data ? 1ULL : 0ULL) << 3;
+
+            uint64_t kf_canary = static_cast<uint64_t>(static_cast<uint32_t>(APP->key.kf)) & 0xFFFULL;
+
+            return magic | (flags << 48) | (kf_canary << 52);
+        }
+
+        /**
+         * @brief Exchanges and validates an obfuscation-flag fingerprint after
+         *        ciphers are switched to post-handshake mode.
+         *
+         * Must be invoked only after `handshaked_=true` and the post-handshake
+         * cipher derivation; otherwise the exchange runs in `safest` mode and
+         * cannot detect a flag disagreement.
+         *
+         * @return true when the peer's fingerprint matches the local canary,
+         *         false otherwise (with `ErrorCode::ObfuscationFlagsMismatch`
+         *         set on the calling thread).
+         */
+        static bool Transmission_Handshake_VerifyFlags(
+            const AppConfigurationPtr&                  APP,
+            ITransmission*                              transmission,
+            ITransmission::YieldContext&                y) noexcept {
+
+            uint64_t local = Transmission_Handshake_FlagCanary(APP);
+            uint64_t nonce =
+                (static_cast<uint64_t>(static_cast<uint32_t>(RandomNext())) << 32) |
+                static_cast<uint64_t>(static_cast<uint32_t>(RandomNext()));
+
+            // Both sides write first then read: full-duplex, no deadlock.
+            Int128 fp_local = MAKE_OWORD(local, nonce);
+            if (!Transmission_Handshake_SessionId(APP, transmission, y, fp_local)) {
+                // Underlying write/encode failure already set an error code.
+                return false;
+            }
+
+            Int128 fp_peer = Transmission_Handshake_SessionId(APP, transmission, y);
+            uint64_t peer_low = static_cast<uint64_t>(fp_peer);
+
+            if (peer_low == local) {
+                return true;   // flags agree
+            }
+
+            // Distinguish "wrong magic" (total framing desync) from
+            // "magic ok but flag bits differ" for clearer diagnostics.
+            constexpr uint64_t kMagicMask  = 0x0000FFFFFFFFFFFFULL;
+            constexpr uint64_t kMagicValue = 0xC0DEC0DEC0DEULL;
+            const char* kind =
+                ((peer_low & kMagicMask) == kMagicValue)
+                    ? "flag bits differ"
+                    : "framing canary lost (decode failed or magic mismatch)";
+
+            ppp::telemetry::Count("transmission.handshake.flag_mismatch", 1);
+            ppp::telemetry::Log(
+                Level::kInfo, "transmission",
+                "obfuscation flag mismatch detected (%s): local=0x%016llx peer=0x%016llx "
+                "local_flags=[masked=%d plaintext=%d delta-encode=%d shuffle-data=%d kf=%d]",
+                kind,
+                static_cast<unsigned long long>(local),
+                static_cast<unsigned long long>(peer_low),
+                APP->key.masked       ? 1 : 0,
+                APP->key.plaintext    ? 1 : 0,
+                APP->key.delta_encode ? 1 : 0,
+                APP->key.shuffle_data ? 1 : 0,
+                APP->key.kf);
+
+            ppp::diagnostics::SetLastErrorCode(
+                ppp::diagnostics::ErrorCode::ObfuscationFlagsMismatch);
+            return false;
+        }
+
         /**
          * @brief Exchanges randomized handshake noise packets before real handshake values.
          */
@@ -1349,6 +1460,13 @@ namespace ppp {
                         }
                     }
 
+                    // Validate that both peers agreed on the post-handshake
+                    // framing flags.  Must run AFTER ciphers were re-derived so
+                    // it exercises the configured (non-`safest`) encoding path.
+                    if (!Transmission_Handshake_VerifyFlags(configuration_, this, y)) {
+                        return 0;
+                    }
+
                     return sid;
                 }
             }
@@ -1398,6 +1516,15 @@ namespace ppp {
                         transport_ = make_shared_object<Ciphertext>(configuration_->key.transport,
                             configuration_->key.transport_key + ivv_str);
                     }
+                }
+
+                // Validate post-handshake framing flags.  On mismatch the helper
+                // emits telemetry, sets `ObfuscationFlagsMismatch`, and returns
+                // false so the caller tears the transmission down with a clear
+                // error code rather than silently hanging on the first read.
+                if (!Transmission_Handshake_VerifyFlags(configuration_, this, y)) {
+                    handshaked_ = false;
+                    return false;
                 }
             }
             return handshaked_;
@@ -1505,7 +1632,12 @@ namespace ppp {
             if (!sid) {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient failed");
                 ppp::telemetry::Count("transmission.handshake.failure", 1);
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                // Only set the generic SessionHandshakeFailed code when the
+                // inner handshake did not already publish a more specific
+                // diagnosis (e.g. ObfuscationFlagsMismatch).
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                }
             } else {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient completed");
                 ppp::telemetry::Count("transmission.handshake.success", 1);
@@ -1539,7 +1671,11 @@ namespace ppp {
             if (!ok) {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer failed");
                 ppp::telemetry::Count("transmission.handshake.failure", 1);
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                // Preserve specific inner-handshake diagnoses (e.g.
+                // ObfuscationFlagsMismatch) over the generic fallback.
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                }
             } else {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer completed");
                 ppp::telemetry::Count("transmission.handshake.success", 1);

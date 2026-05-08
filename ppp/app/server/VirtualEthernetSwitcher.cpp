@@ -1454,6 +1454,30 @@ namespace ppp {
                     if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                     }
+
+                    // Mirror an `ObfuscationFlagsMismatch` diagnosis into the
+                    // structured server event log (`server.log`) so the operator
+                    // sees it on BOTH log channels.  Telemetry (the other
+                    // channel) was already emitted inside the inner handshake.
+                    if (ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::ObfuscationFlagsMismatch) {
+                        VirtualEthernetLoggerPtr logger = GetLogger();
+                        if (NULLPTR != logger) {
+                            const auto& k = configuration_->key;
+                            char buf[256];
+                            int n = snprintf(buf, sizeof(buf),
+                                "server_flags=[masked=%d,plaintext=%d,delta-encode=%d,shuffle-data=%d,kf=%d]; "
+                                "client transport sent garbage immediately after handshake -- "
+                                "align key.{masked,plaintext,delta-encode,shuffle-data,kf} on both ends.",
+                                k.masked ? 1 : 0,
+                                k.plaintext ? 1 : 0,
+                                k.delta_encode ? 1 : 0,
+                                k.shuffle_data ? 1 : 0,
+                                k.kf);
+                            (void)n;
+                            logger->Mismatch(transmission, ppp::string(buf));
+                        }
+                    }
+
                     ppp::telemetry::Count("server.session.rejected", 1);
                     ppp::telemetry::Log(Level::kInfo, "server", "session rejected");
                     return STATUS_ERROR;
