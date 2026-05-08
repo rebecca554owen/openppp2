@@ -612,6 +612,15 @@ namespace ppp {
                     logger->Arp(GetId(), transmission, ip, mask);
                 }
 
+                // Mirror the legacy address into the IPv4 lease pool so a later
+                // AcquireAuto() for a new-protocol client cannot hand the same
+                // IP out a second time.  Best-effort: if the pool is not
+                // configured or the IP is already leased to a different
+                // session, the call is a silent no-op and the legacy NAT entry
+                // remains the source of truth.  The pool entry is released
+                // automatically alongside the session via DeleteIPv4Lease().
+                switcher_->ReserveIPv4Lease(GetId(), ip);
+
                 address_ = ip;
                 return true;
             }

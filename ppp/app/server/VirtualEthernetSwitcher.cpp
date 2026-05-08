@@ -3444,6 +3444,47 @@ namespace ppp {
             }
 
             /**
+             * @brief Reserves a specific IPv4 address in the lease pool for a session.
+             *
+             * @details See header for full contract.  Implementation strategy:
+             *          AcquireManual() will (a) succeed when the requested IP is free,
+             *          or (b) fall back to AcquireAuto and return a *different* IP with
+             *          accepted=false.  The legacy Arp() caller does not actually want
+             *          a different IP — it has already committed to the address it
+             *          announced — so on a non-accepted result we Release() the
+             *          fallback to keep the pool consistent with reality.
+             *
+             *          When the pool is not configured we return false silently;
+             *          legacy clients keep functioning unchanged.
+             */
+            bool VirtualEthernetSwitcher::ReserveIPv4Lease(const Int128& session_id, uint32_t ip) noexcept {
+                if (NULLPTR == configuration_ || !configuration_->server.ipv4_pool.configured) {
+                    return false;
+                }
+
+                if (IPEndPoint::IsInvalid(IPEndPoint(ip, IPEndPoint::MinPort))) {
+                    return false;
+                }
+
+                boost::asio::ip::address addr = ppp::net::Ipep::ToAddress(ip);
+                if (!addr.is_v4()) {
+                    return false;
+                }
+
+                IPv4LeasePool::Result r = ipv4_pool_.AcquireManual(session_id, addr.to_v4());
+                if (r.ok && r.accepted) {
+                    return true;
+                }
+
+                // Manual reservation conflicted; AcquireManual already swapped in a
+                // fallback IP for this session.  The legacy caller does not consume
+                // that fallback, so release it now to leave the pool unchanged from
+                // the legacy caller's perspective.
+                ipv4_pool_.Release(session_id);
+                return false;
+            }
+
+            /**
              * @brief Periodic maintenance entry called by switch timer.
              * @param now Current tick count.
              * @return true while switch remains active.

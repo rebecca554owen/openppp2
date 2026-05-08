@@ -620,6 +620,23 @@ namespace ppp {
                  */
                 void                                                    DeleteIPv4Lease(const Int128& session_id) noexcept;
                 /**
+                 * @brief Reserves a specific IPv4 address in the lease pool for a session.
+                 *
+                 * @details Used by the legacy Arp/OnLan path so that addresses chosen
+                 *          unilaterally by old clients are also marked as taken in the
+                 *          IPv4 lease pool, preventing AcquireAuto() from later handing
+                 *          the same address to a new-protocol client.  If the pool is
+                 *          not configured, the address is unspecified, or the address
+                 *          is already leased to another session, the call returns false
+                 *          (and any pool fallback IP is reverted) so the caller's
+                 *          legacy view of the address remains the only source of truth.
+                 *
+                 * @param session_id Session that owns the legacy address.
+                 * @param ip         IPv4 address (host byte order) to reserve.
+                 * @return true when the exact IP was reserved for this session.
+                 */
+                bool                                                    ReserveIPv4Lease(const Int128& session_id, uint32_t ip) noexcept;
+                /**
                  * @brief Processes a client IPv4 address request and fills the response.
                  *
                  * @details If the pool is configured, allocates (auto or manual) and
