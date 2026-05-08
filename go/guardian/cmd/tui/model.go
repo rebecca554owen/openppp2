@@ -131,7 +131,7 @@ func newModel(client *Client) model {
 		table.WithColumns([]table.Column{{Title: "Name", Width: 18}, {Title: "State", Width: 10}, {Title: "PID", Width: 8}}),
 		table.WithRows([]table.Row{}),
 		table.WithFocused(true),
-		) 
+		)
 	profilesTable := table.New(
 		table.WithColumns([]table.Column{{Title: "Profile", Width: 24}, {Title: "Updated", Width: 14}}),
 		table.WithRows([]table.Row{}),

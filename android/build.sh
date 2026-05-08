@@ -1,5 +1,5 @@
 #! /bin/bash
- 
+
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
 # Description: PPP PRIVATE NETWORK™ 2 ANDROID BUILD SCRIPT.(X) 1.0.0 VERSION.
 # Author     : Kyou.
@@ -10,7 +10,7 @@ PPP_SCRIPT_NAME=$(basename "$0")
 PPP_help() {
     echo "Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved."
     echo "PPP PRIVATE NETWORK™ 2 ANDROID BUILD SCRIPT.(X) 1.0.0 VERSION."
-    echo 
+    echo
     echo "Usage:"
     echo "    ./$PPP_SCRIPT_NAME all"
     echo "    ./$PPP_SCRIPT_NAME x86"

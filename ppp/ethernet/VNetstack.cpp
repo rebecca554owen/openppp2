@@ -339,6 +339,7 @@ namespace ppp {
             } connect_histogram;
 
             if (localPort < IPEndPoint::MinPort || localPort > IPEndPoint::MaxPort) {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "vnetstack", "network port invalid in Open local_port=%d", localPort);
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
             }
 

@@ -107,4 +107,5 @@ android/app/debug
 android/app/profile
 android/app/release
 android/.metadata
+android/**/jniLibs/**/*.so
 

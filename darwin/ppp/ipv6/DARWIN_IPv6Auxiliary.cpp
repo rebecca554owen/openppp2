@@ -76,7 +76,7 @@ namespace ppp {
                             while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
                                 value.pop_back();
                             }
-                            
+
                             if (value != "default") {
                                 gateway = value;
                             }
@@ -302,7 +302,7 @@ namespace ppp {
                     ppp::string addr_str = stl::transform<ppp::string>(address.to_string());
                     char cmd[600];
                     snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 %s prefixlen %d alias > /dev/null 2>&1", context.InterfaceName.data(), addr_str.data(), prefix_length);
-                    
+
                     if (system(cmd) != 0) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IPv6ClientAddressApplyFailed);
                     }

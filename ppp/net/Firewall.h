@@ -37,9 +37,9 @@
  * @endcode
  */
 
-namespace ppp 
+namespace ppp
 {
-    namespace net 
+    namespace net
     {
         /**
          * @brief Stores and evaluates drop rules for network ports, domains, and CIDR segments.
@@ -50,7 +50,7 @@ namespace ppp
          * @note  All virtual methods may be overridden by derived classes to add logging,
          *        telemetry, or alternative matching strategies.
          */
-        class Firewall  
+        class Firewall
         {
         public:
             /**

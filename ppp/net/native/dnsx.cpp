@@ -1,10 +1,10 @@
 // =======================================================================================
 // Module: DNS (Domain Name System) packet query name extraction.
-// 
+//
 // This module provides safe, crash‑resistant parsing of DNS query packets.
 // It implements RFC 1035 name decompression with full bounds checking and
 // recursion depth limiting to withstand malicious or malformed packets.
-// 
+//
 // All public functions are re‑entrant, exception‑neutral, and produce no
 // undefined behavior even when presented with arbitrary byte sequences.
 // =======================================================================================
@@ -14,6 +14,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/net/native/checksum.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <cstring>      // std::memcpy, std::strlen
 #include <memory>       // std::shared_ptr
@@ -62,6 +63,7 @@ namespace ppp {
                 {
                     // Guard against excessive recursion (malicious compression loops or deep nesting).
                     if (depth > DNS_MAX_RECURSION_DEPTH) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: recursion depth=%d", depth);
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
@@ -70,6 +72,7 @@ namespace ppp {
                     if (NULLPTR == szEncodedStr || NULLPTR == pusEncodedStrLen ||
                         NULLPTR == szDotStr || NULLPTR == ppDecodePos ||
                         szEncodedStr < szPacketStartPos || szEncodedStr >= szPacketEndPos) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: pointer bounds");
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return false;
                     }
@@ -85,6 +88,7 @@ namespace ppp {
                     for (;;) {
                         // Ensure we never read past the packet boundary before accessing the label length.
                         if (pDecodePos >= szPacketEndPos) {
+                            ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: decode past end");
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                             return false;
                         }
@@ -98,7 +102,7 @@ namespace ppp {
                             } else {
                                 *szDotStr = '\0';                    // Empty name (root domain) – rare but possible.
                             }
-                            
+
                             *pusEncodedStrLen += 1;             // Account for the terminating zero.
                             return true;
                         }
@@ -110,6 +114,7 @@ namespace ppp {
                             // RFC 1035: label length must be between 1 and 63 inclusive.
                             // Length 0 is illegal here because the terminator is handled above.
                             if (nLabelDataLen == 0 || nLabelDataLen > DNS_MAX_LABEL_LEN) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: label length=%u", static_cast<unsigned int>(nLabelDataLen));
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
@@ -118,12 +123,14 @@ namespace ppp {
                             // +1 accounts for the dot that will be appended after the label.
                             // Use size_t to avoid unsigned integer overflow.
                             if (plainStrLen + static_cast<size_t>(nLabelDataLen) + 1 > static_cast<size_t>(nDotStrSize)) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: domain buffer overflow plain=%llu label=%u size=%u", static_cast<unsigned long long>(plainStrLen), static_cast<unsigned int>(nLabelDataLen), static_cast<unsigned int>(nDotStrSize));
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
                             // Ensure the entire label data is within the packet bounds (exact boundary allowed).
                             if (pDecodePos + 1 + nLabelDataLen > szPacketEndPos) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: label truncated label=%u", static_cast<unsigned int>(nLabelDataLen));
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
@@ -144,12 +151,14 @@ namespace ppp {
                             // the start of the packet to another location where the name continues.
 
                             if (NULLPTR == szPacketStartPos) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: compression missing packet start");
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
 
                             // The pointer occupies 2 bytes; verify they are present.
                             if (pDecodePos + 2 > szPacketEndPos) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: compression pointer truncated");
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;
                             }
@@ -161,6 +170,7 @@ namespace ppp {
                             // Use uintptr_t to avoid signed overflow in pointer arithmetic.
                             uintptr_t packet_len = static_cast<uintptr_t>(szPacketEndPos - szPacketStartPos);
                             if (static_cast<uintptr_t>(usJumpPos) >= packet_len) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: compression jump=%u packet_len=%llu", static_cast<unsigned int>(usJumpPos), static_cast<unsigned long long>(packet_len));
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                                 return false;   // Jump target is outside the packet → malformed.
                             }
@@ -239,6 +249,7 @@ namespace ppp {
 
                     // Basic integrity: the packet must contain at least a DNS header.
                     if (NULLPTR == szPacketStartPos || static_cast<int>(sizeof(dns_hdr)) > nPacketLength) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: short packet length=%d header=%d", nPacketLength, static_cast<int>(sizeof(dns_hdr)));
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return ppp::string();
                     }
@@ -296,6 +307,7 @@ namespace ppp {
                     // After the name, the question section contains QTYPE (2 bytes) and QCLASS (2 bytes).
                     // Ensure we have at least 4 bytes remaining.
                     if (pDecodePos + 4 > packetEnd) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "dnsx", "dns packet invalid: question truncated length=%d", nPacketLength);
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                         return ppp::string();   // Packet truncated before the type/class fields.
                     }
@@ -328,7 +340,7 @@ namespace ppp {
                     const ppp::function<bool(dns_hdr*, ppp::string&, uint16_t, uint16_t)>&  fPredicateE) noexcept
                 {
                     // Default first predicate: accept only standard DNS queries (QR=0, OPCODE=0).
-                    ppp::function<bool(dns_hdr*)> fPredicateB = 
+                    ppp::function<bool(dns_hdr*)> fPredicateB =
                         [](dns_hdr* h) noexcept -> bool {
                             uint16_t usFlags = ntohs(h->usFlags);
                             // QR bit (0x8000) must be 0 → query, not response.
@@ -368,7 +380,7 @@ namespace ppp {
                 ppp::string ExtractHost(const Byte* szPacketStartPos, int nPacketLength) noexcept
                 {
                     // Default first predicate: standard query (QR=0, OPCODE=0).
-                    ppp::function<bool(dns_hdr*)> fPredicateB = 
+                    ppp::function<bool(dns_hdr*)> fPredicateB =
                         [](dns_hdr* h) noexcept -> bool {
                             uint16_t usFlags = ntohs(h->usFlags);
                             return (usFlags & 0x8000) == 0 && (usFlags & 0x7800) == 0;

@@ -25,7 +25,7 @@ namespace {
         }
 
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-        
+
         boost::system::error_code network_ec;
         boost::asio::ip::address network_address = StringToAddress(ppp::linux::ipv6::auxiliary::ComputeNetworkAddress(address, prefix_length), network_ec);
         if (!network_ec && prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && address == network_address.to_v6()) {
@@ -191,7 +191,7 @@ namespace {
      */
     static bool LoadSysctlSnapshot(ppp::unordered_map<ppp::string, ppp::string>& snapshot) noexcept {
         snapshot.clear();
-        
+
         ppp::string path = GetIPv6SysctlSnapshotPath();
         if (!ppp::io::File::Exists(path.data())) {
             return false;
@@ -432,7 +432,7 @@ namespace {
         }
 
         prefix = cidr.substr(0, slash);
-        
+
         /**
          * @brief Validate prefix length using strtol for proper error detection.
          * @note atoi is unsafe as it cannot distinguish between 0 and error.
@@ -444,7 +444,7 @@ namespace {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
             return false;
         }
-        
+
         prefix_length = static_cast<int>(parsed);
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
         return !prefix.empty();
@@ -552,7 +552,7 @@ namespace ppp {
                         while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
                             route.pop_back();
                         }
-                        
+
                         if (!route.empty()) {
                             break;
                         }
@@ -922,7 +922,7 @@ namespace ppp {
                     if (state.DnsApplied) {
                         ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
                     }
-                    
+
                     if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
                         for (const ppp::string& route : state.OriginalDefaultRoutes) {
                             ApplyDefaultRouteCommand(route);

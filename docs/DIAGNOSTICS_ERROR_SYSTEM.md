@@ -1,11 +1,11 @@
 # Diagnostics Error System
 
-> **Subsystem:** `ppp::diagnostics`  
-> **Files:**  
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (595 live entries)  
-> - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum  
-> - `ppp/diagnostics/Error.cpp` — Free function delegations  
-> - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration  
+> **Subsystem:** `ppp::diagnostics`
+> **Files:**
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (595 live entries)
+> - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum
+> - `ppp/diagnostics/Error.cpp` — Free function delegations
+> - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration
 > - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` implementation (173 lines)
 
 ---
