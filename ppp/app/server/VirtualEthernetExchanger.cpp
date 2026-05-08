@@ -333,8 +333,23 @@ namespace ppp {
                     switcher_->UpdateIPv4Request(GetId(), request, response);
                 }
 
+                // The base info quota/expire fields MUST satisfy the client-side
+                // VirtualEthernetInformation::Valid() invariant
+                // (IncomingTraffic > 0 && OutgoingTraffic > 0 && ExpiredTime > now);
+                // otherwise the client treats this response as "session expired"
+                // immediately after IPv4 assignment and tears the link down,
+                // producing the silent ~5s reconnect loop observed in the field.
+                //
+                // For unmanaged sessions (no managed-server backend) we mirror the
+                // fallback values that VirtualEthernetSwitcher::Establish() already
+                // uses on the *first* INFO push: unbounded quotas and the maximum
+                // representable expiration timestamp.
                 VirtualEthernetInformation info;
                 info.Clear();
+                info.BandwidthQoS    = 0;
+                info.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                info.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                info.ExpiredTime     = std::numeric_limits<UInt32>::max();
 
                 VirtualEthernetSwitcher::InformationEnvelope envelope;
                 envelope.Base = info;
