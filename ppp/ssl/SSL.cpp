@@ -3,6 +3,9 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/io/File.h>
 #include <common/chnroutes2/chnroutes2.h>
+#include <mutex>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 /**
  * @file SSL.cpp
@@ -170,13 +173,22 @@ namespace ppp {
                 }, ec);
 
             /** @brief Populate trust store from system default locations. */
-            ssl_context->set_default_verify_paths();
+#if !defined(__ANDROID__)
 
-            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "DEFAULT");
+            ssl_context->set_default_verify_paths();
+#endif
+
+            /**
+             * @brief Avoid the "DEFAULT" cipher alias on BoringSSL. OpenSSL builds
+             *        get an explicit high-strength cipher filter below.
+             */
             if (ciphersuites.size()) {
                 /** @brief Apply caller-provided TLS 1.3 ciphersuite preferences. */
                 SSL_CTX_set_ciphersuites(ssl_context->native_handle(), ciphersuites.data());
             }
+#if !defined(OPENSSL_IS_BORINGSSL)
+            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "HIGH:!aNULL:!eNULL:!MD5:!RC4:!DES");
+#endif
             SSL_CTX_set_ecdh_auto(ssl_context->native_handle(), 1);
             return ssl_context;
         }
@@ -193,8 +205,26 @@ namespace ppp {
             bool                                        verify_peer, 
             const std::string&                          ciphersuites) noexcept {
 
-            std::shared_ptr<boost::asio::ssl::context> ssl_context = make_shared_object<boost::asio::ssl::context>(
-                ppp::ssl::SSL::SSL_C_METHOD(ppp::ssl::SSL::SSL_METHOD::tlsv13));
+            /**
+             * @brief Warm up OpenSSL/BoringSSL global SSL_CTX state once.
+             *
+             * @details boost::asio::ssl::context's constructor invokes
+             *          SSL_CTX_new, which lazily initialises BoringSSL's
+             *          global tables. Only that first global initialisation is
+             *          serialised; per-context allocation and CA loading below
+             *          can run concurrently.
+             */
+            static std::once_flag s_ssl_ctx_init_once;
+            std::call_once(s_ssl_ctx_init_once, []() noexcept {
+                SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+                if (ctx != NULLPTR) {
+                    SSL_CTX_free(ctx);
+                }
+            });
+
+            std::shared_ptr<boost::asio::ssl::context> ssl_context =
+                make_shared_object<boost::asio::ssl::context>(
+                    ppp::ssl::SSL::SSL_C_METHOD(method));
             if (!ssl_context) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 return NULLPTR;
@@ -218,16 +248,51 @@ namespace ppp {
             }
 
             /** @brief Populate trust store from system default locations. */
+#if !defined(__ANDROID__)
+
             ssl_context->set_default_verify_paths();
+#endif
             ssl_context->set_verify_mode(verify_peer ? boost::asio::ssl::verify_peer : boost::asio::ssl::verify_none);
 
-            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "DEFAULT");
+            /**
+             * @brief Avoid the "DEFAULT" cipher alias on BoringSSL. OpenSSL builds
+             *        get an explicit high-strength cipher filter below.
+             */
             if (ciphersuites.size()) {
                 /** @brief Apply caller-provided TLS 1.3 ciphersuite preferences. */
                 SSL_CTX_set_ciphersuites(ssl_context->native_handle(), ciphersuites.data());
             }
+#if !defined(OPENSSL_IS_BORINGSSL)
+            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "HIGH:!aNULL:!eNULL:!MD5:!RC4:!DES");
+#endif
 
             SSL_CTX_set_ecdh_auto(ssl_context->native_handle(), 1);
+
+            /**
+             * @brief Pre-sort the X509_STORE's internal objects stack.
+             *
+             * @details After CA loading (load_verify_file / load_root_certificates),
+             *          the X509_STORE's objects stack is populated but NOT
+             *          sorted. The first lookup during TLS handshake calls
+             *          OPENSSL_sk_find, which lazily sorts the stack via
+             *          qsort. When two handshakes on two separate SSL_CTXs
+             *          run concurrently on scheduler threads, each triggers
+             *          its own lazy sort — but both touch shared BoringSSL
+             *          globals (OBJ ASN.1 tables, error-string init) that
+             *          the qsort callback path dereferences. The race has
+             *          been observed on Android as SIGSEGV inside
+             *          OPENSSL_sk_find / local_qsort with fault addr 0x0.
+             *
+             *          Force-sorting here keeps each context's store in its
+             *          sorted, immutable-from-here state before the caller sees
+             *          the SSL_CTX, so subsequent concurrent handshakes take the
+             *          fast bsearch path without ever calling qsort.
+             */
+            if (X509_STORE* store = SSL_CTX_get_cert_store(ssl_context->native_handle())) {
+                if (STACK_OF(X509_OBJECT)* objs = X509_STORE_get0_objects(store)) {
+                    sk_X509_OBJECT_sort(objs);
+                }
+            }
             return ssl_context;
         }
 

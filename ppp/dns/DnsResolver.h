@@ -352,8 +352,14 @@ namespace ppp {
              *          SSL_SESSION* is owned by this map; SSL_SESSION_free is
              *          called on replace and on resolver destruction.
              */
+            struct TlsSessionCacheEntry {
+                ssl_session_st*                         session = NULLPTR;
+                ppp::list<ppp::string>::iterator        lru;
+            };
+
             mutable std::mutex                              tls_session_mutex_;
-            ppp::unordered_map<ppp::string, ssl_session_st*> tls_session_cache_;
+            ppp::list<ppp::string>                          tls_session_lru_;
+            ppp::unordered_map<ppp::string, TlsSessionCacheEntry> tls_session_cache_;
         };
 
     } // namespace dns
