@@ -12,6 +12,7 @@
 
 #include <ppp/threading/Executors.h>
 #include <ppp/transmissions/ITransmission.h>
+#include <atomic>
 
 #if defined(_WIN32)
 #include <windows/ppp/net/QoSS.h>
@@ -45,8 +46,7 @@ namespace ppp {
                     const StrandPtr&                                        strand,
                     const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
                     const AppConfigurationPtr&                              configuration) noexcept
-                    : ITransmission(context, strand, configuration)
-                    , disposed_(false) {
+                    : ITransmission(context, strand, configuration) {
 
                     boost::system::error_code ec;
                     remoteEP_ = ppp::net::Ipep::V6ToV4(socket->remote_endpoint(ec));
@@ -211,8 +211,11 @@ namespace ppp {
                 }
                 /** @brief Finalizes websocket resources and platform QoS objects. */
                 void                                                        Finalize() noexcept {
+                    if (disposed_.exchange(true, std::memory_order_acq_rel)) {
+                        return;
+                    }
+
                     std::shared_ptr<IWebsocket> socket = std::move(socket_); 
-                    disposed_ = true;
 
                     if (socket) {
                         socket->Dispose();
@@ -272,7 +275,7 @@ namespace ppp {
 #if defined(_WIN32)
                 std::shared_ptr<ppp::net::QoSS>                             qoss_;
 #endif
-                bool                                                        disposed_ = false;
+                std::atomic_bool                                                    disposed_{false};
                 std::shared_ptr<IWebsocket>                                 socket_;
                 boost::asio::ip::tcp::endpoint                              remoteEP_;
             };

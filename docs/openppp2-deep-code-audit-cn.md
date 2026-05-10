@@ -701,6 +701,27 @@ absolute max: configurable but capped
 - Finalize one-shot；
 - ShiftToScheduler 期间禁止并发读写。
 
+> **✅ 已修复（WebSocket disposed_ one-shot）— 2026-05-11**
+>
+> 修复方案：
+> - `WebSocket::disposed_` 从 `bool` 改为 `std::atomic_bool disposed_{false}`；
+> - `Finalize()` 开头使用 `disposed_.exchange(true, std::memory_order_acq_rel)` 实现 one-shot；
+> - 所有 `if (disposed_)` 读取通过 atomic 隐式 `operator bool()` 安全读取；
+> - socket_ shared_ptr 并发保护见下方 §5.3 socket_ 部分。
+
+> **✅ 已修复（socket_ shared_ptr 并发保护）— 2026-05-11**
+>
+> 修复方案（C++17 `std::atomic_load`/`std::atomic_store` free functions）：
+> - WebSocket.h：所有 `socket_` 读取改为 `std::atomic_load(&socket_)`，
+>   构造器写入改为 `std::atomic_store(&socket_, ...)`，Finalize 移出改为
+>   `std::atomic_load` + `std::atomic_store(&socket_, {})`。
+> - ITcpipTransmission.cpp：同样模式应用于 ReadBytes / DoWriteBytes /
+>   ShiftToScheduler / Finalize 路径。
+> - 不改变 public API，不使用 C++20 `std::atomic<std::shared_ptr<T>>`。
+> - `GetSocket()` 也使用 `std::atomic_load`。
+> - 性能影响：`std::atomic_load/store(shared_ptr*)` 在主流实现中使用全局
+>   spinlock，对 WebSocket/TCP 高频读路径有微小开销；可接受为安全性让步。
+
 ---
 
 ### 5.4 server `VirtualEthernetExchanger::Finalize()` 非原子 one-shot
