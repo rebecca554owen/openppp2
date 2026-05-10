@@ -108,7 +108,6 @@ namespace ppp {
                 const ITransmissionPtr&                                 transmission,
                 const Int128&                                           id) noexcept
                 : VirtualEthernetLinklayer(configuration, transmission->GetContext(), id)
-                , disposed_(false)
                 , address_(IPEndPoint::NoneAddress)
                 , switcher_(switcher)
                 , transmission_(transmission)
@@ -171,15 +170,14 @@ namespace ppp {
 
             /** @brief Finalizes all runtime objects and unregisters session from switcher. */
             void VirtualEthernetExchanger::Finalize() noexcept {
-                // BUG-15 + BUG-17: Guard against double-finalization.  disposed_ must be set
-                // to true at the very top, BEFORE any map is cleared, so that any concurrent
+                // BUG-15 + BUG-17: Guard against double-finalization using atomic exchange.
+                // If exchange returns true, another thread already entered Finalize; bail out.
+                // This must happen BEFORE any map is cleared, so that any concurrent
                 // async callback that checks disposed_ first will bail out immediately and will
                 // not touch datagrams_, mappings_, or timeouts_ after we release them.
-                if (disposed_) {
+                if (disposed_.exchange(true, std::memory_order_acq_rel)) {
                     return;
                 }
-
-                disposed_ = true;
 
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
                 for (;;) {

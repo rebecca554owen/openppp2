@@ -728,6 +728,16 @@ if (disposed_.exchange(true)) {
 
 并将 map 资源 move 到局部后锁外释放。
 
+> **✅ 已修复（P0-6A，exchanger disposed_ 原子化）— 2026-05-11**
+>
+> 修复方案：
+> - `bool disposed_` → `std::atomic_bool disposed_{false}`；
+> - `Finalize()` 开头使用 `disposed_.exchange(true, std::memory_order_acq_rel)` 实现 one-shot；
+> - `IsDisposed()` 改为 `disposed_.load(std::memory_order_acquire)`；
+> - 所有 `if (disposed_)` 读取通过 `std::atomic_bool::operator bool()` 隐式 load（seq_cst）；
+> - 构造函数移除 `disposed_(false)` 初始化（使用类内默认值）。
+> - 不改变 Finalize 的 map-move-to-local 锁外释放语义（已由前序重构实现）。
+
 ---
 
 ### 5.5 endpoint wire format 1 字节 host 长度可能截断
@@ -1101,7 +1111,7 @@ cosign / minisign / GPG signing
 3. ~~写队列加背压。~~ → **✅ 已实施：pending_items/pending_bytes + 阈值拒绝（见 §4.1 状态更新）。**
 4. ~~传输帧加最大长度与超时。~~ → **⚠️ 已实施长度上限（PPP_BUFFER_SIZE）；读取超时仍为后续独立项（见 §5.1）。**
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → **✅ 已修复：copy-on-read（见 §4.3 状态更新）。**
-6. 修复主要 Dispose/Finalize one-shot。→ **⚠️ 部分完成：`IAsynchronousWriteIoQueue::disposed_` 数据竞争已修复为 `std::atomic_bool`（见 §4.2 状态更新）；其他类的 one-shot / 非原子 disposed_ 仍为后续项。**
+6. 修复主要 Dispose/Finalize one-shot。→ **⚠️ 部分完成：`IAsynchronousWriteIoQueue::disposed_` 数据竞争已修复为 `std::atomic_bool`（见 §4.2）；`VirtualEthernetExchanger::disposed_` 已修复为 `std::atomic_bool` + `exchange` one-shot（见 §5.4）；`WebSocket::disposed_` 已修复为 `std::atomic_bool` + `exchange` one-shot（见 §5.3）；socket_ shared_ptr 并发保护见 §5.3。其他类（`VEthernetLocalProxyConnection`、`VEthernetLocalProxySwitcher`、`InternetControlMessageProtocol`、`Timer`、`ITransmissionQoS`）的 `disposed_` 仍为后续项。**
 
 > 复核调整：`starrylink.net.key` / `starrylink.net.pem` 经维护者说明属于示例资产，在无证据表明其仍用于生产服务时，不列入 P0 生产密钥泄露。
 
@@ -1357,7 +1367,7 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 3. ~~写队列加背压。~~ → ✅ 已实施（见 §4.1）。
 4. ~~传输帧加最大长度与超时。~~ → ⚠️ 已实施长度上限；读取超时仍为后续独立项（见 §5.1）。
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → ✅ 已修复（见 §4.3）。
-6. 修复主要 Dispose/Finalize one-shot。→ ⚠️ 部分完成：`IAsynchronousWriteIoQueue::disposed_` 已原子化（见 §4.2）；其他类仍为后续项。
+6. 修复主要 Dispose/Finalize one-shot。→ ⚠️ 部分完成：`IAsynchronousWriteIoQueue::disposed_` 已原子化（见 §4.2）；`VirtualEthernetExchanger::disposed_` 已原子化（见 §5.4）；`WebSocket::disposed_` 已原子化（见 §5.3）；socket_ shared_ptr 并发保护见 §5.3；其他类仍为后续项。
 
 ### 第二批：短期修
 
