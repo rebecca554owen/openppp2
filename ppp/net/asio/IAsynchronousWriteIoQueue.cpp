@@ -39,16 +39,25 @@ namespace ppp {
              * holding the synchronization object to avoid lock re-entrancy issues.
              */
             void IAsynchronousWriteIoQueue::Finalize() noexcept {
+                /**
+                 * @brief One-shot guard: atomically transition to disposed state.
+                 *
+                 * If already disposed (exchange returns true), another thread or
+                 * a prior Dispose()/destructor call has already drained the queue.
+                 * Returning early avoids re-acquiring syncobj_ and double-draining.
+                 */
+                if (disposed_.exchange(true, std::memory_order_acq_rel)) {
+                    return;
+                }
+
+                /** @brief Detach the pending queue under lock. */
                 AsynchronousWriteIoContextQueue queues;
-                for (;;) {
-                    /** @brief Atomically transition to disposed state and detach pending queue. */
+                {
                     SynchronizedObjectScope scope(syncobj_);
-                    disposed_.store(true, std::memory_order_release);
                     sending_ = false;
 
                     queues = std::move(queues_);
                     queues_.clear();
-                    break;
                 }
 
                 /** @brief Drain backpressure counters for all queued contexts being dropped. */

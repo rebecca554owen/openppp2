@@ -28,7 +28,8 @@
  *   queue logic, which calls @ref DoWriteBytes only when no prior write is
  *   pending.
  * - @ref Dispose / @ref Finalize fail all queued callbacks with `false` and
- *   prevent further enqueuing.
+ *   prevent further enqueuing.  Both funnel through a one-shot `exchange` guard
+ *   so that concurrent or repeated calls drain the queue exactly once.
  *
  * Thread safety
  * -------------
@@ -117,9 +118,10 @@ namespace ppp {
                 /**
                  * @brief Stops the queue and fails all pending operations.
                  *
-                 * Sets @ref disposed_ = true and calls @ref Finalize to drain the pending
-                 * queue with failure callbacks.  Subclasses should call this (or the base)
-                 * from their own Dispose overrides.
+                 * Delegates to @ref Finalize, which uses a one-shot `exchange` guard
+                 * to ensure the queue is drained exactly once even when called
+                 * concurrently from multiple threads or after the destructor.
+                 * Subclasses should call this (or the base) from their own Dispose overrides.
                  */
                 virtual void                                            Dispose() noexcept;
 
@@ -302,11 +304,17 @@ namespace ppp {
                 int                                                     DoTryWriteBytesNext() noexcept;
 
                 /**
-                 * @brief Marks queue as disposed and completes pending callbacks with failure.
+                 * @brief One-shot finalization that fails all pending operations.
                  *
-                 * Acquires @ref syncobj_, sets @ref disposed_ = true, moves all queued
-                 * contexts to a local list, then releases the lock and calls
-                 * @ref AsynchronousWriteIoContext::Forward(false) on each.
+                 * Uses `disposed_.exchange(true, acq_rel)` to guarantee exactly-once
+                 * semantics: the first caller drains the pending queue and decrements
+                 * backpressure counters; subsequent callers (Dispose, destructor,
+                 * or concurrent threads) return immediately without touching state.
+                 *
+                 * After the exchange succeeds, acquires @ref syncobj_ to reset
+                 * @ref sending_ and detach the pending queue, then releases the lock
+                 * before invoking @ref AsynchronousWriteIoContext::Forward(false) on
+                 * each drained context to avoid lock re-entrancy.
                  */
                 void                                                    Finalize() noexcept;
 

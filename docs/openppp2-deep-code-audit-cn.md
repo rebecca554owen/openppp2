@@ -447,14 +447,15 @@ pending_bytes_
 
 ### 4.2 写队列 `disposed_` 普通 bool 存在数据竞争
 
-> **✅ 已修复（P0-6，原子化 disposed_）— 2026-05-11**
+> **✅ 已修复（P0-6，原子化 disposed_ + Finalize one-shot）— 2026-05-11**
 >
 > 修复方案：`bool disposed_` → `std::atomic_bool disposed_{false}`。
-> Finalize() 内写入使用 `store(true, std::memory_order_release)`；
+> `Finalize()` 入口使用 `disposed_.exchange(true, std::memory_order_acq_rel)`
+> 实现 one-shot 语义：第一个调用者执行 drain，后续调用者（Dispose、析构、
+> 并发线程）立即返回，不重复操作。
 > WriteBytes / DoTryWriteBytesUnsafe / DoTryWriteBytesNext 等所有读路径
-> 使用 `load(std::memory_order_acquire)`。保持现有锁内 re-check 行为不变，
-> 不改变 Finalize 的多次调用 drain 语义（第二次进入时 queue 已空，仅重复
-> 设置 flag）。不改变 WriteBytes public 签名，不重构 backpressure 逻辑。
+> 使用 `load(std::memory_order_acquire)`。保持现有锁内 re-check 行为不变。
+> 不改变 WriteBytes public 签名，不重构 backpressure 逻辑。
 
 **位置：**
 
