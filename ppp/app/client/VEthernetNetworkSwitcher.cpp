@@ -1,4 +1,4 @@
-﻿#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
+#include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -565,6 +565,22 @@ namespace ppp {
                 if (NULLPTR == frame || frame->Ttl == 0) {
                     return false;
                 }
+
+                // The mobile TUN can feed locally generated ICMP errors such as
+                // destination-unreachable/port-unreachable for short-lived UDP
+                // sockets. The echo forwarding path only supports echo probes;
+                // forwarding ICMP errors through it can dereference stale timer
+                // state in the native exchanger and crash the VPN process.
+                if (frame->Type != IcmpType::ICMP_ECHO && frame->Type != IcmpType::ICMP_ER) {
+#if defined(_ANDROID)
+                    __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_drop unsupported type=%d code=%d dst=%s",
+                        (int)frame->Type,
+                        (int)frame->Code,
+                        Ipep::ToAddress(packet->Destination).to_string().c_str());
+#endif
+                    return false;
+                }
+
                 elif(IPAddressIsGatewayServer(frame->Destination, tap->GatewayServer, tap->SubmaskAddress)) {
 #if defined(_ANDROID)
                     __android_log_print(ANDROID_LOG_INFO, "openppp2", "icmp_gateway dst=%s", Ipep::ToAddress(packet->Destination).to_string().c_str());
@@ -2552,7 +2568,7 @@ namespace ppp {
                         // Provider-based rule: route DnsResolver upstream IPs via the
                         // underlying NIC.  For these rules `Nic` is repurposed as the
                         // domestic/foreign selector (see Rule.h) and MUST NOT be used
-                        // to choose dns_serverss_ slot — provider sockets always need
+                        // to choose dns_serverss_ slot -- provider sockets always need
                         // the host route bypass to function.
                         if (!r->ProviderName.empty()) {
                             add_bypass_provider(r->ProviderName);
@@ -2741,7 +2757,7 @@ namespace ppp {
             // Routes need to be protected on Windows to prevent third - party programs(such as network card drivers)
             // From silently modifying the current gateway route and forcing out the VPN virtual gateway route.According to our observation,
             // In some PC and network production environments, third - party programs will destroy VPN deployment routing table information
-            // At certain times.In PPP PRIVATE NETWORK™ 1, this NETWORK route protector exists by default, but PPP PRIVATE Network ™ 2 does
+            // At certain times.In PPP PRIVATE NETWORK 1, this NETWORK route protector exists by default, but PPP PRIVATE Network 2 does
             // Not currently exist, so a new implementation of this section is needed.
             /** @brief Starts background default-route protector worker. */
             bool VEthernetNetworkSwitcher::ProtectDefaultRoute() noexcept {
@@ -3661,7 +3677,7 @@ namespace ppp {
                             boost::asio::ip::udp::endpoint destEP(destinationIP, PPP_DNS_SYS_PORT);
 
                             // Capture shared_from_this() to guarantee the switcher outlives
-                            // the async DnsResolver callback — never use a bare `this` pointer.
+                            // the async DnsResolver callback -- never use a bare `this` pointer.
                             auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
                                 shared_from_this());
 

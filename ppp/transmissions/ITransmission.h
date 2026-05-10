@@ -166,51 +166,27 @@ namespace ppp {
 
         private:
             /**
-             * @brief Strand-serialized bitfield state flags for transmission lifecycle and framing.
+             * @brief Thread-safe transmission lifecycle and framing state.
              *
-             * @details These four bitfields occupy a single @c unsigned @c int storage unit as
-             *          mandated by the C++ standard for adjacent bitfield members of the same
-             *          underlying type.  Because they share one storage unit, the C++ memory model
-             *          treats any access to the unit — even to a logically distinct bitfield within
-             *          it — as an access to the entire object.
-             *
-             * @warning **Thread-safety invariant — MUST NOT be violated in derived classes.**
-             *
-             *          All reads and writes to @c disposed_, @c frame_rn_, @c frame_tn_, and
-             *          @c handshaked_ MUST be performed exclusively from a handler that is already
-             *          running on @c strand_.  Thread safety is guaranteed entirely by strand
-             *          serialization, NOT by atomic operations.
-             *
-             *          Concurrent access from any code path that is not serialized through
-             *          @c strand_ constitutes a data race and is undefined behavior under the
-             *          C++ standard (ISO/IEC 14882, [intro.races]), regardless of which individual
-             *          bitfield is targeted.  If a derived class needs to read or write any of
-             *          these members from an off-strand context, that code path MUST be corrected
-             *          to first dispatch through @c strand_ via @c asio::post or
-             *          @c asio::dispatch before touching these fields.
-             *
-             * @note    Bitfield members cannot be made @c std::atomic.  The C++ standard does not
-             *          permit @c std::atomic<T> to wrap a bitfield, and no compiler extension
-             *          provides this.  Do NOT attempt to convert these members to @c std::atomic.
-             *          The only member that is safe to access from off-strand code is
-             *          @c finalized_ (an @c std::atomic<bool>), which serves as the one-shot gate
-             *          for @c Finalize() and is intentionally separated from this storage unit.
+             * These flags are touched by the read coroutine, callback-based writes,
+             * keepalive/update tasks, handshake timeout handlers, and disposal paths. They must
+             * not share a packed bitfield storage unit: Android can run those handlers on
+             * different executor threads, and a packed read/write races at the byte containing all
+             * flags. Independent atomics keep the state publication well-defined.
              */
-            /** @brief Set when transmission is disposed. */
-            unsigned int                                                                            disposed_ : 1;      // true if transmission is disposed.
+            std::atomic_bool                                                                        disposed_{false};
             /** @brief Set after receive path switches to simple header mode. */
-            unsigned int                                                                            frame_rn_ : 1;      // true if receive‑side simple header mode active.
+            std::atomic_bool                                                                        frame_rn_{false};
             /** @brief Set after transmit path switches to simple header mode. */
-            unsigned int                                                                            frame_tn_ : 1;      // true if transmit‑side simple header mode active.
+            std::atomic_bool                                                                        frame_tn_{false};
             /** @brief Handshake completion state flag storage. */
-            unsigned int                                                                            handshaked_ : 5;    // true if handshake completed.
+            std::atomic_bool                                                                        handshaked_{false};
 
             /**
              * @brief One-shot guard ensuring Finalize() executes at most once.
              *
-             * @details Cannot reuse the disposed_ bitfield for atomic CAS, so this separate
-             *          std::atomic<bool> acts as the gate.  The first caller that flips it from
-             *          false → true proceeds with teardown; all subsequent callers return early.
+             * The first caller that flips it from false to true proceeds with teardown; all
+             * subsequent callers return early.
              */
             std::atomic<bool>                                                                       finalized_{false};
 

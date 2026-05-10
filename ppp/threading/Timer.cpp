@@ -43,76 +43,23 @@ namespace ppp {
         /**
          * @brief Marks timer disposed and clears active scheduling state.
          *
-         * Crash story: on Android we observed a SIGSEGV (SI_KERNEL, fault addr
-         * 0x0, ~2-frame backtrace) reliably ~10s after a successful connect,
-         * with PC parked on the `bl operator=(nullptr_t)` for `TickEvent`
-         * inside Finalize(). That signature is the kernel's stack-guard trip
-         * — i.e. unbounded recursion. The immediate cause: clearing
-         * `TickEvent` runs the destructor of whatever lambda is held, which
-         * releases captured shared_ptrs; in some configurations one of those
-         * captures owns (transitively) another Timer's last reference, whose
-         * ~Timer() calls Finalize() again, and the chain re-enters ours
-         * before this stack frame has unwound. We harden the routine in two
-         * ways:
-         *   1) A thread-local re-entrance guard short-circuits any nested
-         *      call on the same thread.
-         *   2) We *move* the callable into a local before this function
-         *      returns, instead of operator=(nullptr) on the member. The
-         *      member is left empty immediately; the held lambda's
-         *      destruction happens after we set the guard back to false on
-         *      our way out, so any cascading destructors execute against a
-         *      consistent Timer state.
+         * Android now builds with -DFUNCTION, matching the other targets and
+         * using std::function for TickEvent. The native crash was in the old
+         * custom ppp::function destructor path, so cleanup can be direct again.
          */
         void Timer::Finalize() noexcept {
             static thread_local int s_finalize_depth = 0;
             if (s_finalize_depth > 0) {
-                /* Re-entered while a previous Finalize() is still on the
-                 * stack -- e.g. through a shared_ptr<Timer> capture in our
-                 * own TickEvent. Just mark disposed and bail; the outer
-                 * frame will finish the cleanup. */
                 _disposed_ = true;
                 tick_event_guard_.store(false, std::memory_order_release);
                 return;
             }
-            ++s_finalize_depth;
 
+            ++s_finalize_depth;
             _disposed_ = true;
             Stop();
             tick_event_guard_.store(false, std::memory_order_release);
-
-            /* Detach the callable from the member without destroying it
-             * inline. We deliberately do NOT destroy `held` inside this
-             * function: the held lambda commonly captures shared_ptr<X>
-             * where X owns this Timer. Releasing that shared_ptr can run
-             * ~X, which runs ~Timer on `this`, which would corrupt the
-             * stack frame we are currently executing in.
-             *
-             * Two-step deferral:
-             *   1) swap() detaches the callable from `TickEvent` member.
-             *   2) Post `held` to the io_context so its destructor runs
-             *      AFTER this stack frame fully unwinds and we no longer
-             *      touch `this`. If posting fails (context torn down),
-             *      fall back to leaking `held` -- correctness over a tiny
-             *      one-time leak during process teardown. */
-            TickEventHandler* held = new (std::nothrow) TickEventHandler();
-            if (held != NULLPTR) {
-                held->swap(TickEvent);
-                std::shared_ptr<boost::asio::io_context> ctx = _context;
-                if (NULLPTR != ctx) {
-                    boost::system::error_code ec;
-                    try {
-                        boost::asio::post(*ctx, [held]() noexcept { delete held; });
-                    } catch (...) {
-                        /* Posting failed (likely io_context stopped); leak
-                         * `held` -- still safer than running its dtor here. */
-                    }
-                } /* else: context already gone -- leak held to avoid UAF. */
-            } else {
-                /* Allocation failed; fall back to inline clear. The
-                 * recursion guard above prevents the stack-overflow path. */
-                TickEvent = NULLPTR;
-            }
-
+            TickEvent = NULLPTR;
             --s_finalize_depth;
         }
 
