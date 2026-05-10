@@ -34,6 +34,7 @@
  * Licensed under GPL-3.0.
  */
 
+#include <atomic>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
@@ -282,7 +283,7 @@ namespace ppp {
                             });
                     }
 #else
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return;
                     }
 
@@ -1025,10 +1026,10 @@ namespace ppp {
                 /** @brief Guards datagrams_ and deadline_timers_ tables. */
                 SynchronizedObject                                                      syncobj_;
 
-                struct {
-                    bool                                                                disposed_           : 1;  ///< True when Dispose() has been called.
-                    bool                                                                static_echo_input_  : 7;  ///< Bitmap tracking static-echo receive state.
-                };
+                /** @brief Atomic one-shot disposed flag; safe for cross-strand reads. */
+                std::atomic_bool                                                        disposed_{false};
+                /** @brief Tracking flag for static-echo receive state. */
+                bool                                                                    static_echo_input_  = false;
 
                 /** @brief Shared receive buffer allocated once and reused across async reads. */
                 std::shared_ptr<Byte>                                                   buffer_;            
