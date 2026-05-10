@@ -271,9 +271,9 @@ class _OptionsPageState extends State<OptionsPage> {
     if (showSnack) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('「${p.name}」启动参数已保存')),
-      );
-    }
+    );
   }
+}
 
   Future<void> _reset() async {
     final ok = await showDialog<bool>(
@@ -886,4 +886,3 @@ class _Section extends StatelessWidget {
     );
   }
 }
-
