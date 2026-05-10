@@ -534,6 +534,11 @@ namespace ppp {
                     return NULLPTR;
                 }
 
+                /** @brief Frame length upper-bound check (P0-4A): reject frames that exceed PPP_BUFFER_SIZE. */
+                if (payload_length > PPP_BUFFER_SIZE) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
+                }
+
                 std::shared_ptr<Byte> packet = ReadBytes(transmission, y, payload_length);
                 if (NULLPTR == packet) {
                     if (!transmission->disposed_) {
@@ -860,6 +865,11 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
             }
 
+            /** @brief Frame length upper-bound check (P0-4A): reject decoded payloads exceeding PPP_BUFFER_SIZE. */
+            if (payload_len > PPP_BUFFER_SIZE) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
+            }
+
             int expected_len = payload_len + EVP_HEADER_MSS;
             if (expected_len != datalen) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);   // size mismatch – possible truncation attack
@@ -914,6 +924,11 @@ namespace ppp {
             int payload_len = Transmission_Header_Decrypt(APP, allocator, EVP_protocol, header.get(), header_kf);
             if (payload_len < 1) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
+            }
+
+            /** @brief Frame length upper-bound check (P0-4A): reject decoded payloads exceeding PPP_BUFFER_SIZE. */
+            if (payload_len > PPP_BUFFER_SIZE) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
             }
 
             auto payload = ITransmissionBridge::ReadBytes(transmission, y, payload_len);

@@ -574,6 +574,19 @@ std::atomic<std::shared_ptr<const RuleSet>> rules_;
 
 ### 5.1 传输帧长度缺少策略上限，存在 DoS
 
+> **⚠️ 已实施长度上限（P0-4A），读取超时仍为后续独立项 — 2026-05-10**
+>
+> 已在三个解码路径的 payload length 确定后、分配/读取前添加 `PPP_BUFFER_SIZE`
+> （65536 字节）上限检查：
+>
+> - `base94_decode()` — base94 解码后的 payload_length
+> - `Transmission_Packet_Decrypt()` — EVP header 解密后的 payload_len（内存解密路径）
+> - `Transmission_Packet_Read()` — EVP header 解密后的 payload_len（网络读取路径）
+>
+> 超限帧返回 `ProtocolFrameInvalid` 错误并拒绝处理。未实施 per-frame 读取超时，
+> 该功能需单独规划（涉及 Boost.Asio async_read deadline_timer 集成）。
+> ITcpipTransmission 和 WebSocket 路径的限制需后续评估。
+
 **位置：**
 
 - `ppp/transmissions/ITransmission.cpp:914-920`
@@ -1023,7 +1036,7 @@ cosign / minisign / GPG signing
 1. TLS/WSS 开启证书链校验与主机名校验，禁止生产路径默认关闭校验。
 2. ~~禁止生产默认弱 key、固定 key 和 plaintext。~~ → **已调整为：检测并高亮提示弱 key/plaintext；不阻断启动（见 §3.5 状态更新）。**
 3. 写队列加背压。
-4. 传输帧加最大长度与超时。
+4. ~~传输帧加最大长度与超时。~~ → **⚠️ 已实施长度上限（PPP_BUFFER_SIZE）；读取超时仍为后续独立项（见 §5.1）。**
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → **✅ 已修复：copy-on-read（见 §4.3 状态更新）。**
 6. 修复主要 Dispose/Finalize one-shot。
 
@@ -1279,7 +1292,7 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 1. TLS/WSS 开启证书链校验与主机名校验。
 2. ~~禁止生产默认弱 key、固定 key 和 plaintext。~~ → 已调整为：检测并高亮提示弱 key/plaintext；不阻断启动（见 §3.5）。
 3. 写队列加背压。
-4. 传输帧加最大长度与超时。
+4. ~~传输帧加最大长度与超时。~~ → ⚠️ 已实施长度上限；读取超时仍为后续独立项（见 §5.1）。
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → ✅ 已修复（见 §4.3）。
 6. 修复主要 Dispose/Finalize one-shot。
 
