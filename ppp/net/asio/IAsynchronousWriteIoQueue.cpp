@@ -43,7 +43,7 @@ namespace ppp {
                 for (;;) {
                     /** @brief Atomically transition to disposed state and detach pending queue. */
                     SynchronizedObjectScope scope(syncobj_);
-                    disposed_ = true;
+                    disposed_.store(true, std::memory_order_release);
                     sending_ = false;
 
                     queues = std::move(queues_);
@@ -98,7 +98,7 @@ namespace ppp {
 
             /** @brief Coroutine-based write wrapper that dispatches through callback path. */
             bool IAsynchronousWriteIoQueue::WriteBytes(YieldContext& y, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_acquire)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
@@ -123,7 +123,7 @@ namespace ppp {
              */
             bool IAsynchronousWriteIoQueue::WriteBytes(const std::shared_ptr<Byte>& packet, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 IAsynchronousWriteIoQueue* const q = this;
-                if (q->disposed_) {
+                if (q->disposed_.load(std::memory_order_acquire)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
@@ -153,7 +153,7 @@ namespace ppp {
 
                 {
                     SynchronizedObjectScope scope(q->syncobj_);
-                    if (q->disposed_) {
+                    if (q->disposed_.load(std::memory_order_acquire)) {
                         context->Clear();
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return false;
@@ -238,7 +238,7 @@ namespace ppp {
                         Dispose();
                     }
 
-                    if (q->disposed_) {
+                    if (q->disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
                     else {
@@ -264,7 +264,7 @@ namespace ppp {
              *       non-recursive std::mutex.
              */
             bool IAsynchronousWriteIoQueue::DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_acquire)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
@@ -309,7 +309,7 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     sending_ = false;
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return -1;
                     }
@@ -345,7 +345,7 @@ namespace ppp {
                     pending_items_.fetch_sub(1, std::memory_order_relaxed);
                     pending_bytes_.fetch_sub(context->packet_length, std::memory_order_relaxed);
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
                     else {

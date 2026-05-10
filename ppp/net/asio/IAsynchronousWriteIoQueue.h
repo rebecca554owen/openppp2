@@ -34,9 +34,10 @@
  * -------------
  * - The queue state (@ref disposed_, @ref sending_, @ref queues_) is protected
  *   by @ref syncobj_.
- * - @ref disposed_ is a plain `bool` (NOT a bitfield) to guarantee independent
- *   byte addressability vs. @ref sending_, avoiding a C++17 data race between
- *   lock-free reads of @ref disposed_ and locked writes of @ref sending_.
+ * - @ref disposed_ is `std::atomic_bool` to allow lock-free early-exit reads
+ *   in @ref WriteBytes / @ref DoTryWriteBytesUnsafe without acquiring @ref syncobj_.
+ *   Writes use `store(release)`; reads use `load(acquire)` to establish
+ *   happens-before ordering with the full critical-section path.
  *
  * Coroutine support
  * -----------------
@@ -419,26 +420,24 @@ namespace ppp {
                  * @brief True once Dispose()/Finalize() has been called; read without the lock
                  *        only as an early-exit fast-path (the lock re-checks it to be definitive).
                  *
-                 * @note  Stored as a plain bool -- NOT a bitfield -- so that concurrent lock-free
-                 *        reads of disposed_ and lock-protected writes of sending_ operate on
-                 *        distinct, independently-addressable bytes.  Packing both into a single
-                 *        bitfield struct would force the compiler to emit a read-modify-write
-                 *        sequence on the shared byte, introducing a data race between any thread
-                 *        reading disposed_ outside the lock and any thread writing sending_
-                 *        inside the lock (C++17 [intro.races]/2).
+                 * @note  Stored as `std::atomic_bool` so that concurrent lock-free reads
+                 *        (e.g. in WriteBytes/DoTryWriteBytesUnsafe) do not race with
+                 *        lock-protected writes in Finalize().  Writers use `store(release)`;
+                 *        readers use `load(acquire)` to guarantee visibility of all
+                 *        side-effects performed before the disposal flag was set.
                  */
-                bool                                                    disposed_ = false;
+                std::atomic_bool                                            disposed_{false};
 
                 /**
                  * @brief True while an async write is in flight; always accessed under syncobj_.
                  *
-                 * @note  Kept as a plain bool (not bitfield) for the same reason as disposed_:
-                 *        to guarantee byte-level independence so that lock-free reads of disposed_
-                 *        cannot race with locked writes of sending_.
+                 * @note  Plain bool — safe because every read/write of sending_ is performed
+                 *        while holding syncobj_, so no concurrent access exists.
                  */
                 bool                                                    sending_  = false;
 
-                /** @brief Mutex guarding @ref disposed_, @ref sending_, and @ref queues_. */
+                /** @brief Mutex guarding @ref sending_ and @ref queues_; also used for the
+                 *         lock-protected re-check of @ref disposed_ in WriteBytes(). */
                 SynchronizedObject                                      syncobj_;
 
                 /** @brief FIFO list of pending write contexts waiting for @ref DoWriteBytes. */

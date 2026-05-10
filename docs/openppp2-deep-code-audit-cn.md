@@ -447,6 +447,15 @@ pending_bytes_
 
 ### 4.2 写队列 `disposed_` 普通 bool 存在数据竞争
 
+> **✅ 已修复（P0-6，原子化 disposed_）— 2026-05-11**
+>
+> 修复方案：`bool disposed_` → `std::atomic_bool disposed_{false}`。
+> Finalize() 内写入使用 `store(true, std::memory_order_release)`；
+> WriteBytes / DoTryWriteBytesUnsafe / DoTryWriteBytesNext 等所有读路径
+> 使用 `load(std::memory_order_acquire)`。保持现有锁内 re-check 行为不变，
+> 不改变 Finalize 的多次调用 drain 语义（第二次进入时 queue 已空，仅重复
+> 设置 flag）。不改变 WriteBytes public 签名，不重构 backpressure 逻辑。
+
 **位置：**
 
 - `ppp/net/asio/IAsynchronousWriteIoQueue.cpp:37-43`
@@ -1092,7 +1101,7 @@ cosign / minisign / GPG signing
 3. ~~写队列加背压。~~ → **✅ 已实施：pending_items/pending_bytes + 阈值拒绝（见 §4.1 状态更新）。**
 4. ~~传输帧加最大长度与超时。~~ → **⚠️ 已实施长度上限（PPP_BUFFER_SIZE）；读取超时仍为后续独立项（见 §5.1）。**
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → **✅ 已修复：copy-on-read（见 §4.3 状态更新）。**
-6. 修复主要 Dispose/Finalize one-shot。
+6. 修复主要 Dispose/Finalize one-shot。→ **⚠️ 部分完成：`IAsynchronousWriteIoQueue::disposed_` 数据竞争已修复为 `std::atomic_bool`（见 §4.2 状态更新）；其他类的 one-shot / 非原子 disposed_ 仍为后续项。**
 
 > 复核调整：`starrylink.net.key` / `starrylink.net.pem` 经维护者说明属于示例资产，在无证据表明其仍用于生产服务时，不列入 P0 生产密钥泄露。
 
@@ -1348,7 +1357,7 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 3. ~~写队列加背压。~~ → ✅ 已实施（见 §4.1）。
 4. ~~传输帧加最大长度与超时。~~ → ⚠️ 已实施长度上限；读取超时仍为后续独立项（见 §5.1）。
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → ✅ 已修复（见 §4.3）。
-6. 修复主要 Dispose/Finalize one-shot。
+6. 修复主要 Dispose/Finalize one-shot。→ ⚠️ 部分完成：`IAsynchronousWriteIoQueue::disposed_` 已原子化（见 §4.2）；其他类仍为后续项。
 
 ### 第二批：短期修
 
