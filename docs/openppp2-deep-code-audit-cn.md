@@ -1943,3 +1943,77 @@ std::call_once(s_ssl_globals_once, []() {
 3. **P2**：对 §15.3 中单线程类保持现状，仅在 strand 假设变化时升级。
 
 > **不要宣称全仓 Dispose/Finalize 已完成。** 当前修复覆盖了高风险核心路径，但全仓治理仍需按上述分级逐步推进。
+
+---
+
+## 16. `std::shared_ptr` 并发访问规范
+
+> 本节定义仓库中 `std::shared_ptr` 成员在多线程/strand 环境下的使用规范。
+> 当前项目使用 C++17，部分路径已通过 `std::atomic_load/store` free functions 保护（见 §5.3）。
+
+### 16.1 核心规则
+
+1. **同一个 `shared_ptr` 对象并发读写必须使用 `std::atomic_load` / `std::atomic_store`。**
+   - C++ 标准（§[util.smartptr.shared.atomic]）明确：对同一个 `shared_ptr` 实例的并发读写（非仅读）构成 data race，行为未定义。
+   - "读写"包括：一个线程 copy（读 control block + 增加 refcount）、另一个线程 reset/move（写 control block + 可能释放）。
+
+2. **C++17 使用 free functions：**
+   ```cpp
+   // 读取（拷贝）
+   auto local = std::atomic_load(&member_ptr);
+   
+   // 写入（替换）
+   std::atomic_store(&member_ptr, new_value);
+   
+   // 移出（取出并清空）
+   auto local = std::atomic_load(&member_ptr);
+   std::atomic_store(&member_ptr, {});
+   ```
+
+3. **C++20 才考虑 `std::atomic<std::shared_ptr<T>>`：**
+   - `std::atomic<std::shared_ptr<T>>` 是 C++20 标准（§[util.smartptr.atomic]），提供 `load()`、`store()`、`exchange()`、`compare_exchange_*()` 等成员函数。
+   - 当前项目使用 C++17，不可使用此类型。
+   - 升级 C++20 后，优先迁移到 `std::atomic<std::shared_ptr<T>>`，因为 free functions 在 C++20 起已弃用。
+
+4. **不要混用普通 copy/move 与 `atomic_load/store` 操作同一个 `shared_ptr` 成员：**
+   - 如果一个成员在某些路径使用 `std::atomic_load/store`，则**所有**对它的读写都必须使用 `atomic_load/store`。
+   - 混用会导致：atomic 路径与 non-atomic 路径之间没有 happens-before 关系，non-atomic 路径可能观察到撕裂的 control block。
+
+### 16.2 性能评估
+
+- `std::atomic_load/store(shared_ptr*)` 在主流实现（libstdc++、libc++、MSVC STL）中使用**全局 spinlock**（hash table of mutexes），不是 lock-free。
+- 对**高频路径**（如每包 read/write 中的 `socket_` 访问），spinlock contention 可能成为瓶颈。
+- **替代方案：**
+  - **strand 保护**：将所有 `shared_ptr` 访问序列化到同一个 strand，无需 atomic。这是 Boost.Asio 的推荐模式。
+  - **mutex 保护**：用 `std::mutex` 保护 `shared_ptr` 成员的所有读写。spinlock 开销更可控。
+  - **所有权转移**：在初始化时 copy 到局部变量，后续使用局部变量。适用于生命周期由调用者管理的场景。
+  - **裸指针 + shared_from_this**：在 strand 保护下，使用裸指针访问，避免 `shared_ptr` copy 开销。
+
+### 16.3 当前仓库应用
+
+| 成员 | 文件 | 保护方式 | 备注 |
+|---|---|---|---|
+| `WebSocket::socket_` | `ppp/transmissions/templates/WebSocket.h` | `std::atomic_load/store` | 已修复（§5.3） |
+| `ITcpipTransmission::socket_` | `ppp/transmissions/ITcpipTransmission.cpp` | `std::atomic_load/store` | 已修复（§5.3） |
+| `ITransmission::cipher_` | `ppp/transmissions/ITransmission.cpp` | `std::atomic_load/store` | 已修复 |
+
+### 16.4 新代码检查清单
+
+在新增或修改涉及 `shared_ptr` 成员的代码时，必须检查：
+
+- [ ] 该 `shared_ptr` 成员是否会被多个线程/strand 并发访问？
+- [ ] 是否存在一个线程 copy、另一个线程 reset/move 的场景？
+- [ ] 如果是高频路径，是否评估了 `atomic_load/store` 的 spinlock 开销？
+- [ ] 是否可以改为 strand 保护或 mutex 保护？
+- [ ] 所有读写路径是否统一使用 `atomic_load/store`（不要混用）？
+- [ ] 未来升级 C++20 时，是否应迁移到 `std::atomic<std::shared_ptr<T>>`？
+
+### 16.5 C++20 迁移路径
+
+当项目升级到 C++20 时：
+
+1. 将所有 `std::atomic_load/store(shared_ptr*)` 替换为 `std::atomic<std::shared_ptr<T>>`。
+2. 使用 `load()` / `store()` / `exchange()` 成员函数。
+3. 对需要 CAS 的场景，使用 `compare_exchange_weak/strong`。
+4. 删除所有 free function 调用，避免 deprecated 警告。
+5. 评估 `std::atomic<std::shared_ptr<T>>` 的 lock-free 实现（部分平台已支持）。
