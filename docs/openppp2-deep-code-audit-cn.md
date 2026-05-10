@@ -1961,14 +1961,20 @@ std::call_once(s_ssl_globals_once, []() {
    ```cpp
    // 读取（拷贝）
    auto local = std::atomic_load(&member_ptr);
-   
+
    // 写入（替换）
    std::atomic_store(&member_ptr, new_value);
-   
-   // 移出（取出并清空）
+
+   // 移出（取出并清空）—— ⚠️ 非原子交换，见下方说明
    auto local = std::atomic_load(&member_ptr);
    std::atomic_store(&member_ptr, {});
    ```
+
+   **⚠️ 关于"移出（取出并清空）"模式的限制：**
+   上述 `atomic_load` + `atomic_store({})` 是两次独立的原子操作，**不等价于** `atomic exchange`。
+   在并发场景下，两个线程可能同时 `atomic_load` 到相同的 `shared_ptr` 值（都获得非空引用），然后各自 `atomic_store({})`，导致同一个对象被两个消费者"取走"——**不保证唯一取走语义**。
+   如果需要"唯一所有权转移"（exactly-once take），必须使用 `strand` / `mutex` 将 load + clear 保护为临界区；
+   升级 C++20 后可使用 `std::atomic<std::shared_ptr<T>>::exchange()` 实现真正的原子交换。
 
 3. **C++20 才考虑 `std::atomic<std::shared_ptr<T>>`：**
    - `std::atomic<std::shared_ptr<T>>` 是 C++20 标准（§[util.smartptr.atomic]），提供 `load()`、`store()`、`exchange()`、`compare_exchange_*()` 等成员函数。

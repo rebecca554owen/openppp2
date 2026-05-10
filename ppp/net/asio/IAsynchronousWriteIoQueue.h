@@ -37,7 +37,7 @@
  *   by @ref syncobj_.
  * - @ref disposed_ is `std::atomic_bool` to allow lock-free early-exit reads
  *   in @ref WriteBytes / @ref DoTryWriteBytesUnsafe without acquiring @ref syncobj_.
- *   Writes use `store(release)`; reads use `load(acquire)` to establish
+ *   One-shot finalization uses `exchange(acq_rel)`; reads use `load(acquire)` to establish
  *   happens-before ordering with the full critical-section path.
  *
  * Coroutine support
@@ -430,7 +430,8 @@ namespace ppp {
                  *
                  * @note  Stored as `std::atomic_bool` so that concurrent lock-free reads
                  *        (e.g. in WriteBytes/DoTryWriteBytesUnsafe) do not race with
-                 *        lock-protected writes in Finalize().  Writers use `store(release)`;
+                 *        lock-protected writes in Finalize().  One-shot finalization
+                 *        uses `exchange(true, acq_rel)` to ensure exactly-once drain;
                  *        readers use `load(acquire)` to guarantee visibility of all
                  *        side-effects performed before the disposal flag was set.
                  */
