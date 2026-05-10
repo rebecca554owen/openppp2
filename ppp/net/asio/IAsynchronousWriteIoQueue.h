@@ -151,25 +151,31 @@ namespace ppp {
                  * @brief Returns the configured maximum pending item count (0 = unlimited).
                  * @return  Max items threshold.
                  */
-                int                                                     GetMaxPendingItems() const noexcept { return max_pending_items_; }
+                int                                                     GetMaxPendingItems() const noexcept { return max_pending_items_.load(std::memory_order_relaxed); }
 
                 /**
                  * @brief Configures the maximum pending item count.
+                 *
+                 * Negative values are clamped to 0 (unlimited).
+                 *
                  * @param value  Max items; 0 disables the limit.
                  */
-                void                                                    SetMaxPendingItems(int value) noexcept { max_pending_items_ = value; }
+                void                                                    SetMaxPendingItems(int value) noexcept { max_pending_items_.store(value < 0 ? 0 : value, std::memory_order_relaxed); }
 
                 /**
                  * @brief Returns the configured maximum pending byte count (0 = unlimited).
                  * @return  Max bytes threshold.
                  */
-                int                                                     GetMaxPendingBytes() const noexcept { return max_pending_bytes_; }
+                int                                                     GetMaxPendingBytes() const noexcept { return max_pending_bytes_.load(std::memory_order_relaxed); }
 
                 /**
                  * @brief Configures the maximum pending byte count.
+                 *
+                 * Negative values are clamped to 0 (unlimited).
+                 *
                  * @param value  Max bytes; 0 disables the limit.
                  */
-                void                                                    SetMaxPendingBytes(int value) noexcept { max_pending_bytes_ = value; }
+                void                                                    SetMaxPendingBytes(int value) noexcept { max_pending_bytes_.store(value < 0 ? 0 : value, std::memory_order_relaxed); }
 
             private:
                 /**
@@ -448,15 +454,19 @@ namespace ppp {
                  * @brief Maximum number of pending write items before backpressure rejection.
                  *
                  * A value of 0 disables the item-count limit.  Default: 4096.
+                 * Stored as std::atomic<int> to avoid data races between setter
+                 * calls from configuration threads and lock-free reads in WriteBytes().
                  */
-                int                                                     max_pending_items_ = 4096;
+                std::atomic<int>                                        max_pending_items_{4096};
 
                 /**
                  * @brief Maximum total bytes of pending writes before backpressure rejection.
                  *
                  * A value of 0 disables the byte-count limit.  Default: 16 MiB.
+                 * Stored as std::atomic<int> to avoid data races between setter
+                 * calls from configuration threads and lock-free reads in WriteBytes().
                  */
-                int                                                     max_pending_bytes_ = 16 * 1024 * 1024;
+                std::atomic<int>                                        max_pending_bytes_{16 * 1024 * 1024};
             };
         }
     }

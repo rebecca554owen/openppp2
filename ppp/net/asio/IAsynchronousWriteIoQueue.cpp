@@ -138,22 +138,6 @@ namespace ppp {
                     return false;
                 }
 
-                /** @brief Backpressure check (P0-3): reject writes when pending limits are exceeded. */
-                {
-                    int cur_items = q->pending_items_.load(std::memory_order_relaxed);
-                    int cur_bytes = q->pending_bytes_.load(std::memory_order_relaxed);
-
-                    if (q->max_pending_items_ > 0 && cur_items >= q->max_pending_items_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
-                        return false;
-                    }
-
-                    if (q->max_pending_bytes_ > 0 && cur_bytes + packet_length > q->max_pending_bytes_) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
-                        return false;
-                    }
-                }
-
                 std::shared_ptr<AsynchronousWriteIoContext> context = make_shared_object<AsynchronousWriteIoContext>();
                 if (NULLPTR == context) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueWriteContextAllocFailed);
@@ -175,11 +159,44 @@ namespace ppp {
                         return false;
                     }
 
+                    /**
+                     * @brief Backpressure check and counter reservation in one critical section.
+                     *
+                     * Checking threshold and incrementing counters under the same lock prevents
+                     * concurrent WriteBytes() callers from all passing the check and then all
+                     * incrementing, which would overshoot the configured limits.
+                     */
+                    int cur_items = q->pending_items_.load(std::memory_order_relaxed);
+                    int cur_bytes = q->pending_bytes_.load(std::memory_order_relaxed);
+                    int mpi = q->max_pending_items_.load(std::memory_order_relaxed);
+                    int mpb = q->max_pending_bytes_.load(std::memory_order_relaxed);
+
+                    if (mpi > 0 && cur_items >= mpi) {
+                        context->Clear();
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
+                        return false;
+                    }
+
+                    if (mpb > 0 && cur_bytes + packet_length > mpb) {
+                        context->Clear();
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
+                        return false;
+                    }
+
+                    /**
+                     * @brief Reserve backpressure counters atomically with the accept decision.
+                     *
+                     * Incrementing here (inside the lock) together with the threshold check
+                     * ensures that concurrent callers cannot collectively overshoot the limit.
+                     * The counters are decremented on: (a) evtf completion callback,
+                     * (b) write-start failure in this function, or (c) Finalize() drain.
+                     */
+                    q->pending_items_.fetch_add(1, std::memory_order_relaxed);
+                    q->pending_bytes_.fetch_add(packet_length, std::memory_order_relaxed);
+
                     if (q->sending_) {
                         /** @brief Another write is in flight; defer this request into the pending queue. */
                         q->queues_.emplace_back(context);
-                        q->pending_items_.fetch_add(1, std::memory_order_relaxed);
-                        q->pending_bytes_.fetch_add(packet_length, std::memory_order_relaxed);
                         return true;
                     }
 
@@ -192,10 +209,6 @@ namespace ppp {
                      */
                     q->sending_ = true;
                     ctx_to_send = context;
-
-                    /** @brief Increment backpressure counters for the immediately-dispatched context. */
-                    q->pending_items_.fetch_add(1, std::memory_order_relaxed);
-                    q->pending_bytes_.fetch_add(packet_length, std::memory_order_relaxed);
                 }
 
                 /** @brief Initiate the write outside the lock. */
@@ -207,15 +220,23 @@ namespace ppp {
                      *        sending_ = true and this failure is not silently abandoned.
                      */
                     int drain = DoTryWriteBytesNext();
-                    if (drain < 0) {
-                        Dispose();
-                    }
 
+                    /**
+                     * @brief Save packet_length before Clear() zeros it.
+                     *
+                     * Clear() sets packet_length to 0, so we must capture the original
+                     * value first to decrement pending_bytes_ correctly.
+                     */
+                    int saved_length = ctx_to_send->packet_length;
                     ctx_to_send->Clear();
 
                     /** @brief Decrement backpressure counters for the failed ctx_to_send (evtf will not fire). */
                     q->pending_items_.fetch_sub(1, std::memory_order_relaxed);
-                    q->pending_bytes_.fetch_sub(ctx_to_send->packet_length, std::memory_order_relaxed);
+                    q->pending_bytes_.fetch_sub(saved_length, std::memory_order_relaxed);
+
+                    if (drain < 0) {
+                        Dispose();
+                    }
 
                     if (q->disposed_) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
