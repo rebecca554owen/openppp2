@@ -266,7 +266,7 @@ rc4_crypt(...)
 > - protocol_key 或 transport_key 长度 < 8 字节 → `ConfigWeakKeyShort`
 > - `key.plaintext == true` → `ConfigPlaintextEnabled`
 >
-> 后续生产模式可选择性地将这些 warning 升级为强制拒绝（通过新增配置项或 CLI 标志）。
+> 后续可增强 warning 的可见性，例如在日志、管理界面、诊断输出中高亮展示；生产模式也应保持非阻断策略，不拒绝启动、不 fail-closed。
 
 **位置：**
 
