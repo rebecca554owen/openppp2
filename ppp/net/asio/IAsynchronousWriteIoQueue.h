@@ -282,14 +282,16 @@ namespace ppp {
 
             private:
                 /**
-                 * @brief Starts sending a context while the queue lock is held.
+                 * @brief Starts sending a context after queue state has been pre-armed.
                  *
-                 * Calls @ref DoWriteBytes with the context's packet data and a lambda
-                 * that invokes @ref DoTryWriteBytesNext when the I/O completes.
+                 * The caller must set sending_ = true under syncobj_ before releasing the lock,
+                 * then call this function without holding syncobj_. Calling DoWriteBytes while
+                 * holding syncobj_ can deadlock if the completion path re-enters
+                 * DoTryWriteBytesNext().
                  *
                  * @param context  Write context to dispatch (must not be NULLPTR).
                  * @return         true if the async operation was accepted; false on error.
-                 * @warning        Must be called with @ref syncobj_ already held.
+                 * @warning        Must be called without holding @ref syncobj_.
                  */
                 bool                                                    DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept;
 
