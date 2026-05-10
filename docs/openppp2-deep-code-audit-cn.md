@@ -255,6 +255,21 @@ rc4_crypt(...)
 
 ### 3.5 默认密钥可预测，默认 plaintext 开启
 
+> **⚠️ 已实施非阻断安全提示（P0-2）— 2026-05-10**
+>
+> 用户明确要求：弱 key、示例 key、短 key 只能 warning，不得 fail-closed，不得阻断启动。
+> plaintext=true 可以显式配置，显示醒目提示但不拒绝启动。
+>
+> 已实施：在 `AppConfiguration.cpp` 配置归一化完成后检测以下场景并设置
+> `kWarning` 级别错误码（`ConfigWeakKeyDefault`、`ConfigWeakKeyShort`、
+> `ConfigPlaintextEnabled`），不改变任何默认值，不阻断启动：
+>
+> - protocol_key 或 transport_key 等于已知默认值 `"ppp"` → `ConfigWeakKeyDefault`
+> - protocol_key 或 transport_key 长度 < 8 字节 → `ConfigWeakKeyShort`
+> - `key.plaintext == true` → `ConfigPlaintextEnabled`
+>
+> 后续生产模式可选择性地将这些 warning 升级为强制拒绝（通过新增配置项或 CLI 标志）。
+
 **位置：**
 
 - `ppp/configurations/AppConfiguration.cpp:262-267`
@@ -278,10 +293,10 @@ config.key.plaintext = true;
 
 **修复建议：**
 
-1. 禁止默认弱 key 启动。
+1. ~~禁止默认弱 key 启动。~~ → 已调整为：检测并高亮提示，不阻断启动。
 2. 首次启动生成随机高熵 key。
 3. `plaintext` 默认关闭。
-4. 配置中出现 `"ppp"`、`"test"`、空 key 时拒绝启动。
+4. ~~配置中出现 `"ppp"`、`"test"`、空 key 时拒绝启动。~~ → 已调整为：检测并高亮提示，不阻断启动。
 
 ---
 
@@ -1262,10 +1277,10 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 ### 第一批：立即修
 
 1. TLS/WSS 开启证书链校验与主机名校验。
-2. 禁止生产默认弱 key、固定 key 和 plaintext。
+2. ~~禁止生产默认弱 key、固定 key 和 plaintext。~~ → 已调整为：检测并高亮提示弱 key/plaintext；不阻断启动（见 §3.5）。
 3. 写队列加背压。
 4. 传输帧加最大长度与超时。
-5. 修复 DNS cache transaction id 并发覆盖。
+5. ~~修复 DNS cache transaction id 并发覆盖。~~ → ✅ 已修复（见 §4.3）。
 6. 修复主要 Dispose/Finalize one-shot。
 
 ### 第二批：短期修

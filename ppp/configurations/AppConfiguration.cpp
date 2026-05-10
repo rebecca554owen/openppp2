@@ -808,6 +808,40 @@ namespace ppp {
                 config.key.transport_key = BOOST_BEAST_VERSION_STRING;
             }
 
+            /**
+             * @brief Security posture warnings (P0-2).
+             *
+             * Weak keys, example keys, short keys and plaintext mode are detected here
+             * and surfaced as non-fatal warnings.  They never block startup — the
+             * application continues to function for backward compatibility.  Production
+             * deployments should replace these with strong, unique keys and disable
+             * plaintext mode.
+             */
+            {
+                const ppp::string default_key = BOOST_BEAST_VERSION_STRING;  /* well-known "ppp" */
+
+                /* Protocol key warnings */
+                if (config.key.protocol_key == default_key) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyDefault);
+                }
+                elif(config.key.protocol_key.size() < 8) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyShort);
+                }
+
+                /* Transport key warnings */
+                if (config.key.transport_key == default_key) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyDefault);
+                }
+                elif(config.key.transport_key.size() < 8) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyShort);
+                }
+
+                /* Plaintext mode warning */
+                if (config.key.plaintext) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigPlaintextEnabled);
+                }
+            }
+
             if (!Ipep::IsDomainAddress(config.websocket.host) || config.websocket.path.empty() || config.websocket.path[0] != '/') {
                 config.websocket.listen.ws = IPEndPoint::MinPort;
                 config.websocket.listen.wss = IPEndPoint::MinPort;

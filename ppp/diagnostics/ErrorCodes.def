@@ -691,3 +691,7 @@ X(Ipv6NdpProxyNotSupported, "IPv6 NDP neighbor proxy is not supported on the cur
 X(Ipv6ServerRoleNotSupportedOnPlatform, "IPv6 server role is not supported on the current platform; IPv6 features are limited to client mode", ErrorSeverity::kWarning)
 
 X(ObfuscationFlagsMismatch, "Transport obfuscation flags differ between peers (key.masked / key.plaintext / key.delta-encode / key.shuffle-data / key.kf); align both configs.", ErrorSeverity::kError)
+
+X(ConfigWeakKeyDefault, "Protocol or transport key equals the well-known default value (\"ppp\"); this is insecure for production use", ErrorSeverity::kWarning)
+X(ConfigWeakKeyShort, "Protocol or transport key is shorter than 8 bytes; short keys are trivially brute-forced", ErrorSeverity::kWarning)
+X(ConfigPlaintextEnabled, "Plaintext mode is enabled (key.plaintext=true); packets are transmitted without encryption — NOT suitable for untrusted networks", ErrorSeverity::kWarning)
