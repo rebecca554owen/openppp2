@@ -600,16 +600,19 @@ std::atomic<std::shared_ptr<const RuleSet>> rules_;
 
 ### 5.1 传输帧长度缺少策略上限，存在 DoS
 
-> **⚠️ 已实施长度上限（P0-4A），读取超时仍为后续独立项 — 2026-05-10**
+> **✅ 已实施长度上限（P0-4A），读取超时仍为后续独立项 — 2026-05-10；✅ 补齐内存 base94 路径 — 2026-05-11**
 >
-> 已在三个解码路径的 payload length 确定后、分配/读取前添加 `PPP_BUFFER_SIZE`
+> 已在四个解码路径的 payload length 确定后、分配/读取前添加 `PPP_BUFFER_SIZE`
 > （65536 字节）上限检查：
 >
-> - `base94_decode()` — base94 解码后的 payload_length
+> - `base94_decode(cfg, allocator, data, datalen, kf, outlen)` — 内存 base94 解码路径
+>   （CodeReviewer 指出遗漏，2026-05-11 补齐）
+> - `base94_decode(transmission, y, outlen)` — 网络 base94 解码后的 payload_length
 > - `Transmission_Packet_Decrypt()` — EVP header 解密后的 payload_len（内存解密路径）
 > - `Transmission_Packet_Read()` — EVP header 解密后的 payload_len（网络读取路径）
 >
-> 超限帧返回 `ProtocolFrameInvalid` 错误并拒绝处理。未实施 per-frame 读取超时，
+> 超限帧返回 `ProtocolFrameInvalid` 错误并拒绝处理。`payload_length == PPP_BUFFER_SIZE`
+> 仍为合法值（严格大于才拒绝）。未实施 per-frame 读取超时，
 > 该功能需单独规划（涉及 Boost.Asio async_read deadline_timer 集成）。
 > ITcpipTransmission 和 WebSocket 路径的限制需后续评估。
 
