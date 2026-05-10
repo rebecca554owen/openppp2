@@ -377,7 +377,7 @@ system(cmd);
 
 ### 4.1 异步写队列无背压，可能 OOM
 
-> **✅ 已实施背压（P0-3）— 2026-05-10**
+> **✅ 已实施背压（P0-3）— 2026-05-10；✅ 已修正三条缺陷 — 2026-05-11**
 >
 > 已添加 `pending_items_` / `pending_bytes_` 原子计数器和
 > `max_pending_items_`（默认 4096）/ `max_pending_bytes_`（默认 16 MiB）
@@ -387,6 +387,18 @@ system(cmd);
 > 阈值可通过 `SetMaxPendingItems()` / `SetMaxPendingBytes()` 配置，
 > 设为 0 表示 unlimited。`GetPendingItems()` / `GetPendingBytes()`
 > 可用于运行时监控。
+>
+> **CodeReviewer 审查修正（2026-05-11）：**
+> 1. **pending_bytes_ 扣减归零 bug**：立即派发失败路径先调用 `Clear()`
+>    （将 `packet_length` 置零）再 `fetch_sub(packet_length)`，
+>    导致永远扣减 0。修正为先保存 `packet_length` 再 `Clear()`，
+>    使用保存值扣减。
+> 2. **临界区穿透**：背压阈值检查在 `syncobj_` 锁外、计数递增在锁内，
+>    并发 WriteBytes 可全部通过检查再全部递增，突破限制。修正为
+>    检查 + 递增在同一 `syncobj_` 临界区内作为原子 accept/reservation。
+> 3. **阈值 data race**：`max_pending_items_` / `max_pending_bytes_` 为
+>    普通 int，setter 并发写、WriteBytes 并发读构成 data race。修正为
+>    `std::atomic<int>`，setter 将负数 clamp 到 0（0 仍表示 unlimited）。
 >
 > 未实施：慢连接断开策略、上游暂停读取通知。这些需要与传输层
 > 和 TAP 层协调，属于后续独立优化项。
