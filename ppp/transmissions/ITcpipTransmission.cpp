@@ -59,7 +59,8 @@ namespace ppp {
 
             ppp::telemetry::Log(Level::kInfo, "tcpip", "socket closed remote=%s:%u", remoteEP_.address().to_string().c_str(), remoteEP_.port());
 
-            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::move(socket_);
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::atomic_load(&socket_);
+            std::atomic_store(&socket_, std::shared_ptr<boost::asio::ip::tcp::socket>());
 
             if (socket) {
                 Socket::Closesocket(socket);
@@ -113,7 +114,7 @@ namespace ppp {
          * @return true if migration succeeds; otherwise false.
          */
         bool ITcpipTransmission::ShiftToScheduler() noexcept {
-            std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::atomic_load(&socket_);
             if (!socket || !socket->is_open()) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return false;
@@ -130,7 +131,7 @@ namespace ppp {
 
             bool ok = ppp::threading::Executors::ShiftToScheduler(*socket, socket_new, scheduler, strand);
             if (ok) {
-                socket_ = socket_new;
+                std::atomic_store(&socket_, socket_new);
                 GetStrand() = strand;
                 GetContext() = scheduler;
             }
@@ -151,7 +152,7 @@ namespace ppp {
          * @return Read buffer on success; null on failure.
          */
         std::shared_ptr<Byte> ITcpipTransmission::ReadBytes(YieldContext& y, int length) noexcept {
-            std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::atomic_load(&socket_);
             if (!socket || !socket->is_open()) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed, NULLPTR);
             }
@@ -193,7 +194,7 @@ namespace ppp {
          * @return true if the write task is posted; otherwise false.
          */
         bool ITcpipTransmission::DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
-            std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::atomic_load(&socket_);
             if (!socket || !socket->is_open()) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                 return false;

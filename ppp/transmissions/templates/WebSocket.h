@@ -79,14 +79,14 @@ namespace ppp {
                     private:
                         WebSocket&                                          owner_;
                     };
-                    socket_ = make_shared_object<IWebsocketObject>(*this, context, strand, socket, binary);
+                    std::atomic_store(&socket_, make_shared_object<IWebsocketObject>(*this, context, strand, socket, binary));
                 }
                 /** @brief Disposes websocket resources. */
                 virtual ~WebSocket()                                        noexcept { Finalize(); }
 
             public:
-                /** @brief Gets the underlying websocket object. */
-                std::shared_ptr<IWebsocket>                                 GetSocket() noexcept { return socket_; }
+                /** @brief Gets the underlying websocket object (atomic load). */
+                std::shared_ptr<IWebsocket>                                 GetSocket() noexcept { return std::atomic_load(&socket_); }
                 /** @brief Schedules asynchronous disposal and forwards to base transmission cleanup. */
                 virtual void                                                Dispose() noexcept override {
                     auto self = shared_from_this();
@@ -138,7 +138,7 @@ namespace ppp {
                         return false;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (socket) {
                         auto self = shared_from_this();
                         auto complete_do_write_async_callback = 
@@ -196,7 +196,7 @@ namespace ppp {
                         return false;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (!socket) {
                         return false;
                     }
@@ -215,7 +215,8 @@ namespace ppp {
                         return;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = std::move(socket_); 
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
+                    std::atomic_store(&socket_, std::shared_ptr<IWebsocket>());
 
                     if (socket) {
                         socket->Dispose();
@@ -227,7 +228,7 @@ namespace ppp {
                 }
                 /** @brief Moves websocket I/O execution to scheduler when supported by transport. */
                 virtual bool                                                ShiftToScheduler() noexcept override {
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (socket) {
                         return socket->ShiftToScheduler();
                     }
@@ -247,7 +248,7 @@ namespace ppp {
                         return NULLPTR;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (!socket) {
                         return NULLPTR;
                     }
