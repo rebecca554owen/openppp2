@@ -243,6 +243,66 @@ class VpnService {
     }
   }
 
+  /// Milliseconds since the `:vpn` process last wrote its link-state
+  /// heartbeat file. Returns -1 if no VPN session has started yet, or
+  /// a large value when `:vpn` is dead/crashed. The UI uses this as a
+  /// liveness signal during long native operations (e.g. geo-rules
+  /// parsing) where neither the log nor link state value progresses.
+  Future<int> getVpnHeartbeatAgeMs() async {
+    try {
+      final v = await _channel.invokeMethod<int>('getVpnHeartbeatAgeMs');
+      return v ?? -1;
+    } on PlatformException {
+      return -1;
+    }
+  }
+
+  /// Native link state from `libopenppp2.get_link_state()`.
+  /// 0=ESTABLISHED, 1=UNKNOWN, 2=CLIENT_UNINIT, 3=EXCHANGE_UNINIT,
+  /// 4=RECONNECTING, 5=CONNECTING, 6=APP_UNINIT.
+  Future<int> getLinkState() async {
+    try {
+      final v = await _channel.invokeMethod<int>('getLinkState');
+      return v ?? 1;
+    } on PlatformException {
+      return 1;
+    }
+  }
+
+  /// Returns the list of installed user apps with INTERNET permission. Each
+  /// entry is `{ 'package': String, 'label': String, 'system': bool }`. Pass
+  /// `includeSystem: true` to also include system packages.
+  Future<List<Map<String, dynamic>>> getInstalledApps({
+    bool includeSystem = false,
+  }) async {
+    try {
+      final raw = await _channel.invokeMethod<List<dynamic>>(
+        'getInstalledApps',
+        {'includeSystem': includeSystem},
+      );
+      if (raw == null) return const [];
+      return raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false);
+    } on PlatformException {
+      return const [];
+    }
+  }
+
+  /// Returns the base64-encoded PNG icon for `package`, or `null` when the
+  /// icon cannot be resolved (e.g. uninstalled app).
+  Future<String?> getAppIcon(String package) async {
+    try {
+      return await _channel.invokeMethod<String>(
+        'getAppIcon',
+        {'package': package},
+      );
+    } on PlatformException {
+      return null;
+    }
+  }
+
   Future<bool> requestVpnPermission() async {
     try {
       final result = await _channel.invokeMethod<bool>('requestPermission');
