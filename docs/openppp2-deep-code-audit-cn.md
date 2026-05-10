@@ -1058,6 +1058,31 @@ cosign / minisign / GPG signing
 
 ---
 
+### 7.7 Android GeoIP/GeoSite 二进制规则文件直接提交仓库
+
+**位置：**
+
+- `android/android/app/src/main/assets/rules/geoip.dat`（~19.3 MB）
+- `android/android/app/src/main/assets/rules/geosite.dat`（~4.2 MB）
+
+**风险：**
+
+- 仓库体积膨胀约 23 MB；每次更新产生大 binary diff。
+- 来源为 MetaCubeX/meta-rules-dat（聚合 MaxMind GeoLite2 CC BY-SA 4.0 + v2ray/domain-list-community MIT），**聚合产物的再分发许可尚未独立确认**。
+- 无版本标注、无更新策略、无生成记录。
+
+**已采取措施：**
+
+- 添加 `android/android/app/src/main/assets/rules/README.md`：说明用途、文件、来源、许可证风险、更新流程。
+- 添加根 `.gitattributes`：将 `*.dat` 标记为 `binary`，抑制文本 diff 噪音。
+
+**后续建议：**
+
+- 迁移至 GitHub Release asset / Git LFS / 首次运行下载脚本，消除仓库体积负担。
+- 确认并记录上游聚合数据的再分发许可。
+
+---
+
 ## 8. 优先级修复建议
 
 ### P0：必须立即处理
