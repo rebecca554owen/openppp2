@@ -4,6 +4,7 @@
 #include <ppp/ssl/SSL.h>
 #include <ppp/IDisposable.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/diagnostics/Error.h>
 
 /**
  * @file SslSocket.h
@@ -110,6 +111,29 @@ namespace ppp {
                         if (host_.size() > 0) {
                             if (!SSL_set_tlsext_host_name(GetSslHandle(), host_.data())) {
                                 return false; /* throw boost::system::system_error{ { static_cast<int>(::ERR_get_error()), boost::asio::error::get_ssl_category() } }; */
+                            }
+                        }
+
+                        /**
+                         * @brief When peer verification is enabled, set OpenSSL hostname
+                         *        verification so the certificate chain is checked against
+                         *        the expected hostname (SAN / CN).
+                         *
+                         * SSL_set1_host() (OpenSSL ≥ 1.0.2 / BoringSSL) causes the
+                         * built-in verify callback to reject certificates whose
+                         * SubjectAltName or Subject CN does not match `host_`.
+                         *
+                         * An empty host with verify_peer enabled is a misconfiguration
+                         * and must not silently skip hostname verification.
+                         */
+                        if (verify_peer_) {
+                            if (host_.empty()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SslWebSocketRunInvalidHostOrPath);
+                                return false;
+                            }
+
+                            if (!SSL_set1_host(GetSslHandle(), host_.data())) {
+                                return false;
                             }
                         }
 
