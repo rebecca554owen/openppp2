@@ -129,14 +129,16 @@ namespace ppp {
                 /**
                  * @brief Retrieves a cached DNS response and rewrites its transaction ID.
                  *
-                 * @details The cached packet's first two bytes (the DNS transaction ID field)
-                 *          are overwritten with `trans_id` before the buffer pointer is returned,
-                 *          so the caller receives a correctly-addressed response packet.
+                 * @details **Copy-on-read (P0-5 fix):** The method allocates a local copy of
+                 *          the cached packet and writes the caller-supplied @p trans_id into
+                 *          the copy.  The original cached buffer is never mutated, so
+                 *          concurrent Get() callers on the same key do not race on the
+                 *          transaction ID field.
                  *
                  * @param key              Query cache key produced by `QueriesKey()`.
-                 * @param response[out]    Receives the shared buffer of the cached response.
+                 * @param response[out]    Receives a *local copy* of the cached response buffer.
                  * @param response_length[out] Receives the cached packet length in bytes.
-                 * @param trans_id         Transaction ID to write into the DNS response header.
+                 * @param trans_id         Transaction ID to write into the DNS response header copy.
                  * @return True if a valid non-expired cache entry is found and returned;
                  *         false if the key is absent or the entry has expired.
                  */
