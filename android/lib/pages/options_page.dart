@@ -14,8 +14,78 @@ class OptionsPage extends StatefulWidget {
 
   @override
   State<OptionsPage> createState() => _OptionsPageState();
-  }
 }
+
+class _OptionsPageState extends State<OptionsPage> {
+  final _store = ProfileStore();
+
+  // TUN
+  final _tunIp = TextEditingController();
+  final _tunMask = TextEditingController();
+  final _tunPrefix = TextEditingController();
+  final _gateway = TextEditingController();
+  final _mtu = TextEditingController();
+
+  // Route
+  final _route = TextEditingController();
+  final _routePrefix = TextEditingController();
+
+  // DNS
+  final _dns1 = TextEditingController();
+  final _dns2 = TextEditingController();
+  final _dnsRulesList = TextEditingController();
+
+  // Geo bypass (CIDR list)
+  final _bypassIpList = TextEditingController();
+
+  // Advanced
+  final _mark = TextEditingController();
+  final _mux = TextEditingController();
+  bool _vnet = false;
+  bool _blockQuic = false;
+  bool _staticMode = false;
+
+  // DNS resolver (AppConfiguration.dns block)
+  final _dnsDomestic = TextEditingController();
+  final _dnsForeign = TextEditingController();
+  final _dnsEcsOverride = TextEditingController();
+  final _dnsStunCandidates = TextEditingController();
+  bool _dnsInterceptUnmatched = true;
+  bool _dnsEcsEnabled = true;
+  bool _dnsTlsVerifyPeer = true;
+
+  // Geo rules (AppConfiguration.geo-rules block)
+  final _geoCountry = TextEditingController();
+  final _geoIpDat = TextEditingController();
+  final _geoSiteDat = TextEditingController();
+  final _geoIpDownloadUrl = TextEditingController();
+  final _geoSiteDownloadUrl = TextEditingController();
+  final _geoIpFiles = TextEditingController();
+  final _geoSiteFiles = TextEditingController();
+  final _geoDnsProviderDomestic = TextEditingController();
+  final _geoDnsProviderForeign = TextEditingController();
+  final _geoOutputBypass = TextEditingController();
+  final _geoOutputDnsRules = TextEditingController();
+  bool _geoEnabled = true;
+
+  // Proxy (per-app + LAN + auto-append)
+  bool _perAppProxyEnabled = false;
+  String _perAppProxyMode = 'allow';
+  List<String> _perAppProxyApps = const <String>[];
+  bool _autoAppendApps = false;
+  bool _allowLan = true;
+
+  ConfigProfile? _profile;
+  bool _loading = true;
+  bool _dirty = false;
+  StreamSubscription<void>? _storeSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _storeSub = _store.changes.listen((_) => _reloadIfActiveChanged());
+    _load();
+  }
 
   Future<void> _reloadIfActiveChanged() async {
     final active = await _store.getActive();
