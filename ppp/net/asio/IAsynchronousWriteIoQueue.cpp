@@ -14,7 +14,11 @@ namespace ppp {
             IAsynchronousWriteIoQueue::IAsynchronousWriteIoQueue(const std::shared_ptr<BufferswapAllocator>& allocator) noexcept
                 : BufferAllocator(allocator)
                 , disposed_(false)
-                , sending_(false) {
+                , sending_(false)
+                , pending_items_(0)
+                , pending_bytes_(0)
+                , max_pending_items_(4096)
+                , max_pending_bytes_(16 * 1024 * 1024) {
 
             }
 
@@ -47,8 +51,22 @@ namespace ppp {
                     break;
                 }
 
+                /** @brief Drain backpressure counters for all queued contexts being dropped. */
+                int drain_items = 0;
+                int drain_bytes = 0;
                 for (AsynchronousWriteIoContextPtr& context : queues) {
+                    if (NULLPTR != context) {
+                        drain_items++;
+                        drain_bytes += context->packet_length;
+                    }
                     context->Forward(false);
+                }
+
+                if (drain_items > 0) {
+                    pending_items_.fetch_sub(drain_items, std::memory_order_relaxed);
+                }
+                if (drain_bytes > 0) {
+                    pending_bytes_.fetch_sub(drain_bytes, std::memory_order_relaxed);
                 }
             }
 
@@ -120,6 +138,22 @@ namespace ppp {
                     return false;
                 }
 
+                /** @brief Backpressure check (P0-3): reject writes when pending limits are exceeded. */
+                {
+                    int cur_items = q->pending_items_.load(std::memory_order_relaxed);
+                    int cur_bytes = q->pending_bytes_.load(std::memory_order_relaxed);
+
+                    if (q->max_pending_items_ > 0 && cur_items >= q->max_pending_items_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
+                        return false;
+                    }
+
+                    if (q->max_pending_bytes_ > 0 && cur_bytes + packet_length > q->max_pending_bytes_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
+                        return false;
+                    }
+                }
+
                 std::shared_ptr<AsynchronousWriteIoContext> context = make_shared_object<AsynchronousWriteIoContext>();
                 if (NULLPTR == context) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueWriteContextAllocFailed);
@@ -144,6 +178,8 @@ namespace ppp {
                     if (q->sending_) {
                         /** @brief Another write is in flight; defer this request into the pending queue. */
                         q->queues_.emplace_back(context);
+                        q->pending_items_.fetch_add(1, std::memory_order_relaxed);
+                        q->pending_bytes_.fetch_add(packet_length, std::memory_order_relaxed);
                         return true;
                     }
 
@@ -156,6 +192,10 @@ namespace ppp {
                      */
                     q->sending_ = true;
                     ctx_to_send = context;
+
+                    /** @brief Increment backpressure counters for the immediately-dispatched context. */
+                    q->pending_items_.fetch_add(1, std::memory_order_relaxed);
+                    q->pending_bytes_.fetch_add(packet_length, std::memory_order_relaxed);
                 }
 
                 /** @brief Initiate the write outside the lock. */
@@ -172,6 +212,11 @@ namespace ppp {
                     }
 
                     ctx_to_send->Clear();
+
+                    /** @brief Decrement backpressure counters for the failed ctx_to_send (evtf will not fire). */
+                    q->pending_items_.fetch_sub(1, std::memory_order_relaxed);
+                    q->pending_bytes_.fetch_sub(ctx_to_send->packet_length, std::memory_order_relaxed);
+
                     if (q->disposed_) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
@@ -208,6 +253,10 @@ namespace ppp {
                     [self, this, context](bool ok) noexcept {
                         int err = -1;
                         context->Forward(ok);
+
+                        /** @brief Decrement backpressure counters for the completed in-flight context. */
+                        pending_items_.fetch_sub(1, std::memory_order_relaxed);
+                        pending_bytes_.fetch_sub(context->packet_length, std::memory_order_relaxed);
 
                         if (ok) {
                             err = DoTryWriteBytesNext();
@@ -270,6 +319,11 @@ namespace ppp {
                 bool ok = DoTryWriteBytesUnsafe(context);
                 if (!ok) {
                     context->Forward(false);
+
+                    /** @brief Decrement backpressure counters for the failed queued context (evtf will not fire). */
+                    pending_items_.fetch_sub(1, std::memory_order_relaxed);
+                    pending_bytes_.fetch_sub(context->packet_length, std::memory_order_relaxed);
+
                     if (disposed_) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }

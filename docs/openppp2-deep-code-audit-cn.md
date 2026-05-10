@@ -377,6 +377,20 @@ system(cmd);
 
 ### 4.1 异步写队列无背压，可能 OOM
 
+> **✅ 已实施背压（P0-3）— 2026-05-10**
+>
+> 已添加 `pending_items_` / `pending_bytes_` 原子计数器和
+> `max_pending_items_`（默认 4096）/ `max_pending_bytes_`（默认 16 MiB）
+> 阈值。入队前检查阈值，超限时返回 `AsyncWriteQueueBackpressure`
+> 错误并拒绝写入。计数器在写完成（evtf 回调）、写启动失败、
+> 和 Finalize 清理三条路径上对称更新。
+> 阈值可通过 `SetMaxPendingItems()` / `SetMaxPendingBytes()` 配置，
+> 设为 0 表示 unlimited。`GetPendingItems()` / `GetPendingBytes()`
+> 可用于运行时监控。
+>
+> 未实施：慢连接断开策略、上游暂停读取通知。这些需要与传输层
+> 和 TAP 层协调，属于后续独立优化项。
+
 **位置：**
 
 - `ppp/net/asio/IAsynchronousWriteIoQueue.cpp:106-147`
@@ -1035,7 +1049,7 @@ cosign / minisign / GPG signing
 
 1. TLS/WSS 开启证书链校验与主机名校验，禁止生产路径默认关闭校验。
 2. ~~禁止生产默认弱 key、固定 key 和 plaintext。~~ → **已调整为：检测并高亮提示弱 key/plaintext；不阻断启动（见 §3.5 状态更新）。**
-3. 写队列加背压。
+3. ~~写队列加背压。~~ → **✅ 已实施：pending_items/pending_bytes + 阈值拒绝（见 §4.1 状态更新）。**
 4. ~~传输帧加最大长度与超时。~~ → **⚠️ 已实施长度上限（PPP_BUFFER_SIZE）；读取超时仍为后续独立项（见 §5.1）。**
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → **✅ 已修复：copy-on-read（见 §4.3 状态更新）。**
 6. 修复主要 Dispose/Finalize one-shot。
@@ -1291,7 +1305,7 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 
 1. TLS/WSS 开启证书链校验与主机名校验。
 2. ~~禁止生产默认弱 key、固定 key 和 plaintext。~~ → 已调整为：检测并高亮提示弱 key/plaintext；不阻断启动（见 §3.5）。
-3. 写队列加背压。
+3. ~~写队列加背压。~~ → ✅ 已实施（见 §4.1）。
 4. ~~传输帧加最大长度与超时。~~ → ⚠️ 已实施长度上限；读取超时仍为后续独立项（见 §5.1）。
 5. ~~修复 DNS cache transaction id 并发覆盖。~~ → ✅ 已修复（见 §4.3）。
 6. 修复主要 Dispose/Finalize one-shot。

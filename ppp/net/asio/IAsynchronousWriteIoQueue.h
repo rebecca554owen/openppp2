@@ -135,6 +135,42 @@ namespace ppp {
                  */
                 static std::shared_ptr<Byte>                            Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen) noexcept;
 
+                /**
+                 * @brief Returns the number of write contexts currently accepted but not yet completed.
+                 * @return  Pending item count (queued + in-flight).
+                 */
+                int                                                     GetPendingItems() const noexcept { return pending_items_.load(std::memory_order_relaxed); }
+
+                /**
+                 * @brief Returns the total bytes of write contexts currently accepted but not yet completed.
+                 * @return  Pending byte count.
+                 */
+                int                                                     GetPendingBytes() const noexcept { return pending_bytes_.load(std::memory_order_relaxed); }
+
+                /**
+                 * @brief Returns the configured maximum pending item count (0 = unlimited).
+                 * @return  Max items threshold.
+                 */
+                int                                                     GetMaxPendingItems() const noexcept { return max_pending_items_; }
+
+                /**
+                 * @brief Configures the maximum pending item count.
+                 * @param value  Max items; 0 disables the limit.
+                 */
+                void                                                    SetMaxPendingItems(int value) noexcept { max_pending_items_ = value; }
+
+                /**
+                 * @brief Returns the configured maximum pending byte count (0 = unlimited).
+                 * @return  Max bytes threshold.
+                 */
+                int                                                     GetMaxPendingBytes() const noexcept { return max_pending_bytes_; }
+
+                /**
+                 * @brief Configures the maximum pending byte count.
+                 * @param value  Max bytes; 0 disables the limit.
+                 */
+                void                                                    SetMaxPendingBytes(int value) noexcept { max_pending_bytes_ = value; }
+
             private:
                 /**
                  * @brief Set of coroutine yield contexts waiting for their write to complete.
@@ -401,6 +437,26 @@ namespace ppp {
 
                 /** @brief FIFO list of pending write contexts waiting for @ref DoWriteBytes. */
                 AsynchronousWriteIoContextQueue                         queues_;
+
+                /** @brief Number of write contexts accepted but not yet completed (queued + in-flight). */
+                std::atomic<int>                                        pending_items_{0};
+
+                /** @brief Total bytes of write contexts accepted but not yet completed. */
+                std::atomic<int>                                        pending_bytes_{0};
+
+                /**
+                 * @brief Maximum number of pending write items before backpressure rejection.
+                 *
+                 * A value of 0 disables the item-count limit.  Default: 4096.
+                 */
+                int                                                     max_pending_items_ = 4096;
+
+                /**
+                 * @brief Maximum total bytes of pending writes before backpressure rejection.
+                 *
+                 * A value of 0 disables the byte-count limit.  Default: 16 MiB.
+                 */
+                int                                                     max_pending_bytes_ = 16 * 1024 * 1024;
             };
         }
     }

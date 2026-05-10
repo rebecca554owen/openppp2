@@ -475,6 +475,7 @@ X(AsyncWriteQueueCopyAllocFailed, "Asynchronous write queue failed to allocate c
 X(AsyncWriteQueueWriteInvalidPacket, "Asynchronous write queue write received invalid packet", ErrorSeverity::kError)
 X(AsyncWriteQueueWriteNullCallback, "Asynchronous write queue write callback is null", ErrorSeverity::kError)
 X(AsyncWriteQueueWriteContextAllocFailed, "Asynchronous write queue failed to allocate write context", ErrorSeverity::kError)
+X(AsyncWriteQueueBackpressure, "Asynchronous write queue rejected write due to backpressure (pending items or bytes exceeded configured limit)", ErrorSeverity::kWarning)
 
 X(VdnsResolveFromCacheHostnameInvalid, "VDNS resolve-from-cache received invalid hostname", ErrorSeverity::kError)
 X(VdnsSendRequestInvalidArguments, "VDNS send-request received invalid hostname or destination list", ErrorSeverity::kError)
