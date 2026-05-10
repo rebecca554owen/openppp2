@@ -30,7 +30,7 @@ https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
 
 ## License / Redistribution
 
-> **⚠ License must be verified before public redistribution.**
+> **⚠ HARD GATE: License must be confirmed BEFORE any public release or redistribution.**
 
 The MetaCubeX/meta-rules-dat repository aggregates data from multiple upstream
 sources (MaxMind GeoLite2, v2ray/domain-list-community, etc.), each with its own
@@ -38,28 +38,35 @@ license terms. The precise redistribution terms of the aggregated binary output
 **have not been independently confirmed** for this repository.
 
 - MaxMind GeoLite2 data is subject to the [MaxMind CC BY-SA 4.0 license](https://dev.maxmind.com/geoip/geolite-free-geolocation-data).
+  Requires attribution and share-alike compliance.
 - v2ray/domain-list-community is MIT-licensed.
+- The aggregated `.dat` binary's redistribution compatibility with these
+  upstream licenses has **not** been independently verified.
 
-If you redistribute these files, you are responsible for complying with all
-upstream licenses. Consult the
-[MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)
-repository for current license details.
+**You MUST NOT include these `.dat` files in a public Release artifact until
+the redistribution license has been explicitly confirmed.** If confirmation is
+not possible before the planned release date, migrate to one of the alternatives
+listed in the Migration section below.
 
 ## Update Process
 
 1. Download fresh copies from the URLs listed above (or build from source via
    the MetaCubeX toolchain).
 2. Replace `geoip.dat` and `geosite.dat` in this directory.
-3. Commit the updated binaries. The `.gitattributes` file at the repository root
-   marks `*.dat` as `binary` to suppress text-diff noise.
+3. Commit the updated binaries with a message that includes the upstream
+   version/date (e.g., `chore(android): update geo-rules from MetaCubeX 2026-05-11`).
+   The `.gitattributes` file at the repository root marks `*.dat` as `binary`
+   to suppress text-diff noise.
 
-## Recommendation
+## Migration (Required Before Public Release)
 
-For long-term maintenance, consider migrating these assets out of the Git
-repository and into:
-- GitHub Release assets downloaded at build time, or
-- Git LFS, or
-- A first-run download script triggered by `ensureGeoRulesAssets()`.
+For long-term maintenance and license compliance, these assets MUST be migrated
+out of the Git repository before any public release. Choose one of:
 
-This reduces repository bloat (~23 MB of binary data) and simplifies version
-tracking.
+- **GitHub Release assets**: download at build time via CI script.
+- **Git LFS**: track `*.dat` via LFS to reduce repository clone size.
+- **First-run download**: triggered by `ensureGeoRulesAssets()` on first launch,
+  with a bundled CDN fallback.
+
+This eliminates ~23 MB of binary data from the repository and ensures that
+license compliance can be managed independently of the Git history.

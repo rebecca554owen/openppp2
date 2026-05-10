@@ -1116,10 +1116,22 @@ cosign / minisign / GPG signing
 - 添加 `android/android/app/src/main/assets/rules/README.md`：说明用途、文件、来源、许可证风险、更新流程。
 - 添加根 `.gitattributes`：将 `*.dat` 标记为 `binary`，抑制文本 diff 噪音。
 
-**后续建议：**
+> **✅ 治理文档已强化（2026-05-11）**
+>
+> 补充措施：
+> - `README.md` 增加硬性门槛（HARD GATE）：**发布前必须确认再分发许可；否则必须迁移到 GitHub Release asset / Git LFS / 首次运行下载脚本。**
+> - 审计文档明确"不删除 .dat、不破坏 Android 运行时资产需求"的前提下，将治理推进到更稳妥状态。
+> - .dat 文件暂保留在仓库中以维持 Android 构建完整性，但标注为"待迁移资产"。
 
-- 迁移至 GitHub Release asset / Git LFS / 首次运行下载脚本，消除仓库体积负担。
-- 确认并记录上游聚合数据的再分发许可。
+**后续强制要求（硬性门槛）：**
+
+1. **发布前必须确认再分发许可**：维护者需确认 MetaCubeX/meta-rules-dat 聚合产物的许可兼容性，或取得上游明确授权。
+2. 若许可无法确认，**必须在发布前将 .dat 迁移至以下任一方案**：
+   - GitHub Release asset（构建时下载）；
+   - Git LFS（仓库瘦身）；
+   - 首次运行时通过 `ensureGeoRulesAssets()` 从 CDN 下载。
+3. 迁移完成前，禁止将 .dat 包含在面向公众的 Release artifact 中。
+4. 每次 .dat 更新须在 commit message 中注明上游版本和下载日期。
 
 ---
 
