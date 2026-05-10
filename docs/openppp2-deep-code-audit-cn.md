@@ -1290,7 +1290,7 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 
 - 消除示例私钥/证书被误用和继续随 artifact 传播的影响。
 - TLS MITM 风险大幅降低。
-- 默认配置从“不安全可启动”变成“安全失败”。
+- 默认配置从"不安全可启动"变成"带醒目 warning 的可启动配置"；弱 key/plaintext 不拒绝启动，仅输出高亮告警提示。
 - 弱加密和无认证加密逐步退出。
 - 命令注入面收窄。
 - 供应链风险可观测、可追踪。
