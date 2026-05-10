@@ -575,11 +575,19 @@ std::array<boost::asio::const_buffer, 2> bufs = {
 
 **修复建议：**
 
-使用 RCU 规则快照：
+使用 C++17 RCU 规则快照（基于 `std::atomic_load` / `std::atomic_store` free functions）：
 
 ```cpp
-std::atomic<std::shared_ptr<const RuleSet>> rules_;
+std::shared_ptr<const RuleSet> rules_;
+
+// 读取快照
+std::shared_ptr<const RuleSet> snapshot = std::atomic_load(&rules_);
+
+// 发布更新
+std::atomic_store(&rules_, new_rules);
 ```
+
+> **注：** C++20 起可迁移为 `std::atomic<std::shared_ptr<const RuleSet>>`，接口更简洁，但当前项目基线为 C++17，须使用上述 free function 形式。
 
 域名匹配改为反向 trie 或 `string_view` 后缀匹配。
 
