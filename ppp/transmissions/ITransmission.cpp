@@ -434,6 +434,11 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
                 }
 
+                /** @brief Frame length upper-bound check (P0-4A): reject in-memory base94 frames exceeding PPP_BUFFER_SIZE. */
+                if (payload_length > PPP_BUFFER_SIZE) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
+                }
+
                 if ((payload_length + EVP_HEADER_XSS) != datalen) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);   // integrity check
                 }
