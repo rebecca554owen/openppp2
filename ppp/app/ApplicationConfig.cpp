@@ -84,6 +84,16 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     ppp::telemetry::Configure(configuration->telemetry.endpoint.c_str());
     ppp::telemetry::SetLogFile(configuration->telemetry.log_file.c_str());
 
+    /**
+     * @brief Emit startup security diagnostics report (P1-5).
+     *
+     * Scans the loaded configuration for weak/default/short keys and plaintext
+     * mode.  All findings are non-fatal warnings — startup never fails.
+     * Placed here after telemetry is configured so findings are captured in
+     * both the telemetry log and the console.
+     */
+    configuration->EmitSecurityDiagnostics();
+
     return 0;
 }
 

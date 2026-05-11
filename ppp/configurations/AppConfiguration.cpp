@@ -12,6 +12,7 @@
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 /**
  * @file AppConfiguration.cpp
@@ -1944,6 +1945,67 @@ namespace ppp {
         ppp::string AppConfiguration::ToString() noexcept {
             Json::Value json = ToJson();
             return JsonAuxiliary::ToString(json);
+        }
+
+        /**
+         * @brief Emits a startup security diagnostics report.
+         *
+         * Scans the loaded configuration for weak/default/short keys and
+         * plaintext mode.  Each finding is logged via the telemetry subsystem
+         * and written to the console.  All findings are non-fatal warnings;
+         * startup never fails as a result of this call.
+         */
+        void AppConfiguration::EmitSecurityDiagnostics() noexcept {
+            const AppConfiguration& config = *this;
+            const ppp::string default_key = BOOST_BEAST_VERSION_STRING;
+            int warnings = 0;
+
+            /* Protocol key */
+            if (config.key.protocol_key == default_key) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Protocol key uses well-known default value; change for production use");
+                ppp::ConsoleFormat("[security] WARN: protocol key uses well-known default — change for production\n");
+            }
+            else if (config.key.protocol_key.size() < 8) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Protocol key shorter than 8 bytes; trivially brute-forced");
+                ppp::ConsoleFormat("[security] WARN: protocol key shorter than 8 bytes — trivially brute-forced\n");
+            }
+
+            /* Transport key */
+            if (config.key.transport_key == default_key) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Transport key uses well-known default value; change for production use");
+                ppp::ConsoleFormat("[security] WARN: transport key uses well-known default — change for production\n");
+            }
+            else if (config.key.transport_key.size() < 8) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Transport key shorter than 8 bytes; trivially brute-forced");
+                ppp::ConsoleFormat("[security] WARN: transport key shorter than 8 bytes — trivially brute-forced\n");
+            }
+
+            /* Plaintext mode */
+            if (config.key.plaintext) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Plaintext mode enabled (key.plaintext=true); packets transmitted without encryption");
+                ppp::ConsoleFormat("[security] WARN: plaintext mode enabled (key.plaintext=true) — not suitable for untrusted networks\n");
+            }
+
+            /* Summary */
+            if (warnings > 0) {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Startup security diagnostics: %d warning(s) — startup continues (non-fatal)", warnings);
+                ppp::ConsoleFormat("[security] Startup security diagnostics: %d warning(s) — startup continues (non-fatal)\n", warnings);
+            }
+            else {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Startup security diagnostics: all checks passed");
+            }
         }
 
         namespace extensions {

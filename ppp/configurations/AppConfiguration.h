@@ -379,6 +379,18 @@ namespace ppp {
              * @return JSON string representation.
              */
             ppp::string                                                     ToString() noexcept;
+            /**
+             * @brief Emits a startup security diagnostics report.
+             *
+             * Scans the loaded configuration for weak/default/short keys and
+             * plaintext mode.  Each finding is logged via the telemetry subsystem
+             * and written to the console.  All findings are non-fatal warnings;
+             * startup never fails as a result of this call.
+             *
+             * @note Called once during application startup after telemetry is
+             *       configured.  Safe to call multiple times (idempotent).
+             */
+            void                                                            EmitSecurityDiagnostics() noexcept;
 
         private:
             /**

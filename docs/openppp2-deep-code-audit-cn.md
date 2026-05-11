@@ -304,6 +304,8 @@ rc4_crypt(...)
 > - `key.plaintext == true` → `ConfigPlaintextEnabled`
 >
 > 后续可增强 warning 的可见性，例如在日志、管理界面、诊断输出中高亮展示；生产模式也应保持非阻断策略，不拒绝启动、不 fail-closed。
+>
+> **P1-5 已实施（2026-05-11）**：新增 `AppConfiguration::EmitSecurityDiagnostics()` 方法，在启动时发射完整的安全诊断报告（含每个发现的独立警告 + 汇总行），通过 telemetry 和控制台双通道输出。详见 `docs/p1-governance-decisions-cn.md` §P1-5。
 
 **位置：**
 
