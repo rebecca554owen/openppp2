@@ -380,7 +380,7 @@ flowchart TD
 **配置安全：**
 - [ ] 预共享密钥（`key.kcp.protocol`、`key.kcp.transport`）每次部署唯一，并以文件系统级访问控制存储（`chmod 600 appsettings.json`）。
 - [ ] 生产环境中 `plaintext` 为 `false`。
-- [ ] `key.protocol` 和 `key.transport` 设置为强 cipher（如 `aes-256-cfb`、`chacha20`）。
+- [ ] `key.protocol` 和 `key.transport` 设置为当前已支持的最强非遗留 cipher（如 `aes-256-cfb`）；AEAD/ChaCha20 系列 cipher 需在目标构建确认支持后再配置。
 - [ ] `appsettings.json` 不提交到版本控制系统。
 
 **网络安全：**

@@ -387,7 +387,7 @@ Security-related `ppp::diagnostics::ErrorCode` values:
 **Configuration security:**
 - [ ] Pre-shared keys (`key.kcp.protocol`, `key.kcp.transport`) are unique per deployment and stored with filesystem-level access control (`chmod 600 appsettings.json`).
 - [ ] `plaintext` mode is `false` in production.
-- [ ] `key.protocol` and `key.transport` are set to a strong cipher (e.g. `aes-256-cfb`, `chacha20`).
+- [ ] `key.protocol` and `key.transport` are set to the strongest currently supported non-legacy cipher (e.g. `aes-256-cfb`); AEAD/ChaCha20-family ciphers should only be configured after target-build support is verified.
 - [ ] `appsettings.json` is not committed to version control.
 
 **Network security:**

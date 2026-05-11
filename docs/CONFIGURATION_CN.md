@@ -232,7 +232,7 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 空字符串时重置为框架
 |------|------|------|
 | `kcp.protocol` | string | protocol cipher 的基础密钥；握手后派生 `protocol_` cipher |
 | `kcp.transport` | string | transport cipher 的基础密钥；握手后派生 `transport_` cipher |
-| `protocol` | string | protocol cipher 算法名（如 `aes-256-cfb`、`chacha20`） |
+| `protocol` | string | protocol cipher 算法名（如 `aes-256-cfb`；AEAD/ChaCha20 系列需在目标构建确认支持后再配置） |
 | `transport` | string | transport cipher 算法名 |
 | `masked` | bool | 在密文上额外添加掩码层（默认 false） |
 | `plaintext` | bool | 完全禁用加密（仅开发/测试，生产必须 false） |

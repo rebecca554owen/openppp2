@@ -558,7 +558,7 @@ The per-thread 64 KB buffer in `Executors` is the key to avoiding repeated heap 
 
 ### Cipher Performance
 
-AES-based ciphers with hardware AES-NI acceleration (x86/x64 with `-DENABLE_SIMD=ON`) operate at several GB/s per core, well above VPN throughput requirements. ChaCha20 is used where AES-NI is unavailable (most ARM platforms).
+AES-based ciphers with hardware AES-NI acceleration (x86/x64 with `-DENABLE_SIMD=ON`) operate at several GB/s per core, well above VPN throughput requirements. AEAD/ChaCha20-family cipher performance should be evaluated after target-build support is verified.
 
 ---
 
