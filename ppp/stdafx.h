@@ -223,9 +223,9 @@
 #ifndef offset_of
 #define offset_of(s, m) ((::size_t)&reinterpret_cast<char const volatile&>((((s*)0)->m)))
 #endif
- 
+
 #ifndef container_of
-#define container_of(ptr, type, member) ((type*)((char*)static_cast<const decltype(((type*)0)->member)*>(ptr) - offset_of(type, member))) 
+#define container_of(ptr, type, member) ((type*)((char*)static_cast<const decltype(((type*)0)->member)*>(ptr) - offset_of(type, member)))
 #endif
 
 #ifndef PPP_APPLICATION_VERSION
@@ -346,7 +346,7 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_INACTIVE_TIMEOUT        = 60;
 static constexpr int                                                        PPP_MUX_MIN_CONGESTIONS         = 1 << 20;
 static constexpr int                                                        PPP_MUX_DEFAULT_CONGESTIONS     = 128 << 20; /* 134217728 */
-static constexpr int                                                        PPP_UDP_INACTIVE_TIMEOUT        = 72; 
+static constexpr int                                                        PPP_UDP_INACTIVE_TIMEOUT        = 72;
 static constexpr int                                                        PPP_UDP_KEEP_ALIVED_MIN_TIMEOUT = 20;
 static constexpr int                                                        PPP_UDP_KEEP_ALIVED_MAX_TIMEOUT = 60;
 static constexpr int                                                        PPP_DNS_SYS_PORT                = 53;
@@ -360,7 +360,7 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_DEFAULT_DNS_TIMEOUT         = 4;
 static constexpr int                                                        PPP_RESOLVE_DNS_TIMEOUT         = PPP_DEFAULT_DNS_TIMEOUT * 1000;
 static constexpr int                                                        PPP_DEFAULT_DNS_TTL             = 60;
-static constexpr int                                                        PPP_MAX_DNS_PACKET_BUFFER_SIZE  = 512; 
+static constexpr int                                                        PPP_MAX_DNS_PACKET_BUFFER_SIZE  = 512;
 // Allocation size of the PPP coroutine stack space.
 static constexpr int                                                        PPP_COROUTINE_STACK_SIZE        = 1 << 17; /* boost::context::stack_traits::default_size() */
 #define                                                                     PPP_PREFERRED_DNS_SERVER_1      "8.8.8.8"
@@ -369,6 +369,10 @@ static constexpr const char*                                                PPP_
 static constexpr const char*                                                PPP_DEFAULT_KEY_TRANSPORT       = "aes-256-cfb";
 static constexpr int                                                        PPP_DEFAULT_HTTP_PROXY_PORT     = 8080;
 static constexpr int                                                        PPP_DEFAULT_SOCKS_PROXY_PORT    = 1080;
+// ---- PPP_PUBLIC_DNS_SERVER_LIST begins ----
+// Each entry MUST be a separate comma-separated string literal.
+// PPP_PREFERRED_DNS_SERVER_1/2 are #define macros (expand to string literals);
+// a missing comma before them would cause C/C++ implicit adjacent-string concatenation.
 static constexpr const char*                                                PPP_PUBLIC_DNS_SERVER_LIST[]    = {
     "1.0.0.1",
     "1.1.1.1",
@@ -377,7 +381,7 @@ static constexpr const char*                                                PPP_
     "210.2.4.8",
 
     "1.12.12.12",
-    "120.53.53.53"
+    "120.53.53.53",
 
     PPP_PREFERRED_DNS_SERVER_1,
     PPP_PREFERRED_DNS_SERVER_2,
@@ -456,6 +460,7 @@ static constexpr const char*                                                PPP_
 
     "211.148.192.141"
 };
+// ---- PPP_PUBLIC_DNS_SERVER_LIST ends ----
 
 namespace ppp {
     /** @brief Unsigned 8-bit byte alias. */
@@ -653,9 +658,9 @@ namespace stl {
     struct is_string : std::false_type {
         using value_type = T;
     };
- 
+
     template <typename T>
-    struct is_string<T, 
+    struct is_string<T,
         std::void_t<
             typename T::value_type,
             typename T::traits_type,
@@ -671,7 +676,7 @@ namespace stl {
     > {
         using value_type = T;
     };
- 
+
     template <typename T>
     using if_string = std::enable_if_t<is_string<T>::value, T>;
 
@@ -728,7 +733,7 @@ namespace stl {
             buf[1] = '\x0';
             return buf;
         }
-        
+
         bool n = false;
         if constexpr (stl::is_signed<TNumber>::value) {
             n = num < 0;
@@ -766,7 +771,7 @@ namespace stl {
      * @brief Parses textual number in arbitrary radix [2, 36].
      */
     template <typename TNumber, typename TString>
-    TNumber                                                                 to_number(const TString& v, int radix) noexcept 
+    TNumber                                                                 to_number(const TString& v, int radix) noexcept
     {
         int length = v.size();
         if (length < 1)
@@ -863,10 +868,10 @@ extern "C" {
 }
 #endif
 
-// Under the Windows platform, the default project compiled by microsoft vcpkg jemalloc for windowos does not have the C/C++ compiler macro version information, 
-// And the compiler user needs to manually define it in this header file so that it can be included in the help information. 
+// Under the Windows platform, the default project compiled by microsoft vcpkg jemalloc for windowos does not have the C/C++ compiler macro version information,
+// And the compiler user needs to manually define it in this header file so that it can be included in the help information.
 // Displays the library version information that is directly dependent.
-// 
+//
 // Jemalloc compiled by vcpkg on windows, version macro information summary: Windows 0.0.0-0-g000000missing_version_try_git_fetch_tags
 #if !defined(JEMALLOC_VERSION_MAJOR) && !defined(JEMALLOC_VERSION_MINOR) && !defined(JEMALLOC_VERSION_BUGFIX) && !defined(JEMALLOC_VERSION_NREV)
 #define JEMALLOC_VERSION_MAJOR  5
@@ -900,12 +905,12 @@ extern "C" {
 #pragma optimize("", off)
 #pragma optimize("gsyb2", on) /* /O1 = /Og /Os /Oy /Ob2 /GF /Gy */
 #else
-// TRANSMISSIONO1 compiler macros are defined to perform O1 optimizations, 
-// Otherwise gcc compiler version If <= 7.5.X, 
-// The O1 optimization will also be applied, 
-// And the other cases will not be optimized, 
-// Because this will cause the program to crash, 
-// Which is a fatal BUG caused by the gcc compiler optimization. 
+// TRANSMISSIONO1 compiler macros are defined to perform O1 optimizations,
+// Otherwise gcc compiler version If <= 7.5.X,
+// The O1 optimization will also be applied,
+// And the other cases will not be optimized,
+// Because this will cause the program to crash,
+// Which is a fatal BUG caused by the gcc compiler optimization.
 // Higher-version compilers should not optimize the code for gcc compiling this section.
 #if defined(__clang__)
 #pragma clang optimize off
@@ -921,7 +926,7 @@ extern "C" {
 #else
 #if defined(_WIN32)
 #define LOG_TAG(TAG, FORMAT, ...)   ::fprintf(stdout, "[%s][" ## TAG ## "](%s:%d): " ## FORMAT ## "\r\n", ((char*)::ppp::GetCurrentTimeText<ppp::string>().data()), __FILE__, __LINE__, __VA_ARGS__)
-#else   
+#else
 #define LOG_TAG(TAG, FORMAT, ...)   ::fprintf(stdout, "[%s][" TAG "](%s:%d): " FORMAT "\r\n", ((char*)::ppp::GetCurrentTimeText<ppp::string>().data()), __FILE__, __LINE__, __VA_ARGS__)
 #endif
 
@@ -1033,7 +1038,7 @@ namespace ppp {
         return const_cast<T&>(v);
     }
 
-    template <typename T>                                                           
+    template <typename T>
     constexpr T*                                                            constantof(const T* v) noexcept {
         return const_cast<T*>(v);
     }
@@ -1322,7 +1327,7 @@ namespace ppp {
         return result;
     }
 
-    template <typename _Ty> 
+    template <typename _Ty>
     _Ty                                                                     ATrim(const _Ty& s) noexcept {
         if (s.empty()) {
             return s;
@@ -1342,7 +1347,7 @@ namespace ppp {
         return r;
     }
 
-    template <typename _Ty> 
+    template <typename _Ty>
     _Ty                                                                     LTrim(const _Ty& s) noexcept {
         _Ty str = s;
         if (str.empty()) {
@@ -1408,7 +1413,7 @@ namespace ppp {
         if (!r.empty()) {
             std::transform(s.begin(), s.end(), r.begin(), toupper);
         }
-        
+
         return r;
     }
 
@@ -1432,7 +1437,7 @@ namespace ppp {
         typename _Ty::size_type pos = 0;
         while ((pos = r.find(old_value, pos)) != _Ty::npos) {
             r.replace(pos, old_value.length(), new_value);
-            pos += new_value.length();  
+            pos += new_value.length();
         }
 
         return r;
@@ -1504,7 +1509,7 @@ namespace ppp {
         time(&rawtime);
         ptminfo = localtime(&rawtime);
 
-        auto fmt = 
+        auto fmt =
             [](int source, char* dest) noexcept {
                 if (source < 10) {
                     char temp[3];
@@ -1543,12 +1548,12 @@ namespace ppp {
 
     boost::asio::ip::address                                                StringToAddress(const char* s, boost::system::error_code& ec) noexcept;
 
-    inline boost::asio::ip::address                                         StringToAddress(const std::string& s, boost::system::error_code& ec) noexcept { 
-        return StringToAddress(s.data(), ec); 
+    inline boost::asio::ip::address                                         StringToAddress(const std::string& s, boost::system::error_code& ec) noexcept {
+        return StringToAddress(s.data(), ec);
     }
 
-    inline boost::asio::ip::address                                         StringToAddress(const ppp::string& s, boost::system::error_code& ec) noexcept { 
-        return StringToAddress(s.data(), ec); 
+    inline boost::asio::ip::address                                         StringToAddress(const ppp::string& s, boost::system::error_code& ec) noexcept {
+        return StringToAddress(s.data(), ec);
     }
 
     uint64_t                                                                GetTickCount() noexcept;
@@ -1599,7 +1604,7 @@ namespace ppp {
     void                                                                    SetThreadPriorityToMaxLevel() noexcept;
 
     void                                                                    SetProcessPriorityToMaxLevel() noexcept;
-  
+
     bool                                                                    IsInputHelpCommand(int argc, const char* argv[]) noexcept;
 
     bool                                                                    HasCommandArgument(const char* name, int argc, const char** argv) noexcept;
@@ -1607,7 +1612,7 @@ namespace ppp {
     ppp::string                                                             GetCommandArgument(int argc, const char** argv) noexcept;
 
     bool                                                                    GetCommandArgument(const char* name, int argc, const char** argv, bool defaultValue) noexcept;
- 
+
     ppp::string                                                             GetCommandArgument(const char* name, int argc, const char** argv) noexcept;
 
     ppp::string                                                             GetCommandArgument(const char* name, int argc, const char** argv, const char* defaultValue) noexcept;
@@ -1713,17 +1718,17 @@ namespace ppp {
      */
     template <typename T>
     int                                                                     FindIndexOf(int* next, T* src, int src_len, T* sub, int sub_len) noexcept {
-        static constexpr auto FindNextOf = 
+        static constexpr auto FindNextOf =
             [](int* next, T* sub, int sub_len) noexcept {
                 int l = sub_len - 1;
                 int i = 0;
-                int j = -1;     
+                int j = -1;
                 next[0] = -1;
                 while (i < l) {
                     if (j == -1 || sub[i] == sub[j]) {
                         j++;
                         i++;
-                        
+
                         if (sub[i] == sub[j]) {
                             next[i] = next[j];
                         }
@@ -1801,7 +1806,7 @@ namespace ppp {
         if (NULLPTR == memory) {
             return NULLPTR;
         }
-        
+
         memset(memory, 0, sizeof(T));
         return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
             [](T* p) noexcept {
@@ -1825,7 +1830,7 @@ namespace ppp {
         if (NULLPTR == memory) {
             return NULLPTR;
         }
-        
+
         memset(memory, 0, sizeof(T));
         return std::shared_ptr<void*>(reinterpret_cast<void**>(new (memory) T(std::forward<A&&>(args)...)),
             [](void** p) noexcept {
