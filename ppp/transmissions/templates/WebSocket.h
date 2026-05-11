@@ -79,7 +79,8 @@ namespace ppp {
                     private:
                         WebSocket&                                          owner_;
                     };
-                    std::atomic_store(&socket_, make_shared_object<IWebsocketObject>(*this, context, strand, socket, binary));
+                    std::shared_ptr<IWebsocket> websocket = make_shared_object<IWebsocketObject>(*this, context, strand, socket, binary);
+                    std::atomic_store(&socket_, websocket);
                 }
                 /** @brief Disposes websocket resources. */
                 virtual ~WebSocket()                                        noexcept { Finalize(); }
