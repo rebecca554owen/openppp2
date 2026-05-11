@@ -572,7 +572,13 @@ namespace ppp {
                     udp_socket->close(ignored);
                 }
                 if (NULLPTR != timer) {
-                    timer->cancel(ignored);
+                    ignored = boost::system::error_code();
+                    try {
+                        timer->cancel();
+                    }
+                    catch (const boost::system::system_error& e) {
+                        ignored = e.code();
+                    }
                 }
 
                 DnsResolver::ResolveCallback cb = std::move(callback);
@@ -632,7 +638,13 @@ namespace ppp {
                     udp_socket->close(ignored);
                 }
                 if (NULLPTR != timer) {
-                    timer->cancel(ignored);
+                    ignored = boost::system::error_code();
+                    try {
+                        timer->cancel();
+                    }
+                    catch (const boost::system::system_error& e) {
+                        ignored = e.code();
+                    }
                 }
 
                 DnsResolver::ExitIpCallback cb = std::move(callback);
