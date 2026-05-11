@@ -254,7 +254,9 @@ namespace ppp {
             /**
              * @brief Fall back to built-in root certificates if file-based loading fails.
              *
-             * @details Uses the non-throwing overload (safe inside noexcept context).
+             * @details Uses the error_code overload so certificate parsing failures
+             *          do not propagate as Boost/system_error exceptions from this
+             *          fallback path.
              *          On Android, this is typically the primary CA source because
              *          set_default_verify_paths() is skipped (Android does not expose
              *          the system CA store through standard OpenSSL filesystem paths).

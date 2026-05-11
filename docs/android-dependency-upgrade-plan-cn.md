@@ -51,8 +51,8 @@
 |------|---------|---------|------|
 | CMake 最低要求 | **3.0.0** | `android/CMakeLists.txt` 第 1 行 | `CMAKE_MINIMUM_REQUIRED` |
 | C++ 标准 | **C++17** | `android/CMakeLists.txt` 第 76 行 | `SET(CMAKE_CXX_STANDARD 17)` |
-| OpenSSL | **3.0.13** | `AGENTS.md` 记录 | 静态链接 `libssl.a` + `libcrypto.a`，路径 `/root/android/openssl/` |
-| Boost | **1.86.0** | `AGENTS.md` 记录 | 静态链接 6 个模块（system, coroutine, thread, context, regex, filesystem），路径 `/root/android/boost/` |
+| OpenSSL | **需确认**（仓库仅记录 native 参考版本 3.0.13） | `AGENTS.md` 仅记录 Linux/macOS `/root/dev/openssl/` 版本；Android `/root/android/` 未细分版本 | Android 实际预编译库版本需在升级 Phase 0 从构建产物或部署环境确认 |
+| Boost | **需确认**（仓库仅记录 native 参考版本 1.86.0） | `AGENTS.md` 仅记录 Linux/macOS `/root/dev/boost/` 版本；Android `/root/android/` 未细分版本 | Android 实际预编译库版本需在升级 Phase 0 从构建产物或部署环境确认 |
 | ABI 过滤 | **arm64-v8a** | `app/build.gradle` 第 19 行 | KTS 版本未设 `abiFilters` |
 
 ### 1.5 Gradle Properties
@@ -137,7 +137,7 @@
 | **破坏性变更风险** | **低~中**。如有第三方库仍依赖旧 Support Library，关闭 Jetifier 会导致编译失败 |
 | **验证方式** | 设置 `android.enableJetifier=false`，构建通过即安全 |
 | **回滚方式** | 重新设置 `android.enableJetifier=true` |
-| **当前 AndroidX 依赖** | `shared_preferences_android`（Flutter plugin）等，均已是 AndroidX 原生 |
+| **当前 AndroidX 依赖** | 仓库可确认已启用 `android.useAndroidX=true`，并包含 `shared_preferences_android` 等 Flutter plugin；是否所有传递依赖均已原生 AndroidX 需通过依赖树确认 |
 
 ---
 
@@ -174,8 +174,8 @@
 
 | 项目 | 当前 | 目标 | 风险 |
 |------|------|------|------|
-| OpenSSL | 3.0.13（LTS 分支） | TODO — 确认是否升级到 3.0.x 最新 patch 或 3.3.x/3.4.x | **低**（patch 级）；**中**（跨 minor） |
-| Boost | 1.86.0 | TODO — 确认是否升级到 1.87.0 | 低~中。参见 `docs/BOOST_187_COMPATIBILITY.md` |
+| OpenSSL | Android 实际版本需确认（native 参考版本：3.0.13） | TODO — 确认 Android 预编译库当前版本后，再决定是否升级到 3.0.x 最新 patch 或 3.3.x/3.4.x | **低**（patch 级）；**中**（跨 minor） |
+| Boost | Android 实际版本需确认（native 参考版本：1.86.0） | TODO — 确认 Android 预编译库当前版本后，再决定是否升级到 1.87.0 | 低~中。参见 `docs/BOOST_187_COMPATIBILITY.md` |
 
 **升级原因**: 安全补丁、性能优化、新特性。
 
@@ -193,6 +193,7 @@
 Phase 0 ─ 扫描 / 锁版本
   │  · 确认 Groovy vs KTS 基准选择
   │  · 导出完整依赖树（./gradlew :app:dependencies）
+  │  · 确认 Android `/root/android/` 下 OpenSSL/Boost 预编译库实际版本
   │  · 记录当前可工作的 commit hash 作为回滚锚点
   │
 Phase 1 ─ Gradle Wrapper + AGP
@@ -264,4 +265,4 @@ Phase 5 ─ Native TLS / Boost
 
 - **本 commit 不升级任何依赖、不改变任何构建行为。**
 - 本文档仅为规划参考，目标版本栏标注 TODO 的条目需在实际执行前逐一确认。
-- 所有版本信息均从仓库静态文件中读取，未伪造任何数据。
+- 表中明确版本均来自仓库静态文件；对仓库未直接记录的 Android OpenSSL/Boost 实际版本，本文档标记为“需确认”，不伪造具体版本。
