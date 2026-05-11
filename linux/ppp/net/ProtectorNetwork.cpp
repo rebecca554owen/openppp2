@@ -405,18 +405,16 @@ namespace ppp
                 {
                     // Reverse-calling the Java class member static function protects the socket without passing through VPNService / Android-Ko.
                     std::shared_ptr<boost::asio::io_context> jni;
+                    JNIEnv* env = NULLPTR;
                     {
                         SynchronizedObjectScope scope(syncobj_);
                         jni = jni_;
+                        env = env_;
+                    }
 
-                        if (NULLPTR != jni)
-                        {
-                            JNIEnv* env = env_;
-                            if (NULLPTR != env)
-                            {
-                                ok = ProtectorNetwork::ProtectJNI(env, sockfd);
-                            }
-                        }
+                    if (NULLPTR != jni && NULLPTR != env)
+                    {
+                        ok = ProtectorNetwork::ProtectJNI(env, sockfd);
                     }
 
                     // Wake up the coroutine waiting for this protect network socket service to prevent coroutines from getting stuck.
