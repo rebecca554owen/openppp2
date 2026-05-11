@@ -453,7 +453,7 @@ with existing deployments.
 | `ConfigWeakKeyDefault` | `protocol_key` or `transport_key` equals the well-known default `"ppp"` |
 | `ConfigWeakKeyShort` | `protocol_key` or `transport_key` is shorter than 8 bytes |
 | `ConfigPlaintextEnabled` | `key.plaintext` is `true` |
-| `ConfigLegacyCipherAlgorithm` | `key.protocol` or `key.transport` uses a legacy algorithm family (RC4, single DES, Blowfish, CAST5, SEED, IDEA) |
+| `ConfigLegacyCipherAlgorithm` | `key.protocol` or `key.transport` uses a legacy algorithm family (RC4, DES/3DES, Blowfish, CAST5, SEED, IDEA) |
 | `ConfigLegacyCipherShortKey` | The cipher's key length (resolved via OpenSSL EVP) is below 128 bits |
 | `ConfigLegacyKdfMd5` | Internal key derivation uses MD5 via `EVP_BytesToKey`; emitted as an informational warning whenever cipher configuration is validated (no user action possible until KDF becomes configurable) |
 
@@ -462,7 +462,7 @@ with existing deployments.
 | Family | Example Names | Why Deprecated |
 |--------|---------------|----------------|
 | RC4 | `rc4`, `rc4-md5`, `rc4-sha` | Biased keystream; practical attacks exist |
-| DES | `des-cbc`, `des-cfb`, `des-ede` | 56-bit key; trivially brute-forced |
+| DES/3DES | `des-cbc`, `des-cfb`, `des-ede` | 56-bit DES key / legacy 64-bit block ciphers; brute-force and Sweet32-class risks |
 | Blowfish | `bf-cbc`, `bf-cfb` | 64-bit block size; Sweet32 attack surface |
 | CAST5 | `cast5-cbc`, `cast5-cfb` | 64-bit block size; deprecated |
 | SEED | `seed-cbc`, `seed-cfb` | Limited adoption; no modern security review |
@@ -470,14 +470,15 @@ with existing deployments.
 
 ### 17.3 Recommended Modern Configuration
 
-For new deployments, use AEAD ciphers and strong unique keys:
+For new deployments, use the strongest currently supported non-legacy ciphers
+and strong unique keys:
 
 ```json
 {
     "key": {
-        "protocol": "aes-256-gcm",
+        "protocol": "aes-256-cfb",
         "protocol-key": "<random-32-byte-hex-or-passphrase>",
-        "transport": "aes-256-gcm",
+        "transport": "aes-256-cfb",
         "transport-key": "<different-random-32-byte-hex-or-passphrase>",
         "kf": 154543927,
         "kx": 128,
@@ -496,7 +497,7 @@ For new deployments, use AEAD ciphers and strong unique keys:
 
 | Aspect | Minimum | Recommended |
 |--------|---------|-------------|
-| Cipher algorithm | AES-128-CFB | AES-256-GCM or ChaCha20-Poly1305 |
+| Cipher algorithm | AES-128-CFB | AES-256-CFB today; AEAD such as AES-256-GCM or ChaCha20-Poly1305 after project support is verified |
 | Key length | 128 bits | 256 bits |
 | Passphrase length | 8 bytes | 16+ random characters |
 | `plaintext` | `false` | `false` (always) |
@@ -508,8 +509,9 @@ For new deployments, use AEAD ciphers and strong unique keys:
 > the built-in fallback when `key.protocol` or `key.transport` is empty or
 > unsupported. CFB mode is not AEAD and does not provide ciphertext integrity
 > protection, but it is not flagged as a warning because it is the established
-> project baseline. Migrating to GCM provides authentication and removes the
-> need for the separate protocol-layer cipher to protect header metadata.
+> project baseline. Migrating to AEAD (after support is verified for the target
+> build) provides authentication and removes the need for the separate
+> protocol-layer cipher to protect header metadata.
 
 ---
 

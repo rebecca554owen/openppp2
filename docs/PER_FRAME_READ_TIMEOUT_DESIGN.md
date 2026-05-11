@@ -152,13 +152,13 @@ std::shared_ptr<Byte> ITransmission::Read(YieldContext& y, int& outlen) noexcept
             frame_read_timer_->expires_after(
                 std::chrono::seconds(frame_timeout_s));
             frame_read_timer_->async_wait(
-                [self](boost::system::error_code ec) noexcept {
+                [self, frame_timeout_s](boost::system::error_code ec) noexcept {
                     if (ec == boost::system::errc::operation_canceled) {
                         return;  // Normal: frame read completed in time.
                     }
                     // Timer expired — the frame read is stalled.
                     ppp::telemetry::Count("transmission.frame_read_timeout", 1);
-                    ppp::telemetry::Log(Level::kWarn, "transmission",
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "transmission",
                         "per-frame read timeout after %ds", frame_timeout_s);
                     ppp::diagnostics::SetLastErrorCode(
                         ppp::diagnostics::ErrorCode::TunnelReadTimeout);
@@ -348,8 +348,8 @@ No changes needed for MUX paths.
 Add to `ppp/diagnostics/ErrorCodes.def`:
 
 ```cpp
-DEFINE_ERROR_CODE_ENTRY(TunnelReadTimeout, \
-    "Per-frame read timeout exceeded; connection disposed")
+X(TunnelReadTimeout,
+    "Per-frame read timeout exceeded; connection disposed", ErrorSeverity::kWarning)
 ```
 
 This distinguishes a slow-read timeout from a generic `TunnelReadFailed`.
@@ -362,7 +362,7 @@ On timer expiry, emit:
 
 ```cpp
 ppp::telemetry::Count("transmission.frame_read_timeout", 1);
-ppp::telemetry::Log(Level::kWarn, "transmission",
+ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "transmission",
     "per-frame read timeout after %ds remote=%s:%u",
     frame_timeout_s,
     remoteEP_.address().to_string().c_str(),

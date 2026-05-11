@@ -444,7 +444,7 @@ OPENPPP2 在启动时于 `AppConfiguration::Loaded()` 中验证密码配置。
 | `ConfigWeakKeyDefault` | `protocol_key` 或 `transport_key` 等于已知默认值 `"ppp"` |
 | `ConfigWeakKeyShort` | `protocol_key` 或 `transport_key` 长度小于 8 字节 |
 | `ConfigPlaintextEnabled` | `key.plaintext` 为 `true` |
-| `ConfigLegacyCipherAlgorithm` | `key.protocol` 或 `key.transport` 使用遗留算法族（RC4、单 DES、Blowfish、CAST5、SEED、IDEA） |
+| `ConfigLegacyCipherAlgorithm` | `key.protocol` 或 `key.transport` 使用遗留算法族（RC4、DES/3DES、Blowfish、CAST5、SEED、IDEA） |
 | `ConfigLegacyCipherShortKey` | 密码算法密钥长度（通过 OpenSSL EVP 解析）低于 128 位 |
 | `ConfigLegacyKdfMd5` | 内部密钥派生使用 MD5（通过 `EVP_BytesToKey`）；密码配置验证时作为信息性警告发出，在 KDF 可配置之前无用户操作 |
 
@@ -453,7 +453,7 @@ OPENPPP2 在启动时于 `AppConfiguration::Loaded()` 中验证密码配置。
 | 算法族 | 示例名称 | 废弃原因 |
 |--------|---------|---------|
 | RC4 | `rc4`、`rc4-md5`、`rc4-sha` | 密钥流存在偏差；已有实际攻击 |
-| DES | `des-cbc`、`des-cfb`、`des-ede` | 56 位密钥；可暴力破解 |
+| DES/3DES | `des-cbc`、`des-cfb`、`des-ede` | DES 为 56 位密钥，且同属 64 位分组遗留算法；存在暴力破解和 Sweet32 类风险 |
 | Blowfish | `bf-cbc`、`bf-cfb` | 64 位分组；Sweet32 攻击面 |
 | CAST5 | `cast5-cbc`、`cast5-cfb` | 64 位分组；已废弃 |
 | SEED | `seed-cbc`、`seed-cfb` | 采用率有限；无现代安全审查 |
@@ -461,14 +461,14 @@ OPENPPP2 在启动时于 `AppConfiguration::Loaded()` 中验证密码配置。
 
 ### 17.3 推荐的现代配置
 
-新部署应使用 AEAD 密码和强唯一密钥：
+新部署应使用当前已支持的最强非遗留密码和强唯一密钥：
 
 ```json
 {
     "key": {
-        "protocol": "aes-256-gcm",
+        "protocol": "aes-256-cfb",
         "protocol-key": "<随机 32 字节十六进制或密码短语>",
-        "transport": "aes-256-gcm",
+        "transport": "aes-256-cfb",
         "transport-key": "<不同随机 32 字节十六进制或密码短语>",
         "kf": 154543927,
         "kx": 128,
@@ -487,7 +487,7 @@ OPENPPP2 在启动时于 `AppConfiguration::Loaded()` 中验证密码配置。
 
 | 方面 | 最低要求 | 推荐配置 |
 |------|---------|---------|
-| 密码算法 | AES-128-CFB | AES-256-GCM 或 ChaCha20-Poly1305 |
+| 密码算法 | AES-128-CFB | 当前使用 AES-256-CFB；AEAD（如 AES-256-GCM 或 ChaCha20-Poly1305）需在项目支持确认后启用 |
 | 密钥长度 | 128 位 | 256 位 |
 | 密码短语长度 | 8 字节 | 16+ 随机字符 |
 | `plaintext` | `false` | `false`（始终） |
@@ -498,7 +498,7 @@ OPENPPP2 在启动时于 `AppConfiguration::Loaded()` 中验证密码配置。
 > **注意：** 项目当前默认值（`aes-128-cfb` / `aes-256-cfb`）在 `key.protocol` 或
 > `key.transport` 为空或不被支持时仍作为内置回退值。CFB 模式不是 AEAD，
 > 不提供密文完整性保护，但不会触发警告，因为它是项目既定基线。
-> 迁移到 GCM 可提供认证保护，并消除对单独协议层密码保护头元数据的需求。
+> 在目标构建确认支持后迁移到 AEAD 可提供认证保护，并消除对单独协议层密码保护头元数据的需求。
 
 ---
 

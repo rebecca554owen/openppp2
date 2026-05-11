@@ -280,7 +280,7 @@ rc4_crypt(...)
 
 **修复建议：**
 
-1. 新协议默认使用 AES-256-GCM 或 ChaCha20-Poly1305。
+1. 新协议默认优先使用当前已支持的最强非遗留密码；AEAD（如 AES-256-GCM 或 ChaCha20-Poly1305）需在项目支持确认后启用。
 2. KDF 使用 Argon2id、scrypt 或 PBKDF2-HMAC-SHA256。
 3. 每会话随机 salt。
 4. 每包随机 nonce/IV。
@@ -307,7 +307,7 @@ rc4_crypt(...)
 >
 > **P1-5 已实施（2026-05-11）**：新增 `AppConfiguration::EmitSecurityDiagnostics()` 方法，在启动时发射完整的安全诊断报告（含每个发现的独立警告 + 汇总行），通过 telemetry 和控制台双通道输出。详见 `docs/p1-governance-decisions-cn.md` §P1-5。
 >
-> **P1-7 已实施（2026-05-11）**：新增遗留密码算法检测警告。在 `AppConfiguration::Loaded()` 的安全姿态警告块中，当 `key.protocol` 或 `key.transport` 使用遗留算法族（RC4、单 DES、Blowfish、CAST5、SEED、IDEA）或密码密钥长度低于 128 位时，设置 `ConfigLegacyCipherAlgorithm` 或 `ConfigLegacyCipherShortKey` 警告码。同时发出 `ConfigLegacyKdfMd5` 信息性警告码，标记内部使用 MD5 的密钥派生。这些警告不阻断启动、不改变默认值，保持向后兼容。详见 `docs/SECURITY.md` §17 和 `docs/SECURITY_CN.md` §17。
+> **P1-7 已实施（2026-05-11）**：新增遗留密码算法检测警告。在 `AppConfiguration::Loaded()` 的安全姿态警告块中，当 `key.protocol` 或 `key.transport` 使用遗留算法族（RC4、DES/3DES、Blowfish、CAST5、SEED、IDEA）或密码密钥长度低于 128 位时，设置 `ConfigLegacyCipherAlgorithm` 或 `ConfigLegacyCipherShortKey` 警告码。同时发出 `ConfigLegacyKdfMd5` 信息性警告码，标记内部使用 MD5 的密钥派生。这些警告不阻断启动、不改变默认值，保持向后兼容。详见 `docs/SECURITY.md` §17 和 `docs/SECURITY_CN.md` §17。
 
 **位置：**
 
@@ -356,7 +356,7 @@ AES-CFB 只提供机密性，不提供认证完整性。如果协议层没有额
 
 **修复建议：**
 
-- 默认改为 AEAD：`aes-256-gcm` 或 `chacha20-poly1305`。
+- 默认优先改为当前已支持的最强非遗留密码；AEAD（如 `aes-256-gcm` 或 `chacha20-poly1305`）需在项目支持确认后启用。
 - CFB 仅 legacy 兼容。
 - 所有包必须有 tag。
 - tag 验证失败立即丢包并关闭连接。

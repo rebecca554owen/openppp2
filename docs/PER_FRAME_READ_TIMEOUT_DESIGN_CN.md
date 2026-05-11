@@ -137,13 +137,13 @@ std::shared_ptr<Byte> ITransmission::Read(YieldContext& y, int& outlen) noexcept
             frame_read_timer_->expires_after(
                 std::chrono::seconds(frame_timeout_s));
             frame_read_timer_->async_wait(
-                [self](boost::system::error_code ec) noexcept {
+                [self, frame_timeout_s](boost::system::error_code ec) noexcept {
                     if (ec == boost::system::errc::operation_canceled) {
                         return;  // 正常：帧读取按时完成
                     }
                     // 定时器到期 — 帧读取阻塞
                     ppp::telemetry::Count("transmission.frame_read_timeout", 1);
-                    ppp::telemetry::Log(Level::kWarn, "transmission",
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "transmission",
                         "逐帧读取超时 %d 秒", frame_timeout_s);
                     ppp::diagnostics::SetLastErrorCode(
                         ppp::diagnostics::ErrorCode::TunnelReadTimeout);
@@ -300,8 +300,8 @@ MUX 路径无需更改。
 添加到 `ppp/diagnostics/ErrorCodes.def`：
 
 ```cpp
-DEFINE_ERROR_CODE_ENTRY(TunnelReadTimeout, \
-    "Per-frame read timeout exceeded; connection disposed")
+X(TunnelReadTimeout,
+    "Per-frame read timeout exceeded; connection disposed", ErrorSeverity::kWarning)
 ```
 
 这将慢读超时与通用的 `TunnelReadFailed` 区分开来。
@@ -314,7 +314,7 @@ DEFINE_ERROR_CODE_ENTRY(TunnelReadTimeout, \
 
 ```cpp
 ppp::telemetry::Count("transmission.frame_read_timeout", 1);
-ppp::telemetry::Log(Level::kWarn, "transmission",
+ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "transmission",
     "逐帧读取超时 %d 秒 remote=%s:%u",
     frame_timeout_s,
     remoteEP_.address().to_string().c_str(),
