@@ -93,7 +93,7 @@ namespace ppp {
                         break;
                     }
 
-                    disposed_ = true;
+                    disposed_.store(true, std::memory_order_release);
                     proxy_->ReleaseConnection(this);
                 }
 
@@ -105,7 +105,7 @@ namespace ppp {
                     if (!ok) {
                         return false;
                     }
-                    elif(disposed_) {
+                    elif(disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
                     elif(VirtualEthernetTcpipConnectionPtr connection = this->connection_; NULLPTR != connection) {
@@ -133,7 +133,7 @@ namespace ppp {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VEthernetLocalProxyConnectionSendInvalidPayload);
                     }
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
 

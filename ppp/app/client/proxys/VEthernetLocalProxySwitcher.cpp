@@ -60,7 +60,7 @@ namespace ppp {
                         acceptor->Dispose();
                     }
 
-                    disposed_ = true;
+                    disposed_.store(true, std::memory_order_release);
                     ppp::collections::Dictionary::ReleaseAllObjects(connections);
                 }
 
@@ -124,7 +124,7 @@ namespace ppp {
                     }
 
                     std::shared_ptr<ppp::net::SocketAcceptor> acceptor;
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
@@ -193,7 +193,7 @@ namespace ppp {
                             /**
                              * @brief Accept callback validates network readiness before scheduling per-socket work.
                              */
-                            while (!disposed_) {
+                            while (!disposed_.load(std::memory_order_acquire)) {
                                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                                 if (NULLPTR == exchanger) {
                                     error_code = ppp::diagnostics::ErrorCode::AppContextUnavailable;
@@ -398,7 +398,7 @@ namespace ppp {
                  * @brief Creates the always-on 1-second timer for periodic housekeeping.
                  */
                 bool VEthernetLocalProxySwitcher::CreateAlwaysTimeout() noexcept {
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }

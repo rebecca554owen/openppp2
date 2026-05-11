@@ -14,6 +14,8 @@
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/threading/BufferswapAllocator.h>
 
+#include <atomic>
+
 namespace ppp {
     namespace app {
         namespace client {
@@ -136,7 +138,7 @@ namespace ppp {
 
                 private:
                     SynchronizedObject                                                  syncobj_;
-                    bool                                                                disposed_ = false;
+                    std::atomic_bool                                                    disposed_{false};
                     std::shared_ptr<VEthernetExchanger>                                 exchanger_;
                     std::shared_ptr<ppp::net::SocketAcceptor>                           acceptor_;
                     std::shared_ptr<boost::asio::io_context>                            context_;
