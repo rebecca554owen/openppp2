@@ -6,7 +6,7 @@
 
 ---
 
-## 1.8 消除 `system()` shell 拼接
+## 1.8 治理 `system()` / `popen()` Shell 命令执行路径
 
 | 字段 | 内容 |
 |------|------|
@@ -17,16 +17,20 @@
 
 ### 问题描述
 
-项目中存在 **25 处** `system()` 调用，分散于跨平台核心代码和三个平台目录中。主要用途：
+项目中存在多处 `system()` / `popen()` / shell 命令执行路径，分散于跨平台核心代码和三个平台目录中。下表为早期治理清单草案；实施前必须使用 `rg '\b(system|popen)\s*\('` 重新生成并确认完整清单，不应将当前表格视为最终数量口径。主要用途：
+
+`system()` 路径主要依赖命令返回码；`popen()` 路径还依赖 stdout 读取与解析，替换时必须保留输出读取语义，不能按纯返回码调用简单替换。
 
 | 文件 | 行号 | 用途 | 平台 |
 |------|------|------|------|
 | `ppp/app/client/VEthernetNetworkSwitcher.cpp` | 1085, 1188 | 网络切换 shell 命令 | 跨平台 |
+| `ppp/app/ConsoleUI.cpp` | 1795 | shell 命令输出读取（`popen()`） | 跨平台/Unix-like |
 | `ppp/stdafx.cpp` | 1123, 1128 | `system("cls")` / `system("clear")` 清屏 | 跨平台 |
-| `linux/ppp/ipv6/LINUX_IPv6Auxiliary.cpp` | 84, 352, 598 | IPv6 路由管理 (`ip -6 route ...`) | Linux |
-| `linux/ppp/tap/TapLinux.cpp` | 257, 684, 695 | TAP 接口配置 (`ip addr/route ...`) | Linux |
-| `linux/ppp/diagnostics/UnixStackTrace.cpp` | 33 | `addr2line` 调用 | Linux |
-| `darwin/ppp/ipv6/DARWIN_IPv6Auxiliary.cpp` | 217, 238, 242, 271, 306, 414 | IPv6 路由管理 (`route -n inet6 ...`) | macOS |
+| `common/unix/UnixAfx.cpp` | 695, 717, 740 | Unix shell 命令输出读取（`popen()`） | Unix-like |
+| `linux/ppp/ipv6/LINUX_IPv6Auxiliary.cpp` | 84, 352, 598；另有 `popen()` 查询路径 | IPv6 路由管理与状态查询 | Linux |
+| `linux/ppp/tap/TapLinux.cpp` | 257, 684, 695；另有 `popen()` 查询路径 | TAP 接口配置与 NDP 查询 | Linux |
+| `linux/ppp/diagnostics/UnixStackTrace.cpp` | 33, 100 | `addr2line` 调用与输出读取 | Linux |
+| `darwin/ppp/ipv6/DARWIN_IPv6Auxiliary.cpp` | route 管理与 `popen()` 查询路径 | IPv6 路由管理与状态查询 | macOS |
 | `darwin/ppp/tun/utun.cpp` | 143, 190, 223 | utun 接口配置 (`ifconfig`/`route`) | macOS |
 | `windows/ppp/win32/Win32Native.cpp` | 777 | `system("pause")` | Windows |
 | `windows/ppp/app/client/lsp/PaperAirplaneLspY.cpp` | 327 | `system("pause")` | Windows |
@@ -51,10 +55,21 @@
 | 方案 | 描述 | 侵入性 | 前置条件 |
 |------|------|--------|----------|
 | **A. 参数校验过渡** | 对拼接前的参数做白名单/正则校验，拦截注入风险，保留 `system()` 调用 | 低 | 无 |
-| **B. 局部替换高风险路径** | 仅替换含动态参数拼接的 `system()` 调用（约 12 处），使用 `fork+exec` 或 `posix_spawn` | 中 | 平台集成测试 |
-| **C. 统一 ProcessRunner** | 引入 `ppp/system/ProcessRunner` 抽象层，统一替代全部 25 处调用 | 高 | 全平台测试 + API 设计评审 |
+| **B. 局部替换高风险路径** | 仅替换含动态参数拼接的 `system()` / `popen()` 路径，`popen()` 替换必须保留 stdout 读取/解析语义 | 中 | 平台集成测试 |
+| **C. 统一 ProcessRunner** | 引入 `ppp/system/ProcessRunner` 抽象层，统一治理 shell 命令执行路径（含返回码与 stdout 两类语义） | 高 | 全平台测试 + API 设计评审 |
 
 **推荐路径**：先实施方案 A 作为短期加固，再按平台逐步推进方案 B；方案 C 作为长期目标。
+
+### 后续设计文档
+
+**治理设计文档已完成（2026-05-12）**：`docs/SYSTEM_CALL_GOVERNANCE_DESIGN_CN.md`
+
+该文档覆盖：
+- 全仓 `system()` / `popen()` 调用清单草案与风险分级；实施前需重新生成清单
+- 治理原则（不直接 fail-closed、保持兼容、参数白名单、日志/telemetry、避免 shell 注入）
+- **TapLinux 重点分析**：后续优先选择 cleaner withdrawal 边界（`DeleteRoute6`/`DeleteIPv6NeighborProxy`/`DisableIPv6NeighborProxy`/`DeleteIPv6Address`），而非 route-add 边界，因为 withdrawal 是 clean one-shot management operation，且可复用现有 add-path telemetry 模板；部分 withdrawal 函数已有 telemetry 基础
+- 分阶段计划（Inventory → Telemetry 基线 → TapLinux pilot → 扩展 → 其他平台 → 清理）
+- 回滚策略与风险评估
 
 ### 当前约束
 

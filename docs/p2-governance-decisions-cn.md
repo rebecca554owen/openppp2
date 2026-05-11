@@ -415,5 +415,144 @@ P2-16 对上述未修改的 3 个类进行二次只读代码复核，确认：
 
 ---
 
-*创建时间：2026-05-11*
-*关联审计文档：`docs/openppp2-deep-code-audit-cn.md` §15*
+## P2-20 CompletionState 类型安全化设计文档
+
+| 字段 | 内容 |
+|------|------|
+| **编号** | P2-20-TYPE-SAFE |
+| **当前决策** | **已完成设计文档，暂不实施** |
+| **是否 P0 阻断** | 否 |
+| **是否当前 release 阻断** | 否 |
+| **决策日期** | 2026-05-12 |
+| **关联审计文档** | `docs/openppp2-deep-code-audit-cn.md` §14.6 S-3（slot 类型擦除）、§14.9 A-2（CompletionState/StunCompletionState 重复）、§14.7 B-3（slot0 复用） |
+| **设计文档** | `docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md` |
+
+### 问题描述
+
+`CompletionState` 使用 `std::shared_ptr<void> slot0..slot3` 作为通用槽位，类型语义完全依赖注释和调用约定。`std::static_pointer_cast<T>` 失去编译期类型校验，后续若调整槽位顺序会无声地把指针解释为错误类型（审计 S-3）。DoT 和 TCP 存在 `slot0` 复用（request → response），依赖异步链执行顺序的隐式契约（审计 B-3）。
+
+### 设计文档内容
+
+`docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md` 涵盖：
+
+- 各协议（DoH、DoT、UDP、TCP、STUN）slot 使用模式逐行分析与汇总表
+- 四类风险分析：类型安全缺失、slot0 复用隐式契约、结构体重复、生命周期/线程安全交互
+- 方案 A：`std::variant` / 类型化 payload（编译期安全，中等变更量）
+- 方案 B：继承式专用状态结构（`DohCompletionState` / `DotCompletionState`，编译期安全，大变更量）
+- 方案 C：小步 helper accessor / 命名字段过渡（最小侵入，但仍需评审/复核）
+- 三方案对比矩阵（类型安全、变更量、侵入性、lambda 捕获兼容性、前置条件）
+- 生命周期、异步 lambda 捕获、strand/线程边界、slot0 复用的详细分析
+- 实施路径建议（短期方案 C → 中期方案 A/B）与前置条件
+
+### 暂不实施的原因
+
+1. **无自动化测试基础设施**：项目零测试。方案 A/B 改变 CompletionState 结构和 lambda 捕获类型，没有回归测试可能引入静默生命周期错误。
+2. **当前未发现直接运行时错误证据**：当前源码采用集中状态持有和 CAS 单次完成模型；但本文档仅为静态设计记录，不声明已完成 Android 真机回归验证。
+3. **方案 C 可独立实施**：accessor 封装不改变运行时行为，但需要维护者纪律确保新增协议时使用 accessor。
+4. **与其它 P2 条目互不依赖**：设计文档已完成，实施时可独立进行。
+
+### 当前约束
+
+- 不得将该项作为 P0 或当前 release 的阻断条件。
+- 不得在其他修复分支中混入该重构的代码改动。
+- 本文档和设计文档仅作记录用途，不触发代码行为变更。
+- 实施时必须保持 `CompletionState::Complete()` 的 CAS 单次执行语义不变。
+- 实施时必须保持 I/O 资源由 `CompletionState` 集中持有，并避免在 lambda 中分散捕获 socket/stream/timer/buffer 所有权。
+
+### 实施前置条件
+
+| 序号 | 条件 | 说明 | 当前状态 |
+|------|------|------|----------|
+| C-1 | 基本集成测试 | 至少覆盖 DoH/DoT/UDP/TCP/STUN 端到端路径 | ❌ 无测试 |
+| C-2 | 逐调用点复核 | 确认所有 slot 赋值/读取点与设计文档分析一致 | ⚠️ 需实施前复核 |
+| C-3 | 方案 C 可独立实施 | accessor 不改变运行时行为 | ✅ 可行（仍需谨慎） |
+
+### 后续触发条件
+
+| 触发条件 | 动作 |
+|---|---|
+| 引入基本集成测试框架 | 可开始评估方案 A 或 B 并回归验证 |
+| 新增 DNS 协议（如 DoQ） | 必须更新 slot 使用模式文档，评估是否需要更多 slot |
+| slot0 复用引发实际 bug | 立即实施方案 C 消除复用 |
+| DnsResolver 文件拆分（审计 A-3） | 同步实施方案 B（继承） |
+| 升级 C++20 | 方案 A 的 `std::visit` 更简洁 |
+
+---
+
+## P2-21 DoH/DoT 异步链 slot0 复用风险设计文档
+
+| 字段 | 内容 |
+|------|------|
+| **编号** | P2-21-SLOT-REUSE |
+| **当前决策** | **已完成设计文档，暂不实施** |
+| **是否 P0 阻断** | 否 |
+| **是否当前 release 阻断** | 否 |
+| **决策日期** | 2026-05-12 |
+| **关联审计文档** | `docs/openppp2-deep-code-audit-cn.md` §14.7 B-3、§14.6 S-3 |
+| **关联治理项** | P2-20（CompletionState 类型安全化设计，slot0 复用为其子集问题） |
+| **设计文档** | `docs/DNS_DOH_DOT_SLOT_REUSE_DESIGN_CN.md` |
+
+### 问题描述
+
+`SendDot` 和 `SendTcp` 的异步链中，`CompletionState::slot0` 在查询生命周期内先持有 request buffer（供 `async_write` 引用），后在 write handler 的 read-length handler 中被覆盖为 response buffer。此复用依赖以下隐式假设：
+
+1. `async_write` completion handler 在 write 完成后才被调用（Asio 保证）。
+2. write handler 内部的 `async_read`（长度前缀）完成后才执行 slot0 覆盖（嵌套 handler 顺序）。
+3. write 完成后 Asio 不再持有 request buffer 的引用（`boost::asio::buffer()` 是非拥有的）。
+
+当前静态审查未发现已触发的 UAF 证据；slot0 复用依赖 Asio completion 语义与当前 handler 嵌套顺序，这些假设是**时序保证**而非**所有权保证**，仍需在实施、重构或 Asio 版本升级前复核。DoH 链不涉及此问题——它使用 `slot0`（http_req）、`slot1`（read_buf）、`slot2`（http_res）三个独立槽位。
+
+### 设计文档内容
+
+`docs/DNS_DOH_DOT_SLOT_REUSE_DESIGN_CN.md` 涵盖：
+
+- DoT/TCP 链 slot0 复用的完整代码位置分析（含行号对照表）
+- DoH 链不涉及此问题的说明（使用 slot0/1/2 独立槽位）
+- 隐式契约四要素分析（Asio write completion 语义、handler 嵌套顺序、buffer 非拥有视图、shared_ptr 延长生命周期）
+- 四类风险分析（潜在 UAF 条件、handler 顺序变更、重构脆弱性、可读性/调试困难）
+- 三种修复方案对比：
+  - **方案 A（推荐）**：分离 `request_buf` / `response_buf` 命名字段
+  - **方案 B**：write handler 后显式释放 request（收益不足）
+  - **方案 C**：typed state 子类（与 S-3 / P2-20 合并实施）
+- 推荐路径：当前仅记录设计；待测试/验证条件具备后，优先评估方案 A，后续与 CompletionState 类型安全化（S-3 / P2-20）合并升级为 typed fields
+- 修复影响评估（行为/API/性能/兼容性/测试）
+- 实施前置条件与后续触发条件
+
+### 暂不实施的原因
+
+1. **当前未发现已触发的 UAF 证据**：slot0 复用依赖 Asio completion 语义与当前 handler 嵌套顺序；这些依赖仍需在实施/重构前复核。
+2. **无自动化测试基础设施**：项目零测试，DoT/TCP 异步链的手动验证成本高。
+3. **与 P2-20（类型安全化）存在实施路径依赖**：方案 A 是 P2-20 的子集，合并实施效率更高。
+4. **风险等级为"低"**：不构成 P0 阻断，不涉及安全漏洞或数据损坏。
+
+### 当前约束
+
+- 不得将该项作为 P0 或当前 release 的阻断条件。
+- 不得在其他修复分支中混入该项的代码改动。
+- 本文档和设计文档仅作记录用途，不触发代码行为变更。
+- 不得声称该问题已修复。
+- 实施时必须保持 DoH/DoT/TCP/UDP 所有协议链的行为完全不变。
+
+### 实施前置条件
+
+| 序号 | 条件 | 说明 | 当前状态 |
+|------|------|------|----------|
+| C-1 | 理解所有 slot 使用点 | 确认各协议链的 slot 语义 | ✅ 已完成 |
+| C-2 | 确认无外部代码依赖 slot 编号 | `CompletionState` 是内部 struct | ✅ 已确认 |
+| C-3 | 手动测试覆盖 DoT/TCP 路径 | 验证修改后查询正常 | ❌ 无自动化测试 |
+| C-4 | 与 P2-20 实施计划对齐 | 确保命名字段方案与长期 typed state 方向一致 | ⚠️ 需对齐 |
+
+### 后续触发条件
+
+| 触发条件 | 动作 |
+|---|---|
+| CompletionState 类型安全化设计启动（P2-20） | 将方案 A 作为子集纳入 |
+| Boost.Asio 版本升级 | 复核 write completion 语义是否变更 |
+| DoT/TCP 异步链重构 | 必须同时评估并优先纳入方案 A |
+| 引入自动化测试框架 | 可开始评估方案 A 并回归验证 |
+| 发现 write handler 在 write 完成前被调用的证据 | 立即升级为 P0 |
+
+---
+
+*创建时间：2026-05-11（初版） / 2026-05-12（追加 P2-20、P2-21）*
+*关联审计文档：`docs/openppp2-deep-code-audit-cn.md` §14.6、§14.7、§14.9、§15*

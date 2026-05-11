@@ -1246,7 +1246,7 @@ cosign / minisign / GPG signing
 5. DNS redirect socket/timer 池化。
 6. Firewall 匹配优化。**RCU 设计文档已完成（2026-05-11）**：`docs/FIREWALL_RCU_RULE_SNAPSHOT_DESIGN_CN.md`；最小侵入优化已实施（§4.6 OPT-P2-12b/c），RCU 快照 + trie 后缀匹配待测试基础设施就绪后实施。
 7. Android 依赖升级。
-8. 消除 `system()` shell 拼接。
+8. 消除 `system()` / `popen()` shell 命令执行路径。**治理设计文档已完成（2026-05-12）：** `docs/SYSTEM_CALL_GOVERNANCE_DESIGN_CN.md`；治理决策 `docs/p1-governance-decisions-cn.md` P1-8。后续 TapLinux pilot 优先选择 cleaner withdrawal 边界（`DeleteRoute6`/`DeleteIPv6NeighborProxy`/`DisableIPv6NeighborProxy`/`DeleteIPv6Address`），而非 route-add 边界。
 9. 增加 CodeQL / govulncheck / npm audit / OSV。
 10. Per-frame 读取超时（慢读 DoS 加固）：需设计 Boost.Asio deadline_timer/cancellation 与 async_read 集成，覆盖 ITransmission / ITcpipTransmission / WebSocket 路径，通过异步 IO 测试验证 timer 生命周期安全性（见 §5.1）。**设计文档已完成（2026-05-11）：** `docs/PER_FRAME_READ_TIMEOUT_DESIGN.md` / `docs/PER_FRAME_READ_TIMEOUT_DESIGN_CN.md`；治理决策 `docs/p1-governance-decisions-cn.md` P1-1。
 
@@ -1731,6 +1731,16 @@ std::shared_ptr<void> slot3;
 
 **建议：** 使用 `std::variant<...>` 或继承式专用结构（`DohState : CompletionState` / `DotState`），让类型在编译期固定。
 
+> **📋 设计文档已补充（2026-05-12）**
+>
+> 详见 `docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md`，涵盖：
+> - 各协议（DoH/DoT/UDP/TCP/STUN）slot 使用模式逐行分析
+> - 三种改进方案（variant payload / 继承式结构 / accessor 封装）及对比矩阵
+> - 生命周期、异步 lambda 捕获、strand/线程边界、slot0 复用的详细分析
+> - 实施路径与前置条件
+>
+> 治理记录：`docs/p2-governance-decisions-cn.md` P2-20。功能暂不实施，待测试基础设施就绪后启用。
+
 #### **S-4：`std::atomic_load/store(shared_ptr*)` 在 C++20 已弃用**
 
 **位置：** `ppp/transmissions/ITransmission.cpp:87-88`、`1695-1696`、`1715-1716`
@@ -1822,6 +1832,14 @@ struct CompletionState final {
 };
 ```
 
+> **📋 与 S-3 合并设计（2026-05-12）**
+>
+> `docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md` §3.2/§3.4 详细分析了 DoT/TCP 的 slot0 复用模式，
+> §4.2 分析了复用的隐式契约风险，§7.4 给出了各方案的消除策略。
+> 治理记录：`docs/p2-governance-decisions-cn.md` P2-20。
+
+**📋 详细设计文档：`docs/DNS_DOH_DOT_SLOT_REUSE_DESIGN_CN.md`** — 涵盖 DoT/TCP 链 slot0 复用的完整代码位置分析、隐式契约（Asio handler 触发顺序、write buffer 生命周期、shared_ptr 延长生命周期）、风险分析（潜在 UAF 条件、handler 顺序变更、重构脆弱性、可读性）、三种修复候选方案对比（命名字段 / 显式释放 / typed state 子类）及后续评估路径。治理记录：`docs/p2-governance-decisions-cn.md` P2-21。当前状态为"已完成设计，暂不实施"。
+
 #### **B-4：obfuscation 标志校验失败后的冗余写** ✅ 已修复
 
 **位置：** `ppp/transmissions/ITransmission.cpp:1432`
@@ -1883,6 +1901,12 @@ struct AsyncCompletionState final {
 
 可减少约 60 行重复。
 
+> **📋 与 S-3 合并设计（2026-05-12）**
+>
+> `docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md` §3.6 和 §4.3 分析了两个结构体的重复点和合并策略。
+> 方案 B（继承式专用结构）通过共享 `CompletionStateBase` 基类自然减少重复。
+> 治理记录：`docs/p2-governance-decisions-cn.md` P2-20。
+
 #### **A-3：`DnsResolver.cpp` 单文件 4500+ 行**
 
 **建议：** 拆为：
@@ -1930,7 +1954,7 @@ ppp/dns/DnsResolverCore.cpp
 
 #### 优先级 2（重要）
 
-4. 类型安全的 `CompletionState`（S-3 / A-2）：`std::variant` 或继承结构替换 `shared_ptr<void>` 槽。
+4. 类型安全的 `CompletionState`（S-3 / A-2）：`std::variant` 或继承结构替换 `shared_ptr<void>` 槽。**📋 设计文档已补充（2026-05-12）**：`docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md`；治理记录 `docs/p2-governance-decisions-cn.md` P2-20。
 5. 删除冗余 `handshaked_.store(false)`（B-4）✅ 已完成。
 6. 保留 ICMP 错误回送的最小路径（B-2）：让 PMTUD/traceroute 在 Android 下也可用；至少增加开关 `enable_icmp_error_passthrough`。**📋 设计文档已补充：`docs/ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md`**
 7. 澄清并加固 Android TLS 会话缓存（P-1）：当前可用 git 历史中未发现 Android 禁用守卫；后续仅评估 TTL、telemetry、协议隔离与真机验证，不再使用“恢复缓存”口径。
@@ -1995,6 +2019,7 @@ ppp::function has a deep destructor recursion known crash."
 | P-2 SSL_CTX 全局锁 | §6.5 平台条件编译 | 跨平台互斥设计模式；📋 **设计文档：`docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md`** |
 | B-2 ICMP 丢弃 | §5.5 / §5.6 协议帧边界检查 | 同属"为安全/稳定性而牺牲功能"的折衷 |
 | A-3 DnsResolver 拆分 | §6.1 拆 `stdafx.h` | 同属"超大单元拆分"治理思路 |
+| S-3 类型擦除 slot | §14.6 S-3、§14.9 A-2、§14.7 B-3 | 同属 CompletionState 类型安全治理；**📋 设计文档：`docs/DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md`** |
 | S-4 `atomic_load(shared_ptr*)` | §6.1 / §6.2 stdafx 与 Beast 版本宏 | C++ 标准升级路径；详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` |
 
 ### 14.14 总体结论
