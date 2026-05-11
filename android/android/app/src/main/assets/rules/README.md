@@ -4,69 +4,95 @@
 
 Pre-bundled binary GeoIP and GeoSite databases for the Android VPN service.
 `PppVpnService.ensureGeoRulesAssets()` extracts these files on first launch so
-that the native engine can parse `./rules/GeoIP.dat` and `./rules/GeoSite.dat`
+that the native engine can parse `./rules/geoip.dat` and `./rules/geosite.dat`
 without a network download, avoiding a ~60-second blocking hang on cold start.
 
-## Files
+## File Inventory
 
-| File | Approx. Size | Description |
-|------|-------------|-------------|
-| `geoip.dat`  | ~19 MB | IP-to-country CIDR database (protobuf `GeoIPList`) |
-| `geosite.dat` | ~4 MB  | Domain-to-category rule database (protobuf `GeoSiteList`) |
+| File | Approx. Size | Format | Description |
+|------|-------------|--------|-------------|
+| `geoip.dat`  | ~19 MB | Protobuf `GeoIPList` | IP-to-country CIDR database |
+| `geosite.dat` | ~4 MB  | Protobuf `GeoSiteList` | Domain-to-category rule database |
 
-## Source
+> **Tip:** After each refresh, record `sha256sum geoip.dat geosite.dat` in the
+> commit message or a companion log so that reviewers can verify provenance
+> without bloating the repository with checksum files.
 
-These `.dat` files are in **v2ray/xray binary geo format** (protobuf-encoded
-`GeoIPList` / `GeoSiteList`).
+## Upstream Source
 
-The bundled copies originate from the **MetaCubeX/meta-rules-dat** release
-channel, which is the same upstream used by the project's configurable download
-URLs:
+| Field | Value |
+|-------|-------|
+| **Repository** | [`MetaCubeX/meta-rules-dat`](https://github.com/MetaCubeX/meta-rules-dat) |
+| **Artifact names** | `geoip.dat`, `geosite.dat` |
+| **CDN mirror** | `https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/` |
+| **Bundled version date** | `TODO: record on next refresh` |
+| **Bundled version commit / tag** | `TODO: record on next refresh` |
+| **Last reviewed** | `TODO: record on next refresh` |
 
-```
-https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
-https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
-```
+The upstream repository aggregates data from multiple sources, primarily:
 
-## License / Redistribution
+- **MaxMind GeoLite2** — IP geolocation data, licensed under
+  [CC BY-SA 4.0](https://dev.maxmind.com/geoip/geolite-free-geolocation-data)
+  (requires attribution and share-alike compliance).
+- **v2ray/domain-list-community** — domain categorization rules,
+  [MIT-licensed](https://github.com/v2fly/domain-list-community).
 
-> **⚠ HARD GATE: License must be confirmed BEFORE any public release or redistribution.**
+## License & Redistribution Notes
 
-The MetaCubeX/meta-rules-dat repository aggregates data from multiple upstream
-sources (MaxMind GeoLite2, v2ray/domain-list-community, etc.), each with its own
-license terms. The precise redistribution terms of the aggregated binary output
-**have not been independently confirmed** for this repository.
+Per maintainer guidance, these `.dat` rule files **may be included in release
+artifacts** — this is a non-blocking, best-effort governance area.
 
-- MaxMind GeoLite2 data is subject to the [MaxMind CC BY-SA 4.0 license](https://dev.maxmind.com/geoip/geolite-free-geolocation-data).
-  Requires attribution and share-alike compliance.
-- v2ray/domain-list-community is MIT-licensed.
-- The aggregated `.dat` binary's redistribution compatibility with these
-  upstream licenses has **not** been independently verified.
+Recommended best practices (not blockers):
 
-**You MUST NOT include these `.dat` files in a public Release artifact until
-the redistribution license has been explicitly confirmed.** If confirmation is
-not possible before the planned release date, migrate to one of the alternatives
-listed in the Migration section below.
+1. **Record upstream attribution** — acknowledge MaxMind GeoLite2 (CC BY-SA 4.0)
+   and v2ray/domain-list-community (MIT) in release notes or a NOTICE file.
+2. **Track provenance** — on each refresh, log the upstream commit/tag and
+   download date alongside the sha256 hash (see Update Procedure below).
+3. **Re-confirm upstream license periodically** — if the MetaCubeX aggregation
+   terms change, update this section accordingly.
 
-## Update Process
+> This section is a **governance record**, not a release gate. If upstream
+> license questions arise, they can be resolved post-merge without blocking the
+> release pipeline.
 
-1. Download fresh copies from the URLs listed above (or build from source via
-   the MetaCubeX toolchain).
-2. Replace `geoip.dat` and `geosite.dat` in this directory.
-3. Commit the updated binaries with a message that includes the upstream
-   version/date (e.g., `chore(android): update geo-rules from MetaCubeX 2026-05-11`).
-   The `.gitattributes` file at the repository root marks `*.dat` as `binary`
-   to suppress text-diff noise.
+## Update Procedure
 
-## Migration (Required Before Public Release)
+When refreshing the bundled rule files:
 
-For long-term maintenance and license compliance, these assets MUST be migrated
-out of the Git repository before any public release. Choose one of:
+1. **Download** fresh copies:
+   ```
+   curl -LO https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+   curl -LO https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+   ```
+2. **Verify** file integrity (optional but recommended):
+   ```
+   sha256sum geoip.dat geosite.dat
+   ```
+3. **Replace** the files in this directory (`android/android/app/src/main/assets/rules/`).
+4. **Update** the "Upstream Source" table above with the actual refresh date
+   and commit/tag (replace the `TODO` entries).
+5. **Commit** with a descriptive message, e.g.:
+   ```
+   chore(android): refresh geo-rules from MetaCubeX meta-rules-dat
 
-- **GitHub Release assets**: download at build time via CI script.
-- **Git LFS**: track `*.dat` via LFS to reduce repository clone size.
-- **First-run download**: triggered by `ensureGeoRulesAssets()` on first launch,
+   Source: MetaCubeX/meta-rules-dat@release
+   Downloaded: 2026-05-11
+   geoip.dat sha256: <hash>
+   geosite.dat sha256: <hash>
+   ```
+
+The `.gitattributes` file at the repository root marks `*.dat` as `binary`
+to suppress text-diff noise in `git log`.
+
+## Future Optimization (Optional, Non-Blocking)
+
+To reduce repository clone size, the `.dat` files could eventually be moved out
+of Git into one of these distribution channels:
+
+- **GitHub Release assets** — downloaded at build time via CI script.
+- **Git LFS** — track `*.dat` via LFS.
+- **First-run download** — triggered by `ensureGeoRulesAssets()` on first launch,
   with a bundled CDN fallback.
 
-This eliminates ~23 MB of binary data from the repository and ensures that
-license compliance can be managed independently of the Git history.
+This would eliminate ~23 MB of binary data from the repository history.
+This is an optional optimization and **not** a release prerequisite.
