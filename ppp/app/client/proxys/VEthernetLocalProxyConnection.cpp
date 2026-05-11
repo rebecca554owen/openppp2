@@ -54,12 +54,12 @@ namespace ppp {
                     ppp::threading::Executors::ContextPtr context = context_;
                     ppp::threading::Executors::StrandPtr strand = strand_;
 
-                    auto finalize = 
+                    auto finalize =
                         [self, this, context, strand]() noexcept {
                             Finalize();
                         };
 
-                    std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_; 
+                    std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
                     if (NULLPTR != socket) {
                         boost::asio::post(socket->get_executor(), finalize);
                     }
@@ -74,9 +74,9 @@ namespace ppp {
                 void VEthernetLocalProxyConnection::Finalize() noexcept {
                     for (;;) {
                         std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_);
-                        std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_); 
+                        std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_);
                         std::shared_ptr<vmux::vmux_skt> connection_mux = std::move(connection_mux_);
-      
+
                         if (NULLPTR != connection) {
                             connection->Dispose();
                         }
@@ -137,14 +137,14 @@ namespace ppp {
                         return false;
                     }
 
-                    VirtualEthernetTcpipConnectionPtr V = this->connection_; 
+                    VirtualEthernetTcpipConnectionPtr V = this->connection_;
                     if (NULLPTR != V) {
                         return V->SendBufferToPeer(y, messages, messages_size);
                     }
 
                     std::shared_ptr<RinetdConnection> R = this->connection_rinetd_;
                     if (NULLPTR != R) {
-                        std::shared_ptr<boost::asio::ip::tcp::socket> socket = R->GetRemoteSocket(); 
+                        std::shared_ptr<boost::asio::ip::tcp::socket> socket = R->GetRemoteSocket();
                         if (NULLPTR == socket) {
                             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
                         }
@@ -157,7 +157,7 @@ namespace ppp {
                         }
                         return ok;
                     }
-                    
+
                     std::shared_ptr<vmux::vmux_skt> K = this->connection_mux_;
                     if (NULLPTR != K) {
                         return K->send_to_peer_yield(messages, messages_size, y);
@@ -165,13 +165,13 @@ namespace ppp {
 
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
- 
+
                 /**
                  * @brief Creates a bridge path in priority order: rinetd, mux, then transmission tunnel.
                  */
                 bool VEthernetLocalProxyConnection::ConnectBridgeToPeer(const std::shared_ptr<ppp::app::protocol::AddressEndPoint>& destinationEP, YieldContext& y) noexcept {
                     using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<VEthernetLocalProxyConnection>;
-                    
+
                     if (NULLPTR == destinationEP) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     }
@@ -252,7 +252,7 @@ namespace ppp {
                     }
 
 #if defined(_LINUX)
-                    auto switcher = exchanger_->GetSwitcher(); 
+                    auto switcher = exchanger_->GetSwitcher();
                     if (NULLPTR != switcher) {
                         connection->ProtectorNetwork = switcher->GetProtectorNetwork();
                     }

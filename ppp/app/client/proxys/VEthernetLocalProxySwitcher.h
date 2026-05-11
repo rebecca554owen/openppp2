@@ -43,7 +43,11 @@ namespace ppp {
                      */
                     VEthernetLocalProxySwitcher(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
                     /**
-                     * @brief Destroys the switcher and finalizes active resources.
+                     * @brief Destroys the switcher and finalizes active resources synchronously.
+                     *
+                     * @details Unlike Dispose(), which posts teardown to the switcher context,
+                     *          the destructor calls Finalize() directly on the thread that
+                     *          releases the last owner.
                      */
                     virtual ~VEthernetLocalProxySwitcher() noexcept;
 
@@ -95,6 +99,10 @@ namespace ppp {
                 private:
                     /**
                      * @brief Performs idempotent shutdown for timer, acceptor, and connections.
+                     *
+                     * @details May run either from the asynchronous Dispose() path on the
+                     *          switcher context or directly from the destructor on the final
+                     *          releasing thread.
                      */
                     void                                                                Finalize() noexcept;
                     /**

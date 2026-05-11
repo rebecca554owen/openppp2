@@ -62,7 +62,7 @@ namespace ppp {
                      * @param socket Accepted local client socket.
                      */
                     VEthernetLocalProxyConnection(const VEthernetLocalProxySwitcherPtr& proxy,
-                        const VEthernetExchangerPtr&                                    exchanger, 
+                        const VEthernetExchangerPtr&                                    exchanger,
                         const std::shared_ptr<boost::asio::io_context>&                 context,
                         const ppp::threading::Executors::StrandPtr&                     strand,
                         const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket) noexcept;
