@@ -1440,7 +1440,6 @@ namespace ppp {
 
                             ppp::diagnostics::SetLastErrorCode(
                                 ppp::diagnostics::ErrorCode::ObfuscationFlagsMismatch);
-                            handshaked_.store(false, std::memory_order_release);
                             return 0;
                         }
                     }
