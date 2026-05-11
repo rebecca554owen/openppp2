@@ -981,7 +981,8 @@ C/C++ 隐式相邻字符串拼接会将两个条目合并为 `"120.53.53.538.8.8
 **后续建议（可选，不阻断）：**
 
 - ✅ 已实现轻量编译期防护：在数组末尾增加 `static_assert` 固定元素计数为 56，任何隐式字符串拼接导致的条目减少都会在编译期报错。修改列表时需同步更新断言中的数字。
-- 仍未实现逐项校验合法 IPv4 格式的自动化测试（需引入单元测试框架或外部脚本）。参见 [`dns-server-list-governance-cn.md`](dns-server-list-governance-cn.md) 了解后续可测试策略。
+- ✅ 已提供只读脚本 `scripts/check-dns-ipv4.py`，可逐项校验每个条目的 IPv4 格式（含宏展开解析）。脚本不接入 CI、不改构建、不依赖网络，仅作为开发者本地手动校验工具。
+- 未接入 CI 自动门控（当前 56 条人工可控，无需构建阻断）。参见 [`dns-server-list-governance-cn.md`](dns-server-list-governance-cn.md) §4 了解脚本用法与互补策略。
 
 ---
 
@@ -1737,13 +1738,22 @@ C++17 标准下可用，C++20 起触发 deprecated 警告，C++26 移除。
 ```cpp
 template<class T>
 std::shared_ptr<T> atomic_load_compat(const std::shared_ptr<T>* p) noexcept {
-#if __cplusplus >= 202002L
-    static_assert(false, "Use std::atomic<std::shared_ptr<T>> directly");
-#else
     return std::atomic_load(p);
-#endif
 }
 ```
+
+> C++20 迁移时应删除 helper 并改用 `std::atomic<std::shared_ptr<T>>` 成员函数；
+> 不在 helper 内使用 `static_assert(false, ...)` 阻断过渡期编译。
+
+> **📋 设计文档已补充（2026-05-11）**
+>
+> 详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md`，涵盖：
+> - C++17 选择理由与 C++20/C++26 弃用/移除时间线
+> - helper API 形态（`atomic_load_compat` / `atomic_store_compat`，不提供 `atomic_exchange_compat`）
+> - Base/Derived 显式转换规则（模板推导冲突与解决方案）
+> - "移出"（take-and-clear）模式的限制（`atomic_load + atomic_store({})` 不等价于 `atomic exchange`）
+> - 替换范围（当前仓库所有 `atomic_load/store` 调用点清单）
+> - 测试要求与 C++20 迁移步骤
 
 #### **S-5：`UnixSocketAcceptor` macOS 加速链已收敛但需保留遥测**
 
@@ -1751,13 +1761,13 @@ std::shared_ptr<T> atomic_load_compat(const std::shared_ptr<T>* p) noexcept {
 
 ### 14.7 隐性缺陷
 
-#### **B-1：Timer.cpp 极简化依赖 `-DFUNCTION` 编译开关**
+#### **B-1：Timer.cpp 极简化依赖 `-DFUNCTION` 编译开关** ✅ 已实施
 
-**位置：** `android/CMakeLists.txt:14`、`ppp/threading/Timer.cpp:43-67`
+**位置：** `android/CMakeLists.txt:14`、`ppp/threading/Timer.cpp:6-11`
 
 若任一交叉编译目标（如老 NDK、Linux 静态打包）漏掉 `-DFUNCTION`，会回退到旧 `ppp::function` 析构路径，重新触发 Android `SI_KERNEL` 栈溢出崩溃。
 
-**建议：** 在 `Timer.cpp` 顶部加守卫：
+**已实施：** `Timer.cpp` 顶部已加 `#error` 守卫（2026-05-11）。当 `__ANDROID__` 已定义而 `FUNCTION` 未定义时，编译立即终止并给出明确错误信息。
 
 ```cpp
 #if defined(__ANDROID__) && !defined(FUNCTION)
@@ -1900,7 +1910,7 @@ ppp/dns/DnsResolverCore.cpp
 
 | 项 | 现状 | 建议 |
 |---|---|---|
-| C++17 | 全平台一致 | 评估升级 C++20 以使用 `std::atomic<std::shared_ptr<T>>` 与 `<concepts>` |
+| C++17 | 全平台一致 | 评估升级 C++20 以使用 `std::atomic<std::shared_ptr<T>>` 与 `<concepts>`；迁移路径详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` |
 | BoringSSL vs OpenSSL | 通过 `__ANDROID__` 分支区分 | 引入显式宏 `PPP_CRYPTO_BORINGSSL` / `PPP_CRYPTO_OPENSSL`，避免与平台宏耦合 |
 | Boost 1.87+ | `docs/BOOST_187_COMPATIBILITY.md` 已记录 | 保持 |
 
@@ -1909,7 +1919,7 @@ ppp/dns/DnsResolverCore.cpp
 #### 优先级 1（关键 / 必须修复）
 
 1. **修复 Android TLS 信任链缺口（S-1）**：`set_default_verify_paths()` 关掉后，必须确保 `verify_peer` 路径仍有 CA 数据；与 §3.2、§3.3 形成端到端 TLS 加固闭环。
-2. **强制 `-DFUNCTION` 在所有 Android 构建里出现（B-1）**：在 `ppp/threading/Timer.cpp` 顶部加 `#error` 守卫。
+2. **强制 `-DFUNCTION` 在所有 Android 构建里出现（B-1）** ✅ 已实施：在 `ppp/threading/Timer.cpp` 顶部加 `#error` 守卫。
 3. **缩小 `s_ssl_ctx_init_mutex` 临界区（P-2）**：仅守护一次性的全局初始化，CA 加载放外部并发执行。
 
 #### 优先级 2（重要）
@@ -1923,7 +1933,7 @@ ppp/dns/DnsResolverCore.cpp
 
 8. 拆分 `ppp/dns/DnsResolver.cpp`（A-3）。
 9. 清理 `elif` 宏（A-1）；UTF-8 BOM 修复（A-4）。
-10. 引入 `atomic_load_compat` 包装（S-4），便于 C++20 升级。
+10. 引入 `atomic_load_compat` 包装（S-4），便于 C++20 升级。**📋 设计文档已补充：`docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md`**
 
 ### 14.12 关键修复示例
 
@@ -1959,13 +1969,13 @@ std::call_once(s_ssl_globals_once, []() {
 // 此后无需全局锁；CA 加载、cipher 配置可并发
 ```
 
-#### 14.12.3 Android 必须有 `-DFUNCTION` 守卫
+#### 14.12.3 Android 必须有 `-DFUNCTION` 守卫 ✅ 已实施
 
 ```cpp
-// ppp/threading/Timer.cpp - 顶部
+// ppp/threading/Timer.cpp - 顶部（已落盘，2026-05-11）
 #if defined(__ANDROID__) && !defined(FUNCTION)
 #  error "Android Timer.cpp requires -DFUNCTION (std::function backend); \
-          ppp::function backend has a deep destructor recursion known crash."
+ppp::function has a deep destructor recursion known crash."
 #endif
 ```
 
@@ -1977,7 +1987,7 @@ std::call_once(s_ssl_globals_once, []() {
 | P-2 SSL_CTX 全局锁 | §6.5 平台条件编译 | 跨平台互斥设计模式 |
 | B-2 ICMP 丢弃 | §5.5 / §5.6 协议帧边界检查 | 同属"为安全/稳定性而牺牲功能"的折衷 |
 | A-3 DnsResolver 拆分 | §6.1 拆 `stdafx.h` | 同属"超大单元拆分"治理思路 |
-| S-4 `atomic_load(shared_ptr*)` | §6.1 / §6.2 stdafx 与 Beast 版本宏 | C++ 标准升级路径 |
+| S-4 `atomic_load(shared_ptr*)` | §6.1 / §6.2 stdafx 与 Beast 版本宏 | C++ 标准升级路径；详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` |
 
 ### 14.14 总体结论
 
@@ -2123,8 +2133,9 @@ std::call_once(s_ssl_globals_once, []() {
    **⚠️ 关于"移出（取出并清空）"模式的限制：**
    上述 `atomic_load` + `atomic_store({})` 是两次独立的原子操作，**不等价于** `atomic exchange`。
    在并发场景下，两个线程可能同时 `atomic_load` 到相同的 `shared_ptr` 值（都获得非空引用），然后各自 `atomic_store({})`，导致同一个对象被两个消费者"取走"——**不保证唯一取走语义**。
-   如果需要"唯一所有权转移"（exactly-once take），必须使用 `strand` / `mutex` 将 load + clear 保护为临界区；
-   升级 C++20 后可使用 `std::atomic<std::shared_ptr<T>>::exchange()` 实现真正的原子交换。
+   如果需要"唯一所有权转移"（exactly-once take），C++17 下应使用标准 `std::atomic_exchange(shared_ptr*)` free function；
+   若 take-and-clear 之外还有复合不变量，则使用 `strand` / `mutex` 将整个复合操作保护为临界区。升级 C++20 后可使用 `std::atomic<std::shared_ptr<T>>::exchange()` 实现真正的原子交换。
+   > **📋 详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` §4（移出模式限制与 atomic_exchange 分析）**
 
 3. **C++20 才考虑 `std::atomic<std::shared_ptr<T>>`：**
    - `std::atomic<std::shared_ptr<T>>` 是 C++20 标准（§[util.smartptr.atomic]），提供 `load()`、`store()`、`exchange()`、`compare_exchange_*()` 等成员函数。
@@ -2165,6 +2176,8 @@ std::call_once(s_ssl_globals_once, []() {
 - [ ] 未来升级 C++20 时，是否应迁移到 `std::atomic<std::shared_ptr<T>>`？
 
 ### 16.5 C++20 迁移路径
+
+> **📋 详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` §2、§7**
 
 当项目升级到 C++20 时：
 

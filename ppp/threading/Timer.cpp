@@ -3,6 +3,14 @@
 #include <ppp/net/Socket.h>
 #include <ppp/diagnostics/Error.h>
 
+// B-1 compile guard: Android must build with -DFUNCTION so that ppp::function
+// resolves to std::function. The old ppp::function backend triggers deep
+// destructor recursion on Android (SI_KERNEL stack overflow). Catch a missing
+// macro at compile time rather than at runtime crash.
+#if defined(__ANDROID__) && !defined(FUNCTION)
+#  error "Android Timer.cpp requires -DFUNCTION (std::function backend)."
+#endif
+
 /**
  * @file Timer.cpp
  * @brief Implements asynchronous timer scheduling and timeout helpers.
