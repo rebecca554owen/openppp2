@@ -737,7 +737,7 @@ absolute max: configurable but capped
 > 修复方案：
 > - `WebSocket::disposed_` 从 `bool` 改为 `std::atomic_bool disposed_{false}`；
 > - `Finalize()` 开头使用 `disposed_.exchange(true, std::memory_order_acq_rel)` 实现 one-shot；
-> - 所有 `if (disposed_)` 读取通过 atomic 隐式 `operator bool()` 安全读取；
+> - 所有读路径统一为 `disposed_.load(std::memory_order_acquire)` 显式 acquire load（风格/审计一致性治理，非 P0 阻断）；
 > - socket_ shared_ptr 并发保护见下方 §5.3 socket_ 部分。
 
 > **✅ 已修复（socket_ shared_ptr 并发保护）— 2026-05-11**
@@ -1990,6 +1990,13 @@ std::call_once(s_ssl_globals_once, []() {
 ### 15.4 治理结论
 
 当前已修复的组件覆盖了**核心传输路径**（ITransmission、IAsynchronousWriteIoQueue）、**服务端交换器**（VirtualEthernetExchanger server）、**客户端交换器**（VEthernetExchanger client）、**WebSocket 传输层**和 **socket_ shared_ptr 并发保护**。
+
+> **✅ P1-3 已治理（WebSocket disposed_ 显式 load 风格统一）— 2026-05-11**
+>
+> `WebSocket.h` 中所有 `if (disposed_)` 隐式 atomic bool 转换读取已统一为
+> `disposed_.load(std::memory_order_acquire)` 显式 acquire load。
+> `Finalize()` 中 `disposed_.exchange(true, std::memory_order_acq_rel)` 保持不变。
+> 这是风格/审计一致性治理，不是 P0 阻断项。不改变逻辑、不改变 public API。
 
 **全仓 Dispose/Finalize 治理尚未完成**，仍需：
 

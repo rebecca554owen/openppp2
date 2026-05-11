@@ -123,7 +123,7 @@ namespace ppp {
             protected:
                 /** @brief Reads bytes via QoS pipeline using this transmission implementation. */
                 virtual std::shared_ptr<Byte>                               DoReadBytes(YieldContext& y, int length) noexcept {
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return NULLPTR;
                     }
 
@@ -134,7 +134,7 @@ namespace ppp {
                 virtual bool                                                DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                     using AsynchronousWriteCallback = typename IWebsocket::AsynchronousWriteCallback;
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
 
@@ -192,7 +192,7 @@ namespace ppp {
             private:
                 /** @brief Resolves handshake role and dispatches to virtual websocket handshake implementation. */
                 bool                                                        HandshakeWebsocket(bool client_or_server, YieldContext& y) noexcept {
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
 
@@ -244,7 +244,7 @@ namespace ppp {
                         return NULLPTR;
                     }
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return NULLPTR;
                     }
 
