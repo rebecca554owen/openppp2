@@ -172,7 +172,14 @@ namespace ppp {
                     return certificate_key_password_;
                 }, ec);
 
-            /** @brief Populate trust store from system default locations. */
+            /**
+             * @brief Populate trust store from system default locations.
+             *
+             * @details On Android, set_default_verify_paths() is skipped because
+             *          Android does not expose system CAs via standard OpenSSL paths.
+             *          For server contexts this is less critical — the server loads
+             *          its own certificate chain and private key explicitly.
+             */
 #if !defined(__ANDROID__)
 
             ssl_context->set_default_verify_paths();
@@ -232,6 +239,10 @@ namespace ppp {
 
             /**
              * @brief Try loading the configured CA bundle file first.
+             *
+             * @details On all platforms, chnroutes2_cacertpath_default() returns
+             *          "./cacert.pem" (or ".\cacert.pem" on Windows). If the file
+             *          exists and is readable, it is loaded as the primary CA source.
              */
             boost::system::error_code ec = boost::asio::error::invalid_argument;
             if (ppp::string cacert = chnroutes2_cacertpath_default(); !cacert.empty()) {
@@ -242,15 +253,59 @@ namespace ppp {
 
             /**
              * @brief Fall back to built-in root certificates if file-based loading fails.
+             *
+             * @details Uses the non-throwing overload (safe inside noexcept context).
+             *          On Android, this is typically the primary CA source because
+             *          set_default_verify_paths() is skipped (Android does not expose
+             *          the system CA store through standard OpenSSL filesystem paths).
+             *          The hardcoded set in root_certificates.hpp contains Mozilla root
+             *          CAs which provide adequate trust coverage for common servers.
              */
             if (ec) {
-                load_root_certificates(*ssl_context);
+                load_root_certificates(*ssl_context, ec);
             }
 
-            /** @brief Populate trust store from system default locations. */
+            /**
+             * @brief Populate trust store from system default locations.
+             *
+             * @details On Android (BoringSSL), set_default_verify_paths() is a
+             *          no-op because Android does not expose the system CA store
+             *          through the standard filesystem paths that OpenSSL queries.
+             *          The trust source chain on Android is therefore:
+             *            1. cacert.pem file (if present and loadable)
+             *            2. Built-in root certificates from root_certificates.hpp
+             *          Both paths ensure verify_peer has CA data. If no CA source
+             *          succeeded, verify_peer will fail-closed during handshake
+             *          (correct secure behavior — not a silent downgrade).
+             */
 #if !defined(__ANDROID__)
 
             ssl_context->set_default_verify_paths();
+#endif
+
+            /**
+             * @brief Set verify mode. On Android with verify_peer, trust anchors
+             *        come from cacert.pem or the bundled root_certificates.hpp.
+             *
+             * @details If all CA loading paths failed (ec still set) and the caller
+             *          requested verify_peer, the trust store will be empty and every
+             *          handshake will fail — this is intentional fail-closed behavior,
+             *          not a silent security downgrade. We record a diagnostic here so
+             *          operators can trace the root cause of subsequent handshake errors.
+             */
+#if defined(__ANDROID__)
+            if (verify_peer && ec) {
+                /**
+                 * @brief Diagnostic: verify_peer was requested but no CA source was
+                 *        successfully loaded (cacert.pem missing/unreadable AND the
+                 *        built-in root certificate set failed to parse). The trust
+                 *        store is empty; all TLS handshakes will reject peer certs.
+                 *        Operators should ensure a valid cacert.pem is deployed at
+                 *        the path returned by chnroutes2_cacertpath_default().
+                 */
+                ppp::diagnostics::SetLastErrorCode(
+                    ppp::diagnostics::ErrorCode::SslHandshakeFailed);
+            }
 #endif
             ssl_context->set_verify_mode(verify_peer ? boost::asio::ssl::verify_peer : boost::asio::ssl::verify_none);
 
