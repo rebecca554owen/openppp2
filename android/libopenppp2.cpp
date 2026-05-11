@@ -478,12 +478,20 @@ bool                                                                        libo
     boost::asio::post(*context,
         [context, protector_weak, task]() noexcept {
             std::shared_ptr<ppp::net::ProtectorNetwork> protector = protector_weak.lock();
-            if (NULLPTR != protector) {
-                JNIEnv* env = protector->GetEnvironment();
-                if (NULLPTR != env) {
-                    task(env);
-                }
+            if (NULLPTR == protector) {
+                __android_log_print(ANDROID_LOG_WARN, "libopenppp2",
+                    "PostJNI: protector expired, task dropped");
+                return;
             }
+
+            JNIEnv* env = protector->GetEnvironment();
+            if (NULLPTR == env) {
+                __android_log_print(ANDROID_LOG_WARN, "libopenppp2",
+                    "PostJNI: JNI env unavailable, task dropped");
+                return;
+            }
+
+            task(env);
         });
     return true;
 }
