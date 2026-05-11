@@ -539,6 +539,21 @@ graph TD
 
 ---
 
+## 类别：Security Posture Warnings（安全姿态警告，6 个）
+
+配置验证阶段发出的非致命警告。不阻断启动；遗留配置保持向后兼容。
+
+| 名称 | 描述（与源码一致） | 严重级别 |
+|------|-------------------|----------|
+| `ConfigWeakKeyDefault` | Protocol or transport key equals the well-known default value ("ppp"); insecure for production use | `kWarning` |
+| `ConfigWeakKeyShort` | Protocol or transport key is shorter than 8 bytes; trivially brute-forced | `kWarning` |
+| `ConfigPlaintextEnabled` | Plaintext mode is enabled (key.plaintext=true); no encryption applied | `kWarning` |
+| `ConfigLegacyCipherAlgorithm` | Protocol or transport cipher uses a legacy algorithm (RC4, DES, Blowfish, CAST5, SEED, IDEA) | `kWarning` |
+| `ConfigLegacyCipherShortKey` | Cipher key length is below 128 bits | `kWarning` |
+| `ConfigLegacyKdfMd5` | Key derivation uses MD5 internally (EVP_BytesToKey); legacy KDF | `kWarning` |
+
+---
+
 ## 维护规则
 
 1. 新增、删除、重命名错误码时，只修改 `ppp/diagnostics/ErrorCodes.def`。

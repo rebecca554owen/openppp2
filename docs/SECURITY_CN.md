@@ -431,6 +431,77 @@ flowchart TD
 
 ---
 
+## 17. 遗留密码学警告
+
+OPENPPP2 在启动时于 `AppConfiguration::Loaded()` 中验证密码配置。
+当检测到遗留或弱密码设置时，系统会发出非致命 `kWarning` 错误码。
+**这些警告永远不会阻断启动。** 遗留算法保持完全功能，以保证现有部署的向后兼容性。
+
+### 17.1 警告码
+
+| 错误码 | 触发条件 |
+|--------|---------|
+| `ConfigWeakKeyDefault` | `protocol_key` 或 `transport_key` 等于已知默认值 `"ppp"` |
+| `ConfigWeakKeyShort` | `protocol_key` 或 `transport_key` 长度小于 8 字节 |
+| `ConfigPlaintextEnabled` | `key.plaintext` 为 `true` |
+| `ConfigLegacyCipherAlgorithm` | `key.protocol` 或 `key.transport` 使用遗留算法族（RC4、单 DES、Blowfish、CAST5、SEED、IDEA） |
+| `ConfigLegacyCipherShortKey` | 密码算法密钥长度（通过 OpenSSL EVP 解析）低于 128 位 |
+| `ConfigLegacyKdfMd5` | 内部密钥派生使用 MD5（通过 `EVP_BytesToKey`）；密码配置验证时作为信息性警告发出，在 KDF 可配置之前无用户操作 |
+
+### 17.2 遗留算法族
+
+| 算法族 | 示例名称 | 废弃原因 |
+|--------|---------|---------|
+| RC4 | `rc4`、`rc4-md5`、`rc4-sha` | 密钥流存在偏差；已有实际攻击 |
+| DES | `des-cbc`、`des-cfb`、`des-ede` | 56 位密钥；可暴力破解 |
+| Blowfish | `bf-cbc`、`bf-cfb` | 64 位分组；Sweet32 攻击面 |
+| CAST5 | `cast5-cbc`、`cast5-cfb` | 64 位分组；已废弃 |
+| SEED | `seed-cbc`、`seed-cfb` | 采用率有限；无现代安全审查 |
+| IDEA | `idea-cbc`、`idea-cfb` | 64 位分组；采用率有限 |
+
+### 17.3 推荐的现代配置
+
+新部署应使用 AEAD 密码和强唯一密钥：
+
+```json
+{
+    "key": {
+        "protocol": "aes-256-gcm",
+        "protocol-key": "<随机 32 字节十六进制或密码短语>",
+        "transport": "aes-256-gcm",
+        "transport-key": "<不同随机 32 字节十六进制或密码短语>",
+        "kf": 154543927,
+        "kx": 128,
+        "kl": 10,
+        "kh": 12,
+        "sb": 1000,
+        "masked": true,
+        "plaintext": false,
+        "delta-encode": true,
+        "shuffle-data": true
+    }
+}
+```
+
+**密钥建议：**
+
+| 方面 | 最低要求 | 推荐配置 |
+|------|---------|---------|
+| 密码算法 | AES-128-CFB | AES-256-GCM 或 ChaCha20-Poly1305 |
+| 密钥长度 | 128 位 | 256 位 |
+| 密码短语长度 | 8 字节 | 16+ 随机字符 |
+| `plaintext` | `false` | `false`（始终） |
+| `masked` | `false` | `true` |
+| `delta-encode` | `false` | `true` |
+| `shuffle-data` | `false` | `true` |
+
+> **注意：** 项目当前默认值（`aes-128-cfb` / `aes-256-cfb`）在 `key.protocol` 或
+> `key.transport` 为空或不被支持时仍作为内置回退值。CFB 模式不是 AEAD，
+> 不提供密文完整性保护，但不会触发警告，因为它是项目既定基线。
+> 迁移到 GCM 可提供认证保护，并消除对单独协议层密码保护头元数据的需求。
+
+---
+
 ## 相关文档
 
 - [`TRANSMISSION_CN.md`](TRANSMISSION_CN.md) — cipher 槽位细节、帧化、握手序列

@@ -540,6 +540,22 @@ graph TD
 
 ---
 
+## Category: Security Posture Warnings (6)
+
+Non-fatal warnings emitted during configuration validation.
+These never block startup -- legacy settings remain functional for backward compatibility.
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `ConfigWeakKeyDefault` | Protocol or transport key equals the well-known default value ("ppp"); insecure for production use | `kWarning` |
+| `ConfigWeakKeyShort` | Protocol or transport key is shorter than 8 bytes; trivially brute-forced | `kWarning` |
+| `ConfigPlaintextEnabled` | Plaintext mode is enabled (key.plaintext=true); no encryption applied | `kWarning` |
+| `ConfigLegacyCipherAlgorithm` | Protocol or transport cipher uses a legacy algorithm (RC4, DES, Blowfish, CAST5, SEED, IDEA) | `kWarning` |
+| `ConfigLegacyCipherShortKey` | Cipher key length is below 128 bits | `kWarning` |
+| `ConfigLegacyKdfMd5` | Key derivation uses MD5 internally (EVP_BytesToKey); legacy KDF | `kWarning` |
+
+---
+
 ## Maintenance Rules
 
 1. Edit only `ppp/diagnostics/ErrorCodes.def` for add/remove/rename operations.

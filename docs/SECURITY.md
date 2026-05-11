@@ -438,6 +438,81 @@ Security-related `ppp::diagnostics::ErrorCode` values:
 
 ---
 
+## 17. Legacy Cryptography Warnings
+
+OPENPPP2 validates cipher configuration at startup in `AppConfiguration::Loaded()`.
+When legacy or weak cryptographic settings are detected, the system emits
+non-fatal `kWarning` error codes. **These warnings never block startup.**
+Legacy algorithms remain fully functional to preserve backward compatibility
+with existing deployments.
+
+### 17.1 Warning Codes
+
+| Error Code | Trigger Condition |
+|------------|-------------------|
+| `ConfigWeakKeyDefault` | `protocol_key` or `transport_key` equals the well-known default `"ppp"` |
+| `ConfigWeakKeyShort` | `protocol_key` or `transport_key` is shorter than 8 bytes |
+| `ConfigPlaintextEnabled` | `key.plaintext` is `true` |
+| `ConfigLegacyCipherAlgorithm` | `key.protocol` or `key.transport` uses a legacy algorithm family (RC4, single DES, Blowfish, CAST5, SEED, IDEA) |
+| `ConfigLegacyCipherShortKey` | The cipher's key length (resolved via OpenSSL EVP) is below 128 bits |
+| `ConfigLegacyKdfMd5` | Internal key derivation uses MD5 via `EVP_BytesToKey`; emitted as an informational warning whenever cipher configuration is validated (no user action possible until KDF becomes configurable) |
+
+### 17.2 Legacy Algorithm Families
+
+| Family | Example Names | Why Deprecated |
+|--------|---------------|----------------|
+| RC4 | `rc4`, `rc4-md5`, `rc4-sha` | Biased keystream; practical attacks exist |
+| DES | `des-cbc`, `des-cfb`, `des-ede` | 56-bit key; trivially brute-forced |
+| Blowfish | `bf-cbc`, `bf-cfb` | 64-bit block size; Sweet32 attack surface |
+| CAST5 | `cast5-cbc`, `cast5-cfb` | 64-bit block size; deprecated |
+| SEED | `seed-cbc`, `seed-cfb` | Limited adoption; no modern security review |
+| IDEA | `idea-cbc`, `idea-cfb` | 64-bit block size; limited adoption |
+
+### 17.3 Recommended Modern Configuration
+
+For new deployments, use AEAD ciphers and strong unique keys:
+
+```json
+{
+    "key": {
+        "protocol": "aes-256-gcm",
+        "protocol-key": "<random-32-byte-hex-or-passphrase>",
+        "transport": "aes-256-gcm",
+        "transport-key": "<different-random-32-byte-hex-or-passphrase>",
+        "kf": 154543927,
+        "kx": 128,
+        "kl": 10,
+        "kh": 12,
+        "sb": 1000,
+        "masked": true,
+        "plaintext": false,
+        "delta-encode": true,
+        "shuffle-data": true
+    }
+}
+```
+
+**Key recommendations:**
+
+| Aspect | Minimum | Recommended |
+|--------|---------|-------------|
+| Cipher algorithm | AES-128-CFB | AES-256-GCM or ChaCha20-Poly1305 |
+| Key length | 128 bits | 256 bits |
+| Passphrase length | 8 bytes | 16+ random characters |
+| `plaintext` | `false` | `false` (always) |
+| `masked` | `false` | `true` |
+| `delta-encode` | `false` | `true` |
+| `shuffle-data` | `false` | `true` |
+
+> **Note:** The project's current defaults (`aes-128-cfb` / `aes-256-cfb`) remain
+> the built-in fallback when `key.protocol` or `key.transport` is empty or
+> unsupported. CFB mode is not AEAD and does not provide ciphertext integrity
+> protection, but it is not flagged as a warning because it is the established
+> project baseline. Migrating to GCM provides authentication and removes the
+> need for the separate protocol-layer cipher to protect header metadata.
+
+---
+
 ## Related Documents
 
 - [`TRANSMISSION.md`](TRANSMISSION.md) — Cipher slot details, framing, handshake sequence

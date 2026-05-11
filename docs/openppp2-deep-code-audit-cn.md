@@ -306,6 +306,8 @@ rc4_crypt(...)
 > 后续可增强 warning 的可见性，例如在日志、管理界面、诊断输出中高亮展示；生产模式也应保持非阻断策略，不拒绝启动、不 fail-closed。
 >
 > **P1-5 已实施（2026-05-11）**：新增 `AppConfiguration::EmitSecurityDiagnostics()` 方法，在启动时发射完整的安全诊断报告（含每个发现的独立警告 + 汇总行），通过 telemetry 和控制台双通道输出。详见 `docs/p1-governance-decisions-cn.md` §P1-5。
+>
+> **P1-7 已实施（2026-05-11）**：新增遗留密码算法检测警告。在 `AppConfiguration::Loaded()` 的安全姿态警告块中，当 `key.protocol` 或 `key.transport` 使用遗留算法族（RC4、单 DES、Blowfish、CAST5、SEED、IDEA）或密码密钥长度低于 128 位时，设置 `ConfigLegacyCipherAlgorithm` 或 `ConfigLegacyCipherShortKey` 警告码。同时发出 `ConfigLegacyKdfMd5` 信息性警告码，标记内部使用 MD5 的密钥派生。这些警告不阻断启动、不改变默认值，保持向后兼容。详见 `docs/SECURITY.md` §17 和 `docs/SECURITY_CN.md` §17。
 
 **位置：**
 

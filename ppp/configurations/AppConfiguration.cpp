@@ -14,6 +14,8 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
+#include <openssl/evp.h>  /* EVP_get_cipherbyname, EVP_CIPHER_key_length - used for legacy cipher detection */
+
 /**
  * @file AppConfiguration.cpp
  * @brief AppConfiguration loading, normalization, and JSON serialization implementation.
@@ -356,6 +358,53 @@ namespace ppp {
         static void LRTrim(_Uty* s, int length) noexcept {
             for (int i = 0; i < length; i++) {
                 *s[i] = LTrim(RTrim(*s[i]));
+            }
+        }
+
+        /**
+         * @brief Returns the cipher key length in bits for a named algorithm via OpenSSL EVP.
+         * @param method Cipher algorithm name.
+         * @return Key length in bits, or 0 when the method is not recognized by EVP.
+         */
+        static int GetCipherKeyLengthBits(const ppp::string& method) noexcept {
+            const EVP_CIPHER* cipher = EVP_get_cipherbyname(method.data());
+            if (NULLPTR != cipher) {
+                return EVP_CIPHER_key_length(cipher) * 8;
+            }
+            return 0;
+        }
+
+        /**
+         * @brief Emits a kWarning if the configured cipher algorithm is legacy or has a short key.
+         *
+         * Legacy algorithms detected: RC4, DES (single), Blowfish, CAST5, SEED, IDEA.
+         * Short key threshold: below 128 bits.
+         *
+         * @param method Cipher algorithm name (e.g. "aes-256-cfb", "rc4", "des-cbc").
+         */
+        static void WarnLegacyCipherAlgorithm(const ppp::string& method) noexcept {
+            if (method.empty()) {
+                return;
+            }
+
+            ppp::string method_lower = ToLower(method);
+
+            /* Detect legacy/broken algorithm families by name. */
+            if (method_lower.find("rc4") != ppp::string::npos ||
+                method_lower.find("des-") != ppp::string::npos ||   /* catches des-cbc, des-ede*, des-cfb - but not aes-256-cfb */
+                (method_lower.size() >= 3 && method_lower[0] == 'd' && method_lower[1] == 'e' && method_lower[2] == 's' && (method_lower.size() == 3 || method_lower[3] == '-')) ||
+                method_lower.find("bf-") != ppp::string::npos ||   /* Blowfish */
+                method_lower.find("cast5") != ppp::string::npos ||
+                method_lower.find("seed-") != ppp::string::npos ||
+                method_lower.find("idea-") != ppp::string::npos)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLegacyCipherAlgorithm);
+            }
+
+            /* Detect cipher key length below 128 bits (via OpenSSL EVP metadata). */
+            int key_bits = GetCipherKeyLengthBits(method);
+            if (key_bits > 0 && key_bits < 128) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLegacyCipherShortKey);
             }
         }
 
@@ -841,6 +890,22 @@ namespace ppp {
                 if (config.key.plaintext) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigPlaintextEnabled);
                 }
+
+                /**
+                 * @brief Legacy cipher algorithm warnings (P1-7).
+                 *
+                 * Detects RC4, single-DES, Blowfish, CAST5, SEED, IDEA and
+                 * cipher key lengths below 128 bits.  These warnings never
+                 * block startup — legacy algorithms remain fully functional
+                 * for backward compatibility.  Production deployments should
+                 * migrate to AES-256-GCM / ChaCha20-Poly1305.
+                 */
+                WarnLegacyCipherAlgorithm(config.key.protocol);
+                WarnLegacyCipherAlgorithm(config.key.transport);
+
+                /* EVP::initKey currently derives keys via EVP_BytesToKey(..., EVP_md5(), ...).
+                 * This informational warning documents the legacy KDF debt without changing behavior. */
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLegacyKdfMd5);
             }
 
             if (!Ipep::IsDomainAddress(config.websocket.host) || config.websocket.path.empty() || config.websocket.path[0] != '/') {
