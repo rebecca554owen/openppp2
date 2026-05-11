@@ -675,6 +675,11 @@ std::atomic_store(&rules_, new_rules);
 > （见 §8 P1、§12 第二批），需要设计 Boost.Asio deadline_timer/cancellation 与
 > async_read 的集成，并通过异步 IO 测试验证生命周期安全性，不在 P0 范围。
 > ITcpipTransmission 和 WebSocket 路径的长度限制需后续评估。
+>
+> **设计文档（2026-05-11）：** 完整设计/治理文档已编写：`docs/PER_FRAME_READ_TIMEOUT_DESIGN.md`（英文）、
+> `docs/PER_FRAME_READ_TIMEOUT_DESIGN_CN.md`（中文）。包含 Boost.Asio timer/cancellation 生命周期、
+> 三条读取路径（TCP/WS/WSS）的风险分析、QoS 交互设计、配置模式、测试要求和实施检查清单。
+> 治理决策记录见 `docs/p1-governance-decisions-cn.md` P1-1。功能暂不实施，待测试基础设施和平台验证后启用。
 
 **位置：**
 
@@ -1210,7 +1215,7 @@ cosign / minisign / GPG signing
 7. Android 依赖升级。
 8. 消除 `system()` shell 拼接。
 9. 增加 CodeQL / govulncheck / npm audit / OSV。
-10. Per-frame 读取超时（慢读 DoS 加固）：需设计 Boost.Asio deadline_timer/cancellation 与 async_read 集成，覆盖 ITransmission / ITcpipTransmission / WebSocket 路径，通过异步 IO 测试验证 timer 生命周期安全性（见 §5.1）。
+10. Per-frame 读取超时（慢读 DoS 加固）：需设计 Boost.Asio deadline_timer/cancellation 与 async_read 集成，覆盖 ITransmission / ITcpipTransmission / WebSocket 路径，通过异步 IO 测试验证 timer 生命周期安全性（见 §5.1）。**设计文档已完成（2026-05-11）：** `docs/PER_FRAME_READ_TIMEOUT_DESIGN.md` / `docs/PER_FRAME_READ_TIMEOUT_DESIGN_CN.md`；治理决策 `docs/p1-governance-decisions-cn.md` P1-1。
 
 ### P2：中期架构改善
 
@@ -1480,7 +1485,7 @@ std::shared_ptr<Byte> CloneDnsResponseWithId(
 7. Android 依赖升级。
 8. 消除 `system()` shell 拼接。
 9. 增加 CodeQL / govulncheck / npm audit / OSV。
-10. Per-frame 读取超时（慢读 DoS 加固）：Boost.Asio deadline_timer/cancellation 集成，覆盖全部异步读路径（见 §5.1、§8 P1 第 10 项）。
+10. Per-frame 读取超时（慢读 DoS 加固）：Boost.Asio deadline_timer/cancellation 集成，覆盖全部异步读路径（见 §5.1、§8 P1 第 10 项）。**设计文档已完成（2026-05-11）**（见 `docs/PER_FRAME_READ_TIMEOUT_DESIGN.md`）。
 
 ### 第三批：中期重构
 
