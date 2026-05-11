@@ -1625,31 +1625,35 @@ void DnsResolver::StoreTlsSession(const ppp::string& host_key, ssl_session_st* s
 1. 定位真正的根因（疑为 BoringSSL session cache 在并发握手时崩溃）。
 2. 过渡期使用进程内 LRU + `std::mutex` 保护，而非整体禁用。
 
+**📋 2026-05-11 复核状态：** 在当前可用 git 历史/refs 中，未发现审计描述的 `#if defined(__ANDROID__)` 禁用守卫；`git log --all -S "__ANDROID__" -- ppp/dns/DnsResolver.cpp` 无匹配。TLS session cache 在当前可见历史中自引入之日起（commit `a35bb74`）即在所有平台生效，commit `ab00160` 已对其进行了重大加固（LRU 驱逐、`CompletionState` 集中资源所有权、`SSL_SESSION_up_ref` 生命周期修正）。从静态代码审查看，线程安全与引用计数模型未发现明显问题，但仍需 Android/BoringSSL 真机、sanitizer 与 telemetry 验证。
+
+**📋 详细设计文档：`docs/ANDROID_TLS_SESSION_CACHE_DESIGN_CN.md`** — 涵盖代码考古、当前实现分析、加固方案（session TTL / telemetry 增强 / 连接复用）、安全边界、验证矩阵。治理记录：`docs/p2-governance-decisions-cn.md` P2-19。
+
 #### **P-2：客户端 SSL_CTX 创建被全局锁串行化**
 
-**位置：** `ppp/ssl/SSL.cpp:233-239`
+**位置：** `ppp/ssl/SSL.cpp:224-230`（`CreateClientSslContext`）
+
+**📋 当前状态：核心修复已完成（2026-05-11 复核）**
+
+原始代码使用 `std::mutex` 覆盖整个 `CreateClientSslContext`，包括 CA 加载、cipher 配置等磁盘 I/O 和 CPU 密集操作。当前代码已替换为 `std::once_flag` + `std::call_once`，仅保护一次性全局 OpenSSL/BoringSSL 初始化：
 
 ```cpp
-static std::mutex s_ssl_ctx_init_mutex;
-std::lock_guard<std::mutex> guard(s_ssl_ctx_init_mutex);
-
-std::shared_ptr<boost::asio::ssl::context> ssl_context =
-    make_shared_object<boost::asio::ssl::context>(...);
-// ... CA 加载 / verify mode / cipher suites / X509 sort ...
-```
-
-**影响：** 高并发握手场景退化为串行；锁内还包含磁盘 I/O（`load_verify_file` / `load_root_certificates`）。
-
-**修复建议：**
-
-```cpp
-static std::once_flag s_ssl_globals_once;
-std::call_once(s_ssl_globals_once, []() {
-    SSL_CTX* warmup = SSL_CTX_new(TLS_client_method());
-    if (warmup) SSL_CTX_free(warmup);
+// 当前代码（SSL.cpp:224-230）—— 已修复
+static std::once_flag s_ssl_ctx_init_once;
+std::call_once(s_ssl_ctx_init_once, []() noexcept {
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    if (ctx != NULLPTR) {
+        SSL_CTX_free(ctx);
+    }
 });
-// 此后 SSL_CTX_new 与 CA 加载可并发执行
+// 此后 CA 加载、cipher 配置、verify_peer、X509 排序均在锁外并发执行
 ```
+
+**影响：** 一次性 warmup 仅阻塞首次调用（约 1-5ms），后续调用不再被 openppp2 自己的全局 mutex 串行化。DoH/DoT 高并发场景不再因该 mutex 退化为串行，但仍存在每次创建 `SSL_CTX`、CA 加载、OpenSSL/BoringSSL 内部锁与 `X509_STORE` 排序等需验证/可优化成本。
+
+**剩余优化项：** DoH/DoT 每次查询仍创建新 SSL_CTX（含完整 CA 加载和 store 排序）。SSL_CTX 复用可进一步降低开销，需在具备集成测试和性能基准后评估。
+
+**📋 详细设计文档：`docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md`**
 
 ### 14.5 关键安全问题
 
@@ -1799,6 +1803,8 @@ elif (IPAddressIsGatewayServer(frame->Destination, ...)) {
 
 **长期方案：** 让 `VEthernetExchanger` 走一条 **无定时器的无状态注入路径** 处理 ICMP 错误，从而既保留 `traceroute / PMTUD` 又规避旧的定时器崩溃。当前是为稳定性做的临时折衷，**必须备忘录化并定期回看**。
 
+**📋 设计文档已补充：`docs/ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md`**（2026-05-11）。文档涵盖：非 Echo ICMP 类型分析与优先级、无 Timer 依赖的直注路径设计、速率限制与安全边界、配置开关方案、实施步骤与回滚策略。当前状态为"已完成设计，暂不实施"。
+
 #### **B-3：DoH/DoT 异步链中 `state->slot0` 复用**
 
 **位置：** `ppp/dns/DnsResolver.cpp:1748-1752`、`2023-2027`
@@ -1920,14 +1926,14 @@ ppp/dns/DnsResolverCore.cpp
 
 1. **修复 Android TLS 信任链缺口（S-1）**：`set_default_verify_paths()` 关掉后，必须确保 `verify_peer` 路径仍有 CA 数据；与 §3.2、§3.3 形成端到端 TLS 加固闭环。
 2. **强制 `-DFUNCTION` 在所有 Android 构建里出现（B-1）** ✅ 已实施：在 `ppp/threading/Timer.cpp` 顶部加 `#error` 守卫。
-3. **缩小 `s_ssl_ctx_init_mutex` 临界区（P-2）**：仅守护一次性的全局初始化，CA 加载放外部并发执行。
+3. **缩小 `s_ssl_ctx_init_mutex` 临界区（P-2）** ✅ 核心修复已完成：`once_flag` 已消除全局 mutex 串行化，剩余优化项（SSL_CTX 复用）详见 `docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md`。
 
 #### 优先级 2（重要）
 
 4. 类型安全的 `CompletionState`（S-3 / A-2）：`std::variant` 或继承结构替换 `shared_ptr<void>` 槽。
 5. 删除冗余 `handshaked_.store(false)`（B-4）✅ 已完成。
-6. 保留 ICMP 错误回送的最小路径（B-2）：让 PMTUD/traceroute 在 Android 下也可用；至少增加开关 `enable_icmp_errors_passthrough`。
-7. 恢复 Android TLS 会话缓存（P-1）：定位崩溃根因，恢复缓存以降低 DNS 查询延迟。
+6. 保留 ICMP 错误回送的最小路径（B-2）：让 PMTUD/traceroute 在 Android 下也可用；至少增加开关 `enable_icmp_error_passthrough`。**📋 设计文档已补充：`docs/ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md`**
+7. 澄清并加固 Android TLS 会话缓存（P-1）：当前可用 git 历史中未发现 Android 禁用守卫；后续仅评估 TTL、telemetry、协议隔离与真机验证，不再使用“恢复缓存”口径。
 
 #### 优先级 3（锦上添花）
 
@@ -1959,6 +1965,8 @@ ppp/dns/DnsResolverCore.cpp
 
 #### 14.12.2 缩小 SSL 全局初始化锁
 
+> **📋 已实施。** 当前代码（`SSL.cpp:224-230`）已使用 `once_flag` 替代 `mutex`。详细设计和剩余优化项见 `docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md`。
+
 ```cpp
 // ppp/ssl/SSL.cpp - CreateClientSslContext
 static std::once_flag s_ssl_globals_once;
@@ -1984,7 +1992,7 @@ ppp::function has a deep destructor recursion known crash."
 | 续审条目 | 首版相关章节 | 关联性 |
 |---|---|---|
 | S-1 Android CA 加载 | §3.2 WSS/TLS 关闭证书校验、§3.3 主机名校验缺失 | 共同构成 TLS 端到端校验闭环 |
-| P-2 SSL_CTX 全局锁 | §6.5 平台条件编译 | 跨平台互斥设计模式 |
+| P-2 SSL_CTX 全局锁 | §6.5 平台条件编译 | 跨平台互斥设计模式；📋 **设计文档：`docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md`** |
 | B-2 ICMP 丢弃 | §5.5 / §5.6 协议帧边界检查 | 同属"为安全/稳定性而牺牲功能"的折衷 |
 | A-3 DnsResolver 拆分 | §6.1 拆 `stdafx.h` | 同属"超大单元拆分"治理思路 |
 | S-4 `atomic_load(shared_ptr*)` | §6.1 / §6.2 stdafx 与 Beast 版本宏 | C++ 标准升级路径；详见 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` |

@@ -6,6 +6,77 @@
 
 ---
 
+## P2-13 Android ICMP 错误回送最小路径设计
+
+| 字段 | 内容 |
+|------|------|
+| **编号** | P2-13-ICMP-ERR |
+| **当前决策** | **已完成设计文档，暂不实施** |
+| **是否 P0 阻断** | 否 |
+| **是否当前 release 阻断** | 否 |
+| **决策日期** | 2026-05-11 |
+| **关联审计文档** | `docs/openppp2-deep-code-audit-cn.md` B-2（§5.5 / §5.6 协议帧边界检查） |
+| **设计文档** | `docs/ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md` |
+
+### 问题描述
+
+`VEthernetNetworkSwitcher::OnIcmpPacketInput()`（第 574 行）对所有非 `ICMP_ECHO`/`ICMP_ER` 类型的 ICMP 报文直接丢弃。这导致 Android 平台上：
+
+- **traceroute 失效**：依赖 Time Exceeded（Type 11）响应
+- **PMTUD 失效**：依赖 Destination Unreachable / Frag-Needed（Type 3, Code 4）
+- **UDP 快速失败失效**：依赖 Port Unreachable（Type 3, Code 3）
+
+旧实现曾将所有 ICMP 类型通过 `InternetControlMessageProtocol::Echo()` 的 Timer 路径转发，但该路径对非 Echo 类型存在 `EchoAsynchronousContext` 生命周期竞争导致的 use-after-free 崩溃风险，已在审计 B-2 中记录。
+
+### 设计文档内容
+
+`docs/ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md` 涵盖：
+
+- 当前行为与功能影响分析（traceroute、PMTUD、Port Unreachable）
+- 旧 Timer 路径崩溃根因分析（`EchoAsynchronousContext::Release()` vs `ReleaseAllPackets()` 并发竞争）
+- 非 Echo ICMP 类型优先级矩阵（P0: DUR Code 3/4, TE Code 0; P1: DUR 其他 Code; P2: PP; 不处理: SQ/RD/Timestamp）
+- 无 Timer 依赖的直注路径设计（`IcmpErrorPassthrough()` 方法，不创建 raw socket、不写入 `icmppackets_`）
+- 速率限制方案（令牌桶 64/秒，使用 `Executors::GetTickCount()` 而非 `Timer`）
+- 配置开关方案（`enable_icmp_error_passthrough`，默认 `false`）
+- 安全边界分析（5 类威胁及缓解措施、5 层校验层次）
+- 与现有 ECHO/ER 路径的隔离矩阵
+- 实施步骤、前置条件、风险评估与回滚策略
+
+### 暂不实施的原因
+
+1. **无自动化测试基础设施**：项目零测试。新增的 `IcmpErrorPassthrough()` 路径涉及 TUN 写入，没有回归测试可能引入静默注入错误。
+2. **需手动验证 Android TUN 行为**：需确认 `VpnService.establish()` 返回的 TUN fd 接受注入的非 Echo ICMP 错误报文。
+3. **默认关闭零风险**：设计文档的配置开关默认 `false`，不实施不影响任何现有行为。
+4. **与其它 P2 条目互不依赖**：设计文档已完成，实施时可独立进行。
+
+### 当前约束
+
+- 不得将该项作为 P0 或当前 release 的阻断条件。
+- 不得在其他修复分支中混入该项的代码改动。
+- 本文档和设计文档仅作记录用途，不触发代码行为变更。
+- 实施时必须保持 ECHO/ER 现有路径完全不变（路径隔离矩阵见设计文档 §6.1）。
+- 不得恢复旧 Timer 路径处理非 Echo ICMP 类型。
+
+### 实施前置条件
+
+| 序号 | 条件 | 说明 | 当前状态 |
+|------|------|------|----------|
+| C-1 | 配置系统支持新增可选 bool 字段 | JSON 解析器应忽略未知字段 | ✅ 已满足 |
+| C-2 | `Output(IPFrame*)` 在非 Echo 路径下安全 | 无 Timer/Context 依赖 | ✅ 已满足 |
+| C-3 | Android TUN 接受注入的 ICMP 错误 | `VpnService` 不过滤注入报文 | ⚠️ 需手动验证 |
+| C-4 | 手动测试覆盖 | traceroute + PMTUD + port-unreachable | ❌ 无自动化测试 |
+
+### 后续触发条件
+
+| 触发条件 | 动作 |
+|---|---|
+| Android 用户报告 traceroute/PMTUD 不工作 | 评估实施优先级 |
+| 引入基本集成测试框架 | 可开始实施 |
+| 配置系统重构 | 确保 `enable_icmp_error_passthrough` 字段被纳入新配置模型 |
+| IPv6 ICMPv6 错误支持需求 | 扩展设计文档，增加 ICMPv6 类型 |
+
+---
+
 ## P2-12 Firewall RCU 规则快照优化设计文档
 
 | 字段 | 内容 |
@@ -230,6 +301,117 @@ P2-16 对上述未修改的 3 个类进行二次只读代码复核，确认：
 - 不得将该项作为 P0 或当前 release 的阻断条件。
 - 本文档仅作记录用途，不触发代码行为变更。
 - 本文档和 `docs/openppp2-deep-code-audit-cn.md` §15 的修改与其他 P1/P2 条目互不依赖。
+
+---
+
+## P2-18 SSL_CTX 全局初始化锁缩小设计文档
+
+| 字段 | 内容 |
+|------|------|
+| **编号** | P2-18-SSL-LOCK |
+| **当前决策** | **已完成设计文档，暂不实施** |
+| **是否 P0 阻断** | 否 |
+| **是否当前 release 阻断** | 否 |
+| **决策日期** | 2026-05-11 |
+| **关联审计文档** | `docs/openppp2-deep-code-audit-cn.md` §14.4 P-2 |
+| **设计文档** | `docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md` |
+
+### 问题描述
+
+审计 §14.4 P-2 指出客户端 `SSL_CTX` 创建被全局锁串行化，TLS/DoH/DoT 高并发可能退化。
+
+### 设计文档内容
+
+`docs/SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md` 涵盖：
+
+- **当前代码状态澄清**：P-2 核心修复（`std::mutex` → `std::once_flag`）已在当前代码中完成，审计文档示例代码需同步更新
+- 当前锁保护范围分析（`CreateClientSslContext` 操作分解、`once_flag` 保护范围 vs 并发范围）
+- X509_STORE lazy sort 并发安全性分析
+- 退化风险分析（已消除 vs 仍存在的）
+- Android BoringSSL / OpenSSL 差异与 CA fallback 不可退化约束
+- SSL_CTX 复用优化方向（DoH/DoT 共享 context）
+- 分阶段实施方案与前置条件
+- 回滚策略与验证要求
+
+### 暂不实施的原因
+
+1. **P-2 核心修复已完成**：`once_flag` 已消除全局 mutex 串行化，CA 加载/配置已在锁外并发执行。
+2. **剩余优化（SSL_CTX 复用）需基础设施支撑**：无集成测试、无并发压测、无性能基准，无法验证复用后行为不变。
+3. **Android CA fallback 行为需专项验证**：复用场景下 CA 来源链和 fail-closed 语义必须端到端验证。
+
+### 当前约束
+
+- 不得将该项作为 P0 或当前 release 的阻断条件。
+- 不得在其他修复分支中混入 SSL_CTX 复用的代码改动。
+- 本文档和设计文档仅作记录用途，不触发代码行为变更。
+- 实施时必须保持 Android CA fallback 链、cipher 配置、verify_peer 语义完全不变。
+
+### 实施前置条件
+
+| 序号 | 条件 | 说明 | 当前状态 |
+|------|------|------|----------|
+| C-1 | 基本集成测试存在 | 至少覆盖 DoH/DoT handshake 路径 | ❌ 无测试 |
+| C-2 | 并发压测存在 | 验证多线程 context 创建/handshake 安全 | ❌ 无测试 |
+| C-3 | CA 热更新策略定义 | SSL_CTX 复用时 CA bundle 更新机制 | ❌ 未定义 |
+| C-4 | 性能基准工具存在 | 验证 SSL_CTX 复用收益 | ❌ 无基准工具 |
+
+---
+
+## P2-19 Android DoH/DoT TLS Session Cache 设计分析
+
+| 字段 | 内容 |
+|------|------|
+| **编号** | P2-19-TLS-CACHE |
+| **当前决策** | **已完成设计文档，暂不实施** |
+| **是否 P0 阻断** | 否 |
+| **是否当前 release 阻断** | 否 |
+| **决策日期** | 2026-05-11 |
+| **关联审计文档** | `docs/openppp2-deep-code-audit-cn.md` §14.4 P-1 |
+| **设计文档** | `docs/ANDROID_TLS_SESSION_CACHE_DESIGN_CN.md` |
+
+### 问题描述
+
+审计 §14.4 P-1 声称 Android 上 `AcquireTlsSession` / `StoreTlsSession` 被 `#if defined(__ANDROID__)` 守卫禁用，导致每次 DoH/DoT 查询做完整 TLS 握手。
+
+**代码考古结论：** 在当前可用 git 历史/refs 中未发现该守卫；`git log --all -S "__ANDROID__" -- ppp/dns/DnsResolver.cpp` 无匹配。TLS session cache 在当前可见历史中自引入之日起（commit `a35bb74`）即在所有平台生效。commit `ab00160` 对其实现进行了重大加固（LRU 驱逐、`CompletionState` 集中资源所有权、`SSL_SESSION_up_ref` 生命周期修正）。
+
+### 设计文档内容
+
+`docs/ANDROID_TLS_SESSION_CACHE_DESIGN_CN.md` 涵盖：
+
+- 审计文档 P-1 与实际代码状态的差异澄清（代码考古）
+- 当前实现分析（数据结构、线程安全模型、引用计数生命周期、cache key 设计）
+- 方案 A：加固现有实现（session TTL、telemetry 增强、cache key 协议隔离）
+- 方案 B：连接复用 / 连接池（DoH keep-alive、DoT 连接复用）
+- 方案 C：Telemetry-only 观测阶段
+- 安全边界（SNI/host 绑定、证书验证不可跳过、cache key 隔离、过期策略、线程/strand 所有权）
+- 验证矩阵（功能正确性、并发安全性、多 endpoint、失败回退、性能基线）
+- 实施前置条件与推荐路径
+
+### 暂不实施的原因
+
+1. **审计文档 P-1 描述与实际代码不符**：需先澄清审计文档，避免基于错误前提实施改动。
+2. **当前静态审查未发现明显实现错误**：线程安全、引用计数、LRU 驱逐模型看起来合理，但仍需 Android/BoringSSL 真机、sanitizer 与 telemetry 验证。
+3. **无 Android 真机/模拟器测试环境**：无法验证 BoringSSL session cache 行为。
+4. **无自动化测试基础设施**：项目零测试，无法回归验证。
+5. **Telemetry 基线未收集**：缺乏 session reuse 实际数据支撑优化决策。
+
+### 当前约束
+
+- 不得将该项作为 P0 或当前 release 的阻断条件。
+- 不得在其他修复分支中混入 session cache 加固的代码改动。
+- 本文档和设计文档仅作记录用途，不触发代码行为变更。
+- 实施时必须保持 TLS 握手行为、证书验证语义、Android CA fallback 链完全不变。
+
+### 实施前置条件
+
+| 序号 | 条件 | 说明 | 当前状态 |
+|------|------|------|----------|
+| C-1 | Android 真机测试环境 | arm64 设备，Android 10+ | ❌ 未配置 |
+| C-2 | Android 模拟器环境 | x86_64 模拟器，API 29+ | ❌ 未配置 |
+| C-3 | BoringSSL 版本确认 | 确认 NDK r20b 对应的 BoringSSL 版本及已知 session cache bug | ❌ 未确认 |
+| C-4 | ASan / HWASan 构建 | Android 构建启用 AddressSanitizer | ❌ 未配置 |
+| C-5 | Telemetry 基线 | 收集当前 session reuse 指标作为基线 | ❌ 未收集 |
 
 ---
 
