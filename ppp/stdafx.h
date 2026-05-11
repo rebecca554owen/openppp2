@@ -460,6 +460,12 @@ static constexpr const char*                                                PPP_
 
     "211.148.192.141"
 };
+// P2-3 regression guard: pin the expected entry count so that any implicit
+// adjacent-string concatenation (caused by a missing comma) will be caught
+// at compile time.  If you intentionally add/remove entries, update this
+// number to match the new count.
+static_assert(sizeof(PPP_PUBLIC_DNS_SERVER_LIST) / sizeof(PPP_PUBLIC_DNS_SERVER_LIST[0]) == 56,
+              "PPP_PUBLIC_DNS_SERVER_LIST entry count changed - did you forget a comma?");
 // ---- PPP_PUBLIC_DNS_SERVER_LIST ends ----
 
 namespace ppp {

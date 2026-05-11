@@ -92,6 +92,7 @@ The set is intentionally code-first. Each page is written from actual implementa
  | IPv6 | [`IPV6_FIXES.md`](IPV6_FIXES.md) | [`IPV6_FIXES_CN.md`](IPV6_FIXES_CN.md) |
  | Platform | [`MULTIQUEUE_TUN_MODEL.md`](MULTIQUEUE_TUN_MODEL.md) | [`MULTIQUEUE_TUN_MODEL_CN.md`](MULTIQUEUE_TUN_MODEL_CN.md) |
  | Observability | [`OTEL_DESIGN.md`](OTEL_DESIGN.md) | [`OTEL_DESIGN_CN.md`](OTEL_DESIGN_CN.md) |
+| Governance | — | [`dns-server-list-governance-cn.md`](dns-server-list-governance-cn.md) |
 
 ## Reading Principle
 
