@@ -126,8 +126,8 @@ namespace ppp
             static bool                                             ProtectJNI(JNIEnv* env, jint fd) noexcept;
             
         public:
-            std::shared_ptr<boost::asio::io_context>                GetContext() noexcept     { return jni_; }
-            JNIEnv*                                                 GetEnvironment() noexcept { return env_; }
+            std::shared_ptr<boost::asio::io_context>                GetContext() noexcept     { SynchronizedObjectScope scope(syncobj_); return jni_; }
+            JNIEnv*                                                 GetEnvironment() noexcept { SynchronizedObjectScope scope(syncobj_); return env_; }
 #endif
 
         private:                

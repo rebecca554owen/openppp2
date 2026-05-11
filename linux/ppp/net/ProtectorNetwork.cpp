@@ -443,9 +443,14 @@ namespace ppp
             }
 
 #if defined(_ANDROID)
-            // If JNIEnv is set, it means that PPP PRIVATE NETWORK™ 2 is embedded in the Android application as a DLL/SO, 
+            // If JNIEnv is set, it means that PPP PRIVATE NETWORK™ 2 is embedded in the Android application as a DLL/SO,
             // In the form of a JNI reverse call to the JAVA class member static function protect, otherwise it is a sendfd/recvfd structures.
-            std::shared_ptr<boost::asio::io_context> context = jni_;
+            // jni_ may be reassigned by JoinJNI/DetachJNI, so snapshot it while holding syncobj_.
+            std::shared_ptr<boost::asio::io_context> context;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                context = jni_;
+            }
             if (NULLPTR != context)
             {
                 return ProtectJNI(context, sockfd, y);
