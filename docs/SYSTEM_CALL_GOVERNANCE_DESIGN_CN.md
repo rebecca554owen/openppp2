@@ -5,7 +5,8 @@
 > **关联治理项**：P1-8（`docs/p1-governance-decisions-cn.md` §1.8）
 > **关联审计文档**：`docs/openppp2-deep-code-audit-cn.md` §3.8、§8 P1 第 8 项
 > **创建日期**：2026-05-12
-> **状态**：设计文档完成，暂不实施
+> **更新日期**：2026-05-12（补充 Phase 3 实施检查清单、前置条件、与 cleaner withdrawal 边界的顺序关系、回滚/验收要点）
+> **状态**：设计文档完成，暂不实施。Phase 3 尚未启动代码替换。
 
 ---
 
@@ -334,14 +335,143 @@ for (;;) {
 
 ### Phase 3：TapLinux 扩展 — Add 边界 + SetMtu
 
-| 步骤 | 描述 | 替换技术 |
-|------|------|----------|
-| 3.1 | `AddRoute6()` → netlink `RTM_NEWROUTE` | netlink |
-| 3.2 | `SetIPv6Address()` → netlink `RTM_NEWADDR` | netlink |
-| 3.3 | `AddIPv6NeighborProxy()` → netlink `RTM_NEWNEIGH` | netlink |
-| 3.4 | `EnableIPv6NeighborProxy()` → 直接写 procfs | procfs |
-| 3.5 | `SetMtu()` → `ioctl(SIOCSIFMTU)`（复用 `SetInterfaceMtu()` 逻辑） | ioctl |
-| 3.6 | `SetRouteToLinux()` → `posix_spawn`（过渡）或 netlink（最终） | posix_spawn / netlink |
+> **定位：Phase 3 是 Phase 2（cleaner withdrawal 边界）的后续扩展，不是并行任务。**
+>
+> 与 cleaner withdrawal 边界的顺序关系：
+>
+> | 顺序 | 阶段 | 范围 | 当前优先级 |
+> |------|------|------|------------|
+> | 1 | **Phase 2** | cleaner withdrawal 边界（`DeleteRoute6`、`DeleteIPv6Address`、`DeleteIPv6NeighborProxy`、`DisableIPv6NeighborProxy`、`QueryIPv6NeighborProxy`） | **当前优先** |
+> | 2 | **Phase 3** | add 边界 + `SetMtu` + `SetRouteToLinux`（后续扩展） | **Phase 2 完成后启动** |
+>
+> Phase 2 选择 withdrawal 路径作为 pilot 的理由已在 §3.2 中详述（one-shot 操作、已有 telemetry 基线、替换风险低、幂等语义）。Phase 3 中的 add 路径引入了更复杂的语义（`ip -6 route replace` 替换语义、`NLM_F_REPLACE` 标志、已存在条目的处理），因此必须在 Phase 2 的 netlink wrapper 和验证模式成熟后再行推进。
+>
+> **当前状态**：Phase 3 尚未启动。以下为设计层面的实施检查清单，不构成代码变更。
+
+#### 3.P3-0 前置条件（Phase 3 启动前必须满足）
+
+| 序号 | 前置条件 | 说明 | 依赖 |
+|------|----------|------|------|
+| P3-C1 | **Phase 2 全部步骤完成并通过验收** | Phase 2 的 netlink wrapper（`RTM_DELROUTE`/`RTM_DELADDR`/`RTM_DELNEIGH`）已稳定运行 | Phase 2 |
+| P3-C2 | **Phase 2 netlink wrapper 扩展支持 add 操作** | 在 Phase 2 的 `RTM_DEL*` wrapper 基础上，增加 `RTM_NEWROUTE`/`RTM_NEWADDR`/`RTM_NEWNEIGH` 支持 | P3-C1 |
+| P3-C3 | **`replace` 语义的 netlink 实现验证** | `AddRoute6()` 使用 `ip -6 route replace`，netlink 等价操作需要 `NLM_F_REPLACE` 或先 GET 再 DEL+NEW。必须验证内核版本兼容性 | P3-C2 |
+| P3-C4 | **ioctl `SIOCSIFMTU` 路径验证** | 确认 `SetInterfaceMtu()`（已有 ioctl 实现）在所有目标内核版本上可正常工作 | 代码审计 |
+| P3-C5 | **`SetRouteToLinux()` 的 IPv4 路由语义分析** | 确认 `route add -host/-net` 与 `SIOCADDRT` ioctl 的行为等价性，特别是 metric、flags 差异 | 代码审计 |
+| P3-C6 | **Phase 2 telemetry 对比基线已收集** | Phase 2 替换前后的 telemetry 数据对比结果可接受，证明 netlink wrapper 的可靠性 | Phase 2 验收 |
+
+#### 3.P3-1 实施检查清单：`AddRoute6()` → netlink `RTM_NEWROUTE`
+
+| 检查项 | 描述 | 状态 |
+|--------|------|------|
+| P3-1.1 | 复用 Phase 2 的 netlink socket 管理（socket 创建、绑定、错误处理） | 待实施 |
+| P3-1.2 | 实现 `RTM_NEWROUTE` 消息构造，支持以下变体：default route、带 `via` 的路由、不带 `via` 的路由 | 待实施 |
+| P3-1.3 | 处理 `replace` 语义：使用 `NLM_F_REPLACE | NLM_F_CREATE` 标志，或先 `RTM_GETROUTE` 检查再决定 NEW/REPLACE | 待实施 |
+| P3-1.4 | 处理 `onlink` 标志（`ip -6 route replace ... via ... onlink`）：netlink 中对应 `RTNH_F_ONLINK` | 待实施 |
+| P3-1.5 | 保留现有 telemetry：`SpanScope("tap.ipv6.route.add")` + `Count("tap.ipv6.route.add")` + `Histogram("tap.ipv6.route.add.us")` + `Gauge("tap.ipv6_routes")` + `Log(kDebug)` | 待实施 |
+| P3-1.6 | 保留 `IsSafeShellToken()` 参数校验（作为防御性守卫） | 待实施 |
+| P3-1.7 | 保留 `SetLastErrorCode(ErrorCode::RouteReplaceFailed)` 错误码设置 | 待实施 |
+| P3-1.8 | netlink 失败时回退到 `ExecuteIpCommand()`（过渡期安全网，可选） | 待评估 |
+
+**复杂度说明**：`AddRoute6()` 当前有 4 种命令变体（default/non-default × with/without gateway），且使用 `replace` 语义而非 `add`。netlink 的 `NLM_F_REPLACE` 标志在内核 4.x+ 支持，但需验证 3.x 内核（Android）的兼容性。
+
+#### 3.P3-2 实施检查清单：`SetIPv6Address()` → netlink `RTM_NEWADDR`
+
+| 检查项 | 描述 | 状态 |
+|--------|------|------|
+| P3-2.1 | 实现 `RTM_NEWADDR` 消息构造，携带 `IFA_ADDRESS` + `IFA_LOCAL` 属性 | 待实施 |
+| P3-2.2 | 处理 `replace` 语义：`ip -6 addr replace` 对应 netlink `NLM_F_REPLACE | NLM_F_CREATE` | 待实施 |
+| P3-2.3 | 前缀长度范围校验保留：`IPv6_MIN_PREFIX_LENGTH` ≤ prefix ≤ `IPv6_MAX_PREFIX_LENGTH` | 待实施 |
+| P3-2.4 | 保留现有 telemetry：`SpanScope("tap.ipv6.address.set")` + `Histogram("tap.ipv6.address.set.us")` | 待实施 |
+| P3-2.5 | 保留 `IsSafeShellToken()` 参数校验 + `SetLastErrorCode(ErrorCode::TunnelAddressConfigureFailed)` | 待实施 |
+
+#### 3.P3-3 实施检查清单：`AddIPv6NeighborProxy()` → netlink `RTM_NEWNEIGH`
+
+| 检查项 | 描述 | 状态 |
+|--------|------|------|
+| P3-3.1 | 实现 `RTM_NEWNEIGH` 消息构造，设置 `NTF_PROXY` 标志 | 待实施 |
+| P3-3.2 | 使用 `NLM_F_REPLACE` 实现 `ip -6 neigh replace proxy` 语义 | 待实施 |
+| P3-3.3 | 保留现有 telemetry：`SpanScope("tap.ipv6.neighbor.add")` + `Count` + `Histogram` + `Gauge` + `Log(kDebug)` | 待实施 |
+| P3-3.4 | 保留 `IsSafeShellToken()` 参数校验 + `SetLastErrorCode(ErrorCode::IPv6NDPProxyFailed)` | 待实施 |
+
+#### 3.P3-4 实施检查清单：`EnableIPv6NeighborProxy()` → 直接写 procfs
+
+| 检查项 | 描述 | 状态 |
+|--------|------|------|
+| P3-4.1 | 将 `sysctl -w net.ipv6.conf.<iface>.proxy_ndp=1` 替换为直接写 `/proc/sys/net/ipv6/conf/<iface>/proxy_ndp` | 待实施 |
+| P3-4.2 | 写入值为 `"1"`，使用 `open()` + `write()` + `close()`，无需 fork | 待实施 |
+| P3-4.3 | 保留现有 telemetry：`SpanScope("tap.ipv6.neighbor.proxy.enable")` + `Histogram` | 待实施 |
+| P3-4.4 | 错误处理：`open()` 失败 → `SetLastErrorCode(IPv6NDPProxyFailed)`；`write()` 返回值校验 | 待实施 |
+| P3-4.5 | 接口名安全校验保留（procfs 路径注入风险虽低但应防御） | 待实施 |
+
+**注意**：Phase 2 的 `DisableIPv6NeighborProxy()` 已使用相同技术（写 procfs `=0`），Phase 3.4 直接复用 Phase 2 的 wrapper，仅改变写入值。
+
+#### 3.P3-5 实施检查清单：`SetMtu()` → `ioctl(SIOCSIFMTU)`
+
+| 检查项 | 描述 | 状态 |
+|--------|------|------|
+| P3-5.1 | 将 `ip link set dev <iface> mtu <mtu>` 替换为 `ioctl(sock, SIOCSIFMTU, &ifr)` | 待实施 |
+| P3-5.2 | 复用或参考 `SetInterfaceMtu()`（已有的 ioctl 实现）的模式 | 待实施 |
+| P3-5.3 | MTU 范围校验保留：`std::max(1280, std::min(9000, mtu))` | 待实施 |
+| P3-5.4 | 保留 `IsSafeShellToken()` 接口名校验 | 待实施 |
+| P3-5.5 | 错误处理：`ioctl()` 失败 → `SetLastErrorCode(TunnelMtuConfigureFailed)` | 待实施 |
+| P3-5.6 | 考虑添加 telemetry：当前 `SetMtu()` 无 `SpanScope`/`Histogram`，治理时可顺便补齐 | 待评估 |
+
+**复杂度说明**：`SetMtu()` 是所有 Phase 3 步骤中最简单的——单一 ioctl 调用、无 replace 语义、无循环。可作为 Phase 3 的低风险验证点；但 Phase 3 的治理边界仍是 TapLinux add 路径扩展，且必须在 Phase 2 cleaner withdrawal boundary 完成后再启动。
+
+#### 3.P3-6 实施检查清单：`SetRouteToLinux()` → posix_spawn 过渡 / netlink 最终
+
+| 检查项 | 描述 | 状态 |
+|--------|------|------|
+| P3-6.1 | **过渡方案**：将 `system(cmd)` 替换为 `posix_spawn()` + 参数数组，消除 shell 解释层 | 待实施 |
+| P3-6.2 | 参数数组构造：`["route", action, "-host"/"-net", addr, "gw", gw]` 或 `["route", action, "-net", addr, "netmask", mask, "gw", gw]` | 待实施 |
+| P3-6.3 | **delete 路径循环语义保留**：`for(;;)` 循环调用 `posix_spawn()` 直到失败，语义不变 | 待实施 |
+| P3-6.4 | 最终方案：替换为 `ioctl(SIOCADDRT/SIOCDELRT)`，复用 `SetRoute()` 已有实现 | 待实施 |
+| P3-6.5 | 验证 `ifc_ctl_sock_compatible_route` 分支路径的行为一致性 | 待实施 |
+| P3-6.6 | 补齐 telemetry：当前 `SetRouteToLinux()` 无 `SpanScope`/`Count`/`Histogram` | 待实施 |
+
+**复杂度说明**：`SetRouteToLinux()` 是 Phase 3 中最复杂的步骤。`for(;;)` 循环删除语义在 netlink 中没有直接等价操作（需先 `RTM_GETROUTE` 列举再逐一 `RTM_DELROUTE`）。建议使用 posix_spawn 过渡，最终迁移到 `ioctl(SIOCADDRT/SIOCDELRT)`（与 `SetRoute()` 统一）。
+
+#### 3.P3-7 实施顺序建议
+
+基于复杂度递增原则，建议以下实施顺序：
+
+| 顺序 | 步骤 | 复杂度 | 理由 |
+|------|------|--------|------|
+| 1 | 3.P3-5 `SetMtu()` → ioctl | 低 | 单一 ioctl、无 replace 语义、有 `SetInterfaceMtu()` 参考 |
+| 2 | 3.P3-4 `EnableIPv6NeighborProxy()` → procfs | 低 | 直接复用 Phase 2 的 procfs wrapper |
+| 3 | 3.P3-2 `SetIPv6Address()` → netlink | 中 | replace 语义，但模式与 Phase 2 的 `RTM_DELADDR` 对称 |
+| 4 | 3.P3-3 `AddIPv6NeighborProxy()` → netlink | 中 | replace + proxy 标志，模式与 Phase 2 的 `RTM_DELNEIGH` 对称 |
+| 5 | 3.P3-1 `AddRoute6()` → netlink | 高 | 4 种变体 + replace + onlink 标志 |
+| 6 | 3.P3-6 `SetRouteToLinux()` → posix_spawn/netlink | 高 | 循环删除语义 + IPv4 特殊性 |
+
+#### 3.P3-8 回滚要点
+
+| 步骤 | 回滚方法 | 回滚影响 | 恢复难度 |
+|------|----------|----------|----------|
+| 3.P3-5 `SetMtu()` | 恢复 `system("ip link set ...")` 调用 | MTU 设置回退为 shell 命令 | 低，需复验 |
+| 3.P3-4 `EnableIPv6NeighborProxy()` | 恢复 `system("sysctl -w ...")` 调用 | NDP 代理启用回退为 shell 命令 | 低，需复验 |
+| 3.P3-2 `SetIPv6Address()` | 恢复 `system("ip -6 addr replace ...")` 调用 | IPv6 地址设置回退为 shell 命令 | 低，需复验 |
+| 3.P3-3 `AddIPv6NeighborProxy()` | 恢复 `system("ip -6 neigh replace proxy ...")` 调用 | NDP 代理添加回退为 shell 命令 | 低，需复验 |
+| 3.P3-1 `AddRoute6()` | 恢复 `system("ip -6 route replace ...")` 调用 | IPv6 路由添加回退为 shell 命令 | 低到中，需复验 |
+| 3.P3-6 `SetRouteToLinux()` | 恢复 `system("route ...")` 调用 | IPv4 路由操作回退为 shell 命令 | 中，需复验循环删除语义 |
+
+**Phase 3 回滚预期低风险**：`system()` 是当前的已知工作实现，回滚会恢复到当前已知行为。每个函数的替换应设计为可独立回滚；回滚后仍需在目标环境复跑功能、telemetry 和错误码验收，避免命令路径、权限、内核状态或并发路由状态差异带来误判。
+
+**与 Phase 2 回滚的顺序关系**：如果 Phase 2 已完成替换且回滚 Phase 3 某个函数，不会影响 Phase 2 的替换状态。两个 Phase 的回滚是正交的。
+
+#### 3.P3-9 验收要点
+
+| 验收项 | 验收方法 | 判定标准 |
+|--------|----------|----------|
+| **功能等价性** | 对比替换前后的路由/地址/代理状态 | `ip -6 addr show`、`ip -6 route show`、`ip -6 neigh show proxy` 输出一致 |
+| **telemetry 等价性** | 对比替换前后的 SpanScope/Count/Histogram/Gauge 数据 | 操作耗时分布无显著变化（允许 netlink 略快于 system()） |
+| **错误码一致性** | 注入失败场景（如无效接口名），验证 `GetLastErrorCode()` 返回值 | 错误码与替换前一致 |
+| **参数校验保留** | 传入含 shell 元字符的参数，验证 `IsSafeShellToken()` 仍拒绝 | 返回 false，不执行操作 |
+| **IO 线程阻塞改善** | 测量替换前后 IO 线程的阻塞时间 | netlink/procfs/ioctl 路径应显著低于 `system()`，具体阈值以目标环境基线为准 |
+| **`SetRouteToLinux` 循环语义** | 创建多条匹配路由，验证 delete 路径全部清除 | 替换前后行为一致 |
+| **回滚验证** | 执行回滚后重新运行上述验收项 | 回滚后恢复到当前已知 `system()` 行为，并通过同一验收集 |
+
+**验收前提**：验收项中的"对比"操作需要在相同网络拓扑、相同内核版本下进行。建议使用 TUN 接口 + 固定路由配置的自动化脚本。
 
 ### Phase 4：其他平台
 
@@ -380,12 +510,18 @@ for (;;) {
 
 | 被替换函数 | 回滚影响 | 恢复难度 |
 |------------|----------|----------|
-| `DeleteRoute6()` | 路由删除回退为 `system()` | 无影响，行为等价 |
-| `DeleteIPv6NeighborProxy()` | NDP 代理删除回退为 `system()` | 无影响 |
-| `DisableIPv6NeighborProxy()` | NDP 代理禁用回退为 `system()` | 无影响 |
-| `DeleteIPv6Address()` | IPv6 地址删除回退为 `system()` | 无影响 |
+| `DeleteRoute6()` | 路由删除回退为 `system()` | 低，需复验行为等价 |
+| `DeleteIPv6NeighborProxy()` | NDP 代理删除回退为 `system()` | 低，需复验 |
+| `DisableIPv6NeighborProxy()` | NDP 代理禁用回退为 `system()` | 低，需复验 |
+| `DeleteIPv6Address()` | IPv6 地址删除回退为 `system()` | 低，需复验 |
+| `SetMtu()`（Phase 3） | MTU 设置回退为 `system()` | 低，需复验 |
+| `EnableIPv6NeighborProxy()`（Phase 3） | NDP 代理启用回退为 `system()` | 低，需复验 |
+| `SetIPv6Address()`（Phase 3） | IPv6 地址设置回退为 `system()` | 低，需复验 |
+| `AddIPv6NeighborProxy()`（Phase 3） | NDP 代理添加回退为 `system()` | 低，需复验 |
+| `AddRoute6()`（Phase 3） | IPv6 路由添加回退为 `system()` | 低到中，需复验 |
+| `SetRouteToLinux()`（Phase 3） | IPv4 路由操作回退为 `system()` | 中，需复验循环删除语义 |
 
-所有 withdrawal 函数的回滚都是安全的，因为 `system()` 是当前的已知工作实现。
+所有 withdrawal 函数（Phase 2）和 add 边界函数（Phase 3）的回滚都应恢复到当前已知 `system()` 行为，预期风险较低，但仍需在目标环境复跑验收。Phase 2 与 Phase 3 的回滚应保持正交——回滚 Phase 3 不影响 Phase 2 的替换状态，反之亦然。
 
 ---
 
@@ -395,10 +531,13 @@ for (;;) {
 |------|------|----------|
 | netlink 消息构造错误导致路由操作失败 | 中 | 先在非生产环境验证；保留 telemetry 对比基线 |
 | netlink socket 权限不足（Android VpnService 环境） | 中 | Phase 2 前验证 Android netlink 可用性；不可用时保留 `posix_spawn` 过渡方案 |
-| procfs 路径在某些 Linux 发行版上不存在 | 低 | `proxy_ndp` sysctl 在所有支持 IPv6 的 Linux 上可用 |
+| procfs 路径在某些 Linux 发行版上不存在 | 低 | `proxy_ndp` sysctl 在主流支持 IPv6 的 Linux 上通常可用，但 Phase 2/3 启动前仍需在目标环境验证 |
 | `posix_spawn` 替换 `system()` 后环境变量差异 | 低 | 显式传递 `environ`；验证 `PATH` 包含 `ip`/`route` 命令路径 |
-| 替换过程中引入新的阻塞行为 | 低 | netlink 是非阻塞的；procfs 写入是瞬时的 |
-| `SetRouteToLinux()` 循环删除语义在 netlink 中等价实现不完整 | 中 | Phase 3.6 使用 `posix_spawn` 过渡，不要求立即实现 netlink 批量删除 |
+| 替换过程中引入新的阻塞行为 | 低 | netlink/procfs 路径预期显著低于 `system()`，但必须以目标环境 telemetry 基线验证 |
+| `SetRouteToLinux()` 循环删除语义在 netlink 中等价实现不完整 | 中 | Phase 3.P3-6 使用 `posix_spawn` 过渡，不要求立即实现 netlink 批量删除 |
+| **Phase 3：`NLM_F_REPLACE` 在旧内核（<4.x）上不支持** | 中 | Phase 3 启动前验证目标内核版本；不支持时使用 GET+DEL+NEW 三步替代 |
+| **Phase 3：`AddRoute6()` 的 `onlink` 标志在 netlink 中映射不完整** | 低 | `RTNH_F_ONLINK` 在主流内核上支持；需验证 Android 内核 |
+| **Phase 3：`SetRouteToLinux()` 的 `route add -net netmask` 与 `SIOCADDRT` 语义差异** | 中 | 需详细对比 metric、flags、loopback 行为；建议 posix_spawn 过渡 |
 
 ---
 
@@ -424,12 +563,17 @@ for (;;) {
 
 ### 实施前置条件
 
-| 序号 | 条件 | 说明 | 当前状态 |
-|------|------|------|----------|
-| C-1 | Phase 1 telemetry 基线补齐 | withdrawal 函数的 telemetry 覆盖完整 | ❌ 未开始 |
-| C-2 | netlink wrapper 库存在 | 至少覆盖 `RTM_DELROUTE`/`RTM_DELADDR`/`RTM_DELNEIGH` | ❌ 未开始 |
-| C-3 | Linux 手动验证环境 | 可创建 TUN 接口并验证路由操作 | ⚠️ 需确认 |
-| C-4 | Android netlink 可用性验证 | 确认 `VpnService` 环境下 netlink socket 可用 | ❌ 未验证 |
+| 序号 | 条件 | 说明 | 适用阶段 | 当前状态 |
+|------|------|------|----------|----------|
+| C-1 | Phase 1 telemetry 基线补齐 | withdrawal 函数的 telemetry 覆盖完整 | Phase 2+ | ❌ 未开始 |
+| C-2 | netlink wrapper 库存在 | 至少覆盖 `RTM_DELROUTE`/`RTM_DELADDR`/`RTM_DELNEIGH` | Phase 2+ | ❌ 未开始 |
+| C-3 | Linux 手动验证环境 | 可创建 TUN 接口并验证路由操作 | Phase 2+ | ⚠️ 需确认 |
+| C-4 | Android netlink 可用性验证 | 确认 `VpnService` 环境下 netlink socket 可用 | Phase 2+ | ❌ 未验证 |
+| C-5 | Phase 2 全部步骤完成并通过验收 | Phase 2 的 netlink wrapper 已稳定运行 | **Phase 3** | ❌ 未开始 |
+| C-6 | netlink wrapper 扩展支持 add 操作 | 在 `RTM_DEL*` 基础上增加 `RTM_NEWROUTE`/`RTM_NEWADDR`/`RTM_NEWNEIGH` | **Phase 3** | ❌ 未开始 |
+| C-7 | `replace` 语义的 netlink 实现验证 | `NLM_F_REPLACE` 在目标内核版本（含 Android 3.x）上兼容性验证 | **Phase 3** | ❌ 未开始 |
+| C-8 | `ioctl(SIOCSIFMTU)` 路径验证 | 确认 `SetInterfaceMtu()` 在所有目标内核版本上正常工作 | **Phase 3** | ❌ 未开始 |
+| C-9 | Phase 2 telemetry 对比基线已收集 | Phase 2 替换前后 telemetry 数据对比结果可接受 | **Phase 3** | ❌ 未开始 |
 
 ### 触发条件
 
@@ -439,6 +583,8 @@ for (;;) {
 | 发现 `system()` 路径被利用的安全事件 | 提升治理优先级 |
 | Android 用户报告路由操作阻塞 IO 线程 | 提升 Phase 2 优先级 |
 | 维护者确认开始 P1-8 治理 | 启动 Phase 0.3–0.4 |
+| Phase 2 全部验收通过 | 可开始 Phase 3（按 §3.P3-7 建议顺序） |
+| Phase 3 需求变更（如新增 IPv6 路由操作） | 重新评估 Phase 3 范围 |
 
 ---
 

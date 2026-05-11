@@ -1307,6 +1307,10 @@ static std::shared_ptr<ITap>                                                    
     std::shared_ptr<boost::asio::io_context>                                        context,
     std::shared_ptr<libopenppp2_network_interface>                                  network_interface) noexcept {
 
+    if (NULLPTR == context || NULLPTR == network_interface) {
+        return NULLPTR;
+    }
+
     auto tun_fd = network_interface->VTun;
     if (tun_fd == -1) {
         return NULLPTR;
