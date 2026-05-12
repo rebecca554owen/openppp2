@@ -43,7 +43,7 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/Executors.h>
 
-#if defined(__MUSL__)
+#if defined(__MUSL__) || defined(__BIONIC__) || defined(_ANDROID)
 #include <err.h>
 #include <poll.h>
 #else

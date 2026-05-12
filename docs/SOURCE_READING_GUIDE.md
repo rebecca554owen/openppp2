@@ -143,7 +143,7 @@ sequenceDiagram
     participant Coroutine as Coroutine (YieldContext)
     participant Asio as Boost.Asio
 
-    Thread->>Coroutine: spawn via Executors::Spawn
+    Thread->>Coroutine: spawn via YieldContext::Spawn
     Coroutine->>Asio: async_read (yield)
     Asio-->>Coroutine: resume with data
     Coroutine->>Coroutine: process frame
@@ -165,7 +165,7 @@ Key rules:
 
 The `nullof<T>()` pattern appears throughout the codebase and confuses most first-time readers. Here is what it means.
 
-`nullof<YieldContext>()` returns a reference to a zero-initialized sentinel object at a known address. Callees check `if (y)` or compare the address to detect this sentinel. When they detect it, they switch to a thread-blocking code path instead of a coroutine-async path.
+`nullof<YieldContext>()` returns a reference at the null pointer address (defined in `ppp/stdafx.h` as `*(T*)NULLPTR`). Callees check `&y == nullof<YieldContext>()` to detect this sentinel. When they detect it, they switch to a thread-blocking code path instead of a coroutine-async path.
 
 This is used intentionally in `DoKeepAlived()` when sending keepalive packets outside the main receive coroutine. Do not replace it with a real default-constructed object or a pointer — the address check is intentional design, not UB.
 
@@ -493,17 +493,15 @@ stateDiagram-v2
 
 ## Error Code Reference
 
-Source-reading-relevant error codes from `ppp/diagnostics/Error.h`:
+Source-reading-relevant error codes from `ppp/diagnostics/ErrorCodes.def` (selection):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `HandshakeFailed` | Carrier handshake did not complete |
-| `ProtocolViolation` | Unexpected opcode or wire format |
-| `TransmissionNotReady` | Action before handshake complete |
-| `SessionTimeout` | Keepalive timer expired |
-| `PacketDecryptFailed` | Inner packet decryption failed |
-| `PacketEncryptFailed` | Packet could not be encrypted |
-| `AddressResolutionFailed` | DNS resolution for domain endpoint failed |
-| `FirewallDrop` | Packet dropped by local firewall rule |
-| `RouteInstallFailed` | Platform route installation failed |
-| `TapDeviceOpenFailed` | Virtual NIC device could not be opened |
+| `SessionHandshakeFailed` | Session handshake did not complete |
+| `TunnelOpenFailed` | TAP/TUN or listener creation failed |
+| `TunnelListenFailed` | TAP open or listener start failed |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
+| `SessionQuotaExceeded` | Session quota exceeded |
+| `RouteAddFailed` | Platform route installation failed |
+| `NetworkInterfaceUnavailable` | Virtual NIC device not found |
+| `IPv6ServerPrepareFailed` | Server IPv6 environment setup failed |

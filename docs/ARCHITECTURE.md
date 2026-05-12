@@ -221,10 +221,10 @@ classDiagram
         +Write(buffer) int
         +Close()
     }
-    class INetworkInterface {
-        +AddRoute(cidr, gateway) bool
-        +DeleteRoute(cidr) bool
-        +SetDNS(servers) bool
+    class NetworkInterface {
+        +NICName string
+        +IPAddress uint32
+        +GatewayServer uint32
     }
     class LinuxTap {
         +Open() bool
@@ -236,8 +236,6 @@ classDiagram
     }
     ITap <|-- LinuxTap
     ITap <|-- WindowsTap
-    INetworkInterface <|-- LinuxNetworkInterface
-    INetworkInterface <|-- WindowsNetworkInterface
 ```
 
 ---
@@ -438,17 +436,18 @@ sequenceDiagram
 
 ## Error Code Reference
 
-Architecture-level error codes from `ppp/diagnostics/Error.h`:
+Architecture-level error codes from `ppp/diagnostics/ErrorCodes.def` (selection):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `ConfigurationInvalid` | AppConfiguration normalization failed |
-| `RoleConflict` | Both client and server role requested |
-| `TransmissionHandshakeFailed` | ITransmission handshake did not complete |
-| `SessionEstablishFailed` | Link-layer INFO exchange failed |
-| `PlatformSetupFailed` | Host adapter / route / DNS setup failed |
-| `BackendConnectionFailed` | Optional backend unreachable (non-fatal) |
-| `ShutdownTimeout` | Graceful shutdown exceeded time limit |
+| `AppPrivilegeRequired` | Process not running as root/admin |
+| `TunnelOpenFailed` | TAP/TUN or listener creation failed |
+| `TunnelListenFailed` | TAP open or listener start failed |
+| `NetworkInterfaceUnavailable` | Named NIC does not exist |
+| `IPv6ServerPrepareFailed` | Server IPv6 environment setup failed |
+| `SessionHandshakeFailed` | Session-level handshake did not complete |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
+| `RuntimeTimerStartFailed` | Maintenance timer could not be armed |
 
 ---
 

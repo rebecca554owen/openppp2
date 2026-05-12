@@ -29,7 +29,7 @@ graph TD
     SessionID["session_id exchange\n(logical identity from server)"]
     IVVExchange["ivv exchange\n(client-generated key variation seed)"]
     NmuxExchange["nmux exchange\n(server-generated entropy + mux flag)"]
-    CipherRebuild["Cipher Rebuild\n(working cipher activated from base_key + ivv + nmux)"]
+    CipherRebuild["Cipher Rebuild\n(working cipher activated from protocol_key/transport_key + ivv)"]
     DataPlane["Data Plane\n(protected binary protocol, post-handshake frames)"]
 
     Handshake --> NOPPrelude
@@ -75,7 +75,7 @@ sequenceDiagram
     C->>S: ivv (client-generated Int128, fresh per connection)
     S->>C: nmux (server-generated random Int128; low bit = mux enabled flag)
 
-    Note over C,S: Both sides: rebuild protocol_ and transport_ from base key + ivv + nmux
+    Note over C,S: Both sides: rebuild protocol_ and transport_ from protocol_key + ivv / transport_key + ivv
     Note over C,S: handshaked_ = true; working cipher state active
     Note over C,S: Switch to binary protected frame family
 ```
@@ -97,7 +97,7 @@ flowchart TD
     E --> F["Receive nmux\nloop until high-bit-clear packet"]
     F --> G["handshaked_ = true"]
     G --> H["Extract mux flag\nmux = (nmux & 1) != 0"]
-    H --> I["Rebuild protocol_ and transport_\nKDF(base_key, ivv + nmux + session_id)"]
+    H --> I["Rebuild protocol_ and transport_\nprotocol_key + ivv_str / transport_key + ivv_str"]
     I --> J[Client handshake complete]
 ```
 
@@ -121,7 +121,7 @@ flowchart TD
     E --> F["Send nmux"]
     F --> G["Receive ivv\nloop until high-bit-clear packet"]
     G --> H["handshaked_ = true"]
-    H --> I["Rebuild protocol_ and transport_\nKDF(base_key, ivv + nmux + session_id)"]
+    H --> I["Rebuild protocol_ and transport_\nprotocol_key + ivv_str / transport_key + ivv_str"]
     I --> J[Server handshake complete]
 ```
 
@@ -140,7 +140,7 @@ flowchart TD
     C --> D["InternalHandshakeTimeoutClear()\ncancel timer"]
     D --> E["Return handshake result to caller"]
     B -->|"timeout fires before completion"| F["Dispose() called on transmission\nconnection aborted"]
-    F --> G["SetLastErrorCode HandshakeTimeout"]
+    F --> G["SetLastErrorCode SessionHandshakeFailed"]
 ```
 
 If the handshake timer fires before all steps complete, the transmission object is disposed and the connection is aborted. This prevents half-open sessions from consuming server resources indefinitely (defense against slow-handshake DoS).
@@ -288,7 +288,7 @@ The server rebuilds after having:
 2. Sent `nmux`
 3. Received `ivv` (client's random contribution)
 
-Both sides then derive the same working cipher from `base_key + ivv + nmux`:
+Both sides then derive the same working cipher from `protocol_key + ivv` / `transport_key + ivv`:
 
 ```mermaid
 stateDiagram-v2
@@ -356,7 +356,7 @@ flowchart TD
     B -->|"disposed mid-handshake"| FAIL
     B -->|"packet too short"| FAIL
     B -->|"all steps succeed"| SUCCESS
-    FAIL["SetLastErrorCode HandshakeFailed/HandshakeTimeout\nDispose() called\nconnection dropped"]
+    FAIL["SetLastErrorCode SessionHandshakeFailed\nDispose() called\nconnection dropped"]
     SUCCESS["handshaked_ = true\nCiphers rebuilt\nData plane active\nReturn true to caller"]
 ```
 
@@ -382,12 +382,12 @@ The handshake provides:
 
 - **Dummy traffic for shaping**: NOP prelude packets are syntactically indistinguishable from real handshake packets to a passive observer. The NOP count is key-derived (`key.kl`, `key.kh`) so both sides agree without transmitting the count.
 - **Transformed control values**: Session-id packets are obfuscated through rolling XOR transformation using prefix bytes as feedback. They are not plaintext integers.
-- **Per-connection dynamic working keys**: `ivv` (client-random) combined with `nmux` (server-random) ensures that no two connections derive the same working cipher, even from the same base key material.
+- **Per-connection dynamic working keys**: `ivv` (client-random) ensures that no two connections derive the same working cipher, even from the same base key material. `nmux` (server-random) contributes additional entropy to the obfuscation canary.
 - **Timeout-bounded handshake state**: The handshake timer prevents indefinitely half-open connections from consuming server resources.
 - **Embedded mux state**: The mux flag is carried inside `nmux` entropy rather than as a separate trivially-identifiable boolean packet.
 
 Honest limitations:
-- The handshake does **not** provide PFS (Perfect Forward Secrecy) in the traditional DHE sense. If the base key (`key.kcp.protocol` / `key.kcp.transport`) is compromised, historical sessions can potentially be decrypted by an adversary who also captured the `ivv` and `nmux` values.
+- The handshake does **not** provide PFS (Perfect Forward Secrecy) in the traditional DHE sense. If the base key (`key.protocol-key` / `key.transport-key`) is compromised, historical sessions can potentially be decrypted by an adversary who also captured the `ivv` and `nmux` values.
 - The handshake obfuscation (`Pack_SessionId` rolling XOR) is not a cryptographic primitive — it is traffic shaping, not encryption.
 
 ---
@@ -415,7 +415,7 @@ OPENPPP2 uses two independent cipher layers:
 
 1. **Protocol cipher** (`protocol_`) — Keyed from `guid + fsid + session_id`. This cipher is session-scoped and is derived before the handshake begins. It protects header metadata in both pre- and post-handshake frames.
 
-2. **Transport cipher** (`transport_`) — Keyed from the handshake output. Specifically, `ivv` (from the client) and `nmux` (from the server) together with the base key material produce the transport cipher. This cipher is per-connection and is activated by the cipher rebuild step at handshake completion.
+2. **Transport cipher** (`transport_`) — Keyed from the handshake output. Specifically, `ivv` (from the client) appended to the configured `transport_key` passphrase produces the working transport cipher key. This cipher is per-connection and is activated by the cipher rebuild step at handshake completion.
 
 ```mermaid
 graph LR
@@ -426,7 +426,7 @@ graph LR
 
     subgraph "Post-Handshake Phase"
         PostProtocol["Protocol cipher ACTIVE\n(same, unchanged)"]
-        PostTransport["Transport cipher NOW ACTIVE\n(base_key + ivv + nmux derived)\nper-connection, fresh randomness"]
+        PostTransport["Transport cipher NOW ACTIVE\n(protocol_key + ivv / transport_key + ivv derived)\nper-connection, fresh randomness"]
     end
 
     PreProtocol --> PostProtocol

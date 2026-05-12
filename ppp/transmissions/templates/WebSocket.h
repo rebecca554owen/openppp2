@@ -12,6 +12,7 @@
 
 #include <ppp/threading/Executors.h>
 #include <ppp/transmissions/ITransmission.h>
+#include <atomic>
 
 #if defined(_WIN32)
 #include <windows/ppp/net/QoSS.h>
@@ -45,8 +46,7 @@ namespace ppp {
                     const StrandPtr&                                        strand,
                     const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
                     const AppConfigurationPtr&                              configuration) noexcept
-                    : ITransmission(context, strand, configuration)
-                    , disposed_(false) {
+                    : ITransmission(context, strand, configuration) {
 
                     boost::system::error_code ec;
                     remoteEP_ = ppp::net::Ipep::V6ToV4(socket->remote_endpoint(ec));
@@ -79,14 +79,15 @@ namespace ppp {
                     private:
                         WebSocket&                                          owner_;
                     };
-                    socket_ = make_shared_object<IWebsocketObject>(*this, context, strand, socket, binary);
+                    std::shared_ptr<IWebsocket> websocket = make_shared_object<IWebsocketObject>(*this, context, strand, socket, binary);
+                    std::atomic_store(&socket_, websocket);
                 }
                 /** @brief Disposes websocket resources. */
                 virtual ~WebSocket()                                        noexcept { Finalize(); }
 
             public:
-                /** @brief Gets the underlying websocket object. */
-                std::shared_ptr<IWebsocket>                                 GetSocket() noexcept { return socket_; }
+                /** @brief Gets the underlying websocket object (atomic load). */
+                std::shared_ptr<IWebsocket>                                 GetSocket() noexcept { return std::atomic_load(&socket_); }
                 /** @brief Schedules asynchronous disposal and forwards to base transmission cleanup. */
                 virtual void                                                Dispose() noexcept override {
                     auto self = shared_from_this();
@@ -123,7 +124,7 @@ namespace ppp {
             protected:
                 /** @brief Reads bytes via QoS pipeline using this transmission implementation. */
                 virtual std::shared_ptr<Byte>                               DoReadBytes(YieldContext& y, int length) noexcept {
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return NULLPTR;
                     }
 
@@ -134,11 +135,11 @@ namespace ppp {
                 virtual bool                                                DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                     using AsynchronousWriteCallback = typename IWebsocket::AsynchronousWriteCallback;
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (socket) {
                         auto self = shared_from_this();
                         auto complete_do_write_async_callback = 
@@ -192,11 +193,11 @@ namespace ppp {
             private:
                 /** @brief Resolves handshake role and dispatches to virtual websocket handshake implementation. */
                 bool                                                        HandshakeWebsocket(bool client_or_server, YieldContext& y) noexcept {
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (!socket) {
                         return false;
                     }
@@ -211,8 +212,12 @@ namespace ppp {
                 }
                 /** @brief Finalizes websocket resources and platform QoS objects. */
                 void                                                        Finalize() noexcept {
-                    std::shared_ptr<IWebsocket> socket = std::move(socket_); 
-                    disposed_ = true;
+                    if (disposed_.exchange(true, std::memory_order_acq_rel)) {
+                        return;
+                    }
+
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
+                    std::atomic_store(&socket_, std::shared_ptr<IWebsocket>());
 
                     if (socket) {
                         socket->Dispose();
@@ -224,7 +229,7 @@ namespace ppp {
                 }
                 /** @brief Moves websocket I/O execution to scheduler when supported by transport. */
                 virtual bool                                                ShiftToScheduler() noexcept override {
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (socket) {
                         return socket->ShiftToScheduler();
                     }
@@ -240,11 +245,11 @@ namespace ppp {
                         return NULLPTR;
                     }
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         return NULLPTR;
                     }
 
-                    std::shared_ptr<IWebsocket> socket = socket_;
+                    std::shared_ptr<IWebsocket> socket = std::atomic_load(&socket_);
                     if (!socket) {
                         return NULLPTR;
                     }
@@ -272,7 +277,7 @@ namespace ppp {
 #if defined(_WIN32)
                 std::shared_ptr<ppp::net::QoSS>                             qoss_;
 #endif
-                bool                                                        disposed_ = false;
+                std::atomic_bool                                                    disposed_{false};
                 std::shared_ptr<IWebsocket>                                 socket_;
                 boost::asio::ip::tcp::endpoint                              remoteEP_;
             };

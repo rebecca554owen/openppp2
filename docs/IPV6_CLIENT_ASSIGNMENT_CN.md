@@ -1,9 +1,11 @@
 # IPv6 客户端地址分配生命周期
 
-> **子系统：** `ppp::app::client::VEthernetNetworkSwitcher`  
-> **主要文件：** `ppp/app/client/VEthernetNetworkSwitcher.cpp`  
-> **头文件：** `ppp/app/client/VEthernetNetworkSwitcher.h`  
-> **关键函数：** `ApplyAssignedIPv6`（第 702 行）、`RestoreAssignedIPv6`（第 808 行）、`SendRequestedIPv6Configuration`（第 796 行注释中引用）
+[English Version](IPV6_CLIENT_ASSIGNMENT.md)
+
+> **子系统：** `ppp::app::client::VEthernetNetworkSwitcher`
+> **主要文件：** `ppp/app/client/VEthernetNetworkSwitcher.cpp`
+> **头文件：** `ppp/app/client/VEthernetNetworkSwitcher.h`
+> **关键函数：** `ApplyAssignedIPv6`（第 876 行）、`RestoreAssignedIPv6`（第 994 行）、`SendRequestedIPv6Configuration`（第 796 行注释中引用）
 
 ---
 
@@ -102,7 +104,7 @@ stateDiagram-v2
 
 ## 4. `ApplyAssignedIPv6`
 
-**位置：** `VEthernetNetworkSwitcher.cpp`，第 702 行  
+**位置：** `VEthernetNetworkSwitcher.cpp`，第 876 行
 **签名：**
 
 ```cpp
@@ -199,7 +201,7 @@ else {
 
 ## 5. `RestoreAssignedIPv6`
 
-**位置：** `VEthernetNetworkSwitcher.cpp`，第 808 行  
+**位置：** `VEthernetNetworkSwitcher.cpp`，第 994 行
 **签名：**
 
 ```cpp
@@ -247,7 +249,7 @@ void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
 
 ## 6. `last_assigned_ipv6_` 提示机制
 
-**位置：** `VEthernetNetworkSwitcher.h`，第 1028 行  
+**位置：** `VEthernetNetworkSwitcher.h`，第 1065 行
 **类型：** `boost::asio::ip::address`
 
 ```cpp
@@ -455,6 +457,8 @@ sequenceDiagram
 | `IPv6ModeInvalid` | `kError` | `AssignedIPv6Mode` 既非 `IPv6Mode_Nat66` 也非 `IPv6Mode_Gua` |
 | `IPv6GatewayInvalid` | `kError` | 服务器响应中的网关地址格式错误 |
 | `IPv6Unsupported` | `kFatal` | 在不支持的平台上请求 GUA 模式 |
+
+> **注**：以下错误码为拟新增/设计项，不在当前 `ErrorCodes.def`：`IPv6ClientStateCaptureFailed`（无近似现有码，需新增）、`IPv6ClientRestoreFailed`（无近似现有码，需新增）。
 
 ---
 

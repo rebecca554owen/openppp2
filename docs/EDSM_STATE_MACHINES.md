@@ -537,8 +537,7 @@ flowchart TD
 | Error Code | When Set |
 |------------|----------|
 | `SessionHandshakeFailed` | Handshake timed out or received malformed response |
-| `SessionInformationInvalid` | INFO frame carried invalid quota or address data |
-| `ProtocolKeepAliveTimeout` | `DoKeepAlived()` determined deadline exceeded |
+| `KeepaliveTimeout` | `DoKeepAlived()` determined deadline exceeded |
 | `TunnelReadFailed` | `ITransmission::Read()` returned null |
 | `TunnelWriteFailed` | `ITransmission::Write()` returned false |
 | `SessionDisposed` | Handler entered already-disposed session |

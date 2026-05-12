@@ -1000,16 +1000,16 @@ namespace ppp {
                     return p->Run(type, host, path, y);
                 }
 
-                // Do not verify SSL server and only perform one-way authentication instead of mutual authentication, 
-                // As the server's certificate may have expired or it could be a private certificate. 
-                // There is no need for SSL/TLS mutual authentication in this cases.
+                // TLS peer verification is enabled by default for WSS backend connections.
+                // The managed server's certificate is validated against the system CA store.
+                // SslSocket will also enforce hostname verification when verify_peer is true.
                 if (auto p = wss; NULLPTR != p) {
                     std::string ssl_certificate_file;
                     std::string ssl_certificate_key_file;
                     std::string ssl_certificate_chain_file;
                     std::string ssl_certificate_key_password;
                     std::string ssl_ciphersuites = GetDefaultCipherSuites();
-                    bool verify_peer = false;
+                    bool verify_peer = true;
 
                     return p->Run(type, host, path, verify_peer,
                         ssl_certificate_file,

@@ -515,25 +515,27 @@ While coroutines are the dominant execution model, some code paths run on dedica
 ### 9.2 Awaitable API
 
 ```cpp
-// Produced by an async operation
-auto awaitable = Executors::NewAwaitable<bool>();
+// Create an Awaitable signal
+auto awaitable = make_shared_object<Executors::Awaitable>();
 
-// On the io_context thread — signal completion
-awaitable->Complete(result_value);
+// On the io_context thread — signal completion (no arguments)
+awaitable->Processed();
 
-// On the caller OS thread — block until Complete() is called
-bool result = awaitable->Await();
+// On the caller OS thread — block until Processed() is called
+bool completed = awaitable->Await();
 ```
 
-`Await()` uses a `std::condition_variable` to block. `Complete()` stores the value and notifies the condition. Once signalled, `Await()` returns and the awaitable is consumed.
+`Await()` uses a `std::condition_variable` to block. `Processed()` sets an internal flag and notifies the condition. Once signalled, `Await()` returns `true`. If the Awaitable is destroyed before `Processed()` is called, `Await()` returns `false`.
+
+**Note**: `Awaitable` is a binary signal primitive, not a typed result carrier. It does not carry a return value — it only communicates "work done" vs "not done". If you need to pass a result back, capture it in a shared variable before calling `Processed()`.
 
 ### 9.3 When Awaitable is Appropriate
 
 | Caller type | Appropriate mechanism |
 |-------------|----------------------|
 | `io_context` coroutine | `YieldContext::Suspend()` / `Resume()` |
-| Dedicated worker OS thread | `Executors::Awaitable<T>::Await()` |
-| Unit test or synchronous API call | `Executors::Awaitable<T>::Await()` |
+| Dedicated worker OS thread | `Executors::Awaitable::Await()` |
+| Unit test or synchronous API call | `Executors::Awaitable::Await()` |
 
 **Never** call `Awaitable::Await()` from within an `io_context` thread — it will deadlock if the completion handler also runs on that context.
 
@@ -553,16 +555,17 @@ bool SomeLinklayerOperation(YieldContext* y, int param) noexcept
     else
     {
         // Thread-blocking mode: use Awaitable
-        auto aw = Executors::NewAwaitable<bool>();
+        auto aw = make_shared_object<Executors::Awaitable>();
         asio::post(*context_, [aw, param]() {
-            aw->Complete(DoAsyncVariant(nullptr, param));
+            DoAsyncVariant(nullptr, param);
+            aw->Processed();
         });
-        return aw->Await();
+        aw->Await();
     }
 }
 ```
 
-`nullof<YieldContext>()` is defined in `ppp/coroutines/YieldContext.h` as a constexpr returning the address of a zero-initialized static variable — it is always non-null, but `operator bool()` returns `false`. This allows one branch to remain unused in coroutine callers without any extra heap allocation.
+`nullof<YieldContext>()` is defined in `ppp/stdafx.h` as a constexpr that returns `*(T*)NULLPTR` — a reference at the null pointer address. Callees compare `&y == nullof<YieldContext>()` to detect this sentinel (the address is 0). When they detect it, they switch to a thread-blocking code path instead of a coroutine-async path. This allows one implementation to serve both coroutine callers and thread-blocking callers. It is **not** undefined behavior — the reference is never dereferenced; only its address is compared.
 
 ---
 
@@ -579,7 +582,7 @@ Every worker thread and scheduler thread created by `Executors` is named using t
 | Android | `pthread_setname_np()` | `"ppp-worker-0"` |
 | macOS | `pthread_setname_np()` | `"ppp-worker-0"` |
 
-If naming fails, `RuntimeThreadNameFailed` is set but execution continues — thread naming is advisory only.
+If naming fails, `RuntimeThreadNameFailed` (proposed/design item, not in current `ErrorCodes.def`; nearest existing: `StdAfxSetThreadNameEmptyName`) is set but execution continues — thread naming is advisory only.
 
 ### 10.2 Thread Priority
 

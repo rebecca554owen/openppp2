@@ -6,8 +6,13 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import android.util.Log
@@ -38,11 +43,117 @@ class PppVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var vpnThread: Thread? = null
 
+    // When ACTION_CONNECT arrives while the previous session is still tearing
+    // down, we stash the new config here and the vpn thread's finally block
+    // will replay it once isRunning=false. This makes "tap Stop -> tap Start"
+    // feel instant from the user's POV instead of timing out at 30s.
+    private var pendingConfig: String? = null
+    private var pendingVpnOptions: String? = null
+
+    private var linkStateThread: HandlerThread? = null
+    private var linkStateHandler: Handler? = null
+    private val linkStatePoller = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            val ls = try {
+                libopenppp2.get_link_state()
+            } catch (e: Throwable) {
+                PppLog.write(this@PppVpnService, "get_link_state poller failed", e)
+                6
+            }
+            PppStateStore.setLinkState(this@PppVpnService, ls)
+            // Mirror to currentState only as a hint: do NOT downgrade currentState
+            // here -- the authoritative VPN-service state is event-driven.
+            linkStateHandler?.postDelayed(this, 1000L)
+        }
+    }
+
+    private fun startLinkStatePoller() {
+        if (linkStateThread != null) return
+        val t = HandlerThread("openppp2-linkstate").also { it.start() }
+        linkStateThread = t
+        val h = Handler(t.looper)
+        linkStateHandler = h
+        h.post(linkStatePoller)
+    }
+
+    private fun stopLinkStatePoller() {
+        linkStateHandler?.removeCallbacksAndMessages(null)
+        linkStateHandler = null
+        linkStateThread?.quitSafely()
+        linkStateThread = null
+        PppStateStore.clearLinkState(this)
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
         createNotificationChannel()
-        PppLog.write(this, "PppVpnService created")
+        // If this process was freshly (re)started -- typically after a
+        // native crash or after being killed while the tunnel was up -- any
+        // link-state / service-state files on disk are stale and will make
+        // the UI sit on "Initializing" forever. Reset them so the user
+        // sees a clean disconnected state.
+        PppStateStore.clearLinkState(this)
+        PppStateStore.set(this, 0)
+        currentState = 0
+        isRunning = false
+        ensureGeoRulesAssets()
+        PppLog.write(this, "PppVpnService created (state cleared)")
+    }
+
+    /**
+     * Drop a pre-bundled fallback copy of GeoIP.dat / GeoSite.dat into
+     * `files/rules/` if the user does not already have a usable copy.
+     *
+     * Why: the native engine's `open_switcher` path is configured with
+     * `./rules/GeoIP.dat`, `./rules/GeoSite.dat`. When those paths are
+     * missing or are directories (we observed them mistakenly created as
+     * empty directories on a previous run), `libopenppp2.run()` blocks
+     * for ~60s trying to (re)download from `geoip-download-url` and the
+     * UI sits on "Initializing" until the watchdog fires.
+     *
+     * The two .dat files are bundled under `assets/rules/` and are
+     * copied here at most once per APK version. We treat anything that
+     * is NOT a regular file at the destination (missing, or a stray
+     * directory left over from earlier broken builds) as "needs copy",
+     * deleting the stale entry first.
+     */
+    private fun ensureGeoRulesAssets() {
+        try {
+            val rulesDir = java.io.File(filesDir, "rules")
+            if (!rulesDir.exists()) rulesDir.mkdirs()
+            val pairs = listOf(
+                "rules/geoip.dat" to "GeoIP.dat",
+                "rules/geosite.dat" to "GeoSite.dat",
+            )
+            for ((assetPath, destName) in pairs) {
+                val dest = java.io.File(rulesDir, destName)
+                // Wipe stray directory placeholders (the bug that wedged
+                // earlier sessions) so we can overwrite with a real file.
+                if (dest.exists() && !dest.isFile) {
+                    dest.deleteRecursively()
+                }
+                if (dest.isFile && dest.length() > 0L) continue
+                assets.open(assetPath).use { input ->
+                    java.io.FileOutputStream(dest).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                PppLog.write(this, "extracted asset $assetPath -> ${dest.absolutePath} (${dest.length()} bytes)")
+            }
+            // Also clean up the wrong-location stray dirs at filesDir root
+            // that older builds created, so they stop confusing diagnostics.
+            for (n in listOf("GeoIP.dat", "GeoSite.dat")) {
+                val stray = java.io.File(filesDir, n)
+                if (stray.exists() && !stray.isFile) {
+                    stray.deleteRecursively()
+                    PppLog.write(this, "removed stray $n at filesDir root")
+                }
+            }
+        } catch (e: Throwable) {
+            PppLog.write(this, "ensureGeoRulesAssets failed", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -72,6 +183,7 @@ class PppVpnService : VpnService() {
         isRunning = false
         currentState = 0
         PppStateStore.set(this, 0)
+        stopLinkStatePoller()
         vpnInterface?.close()
         vpnInterface = null
         instance = null
@@ -85,7 +197,31 @@ class PppVpnService : VpnService() {
 
     private fun startVpn(configJson: String, vpnOptionsJson: String) {
         if (isRunning) {
-            Log.w(TAG, "VPN is already running")
+            // Race: a fresh ACTION_CONNECT arrived while a previous VPN
+            // session is still running or tearing down.
+            //
+            // Do NOT call libopenppp2.stop() from here. Native asio's
+            // timer-cancel path is not safe against a second stop() racing
+            // an in-flight first stop()/startup; doing so SIGSEGVs reliably
+            // inside boost::asio::epoll_reactor::cancel_timer (observed
+            // right after onStarted=0 on device).
+            //
+            // Two sub-cases:
+            //  1) User already pressed Disconnect (currentState==3) -- stop
+            //     is already in flight. Stash the new config; the vpn
+            //     thread's finally block replays it once run() returns.
+            //  2) User hit Connect while an older session is still live
+            //     (no disconnect was requested). We have no safe way to
+            //     swap configs -- just surface an error to the UI so the
+            //     user disconnects first, and drop the request.
+            if (currentState == 3) {
+                PppLog.write(this, "ACTION_CONNECT while disconnecting -- queued for replay")
+                pendingConfig = configJson
+                pendingVpnOptions = vpnOptionsJson
+            } else {
+                PppLog.write(this, "ACTION_CONNECT ignored: VPN already running; ask user to disconnect first")
+                notifyError("VPN 已在运行，请先断开再切换配置")
+            }
             return
         }
 
@@ -115,6 +251,20 @@ class PppVpnService : VpnService() {
                 this,
                 "vpn options tunIp=$vpnIp tunMask=$vpnMask tunPrefix=$vpnPrefix route=$route/$routePrefix dns1=$dns1 dns2=$dns2 mtu=$mtu mark=$mark mux=$mux vnet=$vnet blockQuic=$blockQuic staticMode=$staticMode bypassIpList=${bypassIpList.isNotBlank()} dnsRulesList=${dnsRulesList.isNotBlank()}"
             )
+
+            // Anchor relative paths inside the AppConfiguration JSON
+            // (e.g. `./rules/GeoIP.dat`, `./generated/bypass-cn.txt`) to the
+            // app's filesDir so the native GeoRuleGenerator can read/write
+            // them. Default Android process CWD is `/`, which is read-only.
+            val rootPath = filesDir.absolutePath
+            val rootOk = try {
+                libopenppp2.set_root_path(rootPath)
+            } catch (_: UnsatisfiedLinkError) {
+                // Older libopenppp2.so without set_root_path: silently ignore;
+                // user must use absolute paths in DNS / Geo settings instead.
+                false
+            }
+            PppLog.write(this, "set_root_path path=$rootPath ok=$rootOk")
 
             val configResult = libopenppp2.set_app_configuration(configJson)
             PppLog.write(this, "set_app_configuration result=$configResult")
@@ -158,6 +308,84 @@ class PppVpnService : VpnService() {
                 builder.setMetered(false)
             }
 
+            // ---- Per-app proxy ----
+            // 'allow' mode = only the listed packages get proxied; 'deny' mode
+            // = every other app is proxied except the listed ones. We always
+            // exclude our own package so we never recurse through the tunnel.
+            val perAppEnabled = options.optBoolean("perAppProxyEnabled", false)
+            val perAppMode = options.optString("perAppProxyMode", "allow")
+            val perAppApps = options.optJSONArray("perAppProxyApps")
+            val perAppPackages = ArrayList<String>()
+            if (perAppApps != null) {
+                for (i in 0 until perAppApps.length()) {
+                    val pkg = perAppApps.optString(i, "")
+                    if (pkg.isNotBlank()) perAppPackages.add(pkg)
+                }
+            }
+            if (perAppEnabled && perAppPackages.isNotEmpty()) {
+                var added = 0
+                var skipped = 0
+                for (pkg in perAppPackages) {
+                    if (pkg == this.packageName) {
+                        skipped++
+                        continue
+                    }
+                    try {
+                        if (perAppMode == "deny") {
+                            builder.addDisallowedApplication(pkg)
+                        } else {
+                            builder.addAllowedApplication(pkg)
+                        }
+                        added++
+                    } catch (e: PackageManager.NameNotFoundException) {
+                        // Uninstalled while we were holding the snapshot --
+                        // tolerate and keep going.
+                        skipped++
+                        PppLog.write(this, "per-app proxy: package not found $pkg")
+                    } catch (e: Throwable) {
+                        skipped++
+                        PppLog.write(this, "per-app proxy: failed to add $pkg", e)
+                    }
+                }
+                // Always exclude self in allow mode -- the system would already
+                // exclude the active VPN app, but be explicit so the picker UI
+                // matches behaviour.
+                if (perAppMode == "deny") {
+                    try {
+                        builder.addDisallowedApplication(this.packageName)
+                    } catch (_: Throwable) { /* ignore */ }
+                }
+                PppLog.write(
+                    this,
+                    "per-app proxy mode=$perAppMode applied=$added skipped=$skipped total=${perAppPackages.size}"
+                )
+            } else {
+                PppLog.write(this, "per-app proxy disabled (or no packages selected)")
+            }
+
+            // ---- System HTTP proxy ----
+            // When `autoAppendApps` (UI label: 系统 HTTP 代理) is on, publish
+            // the local HTTP proxy as the system-wide proxy so well-behaved
+            // apps under the VPN automatically use it. Requires API 29+.
+            // The proxy is reachable at 127.0.0.1:<client.http-proxy.port>;
+            // the port is parsed from the AppConfiguration JSON we just sent
+            // to the native engine so it always matches what's actually
+            // listening.
+            val systemHttpProxy = options.optBoolean("autoAppendApps", false)
+            if (systemHttpProxy) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val port = parseHttpProxyPort(configJson)
+                    try {
+                        builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", port))
+                        PppLog.write(this, "system http proxy set 127.0.0.1:$port")
+                    } catch (e: Throwable) {
+                        PppLog.write(this, "setHttpProxy failed", e)
+                    }
+                } else {
+                    PppLog.write(this, "system http proxy skipped (requires API 29+)")
+                }
+            }
+
             vpnInterface = builder.establish()
             PppLog.write(this, "builder.establish result=${vpnInterface != null}")
             if (vpnInterface == null) {
@@ -199,7 +427,19 @@ class PppVpnService : VpnService() {
             // Start VPN in background thread (run() is blocking)
             PppLog.write(this, "before libopenppp2.run(0)")
             isRunning = true
-            vpnThread = Thread({
+            // Begin polling native link state across processes (PppStateStore
+            // file-backed) so the UI process can read the real handshake state.
+            startLinkStatePoller()
+            // Use an 8 MiB stack (default JVM thread stack on Android is
+            // ~1 MiB, which is too small for boost::asio's deep handler
+            // chains and the cascade of shared_ptr destructions that runs
+            // when a connection is torn down -- we have observed
+            // SI_KERNEL fault 0x0 (stack-guard hit) inside
+            // ppp::function::Callable<...>::__on_zero_shared while the
+            // VPN was happily forwarding traffic, triggered by a peer
+            // RST that posted VirtualEthernetTcpipConnection::Dispose and
+            // then deep-released the connection's Timer callbacks).
+            vpnThread = Thread(null, Runnable {
                 try {
                     PppLog.write(this, "vpnThread started, calling run(0)")
                     val result = libopenppp2.run(0)
@@ -214,13 +454,29 @@ class PppVpnService : VpnService() {
                     notifyError("VPN thread exception: ${e.message ?: e.javaClass.name}")
                 } finally {
                     isRunning = false
+                    stopLinkStatePoller()
                     vpnInterface?.close()
                     vpnInterface = null
-                    notifyStateChanged(0) // disconnected
-                    stopForeground(true)
-                    stopSelf()
+                    val pConfig = pendingConfig
+                    val pOptions = pendingVpnOptions
+                    pendingConfig = null
+                    pendingVpnOptions = null
+                    if (pConfig != null) {
+                        // A reconnect was queued while we were tearing down.
+                        // Replay it on the main looper so the new run() runs
+                        // on a fresh worker thread and we keep the foreground
+                        // service alive (no stopForeground/stopSelf here).
+                        PppLog.write(this, "replaying queued ACTION_CONNECT after teardown")
+                        Handler(Looper.getMainLooper()).post {
+                            startVpn(pConfig, pOptions ?: "{}")
+                        }
+                    } else {
+                        notifyStateChanged(0) // disconnected
+                        stopForeground(true)
+                        stopSelf()
+                    }
                 }
-            }, "openppp2-vpn-thread").also { it.start() }
+            }, "openppp2-vpn-thread", 32L * 1024 * 1024).also { it.start() }
 
         } catch (e: Throwable) {
             Log.e(TAG, "startVpn exception", e)
@@ -264,6 +520,23 @@ class PppVpnService : VpnService() {
         currentState = state
         PppStateStore.set(this, state)
         MainActivity.sendEvent(mapOf("type" to "state", "value" to state))
+    }
+
+    /**
+     * Pulls `client.http-proxy.port` out of the AppConfiguration JSON; falls
+     * back to 8080 when the field is missing/invalid. We do not assume the
+     * default config because users may rebind the HTTP proxy port.
+     */
+    private fun parseHttpProxyPort(configJson: String): Int {
+        return try {
+            val root = JSONObject(configJson)
+            val client = root.optJSONObject("client") ?: return 8080
+            val hp = client.optJSONObject("http-proxy") ?: return 8080
+            val port = hp.optInt("port", 8080)
+            if (port in 1..65535) port else 8080
+        } catch (_: Throwable) {
+            8080
+        }
     }
 
     private fun notifyError(message: String) {

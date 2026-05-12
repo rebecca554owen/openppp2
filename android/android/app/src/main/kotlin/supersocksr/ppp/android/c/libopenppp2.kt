@@ -61,6 +61,9 @@ class libopenppp2 {
         external fun get_default_ciphersuites(): String?
 
         @JvmStatic
+        external fun set_root_path(path: String): Boolean
+
+        @JvmStatic
         external fun set_app_configuration(configurations: String): Int
 
         @JvmStatic

@@ -61,7 +61,7 @@ namespace ppp {
                         }
 
                         ::FreeMibTable(table);
-                        std::sort(routes.begin(), routes.end(), 
+                        std::sort(routes.begin(), routes.end(),
                             [](const DefaultRouteSnapshot& left, const DefaultRouteSnapshot& right) noexcept {
                                 if (left.Metric != right.Metric) {
                                     return left.Metric < right.Metric;
@@ -155,7 +155,7 @@ namespace ppp {
                             state.OriginalDefaultRoutes.emplace_back(std::move(encoded));
                         }
                     }
-                    
+
                     if (auto current_ni = ppp::win32::network::GetNetworkInterfaceByInterfaceIndex(context.InterfaceIndex); NULLPTR != current_ni) {
                         state.OriginalDnsServers = current_ni->DnsAddresses;
                     }
@@ -336,7 +336,7 @@ namespace ppp {
                                     if (NULLPTR == endptr || endptr == value.c_str() || *endptr != '\x0' || parsed < 0) {
                                         continue;
                                     }
-                                    
+
                                     route.Metric = static_cast<int>(parsed);
                                 }
                                 elif (key == "gw") {

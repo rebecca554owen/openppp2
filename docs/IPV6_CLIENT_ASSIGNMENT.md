@@ -1,9 +1,11 @@
 # IPv6 Client Address Assignment Lifecycle
 
-> **Subsystem:** `ppp::app::client::VEthernetNetworkSwitcher`  
-> **Primary file:** `ppp/app/client/VEthernetNetworkSwitcher.cpp`  
-> **Header:** `ppp/app/client/VEthernetNetworkSwitcher.h`  
-> **Key functions:** `ApplyAssignedIPv6` (line 702), `RestoreAssignedIPv6` (line 808), `SendRequestedIPv6Configuration` (referenced at line 796)
+[中文版本](IPV6_CLIENT_ASSIGNMENT_CN.md)
+
+> **Subsystem:** `ppp::app::client::VEthernetNetworkSwitcher`
+> **Primary file:** `ppp/app/client/VEthernetNetworkSwitcher.cpp`
+> **Header:** `ppp/app/client/VEthernetNetworkSwitcher.h`
+> **Key functions:** `ApplyAssignedIPv6` (line 876), `RestoreAssignedIPv6` (line 994), `SendRequestedIPv6Configuration` (referenced at line 796)
 
 ---
 
@@ -102,7 +104,7 @@ stateDiagram-v2
 
 ## 4. `ApplyAssignedIPv6`
 
-**Location:** `VEthernetNetworkSwitcher.cpp`, line 702  
+**Location:** `VEthernetNetworkSwitcher.cpp`, line 876
 **Signature:**
 
 ```cpp
@@ -200,7 +202,7 @@ If any sub-step fails, `RestoreClientConfiguration` is called immediately to und
 
 ## 5. `RestoreAssignedIPv6`
 
-**Location:** `VEthernetNetworkSwitcher.cpp`, line 808  
+**Location:** `VEthernetNetworkSwitcher.cpp`, line 994
 **Signature:**
 
 ```cpp
@@ -254,7 +256,7 @@ void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
 
 ## 6. `last_assigned_ipv6_` Hint Mechanism
 
-**Location:** `VEthernetNetworkSwitcher.h`, line 1028  
+**Location:** `VEthernetNetworkSwitcher.h`, line 1065
 **Type:** `boost::asio::ip::address`
 
 ```cpp
@@ -494,6 +496,8 @@ sequenceDiagram
 | `IPv6ModeInvalid` | `kError` | `AssignedIPv6Mode` is neither `IPv6Mode_Nat66` nor `IPv6Mode_Gua`. |
 | `IPv6GatewayInvalid` | `kError` | Gateway address in server response is malformed. |
 | `IPv6Unsupported` | `kFatal` | GUA mode requested on a platform that does not support it. |
+
+> **Note**: The following error codes are proposed/design items not yet in `ErrorCodes.def`: `IPv6ClientStateCaptureFailed` (no close existing equivalent, needs new entry), `IPv6ClientRestoreFailed` (no close existing equivalent, needs new entry).
 
 ---
 

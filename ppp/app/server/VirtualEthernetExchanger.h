@@ -49,6 +49,7 @@
 #include <ppp/net/Firewall.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
+#include <atomic>
 
 namespace ppp {
     namespace app {
@@ -166,8 +167,8 @@ namespace ppp {
                  */
                 virtual void                                                                Dispose() noexcept;
 
-                /** @brief Returns true if this exchanger has been disposed. */
-                bool                                                                        IsDisposed() noexcept       { return disposed_; }
+                /** @brief Returns true if this exchanger has been disposed (atomic load). */
+                bool                                                                        IsDisposed() noexcept       { return disposed_.load(std::memory_order_acquire); }
                 /** @brief Returns the parent switcher. */
                 VirtualEthernetSwitcherPtr                                                  GetSwitcher() noexcept      { return switcher_; }
                 /** @brief Returns the active transmission channel for this session. */
@@ -646,7 +647,7 @@ namespace ppp {
     
             private:    
                 SynchronizedObject                                                          syncobj_;                   ///< Guards datagrams_, timeouts_, and mappings_.
-                bool                                                                        disposed_ = false;          ///< True after Dispose() is called.
+                std::atomic_bool                                                            disposed_{false};           ///< Atomic one-shot flag; true after Dispose()/Finalize().
                 uint32_t                                                                    address_  = 0;              ///< Client LAN IPv4 address registered in NAT table.
                 int                                                                         preferred_tun_fd_ = -1;     ///< Preferred TUN fd hint for the forwarding layer.
                 VirtualEthernetSwitcherPtr                                                  switcher_;                  ///< Parent switcher reference.

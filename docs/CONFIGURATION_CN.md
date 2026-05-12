@@ -115,9 +115,11 @@ websocket.listen.ws  = 0;
 websocket.listen.wss = 0;
 
 // Key 材料默认值
-key.kf = "xxxxx";            ///< 协议层密钥材料 1
-key.kh = "xxxxx";            ///< 协议层密钥材料 2
-key.kl = "xxxxx";            ///< 协议层密钥材料 3
+key.kf = 154;                 ///< 密钥帧间隔
+key.kh = 181;                 ///< KDF 哈希迭代次数
+key.kl = 152;                 ///< 密钥长度（位）
+key.kx = 191;                 ///< 密钥交换算法选择器
+key.sb = 0;                   ///< 混洗块大小（0 = 禁用）
 
 // Server 默认
 server.subnet    = true;     ///< 启用子网模式
@@ -195,7 +197,7 @@ flowchart TD
 
 ```
 key.protocol / key.transport —— 不支持的 cipher 名称回退默认值（aes-256-cfb）
-key.kf / key.kh / key.kl / key.kx / key.sb —— 空字符串时重置为框架内置值
+key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内置值
 ```
 
 ---
@@ -209,36 +211,38 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 空字符串时重置为框架
 ```json
 {
     "key": {
-        "kcp": {
-            "protocol": "base-protocol-secret",
-            "transport": "base-transport-secret"
-        },
         "protocol": "aes-256-cfb",
+        "protocol-key": "base-protocol-secret",
         "transport": "aes-256-cfb",
+        "transport-key": "base-transport-secret",
         "masked": true,
         "plaintext": false,
         "delta-encode": true,
         "shuffle-data": true,
-        "kf": "frame-key-material",
-        "kh": "hmac-key-material",
-        "kl": "link-key-material",
-        "kx": "extension-key-material",
-        "sb": "session-binding-material"
+        "kf": 154543927,
+        "kh": 12,
+        "kl": 10,
+        "kx": 128,
+        "sb": 1000
     }
 }
 ```
 
 | 字段 | 类型 | 作用 |
 |------|------|------|
-| `kcp.protocol` | string | protocol cipher 的基础密钥；握手后派生 `protocol_` cipher |
-| `kcp.transport` | string | transport cipher 的基础密钥；握手后派生 `transport_` cipher |
-| `protocol` | string | protocol cipher 算法名（如 `aes-256-cfb`、`chacha20`） |
+| `protocol` | string | protocol cipher 算法名（如 `aes-256-cfb`） |
+| `protocol-key` | string | protocol cipher 的基础密钥；握手后派生 `protocol_` cipher |
 | `transport` | string | transport cipher 算法名 |
+| `transport-key` | string | transport cipher 的基础密钥；握手后派生 `transport_` cipher |
 | `masked` | bool | 在密文上额外添加掩码层（默认 false） |
 | `plaintext` | bool | 完全禁用加密（仅开发/测试，生产必须 false） |
 | `delta-encode` | bool | 对密文字节启用差分编码 |
 | `shuffle-data` | bool | 对 payload 字节做置换混洗 |
-| `kf`/`kh`/`kl`/`kx`/`sb` | string | 帧化和 session binding 的辅助密钥材料 |
+| `kf` | int | 密钥帧间隔（每隔多少包触发一次 re-key） |
+| `kh` | int | KDF 密钥哈希迭代次数 |
+| `kl` | int | 密钥长度（位），如 128、256 |
+| `kx` | int | 密钥交换算法选择器 |
+| `sb` | int | `shuffle-data` 模式的混洗块大小 |
 
 ### 7.2 `server` 块
 
@@ -310,10 +314,14 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 空字符串时重置为框架
 | `guid` | string | 客户端唯一标识；空时回退为哨兵 GUID |
 | `server` | string | 服务端 URI（`ppp://`、`ppp://ws/`、`ppp://wss/`） |
 | `bandwidth` | int | 带宽限制（bps），0 表示不限制 |
-| `reconnect` | bool | 连接断开后自动重连 |
-| `paper-airplane.tcp` | bool | 启用 Paper Airplane TCP 加速（Windows） |
+| `reconnections.timeout` | int | 断线后重连等待秒数 |
+| `paper-airplane.tcp` | bool | 启用 Paper Airplane TCP 加速（仅 Windows） |
 | `http-proxy.bind` | string | HTTP 代理监听地址 |
 | `http-proxy.port` | int | HTTP 代理端口 |
+| `socks-proxy.bind` | string | SOCKS5 代理监听地址 |
+| `socks-proxy.port` | int | SOCKS5 代理端口 |
+| `socks-proxy.username` | string | SOCKS5 认证用户名 |
+| `socks-proxy.password` | string | SOCKS5 认证密码 |
 | `mappings` | array | FRP 端口映射规则列表 |
 
 客户端 URI 格式：
@@ -582,11 +590,13 @@ AppConfiguration& Loaded() noexcept;
 
 | ErrorCode | 描述 |
 |-----------|------|
-| `ConfigurationLoadFailed` | JSON 文件加载失败（文件不存在或格式错误） |
-| `ConfigurationInvalidKey` | key 块包含无效密钥材料（空字符串或不支持的 cipher） |
-| `ConfigurationInvalidEndpoint` | 配置的 IP 或端口格式无效 |
-| `ConfigurationBackendUnreachable` | 管理后端在配置的超时内无法连接 |
+| `ConfigLoadFailed` | JSON 文件加载失败（文件不存在或格式错误） |
+| `ConfigLegacyCipherAlgorithm` | key 块包含无效密钥材料（空字符串或不支持的 cipher） |
+| `NetworkAddressInvalid` | 配置的 IP 或端口格式无效 |
+| `SocketConnectFailed` | 管理后端在配置的超时内无法连接 |
 | `ConfigurationIpv6Unsupported` | 当前平台不支持 server IPv6 数据面 |
+
+> **注**：`ConfigurationIpv6Unsupported` 为拟新增/设计项，不在当前 `ErrorCodes.def`（近似现有码 `IPv6Unsupported` 或 `Ipv6ServerRoleNotSupportedOnPlatform`）。
 
 ---
 

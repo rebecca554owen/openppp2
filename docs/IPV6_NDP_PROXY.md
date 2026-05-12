@@ -1,9 +1,11 @@
 # IPv6 NDP Proxy Subsystem
 
-> **Subsystem:** `ppp::app::server::VirtualEthernetSwitcher` + `ppp::tap::TapLinux`  
-> **Primary files:**  
-> - `ppp/app/server/VirtualEthernetSwitcher.cpp` (lines 874–1282, 2236–2311)  
-> - `ppp/app/server/VirtualEthernetSwitcher.h`  
+[中文版本](IPV6_NDP_PROXY_CN.md)
+
+> **Subsystem:** `ppp::app::server::VirtualEthernetSwitcher` + `ppp::tap::TapLinux`
+> **Primary files:**
+> - `ppp/app/server/VirtualEthernetSwitcher.cpp` (lines 919–1370, 2441–2530)
+> - `ppp/app/server/VirtualEthernetSwitcher.h`
 > **Supporting files:** Linux TAP implementation, `ppp/diagnostics/ErrorCodes.def`
 
 ---
@@ -73,8 +75,8 @@ graph TB
 
 | Member | File:Line | Type | Description |
 |---|---|---|---|
-| `ipv6_neighbor_proxy_ifname_` | `.h:785` | `ppp::string` | Name of the uplink NIC where proxy is active. |
-| `ipv6_neighbor_proxy_owned_` | `.h:786` | `bool` | True if we set the sysctl (must restore on close). |
+| `ipv6_neighbor_proxy_ifname_` | `.h:821` | `ppp::string` | Name of the uplink NIC where proxy is active. |
+| `ipv6_neighbor_proxy_owned_` | `.h:822` | `bool` | True if we set the sysctl (must restore on close). |
 | `ipv6_ndp_proxy_applied_` | `.h` (implicit) | `bool` | True after sysctl has been written for this ifname. |
 | `ipv6_ndp_proxy_map_` | `.h` (implicit) | `unordered_map` | Per-address reference count for proxy entries. |
 
@@ -108,7 +110,7 @@ stateDiagram-v2
 
 ## 4. `OpenIPv6NeighborProxyIfNeed`
 
-**Location:** `VirtualEthernetSwitcher.cpp`, line 1044  
+**Location:** `VirtualEthernetSwitcher.cpp`, line 1099
 **Signature:**
 
 ```cpp
@@ -147,7 +149,7 @@ The `ipv6_neighbor_proxy_owned_` flag tracks whether the server itself modified 
 
 ## 5. `AddIPv6NeighborProxy`
 
-**Location:** `VirtualEthernetSwitcher.cpp`, line 1211  
+**Location:** `VirtualEthernetSwitcher.cpp`, line 1282
 **Signature:**
 
 ```cpp
@@ -157,7 +159,7 @@ bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(
 
 Called when an exchanger is fully activated (after lease commit and `AddIPv6Exchanger`). In GUA mode only.
 
-### Implementation (lines 1211–1231)
+### Implementation (lines 1282–1308)
 
 ```cpp
 bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(
@@ -187,7 +189,7 @@ bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(
 
 > **Note:** The unconditional `SetLastErrorCode` at the success path is a known quirk. The function's contract is its `bool` return value; the error code is advisory. Callers at line 874 check the return value and conditionally set `IPv6NDPProxyFailed` if the result is `false` **and** a proxy was required.
 
-### Call Site (line 874)
+### Call Site (line 919)
 
 ```cpp
 bool proxy_ok = !proxy_required || AddIPv6NeighborProxy(ip);
@@ -202,7 +204,7 @@ if (!proxy_ok) {
 
 Two overloads exist:
 
-### Overload 1: By address only (line 1241)
+### Overload 1: By address only (line 1315)
 
 ```cpp
 bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(
@@ -211,7 +213,7 @@ bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(
 
 Uses `ipv6_neighbor_proxy_ifname_` as the interface. Called during normal lease expiry and session teardown.
 
-### Overload 2: By explicit interface + address (line 1267)
+### Overload 2: By explicit interface + address (line 1344)
 
 ```cpp
 bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(
@@ -245,7 +247,7 @@ Failure to delete a proxy entry is **non-fatal**: the lease and exchanger are re
 
 ## 7. `RefreshIPv6NeighborProxyIfNeed`
 
-**Location:** `VirtualEthernetSwitcher.cpp`, line 2236  
+**Location:** `VirtualEthernetSwitcher.cpp`, line 2441
 **Signature:**
 
 ```cpp
@@ -307,10 +309,10 @@ These are Linux-only operations guarded by `#if defined(_LINUX)`. On other platf
 
 | Code | Severity | Triggering Condition |
 |---|---|---|
-| `IPv6NeighborProxyEnableFailed` | `kError` | `TapLinux::EnableIPv6NeighborProxy()` returns false; sysctl write denied. (`.cpp` lines 1055, 1062, 2246, 2286) |
-| `IPv6NeighborProxyAddFailed` | `kError` | `TapLinux::AddIPv6NeighborProxy()` returns false; `ip neigh add proxy` failed. (`.cpp` lines 878, 1219, 1227) |
-| `IPv6NeighborProxyDeleteFailed` | `kError` | `TapLinux::DeleteIPv6NeighborProxy()` returns false; `ip neigh del proxy` failed. (`.cpp` lines 945, 1244, 1252, 1270, 1278) |
-| `IPv6NDPProxyFailed` | `kError` | The kernel NDP proxy entry could not be installed via `ip neigh`; session-level proxy failure. (`.cpp` line 878) |
+| `IPv6NeighborProxyEnableFailed` | `kError` | `TapLinux::EnableIPv6NeighborProxy()` returns false; sysctl write denied. |
+| `IPv6NeighborProxyAddFailed` | `kError` | `TapLinux::AddIPv6NeighborProxy()` returns false; `ip neigh add proxy` failed. |
+| `IPv6NeighborProxyDeleteFailed` | `kError` | `TapLinux::DeleteIPv6NeighborProxy()` returns false; `ip neigh del proxy` failed. |
+| `IPv6NDPProxyFailed` | `kError` | The kernel NDP proxy entry could not be installed via `ip neigh`; session-level proxy failure. |
 
 ### Error Code Consumer Pattern
 
@@ -428,26 +430,26 @@ sequenceDiagram
 
 ### 12.1 `IPv6NeighborProxyEnableFailed`
 
-**Cause:** The `sysctl` command failed, typically due to insufficient permissions or kernel version incompatibility.  
-**Impact:** GUA mode cannot operate. `ipv6_runtime_state_` is set to `3`.  
+**Cause:** The `sysctl` command failed, typically due to insufficient permissions or kernel version incompatibility.
+**Impact:** GUA mode cannot operate. `ipv6_runtime_state_` is set to `3`.
 **Recovery:** Restart the server with `CAP_NET_ADMIN` capability. Alternatively, pre-configure `proxy_ndp=1` in `/etc/sysctl.conf` so the server finds it already enabled.
 
 ### 12.2 `IPv6NeighborProxyAddFailed`
 
-**Cause:** `ip -6 neigh add proxy` failed, usually because the address is already in the proxy table (duplicate) or the kernel's proxy queue is full.  
-**Impact:** The specific client's IPv6 address is not reachable from the upstream router. Other clients are unaffected.  
+**Cause:** `ip -6 neigh add proxy` failed, usually because the address is already in the proxy table (duplicate) or the kernel's proxy queue is full.
+**Impact:** The specific client's IPv6 address is not reachable from the upstream router. Other clients are unaffected.
 **Recovery:** No automatic recovery. The client must reconnect to trigger a new proxy registration attempt. If the kernel queue is full, increase `proxy_qlen`.
 
 ### 12.3 `IPv6NeighborProxyDeleteFailed`
 
-**Cause:** `ip -6 neigh del proxy` failed, usually because the entry does not exist (already deleted externally).  
-**Impact:** Non-fatal. The session and lease tables are still cleaned up correctly. At worst, a stale kernel NDP proxy entry persists until the kernel evicts it (typically ~60 seconds).  
+**Cause:** `ip -6 neigh del proxy` failed, usually because the entry does not exist (already deleted externally).
+**Impact:** Non-fatal. The session and lease tables are still cleaned up correctly. At worst, a stale kernel NDP proxy entry persists until the kernel evicts it (typically ~60 seconds).
 **Recovery:** None required. The kernel eventually evicts the stale entry.
 
 ### 12.4 `IPv6NDPProxyFailed`
 
-**Cause:** Set at the session level when `proxy_required && !AddIPv6NeighborProxy(ip)`.  
-**Impact:** Client's IPv6 address is operational from the server side but not reachable from the upstream network. The client can originate traffic but cannot receive from the internet.  
+**Cause:** Set at the session level when `proxy_required && !AddIPv6NeighborProxy(ip)`.
+**Impact:** Client's IPv6 address is operational from the server side but not reachable from the upstream network. The client can originate traffic but cannot receive from the internet.
 **Recovery:** Same as `IPv6NeighborProxyAddFailed`.
 
 ---

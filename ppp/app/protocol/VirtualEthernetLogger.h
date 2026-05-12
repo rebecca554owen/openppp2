@@ -62,6 +62,21 @@ namespace ppp {
             public:
                 /** @brief Logs a VPN session-open event. */
                 bool                                                            Vpn(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept;
+                /**
+                 * @brief Logs a transport-layer obfuscation-flag mismatch detected
+                 *        during handshake.  Used in tandem with telemetry so the
+                 *        operator sees the diagnosis on both the structured
+                 *        server-event log and the metric/text telemetry pipeline.
+                 *
+                 * @param transmission The transport that observed the mismatch
+                 *                     (must still be alive; only used to read the
+                 *                     remote endpoint for the audit record).
+                 * @param details      Free-form description: typically the local
+                 *                     flag values and the peer canary so log
+                 *                     consumers can pinpoint which config knob
+                 *                     drifted.
+                 */
+                bool                                                            Mismatch(const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const ppp::string& details) noexcept;
                 /** @brief Logs a DNS routing/lookup event. */
                 bool                                                            Dns(Int128 guid, const std::shared_ptr<ppp::transmissions::ITransmission>& transmission, const ppp::string& hostDomain) noexcept;
                 /** @brief Logs ARP-style network assignment event with raw v4 values. */

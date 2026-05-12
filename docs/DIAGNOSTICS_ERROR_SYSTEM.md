@@ -1,12 +1,14 @@
 # Diagnostics Error System
 
-> **Subsystem:** `ppp::diagnostics`  
-> **Files:**  
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (595 live entries)  
-> - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum  
-> - `ppp/diagnostics/Error.cpp` — Free function delegations  
-> - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration  
-> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` implementation (173 lines)
+[中文版本](DIAGNOSTICS_ERROR_SYSTEM_CN.md)
+
+> **Subsystem:** `ppp::diagnostics`
+> **Files:**
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro error code definitions (628 live entries)
+> - `ppp/diagnostics/Error.h` — Public API, `ErrorCode` enum, `ErrorSeverity` enum
+> - `ppp/diagnostics/Error.cpp` — Free function delegations
+> - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` singleton declaration
+> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` implementation (196 lines)
 
 ---
 
@@ -42,7 +44,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 | **Zero allocation on hot path** | Error codes are `uint32_t`-backed enums; `SetLastErrorCode` stores to `thread_local` and an atomic. No heap. |
 | **Thread isolation** | Each thread maintains its own `tls_last_error_code_`. No locking on read or write of per-thread state. |
 | **Process-wide observability** | `last_error_code_snapshot_` is a `std::atomic<uint32_t>` visible to all threads. |
-| **Single source of truth** | All 595 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
+| **Single source of truth** | All 628 error codes are defined in one file (`ErrorCodes.def`) using X-macros. |
 | **No exceptions for error reporting** | `SetLastErrorCode` is `noexcept`. Error conditions are communicated via return values. |
 | **Observer pattern** | Named handlers registered via `RegisterErrorHandler` are called synchronously on error. |
 | **Severity awareness** | Each error code carries a `kTrace`/`kDebug`/`kInfo`/`kWarn`/`kError`/`kFatal` classification. |
@@ -54,7 +56,7 @@ The `ppp::diagnostics` error system provides a **structured, thread-safe, alloca
 ```mermaid
 graph TB
     subgraph ppp/diagnostics
-        Def[ErrorCodes.def\nX-macro definitions\n595 error codes]
+        Def[ErrorCodes.def\nX-macro definitions\n628 error codes]
         Eh[Error.h\nErrorSeverity enum\nErrorCode enum\nfree functions]
         Ec[Error.cpp\ndelegates to ErrorHandler::GetDefault()]
         Ehh[ErrorHandler.h\nErrorHandler class\nsingleton]
@@ -97,8 +99,8 @@ X(name, text, severity)
 
 // Examples (lines 1–25):
 X(Success,                  "Success",               ErrorSeverity::kInfo)
-X(GenericUnknown,           "Generic unknown error", ErrorSeverity::kError)
-X(SocketTimeout,            "Socket timeout",        ErrorSeverity::kWarning)
+X(SocketTimeout,             "Socket timeout",        ErrorSeverity::kWarning)
+X(SocketReadFailed,          "Socket read failed",    ErrorSeverity::kError)
 X(RuntimeInitializationFailed, "Runtime initialization failed", ErrorSeverity::kFatal)
 X(IPv6LeaseConflict,        "IPv6 lease conflict",   ErrorSeverity::kError)
 ```
@@ -119,8 +121,8 @@ This generates:
 ```cpp
 enum class ErrorCode : uint32_t {
     Success = 0,
-    GenericUnknown = 1,
-    GenericInvalidArgument = 2,
+    SocketTimeout = 1,
+    SocketReadFailed = 2,
     // ... additional entries
 };
 ```
@@ -213,10 +215,10 @@ enum class ErrorSeverity : uint8_t {
 
 ```mermaid
 pie title ErrorCode Severity Distribution
-    "kInfo (8)" : 8
-    "kWarning (25)" : 25
-    "kError (539)" : 539
-    "kFatal (23)" : 23
+    "kInfo (9)" : 9
+    "kWarning (64)" : 64
+    "kError (531)" : 531
+    "kFatal (24)" : 24
 ```
 
 ---
@@ -233,7 +235,7 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` is a strongly-typed `uint32_t` enum with 595 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`, and `kErrorCodeMax` is the exclusive upper bound for raw integer validation.
+`ErrorCode` is a strongly-typed `uint32_t` enum with 628 values (as of the current `ErrorCodes.def`). The numeric value of each code is its 0-based definition order in `ErrorCodes.def`, and `kErrorCodeMax` is the exclusive upper bound for raw integer validation.
 
 ### Category Structure of `ErrorCodes.def`
 
@@ -489,8 +491,8 @@ Produces a human-readable diagnostic string of the form:
 Examples:
 ```
 0 Success: Success
-301 IPv6LeasePoolExhausted: The IPv6 lease pool has no remaining addresses available after exhausting all retry attempts.
-293 IPv6NeighborProxyEnableFailed: IPv6 neighbor proxy enable failed
+174 IPv6LeaseConflict: IPv6 lease conflict
+68 MemoryPoolExhausted: Memory pool exhausted
 ```
 
 ### Implementation shape
@@ -517,7 +519,7 @@ ppp::string ErrorHandler::FormatErrorTriplet(ErrorCode code) noexcept {
 ```cpp
 auto triplet = ppp::diagnostics::FormatErrorTriplet(
     ppp::diagnostics::GetLastErrorCode());
-// Output: "297 IPv6LeaseConflict: IPv6 lease conflict"
+// Output: "174 IPv6LeaseConflict: IPv6 lease conflict"
 ```
 
 ---
@@ -635,7 +637,7 @@ void OnErrorObserved(int err_int) {
     if (ppp::diagnostics::IsErrorFatal(code)) {
         // Schedule a controlled shutdown and restart.
         ScheduleRestart();
-    } elif (ppp::diagnostics::GetErrorSeverity(code) ==
+    } else if (ppp::diagnostics::GetErrorSeverity(code) ==
             ppp::diagnostics::ErrorSeverity::kWarning) {
         // Log only; continue operation.
         LogWarning(ppp::diagnostics::FormatErrorTriplet(code));
@@ -666,6 +668,8 @@ graph TD
 | `IPv6Unsupported` | IPv6 unsupported on this platform | Switch to NAT66 or disable IPv6. |
 | `PlatformNotSupportGUAMode` | GUA mode not supported | Use NAT66 on non-Linux. |
 | `GenericNotSupported` | Operation not supported | Check platform compatibility. |
+
+> **Note:** `GenericNotSupported` does not exist in the current `ErrorCodes.def`. The above entry is retained for historical reference only. Verify against `ErrorCodes.def` before relying on it.
 
 ### Warning-Level Control Outcomes
 
@@ -732,8 +736,8 @@ To add a new error code:
 |---|---|
 | `<Subsystem><Condition>Failed` | `IPv6TransitTapOpenFailed` |
 | `<Subsystem><Resource>Invalid` | `IPv6PrefixInvalid` |
-| `<Subsystem><Resource>Exhausted` | `IPv6LeasePoolExhausted` |
-| `<Subsystem><Resource>Conflict` | `IPv6AddressConflict` |
+| `<Subsystem><Resource>Exhausted` | `MemoryPoolExhausted` |
+| `<Subsystem><Resource>Conflict` | `IPv6LeaseConflict` |
 | `<Subsystem><Condition>` | `VmuxSocketSendInvalidPayload` |
 | `App<Stage>Failed` | `AppPreflightCheckFailed` |
 | `Config<Field/Stage>Invalid` | `ConfigFieldInvalid` |

@@ -38,9 +38,9 @@ graph TB
 
 | 承载 | 描述 | 配置键 |
 |------|------|--------|
-| 原始 TCP | 普通 TCP socket 连接 | `server.listen.tcp` |
-| WebSocket | HTTP Upgrade 到 WebSocket | `server.listen.ws` |
-| TLS WebSocket | TLS 支撑的 WebSocket | `server.listen.wss` |
+| 原始 TCP | 普通 TCP socket 连接 | `tcp.listen.port` |
+| WebSocket | HTTP Upgrade 到 WebSocket | `websocket.listen.ws` |
+| TLS WebSocket | TLS 支撑的 WebSocket | `websocket.listen.wss` |
 | 代理 WebSocket | 经 CONNECT 代理的 WebSocket | `client.server-proxy` |
 
 承载层负责：
@@ -86,26 +86,30 @@ flowchart LR
 ### 密钥派生
 
 `appsettings.json` 中配置的密钥是**基础密钥**。
-每条连接的工作密钥是由基础密钥与连接专属 `ivv` 值派生而来：
+在当前 `ITransmission.cpp` 实现中，每条连接的工作 cipher 状态由基础密钥与连接专属 `ivv_str` 重建：
 
 ```
-工作密钥 = KDF(基础密钥, ivv)
+protocol_working_key  = Cipher(key.protocol-key  + ivv_str)
+transport_working_key = Cipher(key.transport-key + ivv_str)
 ```
 
 这提供了会话级密钥隔离：即使一个会话的工作密钥泄露，其他会话依然安全。
 
-### 加密层次
+### 两个独立密码层
 
 每条连接有两个独立的密钥状态：
 
 ```mermaid
 flowchart TD
-    A[明文 payload] --> B[协议层密码<br/>protocol-key + ivv]
+    A[明文 payload] --> B[协议层密码<br/>protocol-key + ivv_str<br/>保护头部元数据]
     B --> C[协议层加密 payload]
-    C --> D[传输层密码<br/>transport-key + ivv]
-    D --> E[传输层加密帧]
+    C --> D[传输层密码<br/>transport-key + ivv_str<br/>保护正文]
+    D --> D2[传输层加密帧]
+    D2 --> E[可选变换<br/>delta-encode + shuffle-data + masked]
     E --> F[承载传输层]
 ```
+
+为什么需要两层密码？**协议层密码**保护帧头部（长度字段及相关元数据）。攻击者即使无法读取正文，只要能读取头部元数据，也能进行流量形状指纹攻击。**传输层密码**保护实际正文。两个独立的基础密钥意味着攻破一个不会攻破另一个。
 
 影响分帧和暴露的可选标志：
 
@@ -120,31 +124,41 @@ flowchart TD
 
 ```cpp
 /**
- * @brief 打开受保护传输并完成握手。
- * @param y        协程 yield 上下文。
- * @return         握手成功并建立会话时返回 true。
- * @note           失败时设置诊断信息。
+ * @brief 执行客户端握手序列。
+ * @param y    协程 yield 上下文。
+ * @param mux  输出标志，指示协商后的多路复用能力。
+ * @return     协商得到的会话标识符（Int128），失败时返回零。
+ * @note       失败时设置诊断信息。握手有可配置的超时。
  */
-virtual bool Open(YieldContext& y) noexcept = 0;
+virtual Int128 HandshakeClient(YieldContext& y, bool& mux) noexcept;
 
 /**
- * @brief 从受保护传输读取一个分帧消息。
- * @param y        Yield 上下文。
- * @param buffer   输出缓冲区。
- * @param length   读取的数据长度。
- * @return         成功返回 true，发生错误或 EOF 时返回 false。
+ * @brief 执行服务端握手序列。
+ * @param y          协程 yield 上下文。
+ * @param session_id 上层提供的会话标识符。
+ * @param mux        请求的多路复用行为。
+ * @return           握手成功时返回 true。
  */
-virtual bool Read(YieldContext& y, ppp::vector<Byte>& buffer, int& length) noexcept = 0;
+virtual bool HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept;
 
 /**
- * @brief 向受保护传输写入一个分帧消息。
- * @param y        Yield 上下文。
- * @param buffer   要写入的数据。
- * @param offset   缓冲区起始偏移。
- * @param length   要写入的字节数。
- * @return         成功返回 true。
+ * @brief 从受保护传输读取并解密一个分帧消息。
+ * @param y       Yield 上下文。
+ * @param outlen  输出的 payload 长度（字节）。
+ * @return        解密后的 payload 缓冲区，失败/EOF 时返回 null。
+ * @note          在返回给调用方之前完成解密和帧验证。
  */
-virtual bool Write(YieldContext& y, const Byte* buffer, int offset, int length) noexcept = 0;
+virtual std::shared_ptr<Byte> Read(YieldContext& y, int& outlen) noexcept;
+
+/**
+ * @brief 加密并向受保护传输写入一个分帧消息。
+ * @param y             Yield 上下文。
+ * @param packet        Payload 指针。
+ * @param packet_length Payload 长度（字节）。
+ * @return              成功时返回 true。
+ * @note                通过 strand 原子性地完成加密、成帧和写入。
+ */
+virtual bool Write(YieldContext& y, const void* packet, int packet_length) noexcept;
 ```
 
 源文件：`ppp/transmissions/ITransmission.h`
@@ -160,13 +174,18 @@ sequenceDiagram
     participant Client as 客户端
     participant Server as 服务端
 
-    Client->>Server: NOP 前奏（dummy 流量）
-    Server->>Client: NOP 前奏响应
-    Client->>Server: session_id + ivv + 密钥确认
-    Server->>Client: session_id ack + 服务端 ivv
-    Client->>Server: 加密密钥同步
-    Server-->>Client: 握手完成
-    Note over Client,Server: 双方现在拥有匹配的会话专属工作密钥
+    Note over Client,Server: 早期阶段 — base94 帧，dummy 流量
+    Client->>Server: NOP 前奏（可变长度随机 dummy 字节，session_id=0）
+    Server->>Client: NOP 前奏响应（可变长度随机 dummy 字节，session_id=0）
+
+    Note over Client,Server: 身份阶段
+    Server->>Client: 真实 session_id（Int128，由 VirtualEthernetSwitcher 分配）
+    Client->>Server: ivv（Int128 随机值，连接级密钥变化种子）
+    Server->>Client: nmux（随机 Int128；低位 = mux 启用标志）
+
+    Note over Client,Server: 双方：重建 protocol_ 和 transport_ 密码
+    Note over Client,Server: handshaked_ = true；工作密码状态激活
+    Note over Client,Server: 切换到二进制受保护帧族
 ```
 
 早期阶段使用 dummy/NOP 流量来防止流量分析识别握手模式。
@@ -313,14 +332,21 @@ stateDiagram-v2
 
 | ErrorCode | 描述 |
 |-----------|------|
-| `HandshakeFailed` | 受保护传输握手未完成 |
-| `HandshakeTimeout` | 握手超过配置的超时时间 |
-| `SessionKeyDerivationFailed` | 无法从基础密钥 + ivv 派生工作密钥 |
-| `TransmissionReadFailed` | ITransmission 分帧读取失败 |
-| `TransmissionWriteFailed` | ITransmission 分帧写入失败 |
-| `CarrierConnectionFailed` | 承载 TCP/WebSocket 连接失败 |
-| `CarrierTlsNegotiationFailed` | TLS 协商失败（WSS 承载） |
-| `LinkLayerProtocolError` | 无效动作类型或格式错误的动作帧 |
+| `SessionHandshakeFailed` | 受保护传输握手未完成 |
+| `SessionHandshakeFailed` | 握手超过配置的超时时间 |
+| `EvpInitKeyDerivationFailed` | 重建工作 cipher 状态时 cipher/KDF 初始化失败 |
+| `TunnelReadFailed` | 隧道分帧读取失败 |
+| `TunnelWriteFailed` | 隧道分帧写入失败 |
+| `SocketConnectFailed` / `TcpConnectFailed` | 承载 TCP/WebSocket 连接失败 |
+| `SslHandshakeFailed` | TLS 协商失败（WSS 承载） |
+| `ProtocolFrameInvalid` | 无效动作类型、格式错误的动作帧，或来自错误方向的 opcode |
+| `ProtocolPacketActionInvalid` | opcode 字节不在可识别范围内 |
+| `KeepaliveTimeout` | 心跳回复超时 |
+| `SessionHandshakeFailed` | STATIC/STATICACK 交换失败 |
+| `ProtocolMuxFailed` | MUX/MUXON 交换失败 |
+| `MappingCreateFailed` | 服务端拒绝 FRP_ENTRY 注册 |
+
+> **注**：密钥派生、传输读写、承载连接失败等旧设计名不是当前 `ErrorCodes.def` 条目；请使用上表列出的近似现有码。
 
 ---
 

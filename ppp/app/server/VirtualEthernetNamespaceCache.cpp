@@ -147,10 +147,17 @@ namespace ppp {
 
             /**
              * @brief Looks up a cached DNS response and applies caller transaction id.
+             *
+             * @details **Copy-on-read fix (P0-5):** The cached response buffer is immutable
+             *          shared state.  On cache hit the method allocates a local copy, writes
+             *          the caller-supplied @p trans_id into the copy, and returns the copy.
+             *          This eliminates the data race where concurrent Get() callers would
+             *          overwrite each other's transaction IDs on the same shared buffer.
+             *
              * @param key Canonical query key.
-             * @param response Receives packet buffer pointer.
+             * @param response Receives packet buffer pointer (local copy).
              * @param response_length Receives packet length.
-             * @param trans_id Transaction id to write into cached DNS header.
+             * @param trans_id Transaction id to write into the local DNS header copy.
              * @return true on cache hit with a valid DNS header; otherwise false.
              */
             bool VirtualEthernetNamespaceCache::Get(const ppp::string& key, std::shared_ptr<Byte>& response, int& response_length, uint16_t trans_id) noexcept {
@@ -160,7 +167,11 @@ namespace ppp {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
                     return false;
                 }
-                else {
+
+                /* --- Phase 1: extract cached entry under lock --- */
+                std::shared_ptr<Byte> cached_response;
+                int                   cached_length = 0;
+                {
                     NamespaceRecordNodePtr node;
                     SynchronizedObjectScope scope(LockObj_);
 
@@ -176,21 +187,33 @@ namespace ppp {
                     }
 
                     NamespaceRecord& record = node->Value;
-                    response                = record.response;
-                    response_length         = record.response_length;
+                    cached_response         = record.response;
+                    cached_length           = record.response_length;
                 }
+                /* --- lock released --- */
 
-                if (NULLPTR == response) {
+                if (NULLPTR == cached_response) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                     return false;
                 }
 
-                if (response_length < sizeof(dns_hdr)) {
+                if (cached_length < static_cast<int>(sizeof(dns_hdr))) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResponseInvalid);
                     return false;
                 }
 
-                ((dns_hdr*)response.get())->usTransID = trans_id;
+                /* --- Phase 2: copy-on-read — allocate local buffer, memcpy, patch trans_id --- */
+                std::shared_ptr<Byte> local_copy = make_shared_alloc<Byte>(cached_length);
+                if (NULLPTR == local_copy) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    return false;
+                }
+
+                memcpy(local_copy.get(), cached_response.get(), cached_length);
+                reinterpret_cast<dns_hdr*>(local_copy.get())->usTransID = trans_id;
+
+                response        = local_copy;
+                response_length = cached_length;
                 return true;
             }
 

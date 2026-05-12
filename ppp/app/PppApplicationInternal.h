@@ -125,6 +125,16 @@ struct NetworkInterface final {
     ppp::string Nic;
 
     ppp::vector<boost::asio::ip::address> DnsAddresses;
+    /**
+     * @brief Optional human-readable label aligned by index with DnsAddresses.
+     *
+     * When non-empty, the TUN status banner prefers this label over the raw
+     * IP literal (for example "cloudflare-dns.com (DoH)" instead of
+     * "1.1.1.1"). Empty entries fall back to the IP rendering. Populated by
+     * GetDnsAddresses() when the value was derived from a structured
+     * DnsServerEntry whose protocol is DoH or DoT and hostname is non-empty.
+     */
+    ppp::vector<ppp::string> DnsLabels;
 
     boost::asio::ip::address Ngw;
     boost::asio::ip::address IPAddress;

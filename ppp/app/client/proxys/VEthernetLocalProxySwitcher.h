@@ -14,6 +14,8 @@
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/threading/BufferswapAllocator.h>
 
+#include <atomic>
+
 namespace ppp {
     namespace app {
         namespace client {
@@ -41,7 +43,11 @@ namespace ppp {
                      */
                     VEthernetLocalProxySwitcher(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
                     /**
-                     * @brief Destroys the switcher and finalizes active resources.
+                     * @brief Destroys the switcher and finalizes active resources synchronously.
+                     *
+                     * @details Unlike Dispose(), which posts teardown to the switcher context,
+                     *          the destructor calls Finalize() directly on the thread that
+                     *          releases the last owner.
                      */
                     virtual ~VEthernetLocalProxySwitcher() noexcept;
 
@@ -93,6 +99,10 @@ namespace ppp {
                 private:
                     /**
                      * @brief Performs idempotent shutdown for timer, acceptor, and connections.
+                     *
+                     * @details May run either from the asynchronous Dispose() path on the
+                     *          switcher context or directly from the destructor on the final
+                     *          releasing thread.
                      */
                     void                                                                Finalize() noexcept;
                     /**
@@ -136,7 +146,7 @@ namespace ppp {
 
                 private:
                     SynchronizedObject                                                  syncobj_;
-                    bool                                                                disposed_ = false;
+                    std::atomic_bool                                                    disposed_{false};
                     std::shared_ptr<VEthernetExchanger>                                 exchanger_;
                     std::shared_ptr<ppp::net::SocketAcceptor>                           acceptor_;
                     std::shared_ptr<boost::asio::io_context>                            context_;

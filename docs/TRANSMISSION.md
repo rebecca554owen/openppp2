@@ -55,28 +55,30 @@ flowchart TD
 ```mermaid
 classDiagram
     class ITransmission {
-        +HandshakeClient(YieldContext) bool
-        +HandshakeServer(YieldContext) bool
-        +Read(YieldContext, length) shared_ptr~Byte~
+        +HandshakeClient(YieldContext, bool) Int128
+        +HandshakeServer(YieldContext, Int128, bool) bool
+        +Read(YieldContext, int) shared_ptr~Byte~
         +Write(YieldContext, packet, length) bool
-        +Encrypt(packet, length) bool
-        +Decrypt(packet, length) bool
+        +Encrypt(data, datalen, outlen) shared_ptr~Byte~
+        +Decrypt(data, datalen, outlen) shared_ptr~Byte~
         +Dispose() void
-        #DoReadBytes(YieldContext, buf, offset, length) int
-        #DoWriteBytes(YieldContext, buf, offset, length) bool
-        -protocol_  ICiphertext
-        -transport_ ICiphertext
-        -handshaked_ atomic~bool~
-        -disposed_  atomic~bool~
+        #DoReadBytes(YieldContext, length) shared_ptr~Byte~
+        -protocol_  CiphertextPtr
+        -transport_ CiphertextPtr
+        -handshaked_ atomic_bool
+        -disposed_  atomic_bool
+        -frame_rn_  atomic_bool
+        -frame_tn_  atomic_bool
     }
     class ITcpipTransmission {
-        -socket_ TSocket
-        +DoReadBytes() int
+        -socket_ shared_ptr~tcp_socket~
+        -remoteEP_ tcp_endpoint
+        +DoReadBytes() shared_ptr~Byte~
         +DoWriteBytes() bool
     }
     class IWebSocketTransmission {
         -websocket_ WsStream
-        +DoReadBytes() int
+        +DoReadBytes() shared_ptr~Byte~
         +DoWriteBytes() bool
     }
     class SslWebSocketTransmission {
@@ -322,13 +324,14 @@ OPENPPP2 keeps two independent cipher slots:
 
 This is a meaningful architectural split. Metadata and payload are handled differently because metadata leakage matters even when payload content is protected. An attacker who can observe packet lengths and patterns can infer traffic types (DNS, video, VoIP) even without decrypting the payload. Protecting the length field independently raises the bar for traffic analysis.
 
-Both cipher objects are `ppp::cryptography::Ciphertext` instances. The session-specific key material for both is derived during handshake using:
+Both cipher objects are `ppp::cryptography::Ciphertext` instances. In the current `ITransmission.cpp` implementation, both cipher states are rebuilt during handshake using:
 
 ```
-working_key = base_key XOR ivv XOR (nmux low-bit-derived factor)
+protocol_working_key  = Cipher(key.protocol-key  + ivv_str)
+transport_working_key = Cipher(key.transport-key + ivv_str)
 ```
 
-Where `ivv` is the client-generated per-connection entropy value exchanged during handshake and `nmux` is the server-generated multiplexing hint. This means every connection uses different working keys even if the base key in `appsettings.json` is the same.
+Where `ivv` is the client-generated per-connection entropy value exchanged during handshake. `nmux` is the server-generated multiplexing hint; it negotiates the mux flag but is not concatenated into the current cipher key strings. This means every connection uses different working keys even if the base key in `appsettings.json` is the same.
 
 ---
 
@@ -340,7 +343,7 @@ The transmission handshake does not just authenticate a peer. It shapes traffic 
 
 1. Send NOP prelude (dummy traffic to obscure handshake start)
 2. Receive real `session_id` from server
-3. Generate fresh `ivv` (random per-connection entropy, typically 16 bytes)
+3. Generate fresh `ivv` (`Int128` random per-connection entropy)
 4. Send `ivv` to server
 5. Receive `nmux` from server (low bit = mux flag)
 6. Mark `handshaked_ = true`
@@ -362,9 +365,9 @@ sequenceDiagram
     C->>S: NOP prelude (session_id = 0, high bit set)
     S->>C: NOP prelude (session_id = 0, high bit set)
     S->>C: session_id (real, non-zero)
-    C->>S: ivv (16 random bytes)
+    C->>S: ivv (Int128 random value)
     S->>C: nmux (1 byte: low bit = mux flag)
-    Note over C,S: Both sides rebuild protocol_ and transport_\nusing base_key + ivv + nmux
+    Note over C,S: Both sides rebuild protocol_ and transport_\nusing protocol-key + ivv_str / transport-key + ivv_str
     Note over C,S: handshaked_ = true on both sides
     Note over C,S: Binary protected framing now active
 ```
@@ -388,13 +391,13 @@ After both sides have exchanged NOP preludes, the real `session_id` exchange beg
 
 ## 12. Connection-Specific Key Derivation
 
-The client generates `ivv` fresh for every new connection. The server uses it along with the base key and `nmux` to rebuild connection-specific cipher state. This means:
+The client generates `ivv` fresh for every new connection. Both peers use it with the configured base keys to rebuild connection-specific cipher state. This means:
 
 - Different connections between the same client and server use different working keys.
 - Compromise of one connection's working key does not expose other connections.
 - Passive traffic analysis that relies on key reuse (e.g., replay attacks with static keys) is defeated.
 
-The `nmux` low bit additionally conditions the key derivation on whether multiplexing is active, meaning MUX and non-MUX sessions produce different cipher states even with the same `ivv`.
+The `nmux` low bit negotiates whether multiplexing is active. It affects post-handshake framing behavior, but the current key strings are rebuilt from `protocol-key + ivv_str` and `transport-key + ivv_str`.
 
 ---
 

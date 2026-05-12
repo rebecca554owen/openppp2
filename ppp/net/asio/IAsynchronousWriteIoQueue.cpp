@@ -14,7 +14,11 @@ namespace ppp {
             IAsynchronousWriteIoQueue::IAsynchronousWriteIoQueue(const std::shared_ptr<BufferswapAllocator>& allocator) noexcept
                 : BufferAllocator(allocator)
                 , disposed_(false)
-                , sending_(false) {
+                , sending_(false)
+                , pending_items_(0)
+                , pending_bytes_(0)
+                , max_pending_items_(4096)
+                , max_pending_bytes_(16 * 1024 * 1024) {
 
             }
 
@@ -35,20 +39,43 @@ namespace ppp {
              * holding the synchronization object to avoid lock re-entrancy issues.
              */
             void IAsynchronousWriteIoQueue::Finalize() noexcept {
+                /**
+                 * @brief One-shot guard: atomically transition to disposed state.
+                 *
+                 * If already disposed (exchange returns true), another thread or
+                 * a prior Dispose()/destructor call has already drained the queue.
+                 * Returning early avoids re-acquiring syncobj_ and double-draining.
+                 */
+                if (disposed_.exchange(true, std::memory_order_acq_rel)) {
+                    return;
+                }
+
+                /** @brief Detach the pending queue under lock. */
                 AsynchronousWriteIoContextQueue queues;
-                for (;;) {
-                    /** @brief Atomically transition to disposed state and detach pending queue. */
+                {
                     SynchronizedObjectScope scope(syncobj_);
-                    disposed_ = true;
                     sending_ = false;
 
                     queues = std::move(queues_);
                     queues_.clear();
-                    break;
                 }
 
+                /** @brief Drain backpressure counters for all queued contexts being dropped. */
+                int drain_items = 0;
+                int drain_bytes = 0;
                 for (AsynchronousWriteIoContextPtr& context : queues) {
+                    if (NULLPTR != context) {
+                        drain_items++;
+                        drain_bytes += context->packet_length;
+                    }
                     context->Forward(false);
+                }
+
+                if (drain_items > 0) {
+                    pending_items_.fetch_sub(drain_items, std::memory_order_relaxed);
+                }
+                if (drain_bytes > 0) {
+                    pending_bytes_.fetch_sub(drain_bytes, std::memory_order_relaxed);
                 }
             }
 
@@ -80,7 +107,7 @@ namespace ppp {
 
             /** @brief Coroutine-based write wrapper that dispatches through callback path. */
             bool IAsynchronousWriteIoQueue::WriteBytes(YieldContext& y, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_acquire)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
@@ -105,7 +132,7 @@ namespace ppp {
              */
             bool IAsynchronousWriteIoQueue::WriteBytes(const std::shared_ptr<Byte>& packet, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
                 IAsynchronousWriteIoQueue* const q = this;
-                if (q->disposed_) {
+                if (q->disposed_.load(std::memory_order_acquire)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
@@ -135,11 +162,46 @@ namespace ppp {
 
                 {
                     SynchronizedObjectScope scope(q->syncobj_);
-                    if (q->disposed_) {
+                    if (q->disposed_.load(std::memory_order_acquire)) {
                         context->Clear();
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return false;
                     }
+
+                    /**
+                     * @brief Backpressure check and counter reservation in one critical section.
+                     *
+                     * Checking threshold and incrementing counters under the same lock prevents
+                     * concurrent WriteBytes() callers from all passing the check and then all
+                     * incrementing, which would overshoot the configured limits.
+                     */
+                    int cur_items = q->pending_items_.load(std::memory_order_relaxed);
+                    int cur_bytes = q->pending_bytes_.load(std::memory_order_relaxed);
+                    int mpi = q->max_pending_items_.load(std::memory_order_relaxed);
+                    int mpb = q->max_pending_bytes_.load(std::memory_order_relaxed);
+
+                    if (mpi > 0 && cur_items >= mpi) {
+                        context->Clear();
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
+                        return false;
+                    }
+
+                    if (mpb > 0 && cur_bytes + packet_length > mpb) {
+                        context->Clear();
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueBackpressure);
+                        return false;
+                    }
+
+                    /**
+                     * @brief Reserve backpressure counters atomically with the accept decision.
+                     *
+                     * Incrementing here (inside the lock) together with the threshold check
+                     * ensures that concurrent callers cannot collectively overshoot the limit.
+                     * The counters are decremented on: (a) evtf completion callback,
+                     * (b) write-start failure in this function, or (c) Finalize() drain.
+                     */
+                    q->pending_items_.fetch_add(1, std::memory_order_relaxed);
+                    q->pending_bytes_.fetch_add(packet_length, std::memory_order_relaxed);
 
                     if (q->sending_) {
                         /** @brief Another write is in flight; defer this request into the pending queue. */
@@ -167,12 +229,25 @@ namespace ppp {
                      *        sending_ = true and this failure is not silently abandoned.
                      */
                     int drain = DoTryWriteBytesNext();
+
+                    /**
+                     * @brief Save packet_length before Clear() zeros it.
+                     *
+                     * Clear() sets packet_length to 0, so we must capture the original
+                     * value first to decrement pending_bytes_ correctly.
+                     */
+                    int saved_length = ctx_to_send->packet_length;
+                    ctx_to_send->Clear();
+
+                    /** @brief Decrement backpressure counters for the failed ctx_to_send (evtf will not fire). */
+                    q->pending_items_.fetch_sub(1, std::memory_order_relaxed);
+                    q->pending_bytes_.fetch_sub(saved_length, std::memory_order_relaxed);
+
                     if (drain < 0) {
                         Dispose();
                     }
 
-                    ctx_to_send->Clear();
-                    if (q->disposed_) {
+                    if (q->disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
                     else {
@@ -198,7 +273,7 @@ namespace ppp {
              *       non-recursive std::mutex.
              */
             bool IAsynchronousWriteIoQueue::DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept {
-                if (disposed_) {
+                if (disposed_.load(std::memory_order_acquire)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
@@ -208,6 +283,10 @@ namespace ppp {
                     [self, this, context](bool ok) noexcept {
                         int err = -1;
                         context->Forward(ok);
+
+                        /** @brief Decrement backpressure counters for the completed in-flight context. */
+                        pending_items_.fetch_sub(1, std::memory_order_relaxed);
+                        pending_bytes_.fetch_sub(context->packet_length, std::memory_order_relaxed);
 
                         if (ok) {
                             err = DoTryWriteBytesNext();
@@ -239,7 +318,7 @@ namespace ppp {
                     SynchronizedObjectScope scope(syncobj_);
                     sending_ = false;
 
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                         return -1;
                     }
@@ -270,7 +349,12 @@ namespace ppp {
                 bool ok = DoTryWriteBytesUnsafe(context);
                 if (!ok) {
                     context->Forward(false);
-                    if (disposed_) {
+
+                    /** @brief Decrement backpressure counters for the failed queued context (evtf will not fire). */
+                    pending_items_.fetch_sub(1, std::memory_order_relaxed);
+                    pending_bytes_.fetch_sub(context->packet_length, std::memory_order_relaxed);
+
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     }
                     else {

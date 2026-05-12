@@ -235,24 +235,45 @@ erDiagram
 
 ## Go Backend 源码布局
 
+Go 管理后端在 `go/` 下有两个管理系统：
+
+### 遗留系统：`go/`（原始 managed server）
+
 ```
 go/
 ├── main.go                 # 入口点，参数解析，ManagedServer 启动
-├── server/
-│   ├── managed_server.go   # ManagedServer 核心
-│   ├── ws_handler.go       # WebSocket 控制链路处理器
-│   ├── http_handler.go     # HTTP 管理 API 处理器
-│   └── tick.go             # 后台 tick loop
-├── storage/
-│   ├── redis.go            # Redis 连接与缓存辅助函数
-│   └── mysql.go            # MySQL 连接与查询辅助函数
-├── model/
-│   ├── user.go             # 用户模型
-│   ├── session.go          # 会话模型
-│   └── node.go             # 节点模型
-└── config/
-    └── config.go           # 配置解析
+├── ppp/
+│   ├── ManagedServer.go    # ManagedServer 核心（WebSocket 控制链路）
+│   ├── Handler.go          # 命令处理器分发
+│   ├── Server.go           # HTTP 管理服务器
+│   ├── Configuration.go    # 配置解析
+│   ├── User.go             # 用户模型
+│   ├── Node.go             # 节点模型
+│   ├── Packet.go           # 线协议编码
+│   └── Traffic.go          # 流量计费
+├── auxiliary/              # 日志、辅助函数
+├── io/                     # WebSocket 服务器、Redis 客户端、DB 封装
+└── daemon/                 # 遗留 daemon 封装（已被 guardian 取代）
 ```
+
+### 新系统：`go/guardian/`（多实例管理器 + WebUI + TUI）
+
+```
+go/guardian/
+├── main.go                 # 入口点
+├── guardian.go             # 核心 guardian 逻辑
+├── config.go               # 配置
+├── api/                    # HTTP API 处理器
+├── auth/                   # 认证中间件
+├── cmd/                    # CLI 命令
+├── instance/               # 每实例生命周期管理
+├── profile/                # 配置文件管理
+├── service/                # 系统服务集成
+├── webui.go                # WebUI 嵌入与服务
+└── webui/                  # Svelte + Vite 前端源码
+```
+
+Guardian 系统取代了 `go/daemon/`，提供多实例管理能力，包含 Svelte WebUI 和 Bubble Tea TUI。
 
 ---
 
@@ -354,20 +375,22 @@ C++ 服务端读取此结果并拒绝会话，同时设置相应诊断。
 
 ## 错误码参考
 
-管理后端操作相关的 `ppp::diagnostics::ErrorCode` 值：
+管理后端操作相关的 `ppp::diagnostics::ErrorCode` 值（来自 `ErrorCodes.def`）：
 
-| ErrorCode | 符号名 | 含义 |
-|-----------|--------|------|
-| `0` | `None` | 无错误 |
-| `1` | `Unspecified` | 未指定错误 |
-| `10200` | `ManagedServerConnectionFailed` | 无法连接 Go backend |
-| `10201` | `ManagedServerAuthenticationFailed` | Backend 拒绝认证 |
-| `10202` | `ManagedServerQuotaExceeded` | 用户额度耗尽 |
-| `10203` | `ManagedServerUserExpired` | 用户订阅已过期 |
-| `10204` | `ManagedServerProtocolError` | 从 backend 收到无效帧 |
-| `10205` | `ManagedServerReconnecting` | Backend 链路断开，正在重连 |
+| ErrorCode | 说明 |
+|-----------|------|
+| `VEthernetManagedConnectUrlEmpty` | 管理后端连接 URL 为空 |
+| `VEthernetManagedAuthNullCallback` | 认证回调为空 |
+| `VEthernetManagedAuthDuplicateSession` | 同一会话的重复认证请求 |
+| `VEthernetManagedPacketLengthOverflow` | 包长度超出支持范围 |
+| `VEthernetManagedPacketJsonParseFailed` | 包 JSON 解析失败 |
+| `VEthernetManagedVerifyUrlEmpty` | 验证 URI 输入为空 |
+| `VEthernetManagedEndpointInputUrlEmpty` | 端点 URL 解析输入为空 |
+| `SessionAuthFailed` | 会话认证失败 |
+| `SessionQuotaExceeded` | 会话额度超限 |
+| `KeepaliveTimeout` | 对端心跳超时 |
 
-这些错误码通过 `SetLastErrorCode(...)` 在 `ppp/app/server/VirtualEthernetManagedServer.cpp` 中设置。
+这些错误码通过 `SetLastErrorCode(...)` 在 `ppp/app/server/VirtualEthernetManagedServer.cpp` 和 `ppp/diagnostics/PreventReturn.cpp` 中设置。
 
 ---
 

@@ -1,9 +1,11 @@
 # IPv6 NDP 代理子系统
 
-> **子系统：** `ppp::app::server::VirtualEthernetSwitcher` + `ppp::tap::TapLinux`  
-> **主要文件：**  
-> - `ppp/app/server/VirtualEthernetSwitcher.cpp`（第 874–1282 行、第 2236–2311 行）  
-> - `ppp/app/server/VirtualEthernetSwitcher.h`  
+[English Version](IPV6_NDP_PROXY.md)
+
+> **子系统：** `ppp::app::server::VirtualEthernetSwitcher` + `ppp::tap::TapLinux`
+> **主要文件：**
+> - `ppp/app/server/VirtualEthernetSwitcher.cpp`（第 919–1370 行、第 2441–2530 行）
+> - `ppp/app/server/VirtualEthernetSwitcher.h`
 > **支持文件：** Linux TAP 实现、`ppp/diagnostics/ErrorCodes.def`
 
 ---
@@ -73,8 +75,8 @@ graph TB
 
 | 成员 | 文件:行号 | 类型 | 描述 |
 |---|---|---|---|
-| `ipv6_neighbor_proxy_ifname_` | `.h:785` | `ppp::string` | 代理处于活跃状态的上行网卡名称 |
-| `ipv6_neighbor_proxy_owned_` | `.h:786` | `bool` | 若我们设置了 sysctl（关闭时必须恢复），则为 true |
+| `ipv6_neighbor_proxy_ifname_` | `.h:821` | `ppp::string` | 代理处于活跃状态的上行网卡名称 |
+| `ipv6_neighbor_proxy_owned_` | `.h:822` | `bool` | 若我们设置了 sysctl（关闭时必须恢复），则为 true |
 | `ipv6_ndp_proxy_applied_` | `.h`（隐式） | `bool` | 为此 ifname 写入 sysctl 后为 true |
 | `ipv6_ndp_proxy_map_` | `.h`（隐式） | `unordered_map` | 代理条目的每地址引用计数 |
 
@@ -108,7 +110,7 @@ stateDiagram-v2
 
 ## 4. `OpenIPv6NeighborProxyIfNeed`
 
-**位置：** `VirtualEthernetSwitcher.cpp`，第 1044 行  
+**位置：** `VirtualEthernetSwitcher.cpp`，第 1099 行
 **签名：**
 
 ```cpp
@@ -147,7 +149,7 @@ flowchart TD
 
 ## 5. `AddIPv6NeighborProxy`
 
-**位置：** `VirtualEthernetSwitcher.cpp`，第 1211 行  
+**位置：** `VirtualEthernetSwitcher.cpp`，第 1282 行
 **签名：**
 
 ```cpp
@@ -157,7 +159,7 @@ bool VirtualEthernetSwitcher::AddIPv6NeighborProxy(
 
 在交换机完全激活后调用（租约提交和 `AddIPv6Exchanger` 之后）。仅在 GUA 模式下。
 
-### 调用点（第 874 行）
+### 调用点（第 919 行）
 
 ```cpp
 bool proxy_ok = !proxy_required || AddIPv6NeighborProxy(ip);
@@ -173,7 +175,7 @@ if (!proxy_ok) {
 
 存在两个重载：
 
-### 重载 1：仅按地址（第 1241 行）
+### 重载 1：仅按地址（第 1315 行）
 
 ```cpp
 bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(
@@ -182,7 +184,7 @@ bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(
 
 使用 `ipv6_neighbor_proxy_ifname_` 作为接口。在正常租约过期和会话拆除期间调用。
 
-### 重载 2：按显式接口 + 地址（第 1267 行）
+### 重载 2：按显式接口 + 地址（第 1344 行）
 
 ```cpp
 bool VirtualEthernetSwitcher::DeleteIPv6NeighborProxy(
@@ -216,7 +218,7 @@ return true;
 
 ## 7. `RefreshIPv6NeighborProxyIfNeed`
 
-**位置：** `VirtualEthernetSwitcher.cpp`，第 2236 行  
+**位置：** `VirtualEthernetSwitcher.cpp`，第 2441 行
 **签名：**
 
 ```cpp
@@ -278,10 +280,10 @@ sequenceDiagram
 
 | 错误码 | 严重级别 | 触发条件 |
 |---|---|---|
-| `IPv6NeighborProxyEnableFailed` | `kError` | `TapLinux::EnableIPv6NeighborProxy()` 返回 false；sysctl 写入被拒绝（`.cpp` 第 1055、1062、2246、2286 行） |
-| `IPv6NeighborProxyAddFailed` | `kError` | `TapLinux::AddIPv6NeighborProxy()` 返回 false；`ip neigh add proxy` 失败（`.cpp` 第 878、1219、1227 行） |
-| `IPv6NeighborProxyDeleteFailed` | `kError` | `TapLinux::DeleteIPv6NeighborProxy()` 返回 false；`ip neigh del proxy` 失败（`.cpp` 第 945、1244、1252、1270、1278 行） |
-| `IPv6NDPProxyFailed` | `kError` | 内核 NDP 代理条目无法通过 `ip neigh` 安装；会话级代理失败（`.cpp` 第 878 行） |
+| `IPv6NeighborProxyEnableFailed` | `kError` | `TapLinux::EnableIPv6NeighborProxy()` 返回 false；sysctl 写入被拒绝 |
+| `IPv6NeighborProxyAddFailed` | `kError` | `TapLinux::AddIPv6NeighborProxy()` 返回 false；`ip neigh add proxy` 失败 |
+| `IPv6NeighborProxyDeleteFailed` | `kError` | `TapLinux::DeleteIPv6NeighborProxy()` 返回 false；`ip neigh del proxy` 失败 |
+| `IPv6NDPProxyFailed` | `kError` | 内核 NDP 代理条目无法通过 `ip neigh` 安装；会话级代理失败 |
 
 ---
 
@@ -364,20 +366,20 @@ sequenceDiagram
 
 ### 12.1 `IPv6NeighborProxyEnableFailed`
 
-**原因：** `sysctl` 命令失败，通常是由于权限不足或内核版本不兼容。  
-**影响：** GUA 模式无法运行。`ipv6_runtime_state_` 设为 `3`。  
+**原因：** `sysctl` 命令失败，通常是由于权限不足或内核版本不兼容。
+**影响：** GUA 模式无法运行。`ipv6_runtime_state_` 设为 `3`。
 **恢复：** 以 `CAP_NET_ADMIN` 能力重启服务器。或者，在 `/etc/sysctl.conf` 中预配置 `proxy_ndp=1`，使服务器发现它已启用。
 
 ### 12.2 `IPv6NeighborProxyAddFailed`
 
-**原因：** `ip -6 neigh add proxy` 失败，通常是因为地址已在代理表中（重复）或内核代理队列已满。  
-**影响：** 特定客户端的 IPv6 地址无法从上游路由器访问。其他客户端不受影响。  
+**原因：** `ip -6 neigh add proxy` 失败，通常是因为地址已在代理表中（重复）或内核代理队列已满。
+**影响：** 特定客户端的 IPv6 地址无法从上游路由器访问。其他客户端不受影响。
 **恢复：** 无自动恢复。客户端必须重新连接以触发新的代理注册尝试。如果内核队列已满，增加 `proxy_qlen`。
 
 ### 12.3 `IPv6NeighborProxyDeleteFailed`
 
-**原因：** `ip -6 neigh del proxy` 失败，通常是因为条目不存在（已在外部删除）。  
-**影响：** 非致命。会话和租约表仍然正确清理。最坏情况是，过期的内核 NDP 代理条目持续存在，直到内核驱逐它（通常约 60 秒）。  
+**原因：** `ip -6 neigh del proxy` 失败，通常是因为条目不存在（已在外部删除）。
+**影响：** 非致命。会话和租约表仍然正确清理。最坏情况是，过期的内核 NDP 代理条目持续存在，直到内核驱逐它（通常约 60 秒）。
 **恢复：** 不需要。内核最终驱逐过期条目。
 
 ---

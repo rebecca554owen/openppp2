@@ -3,6 +3,9 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/io/File.h>
 #include <common/chnroutes2/chnroutes2.h>
+#include <mutex>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 /**
  * @file SSL.cpp
@@ -169,14 +172,30 @@ namespace ppp {
                     return certificate_key_password_;
                 }, ec);
 
-            /** @brief Populate trust store from system default locations. */
-            ssl_context->set_default_verify_paths();
+            /**
+             * @brief Populate trust store from system default locations.
+             *
+             * @details On Android, set_default_verify_paths() is skipped because
+             *          Android does not expose system CAs via standard OpenSSL paths.
+             *          For server contexts this is less critical — the server loads
+             *          its own certificate chain and private key explicitly.
+             */
+#if !defined(__ANDROID__)
 
-            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "DEFAULT");
+            ssl_context->set_default_verify_paths();
+#endif
+
+            /**
+             * @brief Avoid the "DEFAULT" cipher alias on BoringSSL. OpenSSL builds
+             *        get an explicit high-strength cipher filter below.
+             */
             if (ciphersuites.size()) {
                 /** @brief Apply caller-provided TLS 1.3 ciphersuite preferences. */
                 SSL_CTX_set_ciphersuites(ssl_context->native_handle(), ciphersuites.data());
             }
+#if !defined(OPENSSL_IS_BORINGSSL)
+            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "HIGH:!aNULL:!eNULL:!MD5:!RC4:!DES");
+#endif
             SSL_CTX_set_ecdh_auto(ssl_context->native_handle(), 1);
             return ssl_context;
         }
@@ -193,8 +212,26 @@ namespace ppp {
             bool                                        verify_peer, 
             const std::string&                          ciphersuites) noexcept {
 
-            std::shared_ptr<boost::asio::ssl::context> ssl_context = make_shared_object<boost::asio::ssl::context>(
-                ppp::ssl::SSL::SSL_C_METHOD(ppp::ssl::SSL::SSL_METHOD::tlsv13));
+            /**
+             * @brief Warm up OpenSSL/BoringSSL global SSL_CTX state once.
+             *
+             * @details boost::asio::ssl::context's constructor invokes
+             *          SSL_CTX_new, which lazily initialises BoringSSL's
+             *          global tables. Only that first global initialisation is
+             *          serialised; per-context allocation and CA loading below
+             *          can run concurrently.
+             */
+            static std::once_flag s_ssl_ctx_init_once;
+            std::call_once(s_ssl_ctx_init_once, []() noexcept {
+                SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+                if (ctx != NULLPTR) {
+                    SSL_CTX_free(ctx);
+                }
+            });
+
+            std::shared_ptr<boost::asio::ssl::context> ssl_context =
+                make_shared_object<boost::asio::ssl::context>(
+                    ppp::ssl::SSL::SSL_C_METHOD(method));
             if (!ssl_context) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                 return NULLPTR;
@@ -202,6 +239,10 @@ namespace ppp {
 
             /**
              * @brief Try loading the configured CA bundle file first.
+             *
+             * @details On all platforms, chnroutes2_cacertpath_default() returns
+             *          "./cacert.pem" (or ".\cacert.pem" on Windows). If the file
+             *          exists and is readable, it is loaded as the primary CA source.
              */
             boost::system::error_code ec = boost::asio::error::invalid_argument;
             if (ppp::string cacert = chnroutes2_cacertpath_default(); !cacert.empty()) {
@@ -212,22 +253,103 @@ namespace ppp {
 
             /**
              * @brief Fall back to built-in root certificates if file-based loading fails.
+             *
+             * @details Uses the error_code overload so certificate parsing failures
+             *          do not propagate as Boost/system_error exceptions from this
+             *          fallback path.
+             *          On Android, this is typically the primary CA source because
+             *          set_default_verify_paths() is skipped (Android does not expose
+             *          the system CA store through standard OpenSSL filesystem paths).
+             *          The hardcoded set in root_certificates.hpp contains Mozilla root
+             *          CAs which provide adequate trust coverage for common servers.
              */
             if (ec) {
-                load_root_certificates(*ssl_context);
+                load_root_certificates(*ssl_context, ec);
             }
 
-            /** @brief Populate trust store from system default locations. */
+            /**
+             * @brief Populate trust store from system default locations.
+             *
+             * @details On Android (BoringSSL), set_default_verify_paths() is a
+             *          no-op because Android does not expose the system CA store
+             *          through the standard filesystem paths that OpenSSL queries.
+             *          The trust source chain on Android is therefore:
+             *            1. cacert.pem file (if present and loadable)
+             *            2. Built-in root certificates from root_certificates.hpp
+             *          Both paths ensure verify_peer has CA data. If no CA source
+             *          succeeded, verify_peer will fail-closed during handshake
+             *          (correct secure behavior — not a silent downgrade).
+             */
+#if !defined(__ANDROID__)
+
             ssl_context->set_default_verify_paths();
+#endif
+
+            /**
+             * @brief Set verify mode. On Android with verify_peer, trust anchors
+             *        come from cacert.pem or the bundled root_certificates.hpp.
+             *
+             * @details If all CA loading paths failed (ec still set) and the caller
+             *          requested verify_peer, the trust store will be empty and every
+             *          handshake will fail — this is intentional fail-closed behavior,
+             *          not a silent security downgrade. We record a diagnostic here so
+             *          operators can trace the root cause of subsequent handshake errors.
+             */
+#if defined(__ANDROID__)
+            if (verify_peer && ec) {
+                /**
+                 * @brief Diagnostic: verify_peer was requested but no CA source was
+                 *        successfully loaded (cacert.pem missing/unreadable AND the
+                 *        built-in root certificate set failed to parse). The trust
+                 *        store is empty; all TLS handshakes will reject peer certs.
+                 *        Operators should ensure a valid cacert.pem is deployed at
+                 *        the path returned by chnroutes2_cacertpath_default().
+                 */
+                ppp::diagnostics::SetLastErrorCode(
+                    ppp::diagnostics::ErrorCode::SslHandshakeFailed);
+            }
+#endif
             ssl_context->set_verify_mode(verify_peer ? boost::asio::ssl::verify_peer : boost::asio::ssl::verify_none);
 
-            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "DEFAULT");
+            /**
+             * @brief Avoid the "DEFAULT" cipher alias on BoringSSL. OpenSSL builds
+             *        get an explicit high-strength cipher filter below.
+             */
             if (ciphersuites.size()) {
                 /** @brief Apply caller-provided TLS 1.3 ciphersuite preferences. */
                 SSL_CTX_set_ciphersuites(ssl_context->native_handle(), ciphersuites.data());
             }
+#if !defined(OPENSSL_IS_BORINGSSL)
+            SSL_CTX_set_cipher_list(ssl_context->native_handle(), "HIGH:!aNULL:!eNULL:!MD5:!RC4:!DES");
+#endif
 
             SSL_CTX_set_ecdh_auto(ssl_context->native_handle(), 1);
+
+            /**
+             * @brief Pre-sort the X509_STORE's internal objects stack.
+             *
+             * @details After CA loading (load_verify_file / load_root_certificates),
+             *          the X509_STORE's objects stack is populated but NOT
+             *          sorted. The first lookup during TLS handshake calls
+             *          OPENSSL_sk_find, which lazily sorts the stack via
+             *          qsort. When two handshakes on two separate SSL_CTXs
+             *          run concurrently on scheduler threads, each triggers
+             *          its own lazy sort — but both touch shared BoringSSL
+             *          globals (OBJ ASN.1 tables, error-string init) that
+             *          the qsort callback path dereferences. The race has
+             *          been observed on Android as SIGSEGV inside
+             *          OPENSSL_sk_find / local_qsort with fault addr 0x0.
+             *
+             *          Force-sorting here keeps each context's store in its
+             *          sorted, immutable-from-here state before the caller sees
+             *          the SSL_CTX, so subsequent concurrent handshakes take the
+             *          fast bsearch path without ever calling qsort.
+             */
+            if (X509_STORE* store = SSL_CTX_get_cert_store(ssl_context->native_handle())) {
+                if (STACK_OF(X509_OBJECT)* objs = X509_STORE_get0_objects(store)) {
+                    sk_X509_OBJECT_sort(objs);
+                }
+            }
             return ssl_context;
         }
 

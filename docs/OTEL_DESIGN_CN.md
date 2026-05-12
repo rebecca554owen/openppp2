@@ -26,7 +26,7 @@ Telemetry（结构化日志 / OTel）是**可选补充层**，不是错误码的
 
 - **`ppp/diagnostics/Telemetry.h`** — 零开销门面。当 `PPP_TELEMETRY=0` 时提供内联空操作存根，确保禁用时无运行时开销。暴露 `SetEnabled(bool)`、`SetMinLevel(int)`、`SetCountEnabled(bool)`、`SetSpanEnabled(bool)`、`Configure(const char* endpoint)`、`SetLogFile(const char* path)`、`Flush(int timeout_ms)`、`Histogram(...)` 以及 RAII `SpanScope` 用于运行期控制和追踪。
 - **`ppp/diagnostics/Telemetry.cpp`** — 异步后端，使用有界队列（4096 条目）、满时丢弃策略及后台工作线程。支持三种输出目标：内置 stderr 后端（默认）、HTTP OTLP exporter（`HttpOtlpExporter`）和可选的文件输出。OTLP exporter 批量收集最多 256 个事件并以 OTLP/JSON HTTP POST 发送至配置的采集器端点，支持日志、计数器、Gauge、Histogram 和完成态 Span。OTLP 输出现在包含资源/服务元数据以及每个事件的结构化属性，例如 `service.name`、`thread.id`、日志的 `log.level` / `component`，以及 span 在非空时的 `session.id`。使用原始 POSIX socket（Windows 上为 WinSock2），无外部依赖。
-- **CMake 选项 `PPP_TELEMETRY`** — 编译期开关，默认 `OFF`。
+- **CMake 选项 `PPP_TELEMETRY`** — 编译期提示（默认 1 / ON）。Telemetry 门面始终编译；运行期行为由 `g_enabled` 标志控制（默认 `false`），通过 `appsettings.json` 中 `telemetry.enabled = true` 激活。
 - **插桩覆盖** — 已有 13 个模块完成插桩：transmission、protocol、server switcher、server exchanger、client switcher、client exchanger、mux、tap、vnetstack、ITap、tcpip、websocket、managed。
 - **运行期配置** — 从 `appsettings.json` 加载，路径为 `AppConfiguration::telemetry.*` → `telemetry::SetEnabled/SetMinLevel/SetCountEnabled/SetSpanEnabled/Configure/SetLogFile()`。
 - **级别过滤** — `Log` 事件在调用点（快速路径）和后端线程（防御性）均按级别过滤，确保运行期降低级别时不会有 TRACE 事件漏过。
@@ -56,7 +56,7 @@ Telemetry **不得** 重复错误码的语义。它只记录错误码**不覆盖
 
 这是不可妥协的。
 
-- **编译期**：`#ifdef PPP_TELEMETRY` 或 CMake 选项。
+- **编译期**：`#ifdef PPP_TELEMETRY` 或 CMake 选项。注意：`PPP_TELEMETRY` 当前默认为 1（始终编译）；运行期控制通过 `g_enabled` 标志。
 - **运行期**：配置项 `telemetry.enabled = false` 为默认值。
 - **按模块**：每个子系统可独立开启。
 - **热关闭**：禁用时 telemetry facade 编译为空操作。
@@ -148,22 +148,31 @@ Telemetry 导出事件时，推荐包含以下字段：
 ```cpp
 namespace ppp::telemetry {
     void Log(Level level, const char* component, const char* fmt, ...) noexcept;
+    void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept;
     void Count(const char* metric, int64_t delta) noexcept;
     void Gauge(const char* metric, int64_t value) noexcept;
     void Histogram(const char* metric, int64_t value) noexcept;
     void TraceSpan(const char* name, const char* session_id) noexcept;
     void SetEnabled(bool enabled) noexcept;
-    void SetMinLevel(int level) noexcept;
     void SetCountEnabled(bool enabled) noexcept;
     void SetSpanEnabled(bool enabled) noexcept;
+    void SetConsoleLogEnabled(bool enabled) noexcept;
+    void SetConsoleMetricEnabled(bool enabled) noexcept;
+    void SetConsoleSpanEnabled(bool enabled) noexcept;
+    bool IsConsoleLogEnabled() noexcept;
+    bool IsConsoleMetricEnabled() noexcept;
+    bool IsConsoleSpanEnabled() noexcept;
+    int  GetMinLevel() noexcept;
+    void SetMinLevel(int level) noexcept;
     void Configure(const char* endpoint) noexcept;
     void SetLogFile(const char* path) noexcept;
     void Flush(int timeout_ms = 3000) noexcept;
+    void Shutdown() noexcept;
     class SpanScope;
 }
 ```
 
-当 `PPP_TELEMETRY` 未定义时，这些函数是内联空函数 —— 零开销。
+当 `PPP_TELEMETRY` 未定义时，这些函数是内联空函数 —— 零开销。在当前代码库中 `PPP_TELEMETRY` 默认为 1（始终编译）；运行期禁用通过 `SetEnabled(false)` 或 `telemetry.enabled = false` 配置实现。
 
 ---
 
@@ -202,15 +211,108 @@ Telemetry 可以记录：
 
 > **注意：** 由于所有插桩均通过 `Telemetry.h` 门面调用，更换后端或添加 exporter 无需修改任何已插桩的模块。
 
-### 第三阶段 —— 可选 Metrics ✅
+### 第三阶段 —— 可选 Metrics ✅（设计完成）
 
-- `Gauge()` API 已添加到 `Telemetry.h`（禁用时为零开销空操作）。
-- OTLP `BuildGaugeJson()` 实现了 OTel Gauge 数据模型（每次数据点报告瞬时值）。
-- Gauge 插桩：`server.active_sessions`、`server.exchanger_count`、`tap.active_fds`、`tap.ipv6_routes`、`tap.neighbor_proxies`。
-- `Histogram()` API 已添加到 `Telemetry.h`，OTLP `BuildHistogramJson()` 已可导出直方图样本。
-- Histogram 插桩：`websocket.handshake.us`、`websocket.wss.handshake.us`、`managed.auth.us`。
-- Histogram 插桩还覆盖：`server.session.establish.us`、`server.ipv6.assign.us`、`server.route.add.us`、`server.route.delete.us`、`client.connect.us`、`client.proxy.setup.us`、`client.route.apply.us`、`client.dns.apply.us`、`managed.sync.us`、`mux.link.setup.us`、`tap.ipv6.route.add.us`、`tap.ipv6.neighbor.add.us`、`tap.ipv6.neighbor.delete.us`、`tap.interface.state.us`、`vnetstack.connect.us`、`transmission.handshake.us`。
-- 当前桶聚合仍较轻量；现阶段实现为带固定边界的一样本 histogram 点。
+> **状态说明：** ✅ 标记表示可选 Metrics 的**设计与初始实现已完成**。Metrics **不是**强制的运行时门控（runtime gate）——它们是一个可选的可观测性层，运营者可以按需启用或保持关闭。
+
+#### 3.1 指标清单
+
+所有指标均通过 `Telemetry.h` 门面导出。当 `PPP_TELEMETRY` 禁用时，指标调用编译为内联空操作存根。当 `telemetry.count` 为 `false` 时，指标调用走运行期快速返回路径，只执行既有 enabled/count 守卫，不入队、不分配、不格式化，也不触发 exporter 工作。
+
+**Gauge（瞬时值，状态变化时上报）：**
+
+| 指标名称 | 类型 | 模块 | 说明 |
+|---|---|---|---|
+| `server.active_sessions` | Gauge | server switcher | 当前活跃会话数 |
+| `server.exchanger_count` | Gauge | server exchanger | 存活的 exchanger 实例数 |
+| `tap.active_fds` | Gauge | tap | 活跃的 TAP 文件描述符数 |
+| `tap.ipv6_routes` | Gauge | tap | 已安装的 IPv6 路由数 |
+| `tap.neighbor_proxies` | Gauge | tap | 活跃的 IPv6 邻居代理数 |
+
+**Histogram（延迟分布，每次操作上报）：**
+
+| 指标名称 | 类型 | 模块 | 说明 |
+|---|---|---|---|
+| `server.session.establish.us` | Histogram | server switcher | 会话建立延迟（µs） |
+| `server.ipv6.assign.us` | Histogram | server switcher | IPv6 地址分配延迟（µs） |
+| `server.route.add.us` | Histogram | server switcher | 路由添加延迟（µs） |
+| `server.route.delete.us` | Histogram | server switcher | 路由删除延迟（µs） |
+| `client.connect.us` | Histogram | client switcher | 客户端连接延迟（µs） |
+| `client.proxy.setup.us` | Histogram | client switcher | 代理设置延迟（µs） |
+| `client.route.apply.us` | Histogram | client exchanger | 客户端路由应用延迟（µs） |
+| `client.dns.apply.us` | Histogram | client exchanger | DNS 配置延迟（µs） |
+| `websocket.handshake.us` | Histogram | websocket | 普通 WebSocket 握手延迟（µs） |
+| `websocket.wss.handshake.us` | Histogram | websocket | WSS（TLS）握手延迟（µs） |
+| `managed.auth.us` | Histogram | managed | 托管认证延迟（µs） |
+| `managed.sync.us` | Histogram | managed | 托管同步操作延迟（µs） |
+| `mux.link.setup.us` | Histogram | mux | Mux 链路建立延迟（µs） |
+| `tap.ipv6.route.add.us` | Histogram | tap | TAP IPv6 路由添加延迟（µs） |
+| `tap.ipv6.neighbor.add.us` | Histogram | tap | TAP IPv6 邻居添加延迟（µs） |
+| `tap.ipv6.neighbor.delete.us` | Histogram | tap | TAP IPv6 邻居删除延迟（µs） |
+| `tap.interface.state.us` | Histogram | tap | TAP 接口状态变更延迟（µs） |
+| `vnetstack.connect.us` | Histogram | vnetstack | 虚拟网络栈连接延迟（µs） |
+| `transmission.handshake.us` | Histogram | transmission | 传输层握手延迟（µs） |
+
+**Counter（单调递增，通过 `Count()`）：**
+
+Counter 在第一/二阶段的插桩中已覆盖，Phase 3 未新增 Counter 类型。它们继续使用已有的 `Count(metric, delta)` API，遵循相同的默认关闭行为。
+
+#### 3.2 默认关闭 / 可选启用策略
+
+Metrics 遵循与所有 telemetry 相同的可开关性契约：
+
+| 门控层 | 默认值 | 机制 |
+|---|---|---|
+| 编译期 | `ON`（始终编译） | CMake 选项 `PPP_TELEMETRY=1` —— telemetry 门面始终编译；运行期禁用时走快速返回路径 |
+| 运行期主开关 | `false` | `appsettings.json` → `telemetry.enabled = false` |
+| Count/Gauge/Histogram 开关 | `false` | `appsettings.json` → `telemetry.count = false`（控制 `Count()`、`Gauge()` 和 `Histogram()` 的发出） |
+| Span 开关（traces） | `false` | `appsettings.json` → `telemetry.span = false`（与 metrics 独立） |
+
+**托管部署的启用示例：**
+
+```json
+{
+  "telemetry": {
+    "enabled": true,
+    "count": true,
+    "endpoint": "http://collector:4318/v1/logs"
+  }
+}
+```
+
+只需要日志不需要指标的运营者可以设置 `"count": false`。只需要指标不需要追踪的运营者可以设置 `"span": false`。每一层均可独立开关。
+
+#### 3.3 性能约束
+
+Metrics 不得损害「禁用时零开销」的保证：
+
+1. **编译移除**：当 `PPP_TELEMETRY` 未定义时，`Gauge()` 和 `Histogram()` 均为 `inline void` 存根，在优化构建中应被消除。任何二进制体积影响都必须通过构建产物确认，而不是预先假定。
+2. **快速路径守卫**：当 telemetry 已启用但 `telemetry.count` 为 `false` 时，`Gauge()` / `Histogram()` 调用在一次原子加载检查后立即返回（分支预测命中，约 1 ns）。
+3. **热路径无分配**：`Gauge()` 和 `Histogram()` 将固定大小的事件结构体入队到有界队列（4096 条目）。调用点无 `malloc`、无 `std::string`、无格式化。
+4. **满时丢弃**：如果队列已满，指标事件被静默丢弃。这与日志事件的满时丢弃策略一致 —— telemetry 绝不阻塞调用方。
+5. **异步导出**：指标数据点由后台工作线程批量收集（每个 OTLP POST 最多 256 个）并导出，绝不在调用线程上执行。
+6. **不与报文处理竞争**：指标调用不得获取任何与 `syncobj_`、队列分发、fd 亲和性逻辑或报文转发状态共享的锁。队列实现必须对调用方有界且非阻塞；设计不强制要求具体的无锁或单生产者数据结构。
+7. **Histogram 开销**：每个 `Histogram()` 调用记录一个 `(metric_name, value)` 元组。桶聚合为 OTel histogram 格式的工作在 exporter 线程中完成，不在调用点。当前实现使用固定显式边界 —— 这是有意为之的轻量设计。
+
+#### 3.4 验收项
+
+Phase 3 设计在以下条件全部满足时视为完成：
+
+- [x] `Gauge()` 和 `Histogram()` API 存在于 `Telemetry.h` 门面中，具有零开销空操作回退。
+- [x] OTLP exporter 能发出有效的 OTel Gauge 和 Histogram 数据点（通过 `BuildGaugeJson()` / `BuildHistogramJson()` 验证）。
+- [x] 每个主要子系统（server、tap）至少插桩了一个 Gauge 指标。
+- [x] 关键延迟路径（会话建立、握手）至少有一个 Histogram 指标覆盖。
+- [x] `telemetry.count = false` 能以运行期快速守卫的极低成本抑制所有指标发出（Gauge、Histogram、Count）；不会分配、入队、格式化或触发 exporter 工作。
+- [x] `PPP_TELEMETRY=ON` 无条件编译 telemetry；运行期 `telemetry.enabled=false` 提供快速返回守卫；二进制体积影响应通过构建产物检查确认，而不是预先假定。
+- [x] 指标调用点设计上不应在报文转发路径上引入阻塞、分配或共享锁竞争；每个新增指标仍需代码审查确认。
+- [x] 桶聚合虽轻量但功能完整 —— 单样本 histogram 配固定边界在初始发布阶段可接受。
+
+**延后项（不阻塞 Phase 3 签收）：**
+
+- 支持可配置边界的丰富 histogram 桶分组。
+- 指标级别的采样或速率限制（目前仅 TRACE 日志支持此功能）。
+- 单指标粒度的开关（当前模型通过 `telemetry.count` 控制所有指标的统一开关）。
+- 仪表盘或告警集成文档。
 
 ### 第四阶段 —— 可选 Traces ✅
 

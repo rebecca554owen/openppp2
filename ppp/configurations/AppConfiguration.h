@@ -48,6 +48,22 @@ namespace ppp {
             };
 
             /**
+             * @brief Structured DNS server entry with multi-protocol metadata.
+             *
+             * Describes a single upstream DNS server with its connection
+             * parameters.  Supports plain UDP/TCP, DoH, and DoT protocols.
+             * DoQ is normalized to DoT at parse time since the resolver does
+             * not yet implement QUIC transport.
+             */
+            struct DnsServerEntry final {
+                ppp::string                                         protocol;   ///< Transport protocol: "doh", "dot", "udp", "tcp". DoQ is auto-normalized to "dot".
+                ppp::string                                         url;        ///< Full URL for DoH endpoints (e.g. "https://dns.google/dns-query").
+                ppp::string                                         hostname;   ///< TLS server name / hostname for certificate verification (DoT/DoH).
+                ppp::string                                         address;    ///< IP:port address literal (e.g. "1.1.1.1:853", "8.8.8.8:53").
+                ppp::vector<ppp::string>                            bootstrap;  ///< Bootstrap DNS servers used to resolve the hostname before connecting.
+            };
+
+            /**
              * @brief IPv6 address assignment mode for server-side data plane.
              *
              * Controls which IPv6 provisioning strategy the server uses when
@@ -175,6 +191,20 @@ namespace ppp {
                     int                                                     lease_time;     ///< IPv6 address lease duration in seconds.
                     ppp::map<ppp::string, ppp::string>                      static_addresses; ///< Map of client GUID to statically assigned IPv6 address string.
                 }                                                           ipv6;
+                /**
+                 * @brief Server-side IPv4 address pool configuration.
+                 *
+                 * When present in the JSON configuration file, the server
+                 * enables automatic IPv4 address assignment for connected
+                 * clients.  The @c configured flag is set to true whenever
+                 * the @c server.ipv4-pool JSON object exists, even if
+                 * individual fields are missing.
+                 */
+                struct {
+                    bool                                            configured;  ///< True when @c server.ipv4-pool was present in the JSON config.
+                    ppp::string                                     network;     ///< IPv4 network address (e.g. "10.0.0.0").
+                    ppp::string                                     mask;        ///< IPv4 subnet mask (e.g. "255.255.255.0").
+                }                                                           ipv4_pool;
             }                                                               server;         ///< Server-mode specific parameters.
             struct {
                 ppp::string                                                 guid;           ///< Client GUID string used for authentication and session tracking.
@@ -220,6 +250,62 @@ namespace ppp {
                 bool                                                        console_metric; ///< Show counter/gauge/histogram events on local console/file sink.
                 bool                                                        console_span;   ///< Show span events on local console/file sink.
             }                                                               telemetry;       ///< Optional telemetry/observability configuration.
+            /**
+             * @brief GeoIP/GeoSite rule generation configuration (Phase G).
+             *
+             * When enabled, generates bypass CIDR and DNS rule files from
+             * text-format GeoIP/GeoSite inputs. Generated files are appended
+             * to the existing bypass and dns-rules loading paths.
+             *
+             * Binary geoip.dat/geosite.dat files can also be downloaded and
+             * cached for future parsers; Phase G does not parse those binary
+             * dat files yet.
+             */
+            struct GeoRulesConfiguration final {
+                bool                                                        enabled;               ///< Enable geo-rules generation; default false (no-op).
+                ppp::string                                                 country;               ///< Target country/region code; default "cn".
+                ppp::string                                                 geoip_dat;             ///< Local GeoIP dat cache path for downloads; default "GeoIP.dat".
+                ppp::string                                                 geosite_dat;           ///< Local GeoSite dat cache path for downloads; default "GeoSite.dat".
+                ppp::string                                                 geoip_download_url;    ///< Optional URL used to download/update geoip_dat before generation.
+                ppp::string                                                 geosite_download_url;  ///< Optional URL used to download/update geosite_dat before generation.
+                ppp::vector<ppp::string>                                    geoip;                 ///< GeoIP/CIDR source file paths (text CIDR format).
+                ppp::vector<ppp::string>                                    geosite;               ///< GeoSite/domain source file paths (text domain format).
+                ppp::string                                                 dns_provider_domestic; ///< DNS provider for domestic rules; falls back to dns.servers.domestic or "doh.pub".
+                ppp::string                                                 dns_provider_foreign;  ///< DNS provider for foreign rules (reserved); falls back to dns.servers.foreign or "cloudflare".
+                ppp::string                                                 output_bypass;         ///< Generated bypass output file path; default "./generated/bypass-cn.txt".
+                ppp::string                                                 output_dns_rules;      ///< Generated DNS rules output file path; default "./generated/dns-rules-cn.txt".
+                ppp::vector<ppp::string>                                    append_bypass;         ///< Extra CIDR lines or file paths appended after GeoIP results.
+                ppp::vector<ppp::string>                                    append_dns_rules;      ///< Extra DNS rule lines, file paths, or rules:// URLs appended after GeoSite results.
+            };
+
+            /**
+             * @brief DNS resolver configuration for multi-protocol upstream support.
+             *
+             * Controls domestic/foreign DNS server selection, unmatched-query
+             * interception policy, and EDNS Client Subnet (ECS) behavior.
+             * When all fields are at their defaults the legacy DNS forwarding
+             * path is used exclusively, preserving backward compatibility.
+             */
+        struct {
+            struct {
+                ppp::string                                         domestic;        ///< Domestic DNS server identifier (provider shorthand, IP, or URL).
+                ppp::string                                         foreign;         ///< Foreign DNS server identifier (provider shorthand, IP, or URL).
+                ppp::vector<DnsServerEntry>                         domestic_entries; ///< Structured domestic DNS server entries; populated from object/array forms.
+                ppp::vector<DnsServerEntry>                         foreign_entries;  ///< Structured foreign DNS server entries; populated from object/array forms.
+            }                                                       servers;         ///< DNS server selection for domestic and foreign queries.
+            bool                                                    intercept_unmatched; ///< When true, unmatched DNS queries are intercepted and routed through dns.servers.foreign; default false preserves legacy behavior.
+            struct {
+                bool                                                enabled;         ///< Enable EDNS Client Subnet (ECS) OPT RR injection for domestic queries; default false.
+                ppp::string                                         override_ip;     ///< Manual exit IP for ECS; highest-priority source. Empty = auto-detect from server or STUN.
+            }                                                       ecs;             ///< EDNS Client Subnet configuration.
+            struct {
+                bool                                                verify_peer;     ///< Verify DoH/DoT server certificates with system/bundled CA roots; default true.
+            }                                                       tls;             ///< TLS verification configuration for encrypted DNS upstreams.
+            struct {
+                ppp::vector<ppp::string>                            candidates;      ///< STUN server candidates for exit IP detection (ip:port or hostname:port).
+            }                                                       stun;            ///< STUN server configuration for ECS fallback.
+        }                                                           dns;             ///< DNS resolver extension configuration.
+            GeoRulesConfiguration                                       geo_rules;       ///< GeoIP/GeoSite rule generation configuration (Phase G).
         public:
             /**
              * @brief Initializes configuration fields to default values.
@@ -293,6 +379,18 @@ namespace ppp {
              * @return JSON string representation.
              */
             ppp::string                                                     ToString() noexcept;
+            /**
+             * @brief Emits a startup security diagnostics report.
+             *
+             * Scans the loaded configuration for weak/default/short keys and
+             * plaintext mode.  Each finding is logged via the telemetry subsystem
+             * and written to the console.  All findings are non-fatal warnings;
+             * startup never fails as a result of this call.
+             *
+             * @note Called once during application startup after telemetry is
+             *       configured.  Safe to call multiple times (idempotent).
+             */
+            void                                                            EmitSecurityDiagnostics() noexcept;
 
         private:
             /**

@@ -200,7 +200,7 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
                     if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
                     }
-                    
+
                     return -1;
                 }
 

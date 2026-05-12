@@ -30,6 +30,24 @@ namespace ppp
         public:             
             virtual bool                                            Protect(int sockfd, YieldContext& y) noexcept;
 
+            /**
+             * @brief Synchronous socket-protection overload that does not require a YieldContext.
+             *
+             * @details This method is intended for use in non-coroutine async contexts
+             *          (e.g. DnsResolver's pure-async callbacks) where fabricating a
+             *          YieldContext is not possible.
+             *
+             *          Behaviour per platform:
+             *          - If ProtectEvent is set, delegates to it (synchronous, identical
+             *            to the coroutine Protect() path).
+             *          - Non-Android Linux: falls back to SO_BINDTODEVICE.
+             *          - Android without ProtectEvent: returns false (caller must handle).
+             *
+             * @param sockfd  Socket file descriptor to protect.
+             * @return true if the socket was protected; false on error.
+             */
+            bool                                                    ProtectSync(int sockfd) noexcept;
+
         public:             
             static int                                              Recvfd(const char* unix_path, int milliSecondsTimeout = 3000, bool sync = true) noexcept;
             static int                                              Recvfd(const char* unix_path, int milliSecondsTimeout, bool sync, int& fd) noexcept;
@@ -108,8 +126,8 @@ namespace ppp
             static bool                                             ProtectJNI(JNIEnv* env, jint fd) noexcept;
             
         public:
-            std::shared_ptr<boost::asio::io_context>                GetContext() noexcept     { return jni_; }
-            JNIEnv*                                                 GetEnvironment() noexcept { return env_; }
+            std::shared_ptr<boost::asio::io_context>                GetContext() noexcept     { SynchronizedObjectScope scope(syncobj_); return jni_; }
+            JNIEnv*                                                 GetEnvironment() noexcept { SynchronizedObjectScope scope(syncobj_); return env_; }
 #endif
 
         private:                

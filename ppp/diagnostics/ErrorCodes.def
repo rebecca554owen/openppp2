@@ -475,6 +475,7 @@ X(AsyncWriteQueueCopyAllocFailed, "Asynchronous write queue failed to allocate c
 X(AsyncWriteQueueWriteInvalidPacket, "Asynchronous write queue write received invalid packet", ErrorSeverity::kError)
 X(AsyncWriteQueueWriteNullCallback, "Asynchronous write queue write callback is null", ErrorSeverity::kError)
 X(AsyncWriteQueueWriteContextAllocFailed, "Asynchronous write queue failed to allocate write context", ErrorSeverity::kError)
+X(AsyncWriteQueueBackpressure, "Asynchronous write queue rejected write due to backpressure (pending items or bytes exceeded configured limit)", ErrorSeverity::kWarning)
 
 X(VdnsResolveFromCacheHostnameInvalid, "VDNS resolve-from-cache received invalid hostname", ErrorSeverity::kError)
 X(VdnsSendRequestInvalidArguments, "VDNS send-request received invalid hostname or destination list", ErrorSeverity::kError)
@@ -689,3 +690,12 @@ X(ResourceExhaustedPorts, "Resource exhausted: ephemeral port range", ErrorSever
 X(Ipv6SubnetForwardingNotSupported, "IPv6 subnet forwarding is not supported on the current platform", ErrorSeverity::kWarning)
 X(Ipv6NdpProxyNotSupported, "IPv6 NDP neighbor proxy is not supported on the current platform", ErrorSeverity::kWarning)
 X(Ipv6ServerRoleNotSupportedOnPlatform, "IPv6 server role is not supported on the current platform; IPv6 features are limited to client mode", ErrorSeverity::kWarning)
+
+X(ObfuscationFlagsMismatch, "Transport obfuscation flags differ between peers (key.masked / key.plaintext / key.delta-encode / key.shuffle-data / key.kf); align both configs.", ErrorSeverity::kError)
+
+X(ConfigWeakKeyDefault, "Protocol or transport key equals the well-known default value (\"ppp\"); this is insecure for production use", ErrorSeverity::kWarning)
+X(ConfigWeakKeyShort, "Protocol or transport key is shorter than 8 bytes; short keys are trivially brute-forced", ErrorSeverity::kWarning)
+X(ConfigPlaintextEnabled, "Plaintext mode is enabled (key.plaintext=true); packets are transmitted without encryption — NOT suitable for untrusted networks", ErrorSeverity::kWarning)
+X(ConfigLegacyCipherAlgorithm, "Protocol or transport cipher uses a legacy algorithm (RC4, DES, Blowfish, CAST5, SEED, IDEA) that is considered broken or deprecated; upgrade to AES or ChaCha20", ErrorSeverity::kWarning)
+X(ConfigLegacyCipherShortKey, "Protocol or transport cipher key length is below 128 bits; short cipher keys are vulnerable to brute-force attacks", ErrorSeverity::kWarning)
+X(ConfigLegacyKdfMd5, "Protocol or transport cipher key derivation uses MD5 internally (EVP_BytesToKey); this is a legacy KDF and should be upgraded when the project supports a configurable KDF", ErrorSeverity::kWarning)

@@ -368,7 +368,7 @@ flowchart TD
 // 示例：正确的失败路径
 bool VirtualEthernetLinklayer::DoConnect(/*...*/) noexcept {
     if (NULLPTR == transmission_) {
-        SetLastErrorCode(Error::TransmissionNotReady);
+        SetLastErrorCode(Error::SessionDisposed);
         return false;
     }
     // ...
@@ -455,17 +455,18 @@ flowchart LR
 
 ## 错误码参考
 
-工程理念层面的错误码（来自 `ppp/diagnostics/Error.h`）：
+工程理念层面的错误码（来自 `ppp/diagnostics/ErrorCodes.def`，节选）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `TransmissionNotReady` | 握手完成前执行了动作 |
-| `SessionNotAuthenticated` | 会话认证前收到数据包 |
-| `ConfigurationInvalid` | AppConfiguration 归一化失败 |
-| `RoleConflict` | 同时请求了 client 和 server 角色 |
-| `LifecycleViolation` | 在错误的生命周期阶段调用了方法 |
-| `PlatformIntegrationFailed` | 宿主适配器、路由或 DNS 设置失败 |
-| `BackendUnavailable` | Go 后端连接失败（非致命，使用本地策略） |
+| `AppPreflightCheckFailed` | 启动预检失败 |
+| `RuntimeEnvironmentInvalid` | 运行时环境无效 |
+| `SessionDisposed` | 运行时对象已销毁 |
+| `SessionHandshakeFailed` | 会话级握手未完成 |
+| `SessionAuthFailed` | 会话认证失败 |
+| `SessionQuotaExceeded` | 会话额度超限 |
+| `IPv6ServerPrepareFailed` | 服务端 IPv6 环境准备失败 |
+| `KeepaliveTimeout` | 对端心跳超时 |
 
 ---
 

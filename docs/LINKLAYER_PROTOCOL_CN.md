@@ -395,18 +395,18 @@ erDiagram
 
 ## 错误码参考
 
-链路层相关的 `ppp::diagnostics::ErrorCode` 值：
+链路层相关的 `ppp::diagnostics::ErrorCode` 值（来自 `ppp/diagnostics/ErrorCodes.def`）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `InvalidOpcode` | 收到的 opcode 无法识别 |
-| `OpcodeDirectionViolation` | 从错误方向收到 opcode |
-| `HandshakeFailed` | 握手期间 INFO 交换失败 |
-| `KeepaliveTimeout` | KEEPALIVED echo 未得到确认 |
-| `TcpRelayConnectFailed` | SYN 无法被满足 |
-| `StaticPathNegotiationFailed` | STATIC/STATICACK 交换失败 |
-| `MuxNegotiationFailed` | MUX/MUXON 交换失败 |
-| `FrpEntryRegistrationFailed` | FRP_ENTRY 被服务端拒绝 |
+| `ProtocolPacketActionInvalid` | 收到的 opcode 无法识别 |
+| `ProtocolFrameInvalid` | opcode 帧结构无效 |
+| `SessionHandshakeFailed` | 握手期间 INFO 交换失败 |
+| `SessionAuthFailed` | 会话认证失败 |
+| `KeepaliveTimeout` | 对端保活心跳超时 |
+| `ProtocolMuxFailed` | MUX/MUXON 交换失败 |
+| `MappingCreateFailed` | FRP 条目注册失败 |
+| `SocketConnectFailed` | TCP 中继连接失败 |
 
 ---
 

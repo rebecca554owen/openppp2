@@ -1,8 +1,10 @@
 # IPv6 Lease Management
 
-> **Subsystem:** `ppp::app::server::VirtualEthernetSwitcher`  
-> **Primary file:** `ppp/app/server/VirtualEthernetSwitcher.cpp`  
-> **Header:** `ppp/app/server/VirtualEthernetSwitcher.h`  
+[中文版本](IPV6_LEASE_MANAGEMENT_CN.md)
+
+> **Subsystem:** `ppp::app::server::VirtualEthernetSwitcher`
+> **Primary file:** `ppp/app/server/VirtualEthernetSwitcher.cpp`
+> **Header:** `ppp/app/server/VirtualEthernetSwitcher.h`
 > **Introduced:** Core IPv6 pool (lines 396–695, 3144–3219 in `.cpp`)
 
 ---
@@ -39,7 +41,7 @@ The subsystem is designed for high-throughput VPN concentrators where hundreds o
 
 ## 2. Data Structures
 
-### 2.1 `IPv6LeaseEntry` (`VirtualEthernetSwitcher.h`, line 129)
+### 2.1 `IPv6LeaseEntry` (`VirtualEthernetSwitcher.h`, line 130)
 
 ```cpp
 struct IPv6LeaseEntry {
@@ -59,27 +61,27 @@ struct IPv6LeaseEntry {
 | `AddressPrefixLength` | `Byte` | Always `IPv6_MAX_PREFIX_LENGTH` (128) for point-to-point assignments. |
 | `StaticBinding` | `bool` | If `true`, `TickIPv6Leases` skips the entry; it is only removed on explicit session teardown. |
 
-### 2.2 `IPv6LeaseTable` (`VirtualEthernetSwitcher.h`, line 137)
+### 2.2 `IPv6LeaseTable` (`VirtualEthernetSwitcher.h`, line 138)
 
 ```cpp
 typedef ppp::unordered_map<Int128, IPv6LeaseEntry> IPv6LeaseTable;
-IPv6LeaseTable ipv6_leases_;  // line 773 in .h
+IPv6LeaseTable ipv6_leases_;  // line 809 in .h
 ```
 
 Key: session ID (`Int128`). The `ppp::unordered_map` routes through the jemalloc allocator on Linux and the Windows heap allocator on Windows, consistent with the project's allocation policy.
 
-### 2.3 `IPv6ExchangerTable` (`VirtualEthernetSwitcher.h`, line 93)
+### 2.3 `IPv6ExchangerTable` (`VirtualEthernetSwitcher.h`, line 94)
 
 ```cpp
 typedef std::unordered_map<ppp::string, std::shared_ptr<VirtualEthernetExchanger>> IPv6ExchangerTable;
-IPv6ExchangerTable ipv6s_;  // line 771 in .h
+IPv6ExchangerTable ipv6s_;  // line 807 in .h
 ```
 
 Key: canonical string representation of the IPv6 address (e.g. `"2001:db8::1"`). The string key is computed by calling `ip.to_string()` on the `boost::asio::ip::address`.
 
 > **Why string keys?** `boost::asio::ip::address_v6` does not provide a standard hash. Using the string representation avoids a custom hasher while still providing O(1) average lookup. The tradeoff is slightly higher allocation cost per insert, acceptable for session-frequency operations.
 
-### 2.4 `IPv6RequestEntry` (`VirtualEthernetSwitcher.h`, line 108)
+### 2.4 `IPv6RequestEntry` (`VirtualEthernetSwitcher.h`, line 109)
 
 ```cpp
 struct IPv6RequestEntry {
@@ -147,19 +149,19 @@ auto try_commit_ipv6_lease = [&](
 
 **Step-by-step execution:**
 
-1. **Existing lease check** (`.cpp`, line 424–428):  
+1. **Existing lease check** (`.cpp`, line 424–428):
    If `ipv6_leases_` already contains an entry for `session_id` with a valid IPv6 address, return `false` immediately — a session may not hold two leases simultaneously. This prevents a rogue client from draining the pool by reconnecting repeatedly without releasing.
 
-2. **Address availability check** (`.cpp`, line 430–434):  
+2. **Address availability check** (`.cpp`, line 430–434):
    Look up `candidate` in `ipv6s_`. If an entry exists and its exchanger's session ID differs from the requestor's session ID, the address is in use. Return `false` to trigger the caller to try the next candidate.
 
-3. **Cross-lease duplicate scan** (`.cpp`, line 436–450):  
+3. **Cross-lease duplicate scan** (`.cpp`, line 436–450):
    Iterate all entries in `ipv6_leases_` to detect any other session that already holds the same address. This O(n) scan is necessary because `ipv6s_` may transiently lag `ipv6_leases_` during the brief window after a lease is committed but before the exchanger object is fully inserted.
 
-4. **Commit** (`.cpp`, line 452):  
+4. **Commit** (`.cpp`, line 452):
    Write `IPv6LeaseEntry{session_id, now + lease_ms, candidate, prefix, static_binding}` into `ipv6_leases_[session_id]`.
 
-5. **Update output extensions:**  
+5. **Update output extensions:**
    Populate `out_extensions.AssignedIPv6Address`, `AssignedIPv6AddressPrefixLength`, `AssignedIPv6Mode`, etc.
 
 ### 4.2 Candidate Priority Order
@@ -248,7 +250,7 @@ sequenceDiagram
 
 ## 6. Expiry and Eviction: `TickIPv6Leases`
 
-### 6.1 Function Signature (`.h`, line 610; `.cpp`, line 3144)
+### 6.1 Function Signature (`.cpp`, line 3377)
 
 ```cpp
 void VirtualEthernetSwitcher::TickIPv6Leases(UInt64 now) noexcept;
@@ -407,11 +409,13 @@ The following `ErrorCode` values (from `ppp/diagnostics/ErrorCodes.def`) are rel
 | `IPv6LeaseConflict` | `kError` | Two sessions attempted to claim the same address simultaneously. |
 | `IPv6LeaseUnavailable` | `kError` | No active lease found for the session during packet forwarding. |
 | `IPv6LeaseExpired` | `kError` | A lease was found but its `ExpiresAt` has passed. |
-| `IPv6LeasePoolExhausted` | `kError` | All `kMaxIPv6AllocRetries` candidates were rejected; pool is full. |
+| `IPv6LeaseConflict` | `kError` | All `kMaxIPv6AllocRetries` candidates were rejected; pool is full. |
 | `IPv6LeaseCommitFailed` | `kError` | `try_commit_ipv6_lease` returned false after the final retry. |
-| `IPv6LeaseSessionCollision` | `kError` | A new session attempted to claim an address held by a different active session. |
+| `IPv6LeaseConflict` | `kError` | A new session attempted to claim an address held by a different active session. |
 | `IPv6AddressConflict` | `kError` | Assigned address conflicts with an existing active lease. |
 | `IPv6StaticBindingFailed` | `kError` | Static binding from configuration could not be committed. |
+
+> **Note**: The following error codes are proposed/design items not yet in `ErrorCodes.def`: `IPv6LeaseCommitFailed` (nearest existing: `IPv6LeaseConflict`), `IPv6AddressConflict` (nearest: `IPv6LeaseConflict`), `IPv6StaticBindingFailed` (no close existing equivalent, needs new entry).
 
 ---
 

@@ -5,6 +5,7 @@
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -20,12 +21,12 @@ namespace ppp {
 #pragma optimize("", off)
 #pragma optimize("gsyb2", on) /* /O1 = /Og /Os /Oy /Ob2 /GF /Gy */
 #else
-// TRANSMISSIONO1 compiler macros are defined to perform O1 optimizations, 
-// Otherwise gcc compiler version If <= 7.5.X, 
-// The O1 optimization will also be applied, 
-// And the other cases will not be optimized, 
-// Because this will cause the program to crash, 
-// Which is a fatal BUG caused by the gcc compiler optimization. 
+// TRANSMISSIONO1 compiler macros are defined to perform O1 optimizations,
+// Otherwise gcc compiler version If <= 7.5.X,
+// The O1 optimization will also be applied,
+// And the other cases will not be optimized,
+// Because this will cause the program to crash,
+// Which is a fatal BUG caused by the gcc compiler optimization.
 // Higher-version compilers should not optimize the code for gcc compiling this section.
 #if defined(__clang__)
 #pragma clang optimize off
@@ -65,12 +66,20 @@ namespace ppp {
                 boost::system::error_code ec;
                 boost::asio::ip::address address = StringToAddress(host_string.data(), ec);
                 if (ec && resolver) {
+                    ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "uri", "dns resolve start host=%s port=%d", host_string.c_str(), port_number);
                     ppp::coroutines::YieldContext* co = y.GetPtr();
                     if (co) {
                         remoteEP = UriAuxiliary_ResolveEndPointWithBoost(host_string, port_number, y);
                     }
                     else {
                         remoteEP = ppp::net::Ipep::GetEndPoint(host_string, port_number, true);
+                    }
+
+                    if (ppp::net::IPEndPoint::IsInvalid(remoteEP)) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "uri", "dns resolve failed host=%s port=%d", host_string.c_str(), port_number);
+                    }
+                    else {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "uri", "dns resolve ok host=%s port=%d", host_string.c_str(), port_number);
                     }
                 }
                 else {
@@ -176,7 +185,7 @@ namespace ppp {
              * @brief Accept only known protocol schemes and map them to ProtocolType.
              */
             ppp::string proto_string = url_string.substr(0, scheme_sep);
-            ppp::string rest = url_string.substr(scheme_sep + 3); 
+            ppp::string rest = url_string.substr(scheme_sep + 3);
 
             ProtocolType protocol_type = ProtocolType_PPP;
             if (proto_string == "tcp" || proto_string == BOOST_BEAST_VERSION_STRING) {
@@ -233,7 +242,7 @@ namespace ppp {
                         }
 
                         port_number = static_cast<int>(val);
-                        host_string = host_string.substr(0, port_sep); 
+                        host_string = host_string.substr(0, port_sep);
                     }
                 }
             }
@@ -289,7 +298,7 @@ namespace ppp {
              * @brief Build normalized URI using bracket notation for IPv6 addresses.
              */
             ppp::string normalized = proto_string + "://";
-            bool is_ipv6 = (address_string.find(':') != ppp::string::npos);  
+            bool is_ipv6 = (address_string.find(':') != ppp::string::npos);
             if (is_ipv6 && !address_string.empty()) {
                 normalized += "[" + address_string + "]";
             }
@@ -369,7 +378,7 @@ namespace ppp {
                     decoded += input[i];
                 }
             }
-            
+
             return decoded;
         }
     }

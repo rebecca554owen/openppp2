@@ -12,6 +12,9 @@
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
+
+#include <openssl/evp.h>  /* EVP_get_cipherbyname, EVP_CIPHER_key_length - used for legacy cipher detection */
 
 /**
  * @file AppConfiguration.cpp
@@ -111,7 +114,7 @@ namespace {
         }
 
         prefix = cidr.substr(0, slash);
-        
+
         /**
          * @brief Validate prefix length using strtol for proper error detection.
          * @note Reject invalid numeric strings and out-of-range values.
@@ -124,7 +127,7 @@ namespace {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
             return false;
         }
-        
+
         prefix_length = static_cast<int>(parsed);
         return !prefix.empty();
     }
@@ -155,7 +158,7 @@ namespace {
         }
         return false;
     }
-                                            
+
     /**
      * @brief Checks whether an IPv6 prefix is globally routable unicast.
      * @param prefix IPv6 prefix address.
@@ -165,7 +168,7 @@ namespace {
         boost::asio::ip::address_v6::bytes_type bytes = prefix.to_bytes();
         return (bytes[0] & 0xe0) == 0x20;
     }
-                                            
+
     /**
      * @brief Clears all server IPv6 runtime settings.
      * @param config Configuration object to update.
@@ -283,6 +286,10 @@ namespace ppp {
             config.server.ipv6.lease_time = 300;
             config.server.ipv6.static_addresses.clear();
 
+            config.server.ipv4_pool.configured = false;
+            config.server.ipv4_pool.network = "";
+            config.server.ipv4_pool.mask = "";
+
             config.client.mappings.clear();
             config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
             config.client.server = "";
@@ -313,6 +320,31 @@ namespace ppp {
             config.telemetry.console_metric = true;
             config.telemetry.console_span = true;
 
+            config.dns.servers.domestic = "";
+            config.dns.servers.foreign = "";
+            config.dns.servers.domestic_entries.clear();
+            config.dns.servers.foreign_entries.clear();
+            config.dns.intercept_unmatched = false;
+            config.dns.ecs.enabled = false;
+            config.dns.ecs.override_ip = "";
+            config.dns.tls.verify_peer = true;
+            config.dns.stun.candidates.clear();
+
+            config.geo_rules.enabled = false;
+            config.geo_rules.country = "cn";
+            config.geo_rules.geoip_dat = "GeoIP.dat";
+            config.geo_rules.geosite_dat = "GeoSite.dat";
+            config.geo_rules.geoip_download_url = "";
+            config.geo_rules.geosite_download_url = "";
+            config.geo_rules.geoip.clear();
+            config.geo_rules.geosite.clear();
+            config.geo_rules.dns_provider_domestic = "";
+            config.geo_rules.dns_provider_foreign = "";
+            config.geo_rules.output_bypass = "./generated/bypass-cn.txt";
+            config.geo_rules.output_dns_rules = "./generated/dns-rules-cn.txt";
+            config.geo_rules.append_bypass.clear();
+            config.geo_rules.append_dns_rules.clear();
+
             memset(config._lcgmods, 0, sizeof(config._lcgmods));
         }
 
@@ -326,6 +358,53 @@ namespace ppp {
         static void LRTrim(_Uty* s, int length) noexcept {
             for (int i = 0; i < length; i++) {
                 *s[i] = LTrim(RTrim(*s[i]));
+            }
+        }
+
+        /**
+         * @brief Returns the cipher key length in bits for a named algorithm via OpenSSL EVP.
+         * @param method Cipher algorithm name.
+         * @return Key length in bits, or 0 when the method is not recognized by EVP.
+         */
+        static int GetCipherKeyLengthBits(const ppp::string& method) noexcept {
+            const EVP_CIPHER* cipher = EVP_get_cipherbyname(method.data());
+            if (NULLPTR != cipher) {
+                return EVP_CIPHER_key_length(cipher) * 8;
+            }
+            return 0;
+        }
+
+        /**
+         * @brief Emits a kWarning if the configured cipher algorithm is legacy or has a short key.
+         *
+         * Legacy algorithms detected: RC4, DES (single), Blowfish, CAST5, SEED, IDEA.
+         * Short key threshold: below 128 bits.
+         *
+         * @param method Cipher algorithm name (e.g. "aes-256-cfb", "rc4", "des-cbc").
+         */
+        static void WarnLegacyCipherAlgorithm(const ppp::string& method) noexcept {
+            if (method.empty()) {
+                return;
+            }
+
+            ppp::string method_lower = ToLower(method);
+
+            /* Detect legacy/broken algorithm families by name. */
+            if (method_lower.find("rc4") != ppp::string::npos ||
+                method_lower.find("des-") != ppp::string::npos ||   /* catches des-cbc, des-ede*, des-cfb - but not aes-256-cfb */
+                (method_lower.size() >= 3 && method_lower[0] == 'd' && method_lower[1] == 'e' && method_lower[2] == 's' && (method_lower.size() == 3 || method_lower[3] == '-')) ||
+                method_lower.find("bf-") != ppp::string::npos ||   /* Blowfish */
+                method_lower.find("cast5") != ppp::string::npos ||
+                method_lower.find("seed-") != ppp::string::npos ||
+                method_lower.find("idea-") != ppp::string::npos)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLegacyCipherAlgorithm);
+            }
+
+            /* Detect cipher key length below 128 bits (via OpenSSL EVP metadata). */
+            int key_bits = GetCipherKeyLengthBits(method);
+            if (key_bits > 0 && key_bits < 128) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLegacyCipherShortKey);
             }
         }
 
@@ -348,6 +427,8 @@ namespace ppp {
                     &config.server.ipv6.gateway,
                     &config.server.ipv6.dns1,
                     &config.server.ipv6.dns2,
+                    &config.server.ipv4_pool.network,
+                    &config.server.ipv4_pool.mask,
                     &config.client.guid,
                     &config.client.server,
                     &config.client.server_proxy,
@@ -361,6 +442,18 @@ namespace ppp {
                     &config.key.protocol_key,
                     &config.key.transport,
                     &config.key.transport_key,
+                    &config.dns.servers.domestic,
+                    &config.dns.servers.foreign,
+                    &config.dns.ecs.override_ip,
+                    &config.geo_rules.country,
+                    &config.geo_rules.geoip_dat,
+                    &config.geo_rules.geosite_dat,
+                    &config.geo_rules.geoip_download_url,
+                    &config.geo_rules.geosite_download_url,
+                    &config.geo_rules.dns_provider_domestic,
+                    &config.geo_rules.dns_provider_foreign,
+                    &config.geo_rules.output_bypass,
+                    &config.geo_rules.output_dns_rules,
                 };
                 LRTrim(strings, arraysizeof(strings));
             }
@@ -533,6 +626,35 @@ namespace ppp {
 
             LRTrim(config, 0);
             LRTrim(config, 1);
+
+            // Trim string fields inside structured DNS server entries.
+            for (auto* entries : { &config.dns.servers.domestic_entries, &config.dns.servers.foreign_entries }) {
+                for (auto& entry : *entries) {
+                    entry.protocol  = LTrim(RTrim(entry.protocol));
+                    entry.url       = LTrim(RTrim(entry.url));
+                    entry.hostname  = LTrim(RTrim(entry.hostname));
+                    entry.address   = LTrim(RTrim(entry.address));
+                    for (auto& b : entry.bootstrap) {
+                        b = LTrim(RTrim(b));
+                    }
+                    // Remove empty bootstrap entries.
+                    entry.bootstrap.erase(
+                        std::remove_if(entry.bootstrap.begin(), entry.bootstrap.end(),
+                            [](const ppp::string& s) noexcept { return s.empty(); }),
+                        entry.bootstrap.end());
+                }
+            }
+
+            for (auto* vec : { &config.geo_rules.geoip, &config.geo_rules.geosite,
+                               &config.geo_rules.append_bypass, &config.geo_rules.append_dns_rules }) {
+                for (auto& s : *vec) {
+                    s = LTrim(RTrim(s));
+                }
+                vec->erase(
+                    std::remove_if(vec->begin(), vec->end(),
+                        [](const ppp::string& s) noexcept { return s.empty(); }),
+                    vec->end());
+            }
 
             if (config.client.guid.empty()) {
                 config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
@@ -736,6 +858,56 @@ namespace ppp {
                 config.key.transport_key = BOOST_BEAST_VERSION_STRING;
             }
 
+            /**
+             * @brief Security posture warnings (P0-2).
+             *
+             * Weak keys, example keys, short keys and plaintext mode are detected here
+             * and surfaced as non-fatal warnings.  They never block startup — the
+             * application continues to function for backward compatibility.  Production
+             * deployments should replace these with strong, unique keys and disable
+             * plaintext mode.
+             */
+            {
+                const ppp::string default_key = BOOST_BEAST_VERSION_STRING;  /* well-known "ppp" */
+
+                /* Protocol key warnings */
+                if (config.key.protocol_key == default_key) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyDefault);
+                }
+                elif(config.key.protocol_key.size() < 8) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyShort);
+                }
+
+                /* Transport key warnings */
+                if (config.key.transport_key == default_key) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyDefault);
+                }
+                elif(config.key.transport_key.size() < 8) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigWeakKeyShort);
+                }
+
+                /* Plaintext mode warning */
+                if (config.key.plaintext) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigPlaintextEnabled);
+                }
+
+                /**
+                 * @brief Legacy cipher algorithm warnings (P1-7).
+                 *
+                 * Detects RC4, single-DES, Blowfish, CAST5, SEED, IDEA and
+                 * cipher key lengths below 128 bits.  These warnings never
+                 * block startup — legacy algorithms remain fully functional
+                 * for backward compatibility.  Production deployments should
+                 * migrate to AES-256-GCM / ChaCha20-Poly1305.
+                 */
+                WarnLegacyCipherAlgorithm(config.key.protocol);
+                WarnLegacyCipherAlgorithm(config.key.transport);
+
+                /* EVP::initKey currently derives keys via EVP_BytesToKey(..., EVP_md5(), ...).
+                 * This informational warning documents the legacy KDF debt without changing behavior. */
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigLegacyKdfMd5);
+            }
+
             if (!Ipep::IsDomainAddress(config.websocket.host) || config.websocket.path.empty() || config.websocket.path[0] != '/') {
                 config.websocket.listen.ws = IPEndPoint::MinPort;
                 config.websocket.listen.wss = IPEndPoint::MinPort;
@@ -814,6 +986,20 @@ namespace ppp {
             config.virr.retry_interval = std::max<int>(1, config.virr.retry_interval);
             config.virr.update_interval = std::max<int>(1, config.virr.update_interval);
             config.vbgp.update_interval = std::max<int>(1, config.vbgp.update_interval);
+
+            // Validate dns.ecs.override_ip: if non-empty, must be a valid IP address.
+            // Accept both IPv4 and IPv6.  ECS first version primarily uses IPv4,
+            // but the configuration field itself allows either family.
+            if (!config.dns.ecs.override_ip.empty()) {
+                boost::system::error_code dns_ec;
+                boost::asio::ip::address dns_addr = StringToAddress(config.dns.ecs.override_ip.data(), dns_ec);
+                if (dns_ec || IPEndPoint::IsInvalid(dns_addr)) {
+                    config.dns.ecs.override_ip = "";
+                }
+                else {
+                    config.dns.ecs.override_ip = Ipep::ToAddressString<ppp::string>(dns_addr);
+                }
+            }
 
             config._lcgmods[LCGMOD_TYPE_TRANSMISSION] = ppp::cryptography::ssea::lcgmod(config.key.kf, EVP_HEADER_MSS_MIN_MOD, EVP_HEADER_MSS_MAX_MOD);
             config._lcgmods[LCGMOD_TYPE_STATIC] = ppp::cryptography::ssea::lcgmod(config.key.kf, VEP_HEADER_MSS_MIN_MOD, VEP_HEADER_MSS_MAX_MOD);
@@ -1107,6 +1293,169 @@ namespace ppp {
         }
 
         /**
+         * @brief Normalizes a DNS protocol string and applies DoQ→DoT fallback.
+         * @param raw_protocol Raw protocol string from JSON.
+         * @return Normalized lowercase protocol string.
+         *
+         * DoQ is downgraded to "dot" because the resolver does not yet
+         * implement QUIC transport, so advertising DoQ would be an
+         * empty promise.
+         */
+        static ppp::string NormalizeDnsProtocol(const ppp::string& raw_protocol) noexcept {
+            ppp::string proto = ToLower(LTrim(RTrim(raw_protocol)));
+            if (proto == "doq") {
+                return "dot";
+            }
+            return proto;
+        }
+
+        /**
+         * @brief Parses a single DNS server entry from a JSON object.
+         * @param entry Output DnsServerEntry.
+         * @param json Source JSON node (must be an object).
+         * @return True when at least one meaningful field is populated.
+         */
+        static bool ParseDnsServerEntry(AppConfiguration::DnsServerEntry& entry, const Json::Value& json) noexcept {
+            if (!json.isObject()) {
+                return false;
+            }
+
+            entry.protocol  = NormalizeDnsProtocol(JsonAuxiliary::AsValue<ppp::string>(json["protocol"]));
+            entry.url       = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["url"])));
+            entry.hostname  = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["hostname"])));
+            entry.address   = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["address"])));
+            entry.bootstrap.clear();
+
+            // Parse bootstrap list: accept array, object values, or single string.
+            const Json::Value& bootstrap_json = json["bootstrap"];
+            if (bootstrap_json.isArray()) {
+                for (Json::ArrayIndex i = 0; i < bootstrap_json.size(); i++) {
+                    ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(bootstrap_json[i])));
+                    if (!s.empty()) {
+                        entry.bootstrap.emplace_back(std::move(s));
+                    }
+                }
+            }
+            elif(bootstrap_json.isString()) {
+                ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(bootstrap_json)));
+                if (!s.empty()) {
+                    entry.bootstrap.emplace_back(std::move(s));
+                }
+            }
+
+            // Accept if any identifying field is present.
+            return !entry.protocol.empty() || !entry.url.empty() ||
+                   !entry.hostname.empty() || !entry.address.empty();
+        }
+
+        /**
+         * @brief Parses a DNS server specification that may be a string, object, or array.
+         *
+         * - **string**: Stored in the legacy shorthand field and also as a single entry
+         *   with address field populated.
+         * - **object**: Parsed as a structured DnsServerEntry into the entries list.
+         * - **array**: Each element is parsed individually; strings go to legacy shorthand
+         *   (first element only) and entries list, objects go to entries list only.
+         *
+         * @param shorthand Output legacy string shorthand (single string or first of array).
+         * @param entries   Output structured entry list.
+         * @param json      Source JSON node.
+         * @return True when at least one entry or shorthand was produced.
+         */
+        static bool ParseDnsServerSpec(ppp::string& shorthand, ppp::vector<AppConfiguration::DnsServerEntry>& entries, const Json::Value& json) noexcept {
+            using DnsServerEntry = AppConfiguration::DnsServerEntry;
+
+            shorthand.clear();
+            entries.clear();
+
+            if (json.isNull()) {
+                return false;
+            }
+
+            // --- string shorthand: "cloudflare", "1.1.1.1:53", etc. ---
+            if (json.isString()) {
+                shorthand = LTrim(RTrim(JsonAuxiliary::AsString(json)));
+                if (!shorthand.empty()) {
+                    DnsServerEntry entry;
+                    entry.address = shorthand;
+                    entries.emplace_back(std::move(entry));
+                    return true;
+                }
+                return false;
+            }
+
+            // --- object: single structured entry ---
+            if (json.isObject()) {
+                DnsServerEntry entry;
+                if (ParseDnsServerEntry(entry, json)) {
+                    entries.emplace_back(std::move(entry));
+                    return true;
+                }
+                return false;
+            }
+
+            // --- array: mixed string/object entries ---
+            if (json.isArray()) {
+                bool first_string = true;
+                for (Json::ArrayIndex i = 0; i < json.size(); i++) {
+                    const Json::Value& element = json[i];
+
+                    if (element.isString()) {
+                        ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(element)));
+                        if (!s.empty()) {
+                            // First string element also populates the legacy shorthand.
+                            if (first_string) {
+                                shorthand = s;
+                                first_string = false;
+                            }
+                            DnsServerEntry entry;
+                            entry.address = s;
+                            entries.emplace_back(std::move(entry));
+                        }
+                    }
+                    elif(element.isObject()) {
+                        DnsServerEntry entry;
+                        if (ParseDnsServerEntry(entry, element)) {
+                            entries.emplace_back(std::move(entry));
+                        }
+                    }
+                }
+                return !entries.empty();
+            }
+
+            return false;
+        }
+
+        /**
+         * @brief Serializes a DnsServerEntry to a JSON object.
+         * @param entry Source entry.
+         * @return JSON object with populated fields only.
+         */
+        static Json::Value DnsServerEntryToJson(const AppConfiguration::DnsServerEntry& entry) noexcept {
+            Json::Value jo;
+            if (!entry.protocol.empty()) {
+                jo["protocol"] = entry.protocol;
+            }
+            if (!entry.url.empty()) {
+                jo["url"] = entry.url;
+            }
+            if (!entry.hostname.empty()) {
+                jo["hostname"] = entry.hostname;
+            }
+            if (!entry.address.empty()) {
+                jo["address"] = entry.address;
+            }
+            if (!entry.bootstrap.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& b : entry.bootstrap) {
+                    arr.append(b);
+                }
+                jo["bootstrap"] = arr;
+            }
+            return jo;
+        }
+
+        /**
          * @brief Loads configuration from a JSON object.
          * @param json Source JSON object.
          * @return True when loading and normalization succeed.
@@ -1214,6 +1563,16 @@ namespace ppp {
                 }
             }
 
+            // Parse server.ipv4-pool: presence alone enables IPv4 assignment.
+            {
+                const Json::Value& ipv4_pool_json = json["server"]["ipv4-pool"];
+                if (ipv4_pool_json.isObject()) {
+                    config.server.ipv4_pool.configured = true;
+                    config.server.ipv4_pool.network = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(ipv4_pool_json["network"])));
+                    config.server.ipv4_pool.mask    = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(ipv4_pool_json["mask"])));
+                }
+            }
+
             LoadAllMappings(config, json["client"]["mappings"]);
             LoadAllRoutes(config.client.routes, json["client"]["routes"]);
 
@@ -1245,6 +1604,96 @@ namespace ppp {
             AssignBoolIfPresent(config.telemetry.console_log, json["telemetry"]["console-log"]);
             AssignBoolIfPresent(config.telemetry.console_metric, json["telemetry"]["console-metric"]);
             AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
+
+            // DNS resolver extension configuration.
+            // domestic/foreign accept three forms:
+            //   string  → legacy shorthand stored in domestic/foreign + single entry
+            //   object  → structured DnsServerEntry
+            //   array   → mixed string/object entries, first string → legacy shorthand
+            {
+                ppp::string domestic_shorthand;
+                ppp::vector<DnsServerEntry> domestic_entries;
+                ParseDnsServerSpec(domestic_shorthand, domestic_entries, json["dns"]["servers"]["domestic"]);
+                config.dns.servers.domestic = domestic_shorthand;
+                config.dns.servers.domestic_entries = std::move(domestic_entries);
+
+                ppp::string foreign_shorthand;
+                ppp::vector<DnsServerEntry> foreign_entries;
+                ParseDnsServerSpec(foreign_shorthand, foreign_entries, json["dns"]["servers"]["foreign"]);
+                config.dns.servers.foreign = foreign_shorthand;
+                config.dns.servers.foreign_entries = std::move(foreign_entries);
+            }
+            AssignBoolIfPresent(config.dns.intercept_unmatched, json["dns"]["intercept-unmatched"]);
+            AssignBoolIfPresent(config.dns.ecs.enabled, json["dns"]["ecs"]["enabled"]);
+            config.dns.ecs.override_ip = JsonAuxiliary::AsValue<ppp::string>(json["dns"]["ecs"]["override-ip"]);
+            AssignBoolIfPresent(config.dns.tls.verify_peer, json["dns"]["tls"]["verify-peer"]);
+
+            // STUN candidates: array of "ip:port" or "hostname:port" strings.
+            {
+                const Json::Value& stun_json = json["dns"]["stun"]["candidates"];
+                if (stun_json.isArray()) {
+                    config.dns.stun.candidates.clear();
+                    for (Json::ArrayIndex i = 0; i < stun_json.size(); i++) {
+                        ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(stun_json[i])));
+                        if (!s.empty()) {
+                            config.dns.stun.candidates.emplace_back(std::move(s));
+                        }
+                    }
+                }
+            }
+
+            // Geo-rules configuration (Phase G).
+            // geoip/geosite accept string or string[].
+            // append-bypass/append-dns-rules accept string[].
+            {
+                const Json::Value& gr = json["geo-rules"];
+                if (gr.isObject()) {
+                    AssignBoolIfPresent(config.geo_rules.enabled, gr["enabled"]);
+                    auto assign_string_if_nonempty = [](ppp::string& target, const Json::Value& v) noexcept {
+                        ppp::string s = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(v)));
+                        if (!s.empty()) { target = std::move(s); }
+                    };
+                    assign_string_if_nonempty(config.geo_rules.country, gr["country"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_dat, gr["geoip-dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_dat, gr["geosite-dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_download_url, gr["geoip-download-url"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_download_url, gr["geosite-download-url"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_dat, gr["geoip_dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_dat, gr["geosite_dat"]);
+                    assign_string_if_nonempty(config.geo_rules.geoip_download_url, gr["geoip_download_url"]);
+                    assign_string_if_nonempty(config.geo_rules.geosite_download_url, gr["geosite_download_url"]);
+                    assign_string_if_nonempty(config.geo_rules.dns_provider_domestic, gr["dns-provider-domestic"]);
+                    assign_string_if_nonempty(config.geo_rules.dns_provider_foreign, gr["dns-provider-foreign"]);
+                    assign_string_if_nonempty(config.geo_rules.output_bypass, gr["output-bypass"]);
+                    assign_string_if_nonempty(config.geo_rules.output_dns_rules, gr["output-dns-rules"]);
+                    auto load_string_or_array = [](const Json::Value& v, ppp::vector<ppp::string>& out) noexcept {
+                        out.clear();
+                        if (v.isString()) {
+                            ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(v)));
+                            if (!s.empty()) { out.emplace_back(std::move(s)); }
+                        }
+                        elif(v.isArray()) {
+                            for (Json::ArrayIndex i = 0; i < v.size(); i++) {
+                                ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(v[i])));
+                                if (!s.empty()) { out.emplace_back(std::move(s)); }
+                            }
+                        }
+                    };
+                    load_string_or_array(gr["geoip"], config.geo_rules.geoip);
+                    load_string_or_array(gr["geosite"], config.geo_rules.geosite);
+                    auto load_string_array = [](const Json::Value& v, ppp::vector<ppp::string>& out) noexcept {
+                        if (v.isArray()) {
+                            out.clear();
+                            for (Json::ArrayIndex i = 0; i < v.size(); i++) {
+                                ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(v[i])));
+                                if (!s.empty()) { out.emplace_back(std::move(s)); }
+                            }
+                        }
+                    };
+                    load_string_array(gr["append-bypass"], config.geo_rules.append_bypass);
+                    load_string_array(gr["append-dns-rules"], config.geo_rules.append_dns_rules);
+                }
+            }
 
             bool loaded = Loaded();
             if (!loaded && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
@@ -1409,6 +1858,12 @@ namespace ppp {
                 static_addresses[kv.first] = kv.second;
             }
             server["ipv6"]["static-addresses"] = static_addresses;
+            if (config.server.ipv4_pool.configured) {
+                Json::Value ipv4_pool;
+                ipv4_pool["network"] = config.server.ipv4_pool.network;
+                ipv4_pool["mask"]    = config.server.ipv4_pool.mask;
+                server["ipv4-pool"] = ipv4_pool;
+            }
             root["server"] = server;
 
             // Set client structure
@@ -1475,6 +1930,76 @@ namespace ppp {
             telemetry["console-span"] = config.telemetry.console_span;
             root["telemetry"] = telemetry;
 
+            Json::Value dns;
+            // Serialize domestic/foreign: emit structured array when entries exist,
+            // otherwise emit legacy string shorthand.
+            if (!config.dns.servers.domestic_entries.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const DnsServerEntry& entry : config.dns.servers.domestic_entries) {
+                    arr.append(DnsServerEntryToJson(entry));
+                }
+                dns["servers"]["domestic"] = arr;
+            }
+            else {
+                dns["servers"]["domestic"] = config.dns.servers.domestic;
+            }
+
+            if (!config.dns.servers.foreign_entries.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const DnsServerEntry& entry : config.dns.servers.foreign_entries) {
+                    arr.append(DnsServerEntryToJson(entry));
+                }
+                dns["servers"]["foreign"] = arr;
+            }
+            else {
+                dns["servers"]["foreign"] = config.dns.servers.foreign;
+            }
+            dns["intercept-unmatched"] = config.dns.intercept_unmatched;
+            dns["ecs"]["enabled"] = config.dns.ecs.enabled;
+            dns["ecs"]["override-ip"] = config.dns.ecs.override_ip;
+            dns["tls"]["verify-peer"] = config.dns.tls.verify_peer;
+            if (!config.dns.stun.candidates.empty()) {
+                Json::Value stun_cands(Json::arrayValue);
+                for (const ppp::string& c : config.dns.stun.candidates) {
+                    stun_cands.append(c);
+                }
+                dns["stun"]["candidates"] = stun_cands;
+            }
+            root["dns"] = dns;
+
+            Json::Value geo_rules;
+            geo_rules["enabled"] = config.geo_rules.enabled;
+            geo_rules["country"] = config.geo_rules.country;
+            geo_rules["geoip-dat"] = config.geo_rules.geoip_dat;
+            geo_rules["geosite-dat"] = config.geo_rules.geosite_dat;
+            if (!config.geo_rules.geoip_download_url.empty()) { geo_rules["geoip-download-url"] = config.geo_rules.geoip_download_url; }
+            if (!config.geo_rules.geosite_download_url.empty()) { geo_rules["geosite-download-url"] = config.geo_rules.geosite_download_url; }
+            if (!config.geo_rules.geoip.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.geoip) { arr.append(s); }
+                geo_rules["geoip"] = arr;
+            }
+            if (!config.geo_rules.geosite.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.geosite) { arr.append(s); }
+                geo_rules["geosite"] = arr;
+            }
+            if (!config.geo_rules.dns_provider_domestic.empty()) { geo_rules["dns-provider-domestic"] = config.geo_rules.dns_provider_domestic; }
+            if (!config.geo_rules.dns_provider_foreign.empty()) { geo_rules["dns-provider-foreign"] = config.geo_rules.dns_provider_foreign; }
+            geo_rules["output-bypass"] = config.geo_rules.output_bypass;
+            geo_rules["output-dns-rules"] = config.geo_rules.output_dns_rules;
+            if (!config.geo_rules.append_bypass.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.append_bypass) { arr.append(s); }
+                geo_rules["append-bypass"] = arr;
+            }
+            if (!config.geo_rules.append_dns_rules.empty()) {
+                Json::Value arr(Json::arrayValue);
+                for (const ppp::string& s : config.geo_rules.append_dns_rules) { arr.append(s); }
+                geo_rules["append-dns-rules"] = arr;
+            }
+            root["geo-rules"] = geo_rules;
+
             return root;
         }
 
@@ -1485,6 +2010,67 @@ namespace ppp {
         ppp::string AppConfiguration::ToString() noexcept {
             Json::Value json = ToJson();
             return JsonAuxiliary::ToString(json);
+        }
+
+        /**
+         * @brief Emits a startup security diagnostics report.
+         *
+         * Scans the loaded configuration for weak/default/short keys and
+         * plaintext mode.  Each finding is logged via the telemetry subsystem
+         * and written to the console.  All findings are non-fatal warnings;
+         * startup never fails as a result of this call.
+         */
+        void AppConfiguration::EmitSecurityDiagnostics() noexcept {
+            const AppConfiguration& config = *this;
+            const ppp::string default_key = BOOST_BEAST_VERSION_STRING;
+            int warnings = 0;
+
+            /* Protocol key */
+            if (config.key.protocol_key == default_key) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Protocol key uses well-known default value; change for production use");
+                ppp::ConsoleFormat("[security] WARN: protocol key uses well-known default — change for production\n");
+            }
+            else if (config.key.protocol_key.size() < 8) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Protocol key shorter than 8 bytes; trivially brute-forced");
+                ppp::ConsoleFormat("[security] WARN: protocol key shorter than 8 bytes — trivially brute-forced\n");
+            }
+
+            /* Transport key */
+            if (config.key.transport_key == default_key) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Transport key uses well-known default value; change for production use");
+                ppp::ConsoleFormat("[security] WARN: transport key uses well-known default — change for production\n");
+            }
+            else if (config.key.transport_key.size() < 8) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Transport key shorter than 8 bytes; trivially brute-forced");
+                ppp::ConsoleFormat("[security] WARN: transport key shorter than 8 bytes — trivially brute-forced\n");
+            }
+
+            /* Plaintext mode */
+            if (config.key.plaintext) {
+                ++warnings;
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Plaintext mode enabled (key.plaintext=true); packets transmitted without encryption");
+                ppp::ConsoleFormat("[security] WARN: plaintext mode enabled (key.plaintext=true) — not suitable for untrusted networks\n");
+            }
+
+            /* Summary */
+            if (warnings > 0) {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Startup security diagnostics: %d warning(s) — startup continues (non-fatal)", warnings);
+                ppp::ConsoleFormat("[security] Startup security diagnostics: %d warning(s) — startup continues (non-fatal)\n", warnings);
+            }
+            else {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
+                    "Startup security diagnostics: all checks passed");
+            }
         }
 
         namespace extensions {

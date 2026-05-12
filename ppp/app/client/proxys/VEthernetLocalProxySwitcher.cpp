@@ -49,8 +49,8 @@ namespace ppp {
                         break;
                     }
 
-                    std::shared_ptr<ppp::threading::Timer> timeout = std::move(timeout_); 
-                    std::shared_ptr<ppp::net::SocketAcceptor> acceptor = std::move(acceptor_); 
+                    std::shared_ptr<ppp::threading::Timer> timeout = std::move(timeout_);
+                    std::shared_ptr<ppp::net::SocketAcceptor> acceptor = std::move(acceptor_);
 
                     if (NULLPTR != timeout) {
                         timeout->Dispose();
@@ -60,7 +60,7 @@ namespace ppp {
                         acceptor->Dispose();
                     }
 
-                    disposed_ = true;
+                    disposed_.store(true, std::memory_order_release);
                     ppp::collections::Dictionary::ReleaseAllObjects(connections);
                 }
 
@@ -106,7 +106,7 @@ namespace ppp {
                  */
                 void VEthernetLocalProxySwitcher::Dispose() noexcept {
                     auto self = shared_from_this();
-                    boost::asio::post(*context_, 
+                    boost::asio::post(*context_,
                         [self, this]() noexcept {
                             Finalize();
                         });
@@ -124,7 +124,7 @@ namespace ppp {
                     }
 
                     std::shared_ptr<ppp::net::SocketAcceptor> acceptor;
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
@@ -185,15 +185,15 @@ namespace ppp {
                     ppp::net::Socket::SetWindowSizeIfNotZero(sockfd, configuration_->tcp.cwnd, configuration_->tcp.rwnd);
 
                     auto self = shared_from_this();
-                    acceptor->AcceptSocket = 
+                    acceptor->AcceptSocket =
                         [self, this](ppp::net::SocketAcceptor*, ppp::net::SocketAcceptor::AcceptSocketEventArgs& e) noexcept {
                             int sockfd = e.Socket;
                             ppp::diagnostics::ErrorCode error_code = ppp::diagnostics::ErrorCode::SessionDisposed;
-                            
+
                             /**
                              * @brief Accept callback validates network readiness before scheduling per-socket work.
                              */
-                            while (!disposed_) {
+                            while (!disposed_.load(std::memory_order_acquire)) {
                                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                                 if (NULLPTR == exchanger) {
                                     error_code = ppp::diagnostics::ErrorCode::AppContextUnavailable;
@@ -209,7 +209,7 @@ namespace ppp {
                                 ppp::threading::Executors::ContextPtr context;
                                 ppp::threading::Executors::StrandPtr strand;
                                 context = ppp::threading::Executors::SelectScheduler(strand);
-                                
+
                                 if (NULLPTR == context) {
                                     error_code = ppp::diagnostics::ErrorCode::RuntimeSchedulerUnavailable;
                                     break;
@@ -251,7 +251,7 @@ namespace ppp {
                     if (NULLPTR != connection) {
                         auto self = shared_from_this();
                         std::shared_ptr<boost::asio::io_context> context = GetContext();
-                        boost::asio::post(*context, 
+                        boost::asio::post(*context,
                             [self, this, connection]() noexcept {
                                 RemoveConnection(connection);
                             });
@@ -262,10 +262,10 @@ namespace ppp {
                  * @brief Removes one tracked connection entry by pointer identity.
                  */
                 bool VEthernetLocalProxySwitcher::RemoveConnection(VEthernetLocalProxyConnection* connection) noexcept {
-                    VEthernetLocalProxyConnectionPtr r; 
+                    VEthernetLocalProxyConnectionPtr r;
                     if (NULLPTR != connection) {
                         SynchronizedObjectScope scope(syncobj_);
-                        r = ppp::collections::Dictionary::ReleaseObjectByKey(connections_, connection); 
+                        r = ppp::collections::Dictionary::ReleaseObjectByKey(connections_, connection);
                     }
 
                     return NULLPTR != r;
@@ -301,7 +301,7 @@ namespace ppp {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         return NULLPTR;
                     }
-                    
+
                     ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration_->tcp.turbo);
                     ppp::net::Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration_->tcp.cwnd, configuration_->tcp.rwnd);
                     return socket;
@@ -315,13 +315,13 @@ namespace ppp {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryBufferNull);
                         return false;
                     }
-                    
+
                     SynchronizedObjectScope scope(syncobj_);
                     bool added = ppp::collections::Dictionary::TryAdd(connections_, connection.get(), connection);
                     if (!added) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                     }
-                    
+
                     return added;
                 }
 
@@ -372,10 +372,10 @@ namespace ppp {
 
                         break;
                     }
-                    
+
                     if (!bok) {
                         if (RemoveConnection(connection.get())) {
-                            connection->Dispose(); 
+                            connection->Dispose();
                         }
 
                         if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
@@ -398,7 +398,7 @@ namespace ppp {
                  * @brief Creates the always-on 1-second timer for periodic housekeeping.
                  */
                 bool VEthernetLocalProxySwitcher::CreateAlwaysTimeout() noexcept {
-                    if (disposed_) {
+                    if (disposed_.load(std::memory_order_acquire)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
@@ -410,7 +410,7 @@ namespace ppp {
                         return false;
                     }
 
-                    timeout->TickEvent = 
+                    timeout->TickEvent =
                         [self, this](ppp::threading::Timer* sender, ppp::threading::Timer::TickEventArgs& e) noexcept {
                             UInt64 now = ppp::threading::Executors::GetTickCount();
                             Update(now);

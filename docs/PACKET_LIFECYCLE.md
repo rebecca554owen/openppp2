@@ -723,11 +723,11 @@ Packets may be silently dropped at several stages of the lifecycle:
 | Drop Point | Condition | Action |
 |------------|-----------|--------|
 | `VEthernet::OnPacketInput` | IP header invalid (checksum, version, length) | Drop, no error code |
-| `VEthernet::OnPacketInput` | Firewall rule match | Drop, `FirewallSegmentBlocked` or `FirewallDomainBlocked` |
+| `VEthernet::OnPacketInput` | Firewall rule match | Drop, `NetworkFirewallBlocked` |
 | `IPFragment` | Fragment set timeout | Drop, no notification to application |
 | `VirtualEthernetLinklayer::PacketInput` | Unknown opcode byte | Drop, `ProtocolPacketActionInvalid` |
 | `ITransmission::Read` | Checksum / decrypt failure | Drop, `ProtocolDecodeFailed` |
-| QoS token bucket | Token exhaustion with drop policy | Drop, `GenericRateLimited` |
+| QoS token bucket | Token exhaustion with drop policy | Drop, `RateLimitExceeded` |
 | Server relay | Destination unreachable | DoDisconnect or DoSendTo with error |
 
 ---

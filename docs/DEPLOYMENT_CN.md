@@ -62,7 +62,7 @@ flowchart TD
 | 表面 | 组件 | 备注 |
 |------|------|------|
 | Host | 权限、虚拟网卡、OS 路由、DNS 设置 | 运行时打开前必须就绪 |
-| Listener | TCP、WebSocket、TLS WebSocket、static UDP | 在 `server.listen.*` 中配置 |
+| Listener | TCP、WebSocket、TLS WebSocket、static UDP | 在 `tcp.listen/websocket.listen/udp.listen` 中配置 |
 | Data plane | 会话、NAT 映射、IPv6 transit、static echo | 每会话运行时状态 |
 | Management | 通过 WebSocket 接入 Go backend | 可选；扩展策略，不接触数据包字节 |
 
@@ -162,8 +162,8 @@ flowchart TD
 |------|------|
 | 1 | 权限：Linux 上 root，Windows 上管理员 |
 | 2 | 配置文件存在 |
-| 3 | 至少启用一个监听器（`server.listen.tcp` 或 `server.listen.ws`） |
-| 4 | `server.listen.port` 设置为可用端口 |
+| 3 | 至少启用一个监听器（`tcp.listen.port` 或 `websocket.listen.ws`） |
+| 4 | 监听端口设置为可用端口 |
 | 5 | 如果设置了 `server.firewall`，防火墙配置文件存在 |
 | 6 | 如果设置了 `server.backend`，Go backend 可达 |
 | 7 | 如果启用了 `server.ipv6`，NIC 支持 IPv6 |
@@ -172,10 +172,10 @@ flowchart TD
 
 | 监听器 | 配置键 | 协议 | TLS |
 |--------|--------|------|-----|
-| TCP | `server.listen.tcp` | 原始 TCP | 否 |
-| WebSocket | `server.listen.ws` | HTTP WebSocket | 否 |
-| TLS WebSocket | `server.listen.wss` | HTTPS WebSocket | 是 |
-| Static UDP | `server.listen.udp` | 原始 UDP | 否 |
+| TCP | `tcp.listen.port` | 原始 TCP | 否 |
+| WebSocket | `websocket.listen.ws` | HTTP WebSocket | 否 |
+| TLS WebSocket | `websocket.listen.wss` | HTTPS WebSocket | 是 |
+| Static UDP | `udp.listen.port` | 原始 UDP | 否 |
 
 ---
 
@@ -316,26 +316,29 @@ flowchart TD
 ```json
 {
   "concurrent": 4,
-  "cdn": [0, 0],
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
-    "masked": false,
-    "plaintext": false,
-    "delta-encode": false,
-    "shuffle-data": false
+    "transport-key": "OpenPPP2-Test-Transport-Key"
+  },
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
+  "udp": {
+    "listen": { "port": 20000 }
+  },
+  "websocket": {
+    "path": "/tun"
   },
   "server": {
-    "node": 1,
-    "subnet": true,
-    "listen": {
-      "port": 20000,
-      "ws": false,
-      "wss": false
+    "ipv4-pool": {
+      "network": "10.0.0.0",
+      "mask": "255.255.255.0"
     }
   }
 }
@@ -345,19 +348,16 @@ flowchart TD
 
 ```json
 {
-  "concurrent": 4,
-  "cdn": [0, 0],
+  "concurrent": 2,
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
-    "masked": false,
-    "plaintext": false,
-    "delta-encode": false,
-    "shuffle-data": false
+    "transport-key": "OpenPPP2-Test-Transport-Key"
   },
   "client": {
     "guid": "{F4519CF1-7A8A-4B00-89C8-9172A87B96DB}",
@@ -374,15 +374,15 @@ flowchart TD
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `PrivilegeRequired` | 进程需要管理员/root 权限 |
-| `ConfigurationNotFound` | 任何搜索路径都找不到配置文件 |
-| `ConfigurationLoadFailed` | 找到配置文件但解析失败 |
-| `AdapterOpenFailed` | 虚拟网卡无法打开 |
-| `ServerListenerOpenFailed` | TCP 或 WebSocket 监听器绑定失败 |
-| `ServerFirewallOpenFailed` | 防火墙子系统初始化失败 |
-| `ManagedServerConnectionFailed` | Go backend WebSocket 连接失败 |
-| `IPv6TransitOpenFailed` | IPv6 transit plane 打开失败 |
-| `DuplicateInstanceDetected` | 已有另一个 ppp 实例在运行 |
+| `AppPrivilegeRequired` | 进程需要管理员/root 权限 |
+| `ConfigFileNotFound` | 任何搜索路径都找不到配置文件 |
+| `ConfigLoadFailed` | 找到配置文件但解析失败 |
+| `NetworkInterfaceOpenFailed` | 虚拟网卡无法打开 |
+| `SocketBindFailed` | TCP 或 WebSocket 监听器绑定失败 |
+| `FirewallCreateFailed` | 防火墙子系统初始化失败 |
+| `VEthernetManagedConnectUrlEmpty` | Go backend WebSocket 连接失败 |
+| `IPv6TransitTapOpenFailed` | IPv6 transit TAP 打开失败 |
+| `AppAlreadyRunning` | 已有另一个 ppp 实例在运行 |
 
 ---
 

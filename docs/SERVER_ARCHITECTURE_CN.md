@@ -299,10 +299,10 @@ bool SendKeepalive(YieldContext& y) noexcept;
 
 | 监听器类型 | 配置键 | 协议 |
 |-----------|--------|------|
-| TCP | `server.listen.tcp` | 原始 TCP |
-| WebSocket | `server.listen.ws` | HTTP WebSocket |
-| TLS WebSocket | `server.listen.wss` | HTTPS WebSocket |
-| UDP static | `server.listen.udp` | 原始 UDP（static echo） |
+| TCP | `tcp.listen.port` | 原始 TCP |
+| WebSocket | `websocket.listen.ws` | HTTP WebSocket |
+| TLS WebSocket | `websocket.listen.wss` | HTTPS WebSocket |
+| UDP static | `udp.listen.port` | 原始 UDP（static echo） |
 
 启用哪些类型取决于配置。
 所有监听器类型都把连接投递给 `VirtualEthernetSwitcher::AcceptConnection`。
@@ -351,9 +351,9 @@ Static UDP 绕过每会话机制，作为独立的监听器处理。
 
 | 配置字段 | 效果 |
 |---------|------|
-| `server.listen.tcp` | 启用/禁用 TCP 监听器 |
-| `server.listen.ws` | 启用/禁用 WebSocket 监听器 |
-| `server.listen.wss` | 启用/禁用 TLS WebSocket 监听器 |
+| `tcp.listen.port` | 启用/禁用 TCP 监听器 |
+| `websocket.listen.ws` | 启用/禁用 WebSocket 监听器 |
+| `websocket.listen.wss` | 启用/禁用 TLS WebSocket 监听器 |
 | `server.backend` | 启用/配置管理后端 URL |
 | `server.firewall` | 防火墙策略文件路径 |
 | `server.ipv6` | 启用 IPv6 transit plane |
@@ -383,20 +383,19 @@ Static UDP 绕过每会话机制，作为独立的监听器处理。
 
 ## 错误码参考
 
-服务端相关的 `ppp::diagnostics::ErrorCode` 值：
+服务端相关的 `ppp::diagnostics::ErrorCode` 值（节选自 `ErrorCodes.def`）：
 
 | ErrorCode | 描述 |
 |-----------|------|
-| `ServerListenerOpenFailed` | 无法打开 TCP 或 WebSocket 监听器 |
-| `ServerFirewallOpenFailed` | 防火墙初始化失败 |
-| `HandshakeFailed` | 客户端握手未完成 |
-| `HandshakeTimeout` | 客户端握手超时 |
-| `AuthenticationFailed` | 会话被拒绝 |
-| `ManagedServerConnectionFailed` | 无法连接管理后端 |
-| `ManagedServerAuthenticationFailed` | 后端拒绝用户 |
+| `TunnelOpenFailed` | 无法打开 TCP 或 WebSocket 监听器 |
+| `TunnelListenFailed` | 监听器 accept 循环启动失败 |
+| `SessionHandshakeFailed` | 客户端握手未完成 |
+| `SessionAuthFailed` | 会话认证失败 |
+| `SessionQuotaExceeded` | 用户额度耗尽 |
 | `KeepaliveTimeout` | 客户端保活超时 |
-| `SessionExpired` | 会话因策略过期 |
-| `QuotaExceeded` | 会话额度耗尽 |
+| `IPv6ServerPrepareFailed` | 服务端 IPv6 环境准备失败 |
+| `VEthernetManagedConnectUrlEmpty` | 管理后端 URL 为空 |
+| `VEthernetManagedPacketJsonParseFailed` | 从后端收到无效 JSON 帧 |
 
 ---
 

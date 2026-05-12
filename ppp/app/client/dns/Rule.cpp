@@ -1,4 +1,5 @@
 #include <ppp/app/client/dns/Rule.h>
+#include <ppp/dns/DnsResolver.h>
 #include <ppp/io/File.h>
 #include <ppp/net/Firewall.h>
 #include <ppp/net/Ipep.h>
@@ -66,15 +67,24 @@ namespace ppp
                         return 0;
                     }
 
+                    ppp::string normalized = s;
+                    for (char& ch : normalized)
+                    {
+                        if (ch == ',' || ch == ';' || ch == '\t')
+                        {
+                            ch = '\n';
+                        }
+                    }
+
                     ppp::vector<ppp::string> lines;
-                    Tokenize<ppp::string>(s, lines, "\r\n");
+                    Tokenize<ppp::string>(normalized, lines, "\r\n");
 
                     if (lines.empty())
                     {
                         return 0;
                     }
 
-                    std::size_t length = rules.size();
+                    std::size_t length = rules.size() + full_rules.size() + regexp_rules.size();
                     ppp::unordered_set<ppp::string> sets;
 
                     for (std::size_t i = 0, line_count = lines.size(); i < line_count; i++)
@@ -82,9 +92,9 @@ namespace ppp
                         ppp::string line = lines[i];
                         // Strip inline comments and skip pure comment lines.
                         std::size_t index = line.find('#');
-                        if (index != ppp::string::npos) 
+                        if (index != ppp::string::npos)
                         {
-                            if (index == 0) 
+                            if (index == 0)
                             {
                                 continue;
                             }
@@ -102,32 +112,72 @@ namespace ppp
                         Tokenize<ppp::string>(line, segments, "/");
 
                         std::size_t segment_size = segments.size();
+                        for (std::size_t j = 0; j < segment_size; j++)
+                        {
+                            segments[j] = ATrim<ppp::string>(segments[j]);
+                        }
+
+                        // Mobile UI historically described this field as a DNS
+                        // server list.  Accept a bare IP/provider line as a
+                        // wildcard rule so entries like "8.8.8.8" and
+                        // "cloudflare" actually take effect for all domains.
+                        if (segment_size == 1)
+                        {
+                            ppp::string upstream = segments[0];
+                            if (upstream.empty())
+                            {
+                                continue;
+                            }
+
+                            bool nic = false;
+                            boost::system::error_code ec;
+                            boost::asio::ip::address address = StringToAddress(upstream, ec);
+                            Ptr rule;
+                            if (!ec)
+                            {
+                                if (ppp::net::IPEndPoint::IsInvalid(address))
+                                {
+                                    continue;
+                                }
+
+                                rule = make_shared_object<Rule>(Rule{ ".*", nic, address });
+                            }
+                            elif(ppp::dns::DnsResolver::HasProvider(upstream))
+                            {
+                                rule = make_shared_object<Rule>(Rule{ ".*", nic, {}, upstream });
+                            }
+
+                            if (NULLPTR != rule)
+                            {
+                                if (regexp_rules.find(".*") == regexp_rules.end())
+                                {
+                                    regexp_rules[".*"] = rule;
+                                }
+                            }
+                            continue;
+                        }
+
                         if (segment_size < 2)
                         {
                             continue;
                         }
 
-                        for (std::size_t j = 0; j < segment_size; j++)
-                        {
-                            segments[j] = ATrim<ppp::string>(segments[j]);
-                        }
-                        
                         ppp::string& host = segments[0];
                         if (host.empty() || segments[1].empty())
                         {
                             continue;
                         }
-                       
+
                         std::size_t host_size = host.size();
                         bool regexp = host_size >= 7 && memcmp(host.data(), "regexp:", 7) == 0;
                         bool full = false;
                         // Parse host mode: regexp, full host, or relative domain.
-                        if (regexp) 
+                        if (regexp)
                         {
                             boost::regex pattern;
                             host = host.substr(7);
 
-                            try 
+                            try
                             {
                                 int err = pattern.set_expression(host.data(), host.data() + host.size(), boost::regex_constants::icase | boost::regex_constants::perl);
                                 if (err != boost::regex_constants::error_ok)
@@ -135,12 +185,12 @@ namespace ppp
                                     continue;
                                 }
                             }
-                            catch (const boost::exception&) 
+                            catch (const boost::exception&)
                             {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                                 continue;
                             }
-                            catch (const std::exception&) 
+                            catch (const std::exception&)
                             {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                                 continue;
@@ -150,24 +200,14 @@ namespace ppp
                         {
                             host = ToLower<ppp::string>(host.substr(5));
                         }
-                        else 
+                        else
                         {
                             host = ToLower<ppp::string>(host);
                         }
 
-                        boost::system::error_code ec;
-                        boost::asio::ip::address address = StringToAddress(segments[1], ec);
-                        if (ec)
-                        {
-                            continue;
-                        }
-                        elif(ppp::net::IPEndPoint::IsInvalid(address))
-                        {
-                            continue;
-                        }
-
+                        // Parse the optional third segment (nic flag) before the address
+                        // check so it is available for both IP and provider-name paths.
                         bool nic = true;
-                        // Optional third segment controls NIC routing behavior.
                         if (segment_size > 2)
                         {
                             ppp::string& nic_type = segments[2];
@@ -180,7 +220,45 @@ namespace ppp
                                 }
                             }
                         }
-                    
+
+                        boost::system::error_code ec;
+                        boost::asio::ip::address address = StringToAddress(segments[1], ec);
+                        if (ec)
+                        {
+                            // New: segments[1] is not a valid IP address.
+                            // Check whether it matches a built-in DNS provider name
+                            // (e.g. "doh.pub", "cloudflare", "alidns").
+                            if (ppp::dns::DnsResolver::HasProvider(segments[1]))
+                            {
+                                // Create a rule that routes through DnsResolver
+                                // instead of legacy UDP forwarding.
+                                //   Server        = default (unspecified)
+                                //   ProviderName  = segments[1]
+                                Ptr rule = make_shared_object<Rule>(Rule{ host, nic, {}, segments[1] });
+                                if (NULLPTR == rule)
+                                {
+                                    break;
+                                }
+                                elif(regexp)
+                                {
+                                    regexp_rules[host] = rule;
+                                }
+                                elif(full)
+                                {
+                                    full_rules[host] = rule;
+                                }
+                                else
+                                {
+                                    rules[host] = rule;
+                                }
+                            }
+                            continue;
+                        }
+                        elif(ppp::net::IPEndPoint::IsInvalid(address))
+                        {
+                            continue;
+                        }
+
                         Ptr rule = make_shared_object<Rule>(Rule{ host, nic, address });
                         if (NULLPTR == rule)
                         {
@@ -190,17 +268,17 @@ namespace ppp
                         {
                             regexp_rules[host] = rule;
                         }
-                        elif(full) 
+                        elif(full)
                         {
                             full_rules[host] = rule;
                         }
-                        else 
+                        else
                         {
                             rules[host] = rule;
                         }
                     }
 
-                    return rules.size() - length;
+                    return (rules.size() + full_rules.size() + regexp_rules.size()) - length;
                 }
 
                 /**
@@ -212,7 +290,7 @@ namespace ppp
                  * @return Matched rule pointer, or null when not found.
                  * @note IP literal input is ignored and returns null.
                  */
-                Rule::Ptr Rule::Get(const ppp::string& s, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept 
+                Rule::Ptr Rule::Get(const ppp::string& s, ppp::unordered_map<ppp::string, Ptr>& rules, ppp::unordered_map<ppp::string, Ptr>& full_rules, ppp::unordered_map<ppp::string, Ptr>& regexp_rules) noexcept
                 {
                     if (s.empty())
                     {
@@ -240,14 +318,14 @@ namespace ppp
                     }
 
                     Rule::Ptr rule = GetWithAbsoluteHost(host_lower, full_rules);
-                    if (NULLPTR != rule) 
+                    if (NULLPTR != rule)
                     {
                         return rule;
                     }
 
                     // Apply regexp matching after exact full-host lookup.
                     rule = GetWithRegExp(host_lower, regexp_rules);
-                    if (NULLPTR != rule) 
+                    if (NULLPTR != rule)
                     {
                         return rule;
                     }
@@ -288,7 +366,7 @@ namespace ppp
                     {
                         boost::regex pattern;
 
-                        try 
+                        try
                         {
                             int err = pattern.set_expression(r.data(), r.data() + r.size(), boost::regex_constants::icase | boost::regex_constants::perl);
                             if (err != boost::regex_constants::error_ok)
@@ -296,17 +374,17 @@ namespace ppp
                                 continue;
                             }
 
-                            if (boost::regex_search(s.begin(), s.end(), pattern)) 
+                            if (boost::regex_search(s.begin(), s.end(), pattern))
                             {
                                 return rule;
                             }
                         }
-                        catch (const boost::exception&) 
+                        catch (const boost::exception&)
                         {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                             continue;
                         }
-                        catch (const std::exception&) 
+                        catch (const std::exception&)
                         {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ConfigDnsRuleLoadFailed);
                             continue;

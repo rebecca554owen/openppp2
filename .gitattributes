@@ -1,0 +1,3 @@
+# Mark binary data files to suppress text-diff noise in git log/diff.
+# These are protobuf-encoded GeoIP/GeoSite databases bundled for Android.
+android/android/app/src/main/assets/rules/*.dat binary

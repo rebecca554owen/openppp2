@@ -212,10 +212,11 @@ The repository contains paired English/Chinese documents plus the root README pa
 | IPv6 | `IPV6_TRANSIT_PLANE.md` | `IPV6_TRANSIT_PLANE_CN.md` |
 | IPv6 | `IPV6_NDP_PROXY.md` | `IPV6_NDP_PROXY_CN.md` |
 | IPv6 | `IPV6_CLIENT_ASSIGNMENT.md` | `IPV6_CLIENT_ASSIGNMENT_CN.md` |
- | TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
- | IPv6 Fix Notes | `IPV6_FIXES.md` | `IPV6_FIXES_CN.md` |
- | Platform | `MULTIQUEUE_TUN_MODEL.md` | `MULTIQUEUE_TUN_MODEL_CN.md` |
- | Observability | `OTEL_DESIGN.md` | `OTEL_DESIGN_CN.md` |
+| IPv6 Fix Notes | `IPV6_FIXES.md` | `IPV6_FIXES_CN.md` |
+| Platform | `MULTIQUEUE_TUN_MODEL.md` | `MULTIQUEUE_TUN_MODEL_CN.md` |
+| Observability | `OTEL_DESIGN.md` | `OTEL_DESIGN_CN.md` |
+| TUI | `TUI_DESIGN.md` | `TUI_DESIGN_CN.md` |
+| Concurrency | `ATOMIC_SHARED_PTR_HELPER_DESIGN.md` | `ATOMIC_SHARED_PTR_HELPER_DESIGN_CN.md` |
 
 ---
 
@@ -250,7 +251,7 @@ The repository contains paired English/Chinese documents plus the root README pa
 │   │   └── ConsoleUI.h/.cpp      # TUI: render + input threads
 │   ├── diagnostics/
 │   │   ├── Error.h/.cpp          # Error code definitions and setters
-│   │   ├── ErrorCodes.def        # X-macro source: 542 error codes
+│   │   ├── ErrorCodes.def        # X-macro source: 628 error codes
 │   │   └── ErrorHandler.h/.cpp   # Handler registration / dispatch
 │   ├── tap/
 │   │   └── ITap.h/.cpp           # Virtual NIC abstraction interface
@@ -309,9 +310,10 @@ Optional CMake flags:
 | Flag | Purpose |
 |------|---------|
 | `-DENABLE_SIMD=ON` | AES-NI acceleration (x86/x64 only) |
+| `-DENABLE_IO_URING=ON` | io_uring async event driver (Linux kernel ≥ 5.10) |
+| `-DENABLE_SYSNAT=ON` | SYSNAT kernel-bypass traffic control (Linux only) |
+| `-DPPP_TELEMETRY=ON` | Optional telemetry/OTel facade |
 | `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` | Required on macOS |
-
-io_uring (Linux ≥ 5.10): uncomment `BOOST_ASIO_HAS_IO_URING` in `CMakeLists.txt` or use a `builds/` variant.
 
 ### Windows
 
@@ -368,7 +370,6 @@ Use `build-openppp2-by-builds.sh` to compile all variants into `bin/<variant>.zi
 ```json
 {
     "concurrent": 4,
-    "cdn": [1, 2],
     "key": {
         "kf": 154543927,
         "kx": 128,
@@ -377,19 +378,17 @@ Use `build-openppp2-by-builds.sh` to compile all variants into `bin/<variant>.zi
         "protocol": "aes-128-cfb",
         "protocol-key": "TSAO_PPP",
         "transport": "aes-256-cfb",
-        "transport-key": "TSAO_PPP",
-        "masked": false,
-        "plaintext": false,
-        "delta-encode": false,
-        "shuffle-data": false
+        "transport-key": "TSAO_PPP"
+    },
+    "tcp": {
+        "listen": { "port": 20000 }
     },
     "server": {
-        "bind": "0.0.0.0",
-        "port": 20000,
         "subnet": true,
-        "dns": "8.8.8.8",
-        "ip": "10.0.0.0",
-        "mask": "255.255.0.0"
+        "ipv4-pool": {
+            "network": "10.0.0.0",
+            "mask": "255.255.0.0"
+        }
     }
 }
 ```
@@ -412,14 +411,7 @@ Run: `./ppp --mode=server --config=./appsettings.json`
         "transport-key": "TSAO_PPP"
     },
     "client": {
-        "server": "ppp://your-server-ip:20000/",
-        "bandwidth": 0,
-        "reconnections": {
-            "timeout": 5
-        },
-        "paper-airplane": {
-            "tcp": true
-        }
+        "server": "ppp://your-server-ip:20000/"
     }
 }
 ```
@@ -457,9 +449,11 @@ Key configuration groups:
 
 | Group | Key fields | Notes |
 |-------|------------|-------|
-| `key` | `kf`, `kx`, `kl`, `kh`, `protocol`, `transport`, `masked`, `plaintext`, `delta-encode`, `shuffle-data` | Cipher and obfuscation parameters |
-| `server` | `bind`, `port`, `subnet`, `dns`, `ip`, `mask` | Server listen and IP pool |
+| `key` | `kf`, `kx`, `kl`, `kh`, `sb`, `protocol`, `transport`, `masked`, `plaintext`, `delta-encode`, `shuffle-data` | Cipher and obfuscation parameters |
+| `server` | `node`, `subnet`, `mapping`, `backend`, `ipv4-pool`, `ipv6` | Server identity, IP pool, and management |
 | `client` | `server`, `bandwidth`, `reconnections`, `paper-airplane` | Client connection target and QoS |
+| `tcp` | `listen.port`, `connect.timeout`, `inactive.timeout`, `turbo`, `fast-open` | TCP socket policy |
+| `websocket` | `host`, `path`, `listen.ws`, `listen.wss`, `ssl.*` | WebSocket carrier configuration |
 | `concurrent` | (integer) | Number of io_context threads |
 | `cdn` | (array) | Obfuscation CDN port modes |
 
@@ -477,7 +471,7 @@ Full reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
 - **Framing**: base94 frame header (first packet: 4+3 bytes, later: 4 bytes)
 - **Masking**: byte-level mask applied to payload header bytes
 - **Delta encoding**: incremental delta compression on payload data
-- **Two cipher layers**: protocol cipher (header metadata) and transport cipher (payload), both derived from `ivv + nmux + base_key`
+- **Two cipher layers**: protocol cipher (header metadata) and transport cipher (payload), both rebuilt from `base_key + ivv_str`
 
 ```mermaid
 sequenceDiagram
@@ -697,7 +691,7 @@ Full reference: [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md)
 
 ## Error Handling Summary
 
-Errors are represented as typed error codes defined in `ppp/diagnostics/ErrorCodes.def` via X-macro. There are **542 error codes**.
+Errors are represented as typed error codes defined in `ppp/diagnostics/ErrorCodes.def` via X-macro. There are **628 error codes**.
 
 ```mermaid
 flowchart LR
@@ -769,8 +763,8 @@ Security operates at two independent layers:
 
 | Layer | What it protects | Cipher source |
 |-------|-----------------|---------------|
-| Protocol cipher | Header metadata and session framing | `ivv + nmux + base_key` |
-| Transport cipher | Payload data | `ivv + nmux + base_key` (different derivation) |
+| Protocol cipher | Header metadata and session framing | `protocol-key + ivv_str` |
+| Transport cipher | Payload data | `transport-key + ivv_str` |
 
 Additional obfuscation features (configured via `key.*`):
 

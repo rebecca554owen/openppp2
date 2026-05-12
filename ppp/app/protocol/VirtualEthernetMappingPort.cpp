@@ -19,6 +19,7 @@
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 namespace ppp {
     namespace app {
@@ -27,6 +28,25 @@ namespace ppp {
             static constexpr int PPP_UDP_BUFFER_SIZE = 65000;
             /** @brief Maximum TCP buffer size used by forwarding loops. */
             static constexpr int PPP_TCP_BUFFER_SIZE = PPP_UDP_BUFFER_SIZE;
+
+            static void LogNetworkPortInvalidToSessionLog(const std::shared_ptr<VirtualEthernetLogger>& logger, const char* where, int remote_port, int local_port, bool tcp, bool in) noexcept {
+                if (NULLPTR == logger || NULLPTR == where) {
+                    return;
+                }
+
+                ppp::string line = "{\"event\":\"network_port_invalid\",\"code\":100,\"where\":\"";
+                line += where;
+                line += "\",\"remote_port\":";
+                line += stl::to_string<ppp::string>(remote_port);
+                line += ",\"local_port\":";
+                line += stl::to_string<ppp::string>(local_port);
+                line += ",\"tcp\":";
+                line += tcp ? "true" : "false";
+                line += ",\"in\":";
+                line += in ? "true" : "false";
+                line += "}\n";
+                logger->Write(line.data(), static_cast<int>(line.size()), ppp::function<void(bool)>());
+            }
 
             /** @brief Constructs a mapping port bound to one FRP endpoint definition. */
             VirtualEthernetMappingPort::VirtualEthernetMappingPort(const std::shared_ptr<VirtualEthernetLinklayer>& linklayer, const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port) noexcept
@@ -169,6 +189,8 @@ namespace ppp {
                                                                                                            \
                 auto local_ep = socket.local_endpoint(ec);                                                 \
                 if (local_ep.port() != remote_port_) {                                                     \
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mapping_port", "network port invalid after bind expected=%d actual=%d tcp=%d in=%d ec=%d", remote_port_, ec ? -1 : local_ep.port(), tcp_ ? 1 : 0, in_ ? 1 : 0, ec.value()); \
+                    LogNetworkPortInvalidToSessionLog(logger_, "mapping_port.after_bind", remote_port_, ec ? -1 : local_ep.port(), tcp_, in_); \
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid); \
                 }                                                                                          \
                                                                                                            \
@@ -206,6 +228,8 @@ namespace ppp {
             bool VirtualEthernetMappingPort::OpenFrpServer(const VirtualEthernetLoggerPtr& logger) noexcept {
                 // Validate remote port range
                 if (remote_port_ <= ppp::net::IPEndPoint::MinPort || remote_port_ > ppp::net::IPEndPoint::MaxPort) {
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mapping_port", "network port invalid in OpenFrpServer remote_port=%d tcp=%d in=%d", remote_port_, tcp_ ? 1 : 0, in_ ? 1 : 0);
+                    LogNetworkPortInvalidToSessionLog(logger, "mapping_port.open_frp_server", remote_port_, ppp::net::IPEndPoint::MinPort, tcp_, in_);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
@@ -923,10 +947,12 @@ namespace ppp {
             bool VirtualEthernetMappingPort::OpenFrpClient(const boost::asio::ip::address& local_ip, int local_port) noexcept {
                 // Validate ports
                 if (remote_port_ <= ppp::net::IPEndPoint::MinPort || remote_port_ > ppp::net::IPEndPoint::MaxPort) {
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mapping_port", "network port invalid in OpenFrpClient remote_port=%d local_port=%d tcp=%d in=%d", remote_port_, local_port, tcp_ ? 1 : 0, in_ ? 1 : 0);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 
                 if (local_port <= ppp::net::IPEndPoint::MinPort || local_port > ppp::net::IPEndPoint::MaxPort) {
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mapping_port", "network port invalid in OpenFrpClient local_port=%d remote_port=%d tcp=%d in=%d", local_port, remote_port_, tcp_ ? 1 : 0, in_ ? 1 : 0);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 }
 

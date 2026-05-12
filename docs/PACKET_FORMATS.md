@@ -445,18 +445,19 @@ the caller. The caller is responsible for detecting the failure and closing the 
 
 ## Error Code Reference
 
-Packet format error codes (from `ppp/diagnostics/Error.h`):
+Packet format error codes (from `ppp/diagnostics/ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `PacketMaskIdZero` | Received static packet with `mask_id == 0` |
-| `PacketChecksumMismatch` | Static packet checksum validation failed |
-| `PacketHeaderLengthInvalid` | `header_length` mapping produced an out-of-range value |
-| `PacketCipherDecryptFailed` | Protocol or transport cipher decryption failed |
-| `PacketPayloadTooLarge` | Recovered payload length exceeds expected maximum |
-| `PacketFamilyInvalid` | `session_id` sign produced an unrecognized packet family |
-| `PacketBase94DecodeFailed` | base94 decoding of header or payload failed |
-| `PacketLengthMappingFailed` | base94 length reverse-mapping failed |
+| `ProtocolDecodeFailed` | Static packet checksum, cipher, or structural decode failure |
+| `ProtocolFrameInvalid` | Received packet frame is structurally invalid |
+| `ProtocolPacketActionInvalid` | Unrecognized packet family or opcode |
+| `SseaDeltaDecodeInvalidInput` | Delta-decode received invalid input |
+| `SseaBase94DecodeInvalidInput` | Base94 decode received invalid input |
+| `SseaBase94DecodeCharOutOfAlphabet` | Base94 decode found character outside alphabet |
+| `TransmissionPacketDecryptPayloadAllocFailed` | Packet decrypt failed to allocate payload buffer |
+| `NetworkPacketMalformed` | Network packet failed structural validation |
+| `NetworkPacketTooLarge` | Recovered payload length exceeds expected maximum |
 
 ---
 

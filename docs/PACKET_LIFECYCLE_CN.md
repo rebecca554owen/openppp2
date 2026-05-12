@@ -721,11 +721,11 @@ sequenceDiagram
 | 丢弃点 | 条件 | 动作 |
 |--------|------|------|
 | `VEthernet::OnPacketInput` | IP 头部无效（校验和、版本、长度）| 丢弃，不设错误码 |
-| `VEthernet::OnPacketInput` | 防火墙规则命中 | 丢弃，`FirewallSegmentBlocked` 或 `FirewallDomainBlocked` |
+| `VEthernet::OnPacketInput` | 防火墙规则命中 | 丢弃，`NetworkFirewallBlocked` |
 | `IPFragment` | 分片集超时 | 丢弃，不通知应用 |
 | `VirtualEthernetLinklayer::PacketInput` | 未知操作码字节 | 丢弃，`ProtocolPacketActionInvalid` |
 | `ITransmission::Read` | 校验和 / 解密失败 | 丢弃，`ProtocolDecodeFailed` |
-| QoS 令牌桶 | 令牌耗尽（丢弃策略）| 丢弃，`GenericRateLimited` |
+| QoS 令牌桶 | 令牌耗尽（丢弃策略）| 丢弃，`RateLimitExceeded` |
 | 服务端中继 | 目标不可达 | DoDisconnect 或携带错误的 DoSendTo |
 
 ---

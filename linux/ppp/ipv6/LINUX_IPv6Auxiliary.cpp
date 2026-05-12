@@ -25,7 +25,7 @@ namespace {
         }
 
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-        
+
         boost::system::error_code network_ec;
         boost::asio::ip::address network_address = StringToAddress(ppp::linux::ipv6::auxiliary::ComputeNetworkAddress(address, prefix_length), network_ec);
         if (!network_ec && prefix_length < ppp::ipv6::IPv6_MAX_PREFIX_LENGTH && address == network_address.to_v6()) {
@@ -77,11 +77,28 @@ namespace {
         return true;
     }
 
-    static bool LinuxExecuteCommand(const ppp::string& command) noexcept {
+    /**
+     * @brief SECURITY-GOVERNANCE: Canonical system() wrapper for this translation unit.
+     *
+     * All command execution in this file MUST route through this function.
+     * Callers MUST sanitize every dynamic token via IsSafeShellToken() (or
+     * IsSafeSysctlKey/IsSafeSysctlValue for sysctl operations) before
+     * interpolating into the command string.  Raw system() calls are
+     * prohibited outside this wrapper.
+     *
+     * @param command Fully-formed shell command to execute.
+     * @return The exit status of the command, or -1 if the command is empty.
+     */
+    static int RunSystemCommand(const ppp::string& command) noexcept {
         if (command.empty()) {
-            return false;
+            return -1;
         }
-        return system(command.data()) == 0;
+        return system(command.data());
+    }
+
+    /** @brief Convenience wrapper: returns true when the command exits with status 0. */
+    static bool LinuxExecuteCommand(const ppp::string& command) noexcept {
+        return RunSystemCommand(command) == 0;
     }
 
     /**
@@ -132,7 +149,13 @@ namespace {
 
     /**
      * @brief Reads a sysctl value by key using `sysctl -n`.
-     * @param key Sysctl key to query.
+     *
+     * SECURITY-GOVERNANCE: This function intentionally uses raw popen() rather than
+     * RunSystemCommand() because it needs to capture stdout.  The `key` parameter is
+     * validated by IsSafeSysctlKey() which restricts characters to [a-zA-Z0-9._-],
+     * preventing shell metacharacter injection.
+     *
+     * @param key Sysctl key to query (must pass IsSafeSysctlKey).
      * @param value Receives the trimmed sysctl value on success.
      * @return true if the key is valid and a non-empty value is read; otherwise false.
      */
@@ -191,7 +214,7 @@ namespace {
      */
     static bool LoadSysctlSnapshot(ppp::unordered_map<ppp::string, ppp::string>& snapshot) noexcept {
         snapshot.clear();
-        
+
         ppp::string path = GetIPv6SysctlSnapshotPath();
         if (!ppp::io::File::Exists(path.data())) {
             return false;
@@ -345,11 +368,9 @@ namespace {
         return ppp::unix__::UnixAfx::ExecuteShellCommandLines("ip -6 route show default");
     }
 
+    /** @brief Convenience wrapper: returns the raw exit status (preserves legacy semantics). */
     static int LinuxExecuteCommandWithStatus(const ppp::string& command) noexcept {
-        if (command.empty()) {
-            return -1;
-        }
-        return system(command.data());
+        return RunSystemCommand(command);
     }
 
     static bool SupportsIp6tablesNatTable() noexcept {
@@ -432,7 +453,7 @@ namespace {
         }
 
         prefix = cidr.substr(0, slash);
-        
+
         /**
          * @brief Validate prefix length using strtol for proper error detection.
          * @note atoi is unsafe as it cannot distinguish between 0 and error.
@@ -444,7 +465,7 @@ namespace {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6PrefixInvalid);
             return false;
         }
-        
+
         prefix_length = static_cast<int>(parsed);
         prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
         return !prefix.empty();
@@ -537,6 +558,10 @@ namespace ppp {
             namespace auxiliary {
                 /**
                  * @brief Reads the first available IPv6 default route line.
+                 *
+                 * SECURITY-GOVERNANCE: Uses popen() with a hardcoded command literal
+                 * (no dynamic tokens); no IsSafeShellToken guard is required.
+                 *
                  * @return First non-empty default route entry, or empty if unavailable.
                  */
                 ppp::string ReadDefaultRoute() noexcept {
@@ -552,7 +577,7 @@ namespace ppp {
                         while (!route.empty() && (route.back() == '\n' || route.back() == '\r')) {
                             route.pop_back();
                         }
-                        
+
                         if (!route.empty()) {
                             break;
                         }
@@ -595,7 +620,7 @@ namespace ppp {
 
                     char command[1600];
                     snprintf(command, sizeof(command), "ip -6 route replace %s > /dev/null 2>&1", route.data());
-                    if (system(command) == 0) {
+                    if (RunSystemCommand(command) == 0) {
                         return true;
                     }
 
@@ -922,7 +947,7 @@ namespace ppp {
                     if (state.DnsApplied) {
                         ppp::unix__::UnixAfx::SetDnsResolveConfiguration(state.OriginalDnsConfiguration);
                     }
-                    
+
                     if (state.DefaultRouteApplied && state.DefaultRouteWasPresent) {
                         for (const ppp::string& route : state.OriginalDefaultRoutes) {
                             ApplyDefaultRouteCommand(route);

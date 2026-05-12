@@ -131,19 +131,375 @@ Source: `ppp/configurations/AppConfiguration.h`, `ppp/configurations/AppConfigur
 
 ## Phase 3: Privilege and Instance Checks
 
-`IsUserAnAdministrator()` performs a platform-specific privilege check:
+> **Status**: Design / planning document. The checklist below describes the intended
+> implementation contract and acceptance criteria; it does **not** claim that every
+> item is complete in the current codebase.  Source files referenced are the current
+> implementation and serve as the authoritative contract for verification.
 
-- **Linux/macOS**: checks `getuid() == 0` (root required for TUN/TAP ioctl and routing)
-- **Windows**: checks if the process token contains the Administrators SID
-- **Android**: always passes (the JNI caller is responsible for ensuring permissions)
+Phase 3 is the gate between "configuration is loaded" and "platform environment
+preparation begins."  It consists of two logically independent checks that run
+sequentially:
 
-If the check fails, `AppPrivilegeRequired` is set and the process exits.
+1. **Privilege check** — confirm the OS-level capabilities required for TUN/TAP
+   manipulation, routing table mutation, and (on Windows) driver installation.
+2. **Single-instance guard** — confirm that no other `ppp` process is already
+   running with the same configuration file, then acquire a platform lock that
+   prevents concurrent execution until `Dispose()`.
 
-`prevent_rerun_` is a platform-specific file or mutex lock scoped to the config file path. The lock key is formed as `client://<config_path>` or `server://<config_path>`. If the lock already exists, `AppAlreadyRunning` is set and the process exits. Otherwise, the lock is acquired and held until `Dispose()`.
+Both checks execute in `PppApplication::Main()` before any TAP, switcher, or
+routing code runs.  Failure at either check sets a `ppp::diagnostics::ErrorCode`
+and returns `-1` from `Main()`, which propagates as a non-zero exit code.
 
-This prevents:
-- Running two server instances on the same port simultaneously
-- Running two client instances on the same TAP adapter simultaneously
+Source: `ppp/app/ApplicationInitialize.cpp` (lines 334–351),
+        `ppp/stdafx.cpp` (`IsUserAnAdministrator`),
+        `ppp/diagnostics/PreventReturn.h`, `ppp/diagnostics/PreventReturn.cpp`,
+        `windows/ppp/win32/Win32Event.h`, `windows/ppp/win32/Win32Event.cpp`
+
+---
+
+### 3.1 Implementation Checklist
+
+| # | Step | Source Location | Error Code on Failure |
+|---|------|----------------|-----------------------|
+| 3.1.1 | Reset diagnostics: `SetLastErrorCode(Success)` | `ApplicationInitialize.cpp:335` | — |
+| 3.1.2 | Call `ppp::IsUserAnAdministrator()` | `ApplicationInitialize.cpp:337` | `AppPrivilegeRequired` |
+| 3.1.3 | Build lock name: `"<role>://<config_path>"` where role is `client` or `server` | `ApplicationInitialize.cpp:342` | — |
+| 3.1.4 | Call `prevent_rerun_.Exists(lock_name)` — non-destructive probe | `ApplicationInitialize.cpp:343` | `AppAlreadyRunning` |
+| 3.1.5 | Call `prevent_rerun_.Open(lock_name)` — acquire persistent lock | `ApplicationInitialize.cpp:348` | `AppLockAcquireFailed` |
+| 3.1.6 | Proceed to Phase 4 (platform/network environment) | `ApplicationInitialize.cpp:353+` | — |
+
+Steps 3.1.2 through 3.1.5 are the **fail-fast gate**.  Any failure causes an
+immediate `return -1`; no TAP device, switcher, or routing mutation occurs.
+
+Lock release happens in `PppApplication::Release()` → `prevent_rerun_.Close()`
+at the end of the shutdown path (see "Shutdown Path" section below).
+
+---
+
+### 3.2 Cross-Platform Privilege Check
+
+`ppp::IsUserAnAdministrator()` is a single function with platform-specific
+implementations.  It must be called **before** any privilege-requiring operation.
+
+#### 3.2.1 Linux and macOS
+
+```cpp
+// ppp/stdafx.cpp:564-570
+bool IsUserAnAdministrator() noexcept {
+    return ::getuid() == 0;  // root UID is 0
+}
+```
+
+| Aspect | Detail |
+|--------|--------|
+| Mechanism | `getuid() == 0` |
+| Scope | Entire process (UID is process-wide) |
+| Required for | `/dev/net/tun` ioctl (`TUNSETIFF`), routing table mutation (`ip route`), DNS override, firewall rules |
+| False positive | None — `getuid() == 0` is the definitive root test |
+| False negative | None for the "is root" question; does not check capabilities (`CAP_NET_ADMIN` etc.) |
+
+**Design note**: A future enhancement could use `cap_get_proc()` / `CAP_NET_ADMIN`
+on Linux to allow non-root operation with file capabilities.  This is out of scope
+for the current design.
+
+#### 3.2.2 Windows
+
+```cpp
+// windows/ppp/win32/Win32Native.cpp:337-365
+bool Win32Native::IsUserAnAdministrator() noexcept {
+    if (IsUserAnAdmin()) return true;          // Shell32 API, returns true if admin group
+    // Fallback: check token elevation
+    OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken);
+    GetTokenInformation(hToken, TokenElevation, ...);
+    return tokenElevation.TokenIsElevated;
+}
+```
+
+| Aspect | Detail |
+|--------|--------|
+| Mechanism | Two-stage: `IsUserAnAdmin()` (Shell32) then `TokenElevation` (Advapi32) |
+| Scope | Per-process token |
+| Required for | Wintun adapter creation, routing table (`route` / `netsh`), DNS override, driver installation |
+| Edge case | Running as a member of the Administrators group without elevation → `IsUserAnAdmin()` returns true, but `TokenElevation` is false.  The current implementation returns true in this case (first check passes).  This matches the behavior of `runas` scenarios. |
+
+**Design note**: On Windows, the process may need UAC elevation even when the user
+is an admin.  The caller should manifest the exe with `requireAdministrator` or
+invoke via an elevated shell.  `IsUserAnAdministrator()` does **not** trigger UAC
+itself.
+
+#### 3.2.3 Android
+
+| Aspect | Detail |
+|--------|--------|
+| Mechanism | Current non-Windows branch uses `getuid() == 0`; Android is not specially exempted in this helper |
+| Rationale | Android VPN permission model (`VpnService.prepare()`) handles app-level VPN authorization, but the core helper still follows the generic POSIX root check unless Android startup bypasses this core path |
+| Source | `ppp/stdafx.cpp` — the generic non-Windows branch covers Android unless a platform-specific override is added |
+
+#### 3.2.4 Privilege Check — Failure Behavior
+
+| Error Code | Severity | Meaning | Operator Action |
+|-----------|----------|---------|-----------------|
+| `AppPrivilegeRequired` | Error | Process not running as root/Administrator under the core startup path | Run with `sudo` (Linux/macOS), run as Administrator (Windows), or ensure Android JNI startup uses its intended VpnService-managed path |
+
+The process prints `[error] AppPrivilegeRequired — Administrator or root privilege required for this operation` to stderr and exits with code `-1`.
+
+---
+
+### 3.3 Single-Instance Guard: Lock Name Construction
+
+The lock name is constructed as:
+
+```
+<role>://<absolute_config_path>
+```
+
+where `role` is `client` or `server` (determined by `--mode`).  This means:
+
+- Two `ppp client` instances with **different** config files can coexist.
+- A `ppp client` and `ppp server` with the **same** config file can coexist.
+- Two `ppp server` instances with the **same** config file are blocked.
+
+The raw name is then transformed by `NameTransform()`:
+
+1. Compute MD5 hash of the name string (using `ppp::cryptography::ComputeMD5`).
+2. Prefix with `BOOST_BEAST_VERSION_STRING + "."` (e.g., `"Boost.Beast.347"`).
+3. The result is a platform-safe string used as the kernel object name or file path component.
+
+This transformation ensures the lock name is stable across runs and safe for
+both Windows kernel object namespaces and POSIX filesystem paths.
+
+Source: `ppp/diagnostics/PreventReturn.cpp` — `NameTransform()` (lines 32–49)
+
+---
+
+### 3.4 Single-Instance Guard: Platform Strategies
+
+#### 3.4.1 POSIX (Linux, macOS, generic Unix including Android builds) — PID Lock File + Advisory Lock
+
+| Aspect | Detail |
+|--------|--------|
+| Lock file location (Linux) | `/var/run/<transformed_name>.pid` |
+| Lock file location (macOS) | `/tmp/<transformed_name>.pid` |
+| Lock file location (Android/generic non-macOS Unix) | Current generic non-Windows path follows the Linux-style `/var/run/<transformed_name>.pid` unless a platform override is introduced |
+| File creation | `open(path, O_CREAT \| O_RDWR, 0666)` |
+| Lock acquisition | `flock(fd, LOCK_EX \| LOCK_NB)` — non-blocking exclusive |
+| Lock detection | `flock()` returns `-1` with `errno == EWOULDBLOCK` or `EAGAIN` |
+| Lock release | `flock(fd, LOCK_UN)` + `close(fd)` + `unlink(path)` |
+| PID write | Current PID is written to the file (informational; not used for liveness) |
+| Crash recovery | If the process crashes, the OS releases the `flock` automatically.  The `.pid` file remains on disk but the lock is no longer held.  Subsequent `Exists()` → `FLOCK_OPEN()` will succeed, and `Open()` will acquire the lock.  The stale file is overwritten. |
+
+**POSIX flow — `Exists()` (non-destructive probe)**:
+
+```
+FLOCK_OPEN(name)
+  → open(path, O_CREAT|O_RDWR)
+  → flock(fd, LOCK_EX|LOCK_NB)
+    → success: no other instance → FLOCK_CLOSE → return false
+    → EWOULDBLOCK: another instance holds lock → return true
+    → other error: inconclusive → return false
+```
+
+**POSIX flow — `Open()` (acquire persistent lock)**:
+
+```
+FLOCK_OPEN(name)
+  → success: store fd and path in pid_file_ / pid_path_ → return true
+  → EWOULDBLOCK: set AppAlreadyRunning → return false
+  → other error: set AppLockAcquireFailed → return false
+```
+
+**POSIX flow — `Close()` (release)**:
+
+```
+FLOCK_CLOSE(path, fd)
+  → flock(fd, LOCK_UN)
+  → close(fd)
+  → unlink(path)
+  → reset pid_file_ = -1, pid_path_ = ""
+```
+
+**Edge case — `/var/run` permissions**: On some Linux distributions, `/var/run` is
+world-writable (`tmpfs`).  On others, it requires root.  Since privilege check
+(Step 3.1.2) has already passed, the process has root and can write to `/var/run`.
+
+**Edge case — macOS `/tmp`**: macOS uses a per-user temp directory via `$TMPDIR`,
+but `/tmp` is shared.  The lock file path uses `/tmp` directly (not `$TMPDIR`) to
+ensure cross-session visibility.
+
+Source: `ppp/diagnostics/PreventReturn.cpp` — `FLOCK_OPEN`, `FLOCK_CLOSE` (lines 122–277)
+
+#### 3.4.2 Windows — Named Kernel Event
+
+| Aspect | Detail |
+|--------|--------|
+| Mechanism | Named `Event` kernel object via `CreateEventA()` / `OpenEventA()` |
+| Object name | The transformed name string (MD5-prefixed) |
+| Scope | Named kernel object in the default Windows object namespace for the process/session; no `Global\` prefix is used, so cross-session visibility must not be assumed |
+| Detection | `OpenEventA(EVENT_ALL_ACCESS, FALSE, name)` — if it succeeds, the event already exists |
+| Creation | `CreateEventA(NULL, TRUE, FALSE, name)` — manual-reset event, initially non-signaled |
+| Release | `CloseHandle()` on the event handle; the kernel object is destroyed when the last handle closes |
+| Crash recovery | If the process crashes, Windows closes the handle automatically.  The kernel event object is destroyed.  Subsequent `Exists()` → `OpenEventA()` will fail (object gone), `CreateEventA()` will succeed. |
+
+**Windows flow — `Exists()` (probe)**:
+
+```
+h = OpenEventA(EVENT_ALL_ACCESS, FALSE, name)
+  → success: close handle → return true (another instance exists)
+  → failure: return false (no event with that name)
+```
+
+**Windows flow — `Open()` (acquire)**:
+
+```
+h = OpenEventA(EVENT_ALL_ACCESS, FALSE, name)
+  → success: event already exists; current Win32Event::Open() stores that handle and returns success
+  → failure:
+     h = CreateEventA(NULL, TRUE, FALSE, name)
+       → success: store in hKrlEvt → return true
+       → failure: set AppLockAcquireFailed → return false
+```
+
+**Design note — race between `Exists()` and `Open()`**: On Windows, there is a
+TOCTOU window between `Exists()` returning false and `Open()` acquiring the event.
+The current `Win32Event::Open()` first calls `OpenEventA()`; if that succeeds, it
+stores the existing handle and reports success rather than treating the race as an
+instance conflict. A future hardening step should consider using a named mutex or
+`CreateEventA` with `GetLastError() == ERROR_ALREADY_EXISTS` handling if strict
+single-instance acquisition is required.
+
+**Alternative considered — Named Mutex**: A named mutex (`CreateMutexA`) would also
+work and has the advantage that `WAIT_OBJECT_0` vs `WAIT_ABANDONED` can detect
+crashed owners.  However, the current implementation uses events, which are simpler
+and sufficient for the "exists or not" check pattern.
+
+Source: `windows/ppp/win32/Win32Event.cpp` (lines 27–176)
+
+#### 3.4.3 Android
+
+Android uses the POSIX path (PID lock file + `flock`).  The lock file is created
+through the generic non-macOS Unix branch, which currently means `/var/run/` unless
+Android startup bypasses this core guard or a platform-specific path is added. This
+may not be writable for an ordinary Android app process; therefore Android behavior
+must be validated against the JNI/VpnService startup path rather than inferred from
+Linux server assumptions. Android's VPN permission model can still be treated as the
+primary app-level authorization mechanism, while this guard is only a secondary
+safety net when the core path is used.
+
+---
+
+### 3.5 Failure Strategy
+
+All Phase 3 failures follow the same pattern:
+
+1. Set `ppp::diagnostics::ErrorCode` via `SetLastErrorCode()`.
+2. `Main()` returns `-1`.
+3. `Run()` propagates the return value to `main()`.
+4. `main()` returns the non-zero exit code.
+5. The diagnostics code is available via `GetLastErrorCode()` for programmatic
+   consumers (e.g., the Go management backend, Android JNI).
+
+| Failure | Error Code | Severity | Behavior | Operator Recovery |
+|---------|-----------|----------|----------|-------------------|
+| Not root/admin | `AppPrivilegeRequired` | Error | Immediate exit | Run with elevated privileges |
+| Another instance running | `AppAlreadyRunning` | Warning | Immediate exit | Stop the other instance or use a different config path |
+| Lock acquisition OS error | `AppLockAcquireFailed` | Error | Immediate exit | Check filesystem permissions, disk space, `/var/run` existence |
+| Lock name transform failure | `PreventReturnNameTransformEmptyInput` | Error | Immediate exit | Ensure `--config` path is non-empty |
+| Lock release failure | `AppLockReleaseFailed` | Warning | Logged, does not block exit | Manual cleanup of stale `.pid` file (Linux/macOS) |
+
+**Design invariant**: No partial initialization is left behind on Phase 3 failure.
+The process has not opened any TAP device, socket, or routing table entry, so no
+rollback is needed.  The only resource that might leak is the lock itself, but
+the lock is only acquired in Step 3.1.5, and if that step fails, the lock was
+never held.
+
+---
+
+### 3.6 Detailed Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant main as PppApplication::Main()
+    participant priv as IsUserAnAdministrator()
+    participant pr as PreventReturn
+    participant lock as Platform Lock (flock/Event)
+    participant diag as diagnostics
+
+    main->>diag: SetLastErrorCode(Success)
+    main->>priv: IsUserAnAdministrator()
+    alt Linux/macOS/generic non-Windows including Android core path
+        priv->>priv: getuid() == 0
+    else Windows
+        priv->>priv: IsUserAnAdmin() || TokenElevation
+    end
+    priv-->>main: result
+    alt result == false
+        main->>diag: SetLastErrorCode(AppPrivilegeRequired)
+        main-->>main: return -1
+    end
+
+    main->>main: Build lock name: "<role>://<config_path>"
+    main->>pr: prevent_rerun_.Exists(lock_name)
+    pr->>pr: NameTransform(lock_name) → MD5 hash
+    pr->>lock: Platform probe (flock/OPEN_EX)
+    lock-->>pr: held / not held / error
+    pr-->>main: true (already running) / false
+    alt already running
+        main->>diag: SetLastErrorCode(AppAlreadyRunning)
+        main-->>main: return -1
+    end
+
+    main->>pr: prevent_rerun_.Open(lock_name)
+    pr->>pr: NameTransform(lock_name) → MD5 hash
+    pr->>lock: Platform acquire (flock/CreateEventA)
+    lock-->>pr: acquired / blocked / error
+    pr-->>main: true (lock held) / false
+    alt lock failed
+        main->>diag: SetLastErrorCode(AppLockAcquireFailed)
+        main-->>main: return -1
+    end
+
+    Note over main: Lock held until Dispose() → Release() → Close()
+    main->>main: Proceed to Phase 4
+```
+
+---
+
+### 3.7 Lifecycle Integration
+
+| Lifecycle Event | Effect on Phase 3 |
+|----------------|-------------------|
+| Normal shutdown | `Release()` → `prevent_rerun_.Close()` releases the lock |
+| Restart (`ShutdownApplication(true)`) | `Release()` releases the lock; `re-exec` re-acquires it in the new process |
+| Crash (SIGSEGV, unhandled exception) | OS releases `flock` / closes Event handle automatically; lock file may remain on disk but is not held |
+| `Dispose()` failure | `Release()` is called regardless; lock is always released even if other cleanup fails |
+
+The lock lifetime is:
+
+```
+prevent_rerun_.Open()  →  ... [entire runtime lifetime] ...  →  prevent_rerun_.Close()
+     (Step 3.1.5)                                                     (Release())
+```
+
+---
+
+### 3.8 Acceptance Criteria
+
+These criteria define what "Phase 3 is correct" means for review and testing:
+
+| # | Criterion | Verification Method |
+|---|-----------|-------------------|
+| AC-1 | Non-root process on Linux/macOS is rejected with `AppPrivilegeRequired` | Run `./ppp --mode=client --config=./appsettings.json` as non-root; verify exit code `-1` and stderr message |
+| AC-2 | Windows process that is neither elevated nor accepted by the current `IsUserAnAdmin()` fallback is rejected with `AppPrivilegeRequired` | Run `ppp.exe --mode=client --config=appsettings.json` from a standard non-Administrators account; verify exit code `-1`. UAC unelevated Administrator accounts require separate validation because the current helper first consults `IsUserAnAdmin()` |
+| AC-3 | Two server instances with same config: second is rejected with `AppAlreadyRunning` | Start `ppp --mode=server`, then start another with same `--config`; verify second exits with `-1` |
+| AC-4 | Two client instances with same config: second is rejected with `AppAlreadyRunning` | Same as AC-3 but with `--mode=client` |
+| AC-5 | Client and server with same config can coexist | Start `ppp --mode=client --config=X`, then `ppp --mode=server --config=X`; both should start (lock names differ) |
+| AC-6 | Two instances with different configs can coexist | Start two `ppp --mode=client` with different `--config` paths; both should start |
+| AC-7 | Crash recovery: after abnormal exit, new instance can start | Start `ppp`, kill with `SIGKILL`, start again; second instance should succeed |
+| AC-8 | Normal shutdown releases the lock | Start `ppp`, send `SIGINT`, start again; second instance should succeed |
+| AC-9 | Restart re-acquires the lock | Start `ppp --auto-restart`, trigger restart; new process should acquire the lock |
+| AC-10 | Lock file is cleaned up after shutdown on Linux/macOS | After shutdown, verify `/var/run/<hash>.pid` (Linux) or `/tmp/<hash>.pid` (macOS) does not exist |
+| AC-11 | `AppLockAcquireFailed` is set when OS lock call fails with unexpected error | (Requires fault injection or unusual `/var/run` permissions) |
+| AC-12 | Error codes are propagated to `GetLastErrorCode()` | After each failure scenario, verify `GetLastErrorCode()` returns the expected code |
 
 ---
 
@@ -475,10 +831,11 @@ flowchart TD
 
 ## Android Lifecycle Sync Notes
 
-Android bridge lifecycle (`run`, `stop`, and release paths in `android/libopenppp2.cpp`) must maintain parity with core lifecycle semantics:
+Android bridge lifecycle (`run`, `stop`, and release paths in `/mnt/e/Desktop/openppp2-next/openppp2/android/libopenppp2.cpp`) must maintain parity with core lifecycle semantics:
 
-- `run()` maps to the full startup pipeline through `PreparedLoopbackEnvironment()`. Since Android provides an existing VPN file descriptor from `VpnService`, `ITap::Create()` wraps that fd rather than opening `/dev/net/tun`.
-- `stop()` maps to `ShutdownApplication(false)`.
+- JNI `run()` follows the Android-specific bridge path in `/mnt/e/Desktop/openppp2-next/openppp2/android/libopenppp2.cpp`: `Java_supersocksr_ppp_android_c_libopenppp2_run()` → `libopenppp2_try_open_ethernet_switcher()` → `libopenppp2_from_tuntap_driver_new()` → `libopenppp_try_open_ethernet_switcher_new()`. It does **not** call the desktop `PppApplication::Main()` / `PreparedLoopbackEnvironment()` startup pipeline.
+- Since Android provides an existing VPN file descriptor from `VpnService`, the bridge wraps that fd via the Android TUN/TAP helper path instead of opening `/dev/net/tun` through the desktop startup path.
+- JNI `stop()` follows the Android bridge release path in `/mnt/e/Desktop/openppp2-next/openppp2/android/libopenppp2.cpp`: `Java_supersocksr_ppp_android_c_libopenppp2_stop()` → `libopenppp2_application::Invoke(...)` → `app->Release()`. This is semantically the Android stop/release operation, but it is not a direct call to `PppApplication::ShutdownApplication(false)`.
 - The JNI bridge (`__LIBOPENPPP2__` macro) exports these functions for consumption by the Android Java/Kotlin layer.
 - App-uninitialized and not-running states must map consistently across JNI and core diagnostics so managed callers can react predictably.
 - Release/cleanup failures must be reported with stable error codes — the JNI layer propagates them back as integer return values.
@@ -490,7 +847,7 @@ Android-specific differences:
 | TAP creation | `TapLinux::From(fd)` wraps existing VpnService fd |
 | jemalloc | Android system already uses jemalloc; no additional layer added |
 | Socket protection | All control sockets must be protected via `VpnService.protect()` |
-| Privilege check | Skipped — VpnService permission model handles this |
+| Privilege check | JNI/VpnService startup may bypass the core root/admin check; if the generic core path is used, the non-Windows helper still applies `getuid() == 0` |
 
 ---
 

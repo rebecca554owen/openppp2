@@ -246,7 +246,33 @@ namespace ppp {
                 InformationEnvelope envelope;
                 envelope.Base = info;
                 BuildInformationIPv6Extensions(session_id, envelope.Extensions);
-                
+
+                // Auto-assign IPv4 from the lease pool when configured.
+                // This mirrors the IPv6 auto-assignment above: the pool
+                // hands out an address for every session that reaches
+                // this point (initial handshake or managed-server info).
+                if (configuration_->server.ipv4_pool.configured) {
+                    IPv4LeasePool::Result r = ipv4_pool_.AcquireAuto(session_id);
+                    if (r.ok) {
+                        envelope.Extensions.ClientIPv4Assign.enabled  = true;
+                        envelope.Extensions.ClientIPv4Assign.accepted = r.accepted;
+                        envelope.Extensions.ClientIPv4Assign.conflict = r.conflict;
+                        envelope.Extensions.ClientIPv4Assign.mode     = "auto";
+                        if (!r.reason.empty()) {
+                            envelope.Extensions.ClientIPv4Assign.reason = r.reason;
+                        }
+
+                        std::string addr_str = r.address.to_string();
+                        envelope.Extensions.ClientIPv4Assign.address = ppp::string(addr_str.data(), addr_str.size());
+
+                        std::string gw_str = r.gateway.to_string();
+                        envelope.Extensions.ClientIPv4Assign.gateway = ppp::string(gw_str.data(), gw_str.size());
+
+                        std::string mask_str = r.mask.to_string();
+                        envelope.Extensions.ClientIPv4Assign.mask = ppp::string(mask_str.data(), mask_str.size());
+                    }
+                }
+
                 envelope.ExtendedJson = envelope.Extensions.ToJson();
                 return envelope;
             }
@@ -1428,6 +1454,30 @@ namespace ppp {
                     if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
                     }
+
+                    // Mirror an `ObfuscationFlagsMismatch` diagnosis into the
+                    // structured server event log (`server.log`) so the operator
+                    // sees it on BOTH log channels.  Telemetry (the other
+                    // channel) was already emitted inside the inner handshake.
+                    if (ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::ObfuscationFlagsMismatch) {
+                        VirtualEthernetLoggerPtr logger = GetLogger();
+                        if (NULLPTR != logger) {
+                            const auto& k = configuration_->key;
+                            char buf[256];
+                            int n = snprintf(buf, sizeof(buf),
+                                "server_flags=[masked=%d,plaintext=%d,delta-encode=%d,shuffle-data=%d,kf=%d]; "
+                                "client transport sent garbage immediately after handshake -- "
+                                "align key.{masked,plaintext,delta-encode,shuffle-data,kf} on both ends.",
+                                k.masked ? 1 : 0,
+                                k.plaintext ? 1 : 0,
+                                k.delta_encode ? 1 : 0,
+                                k.shuffle_data ? 1 : 0,
+                                k.kf);
+                            (void)n;
+                            logger->Mismatch(transmission, ppp::string(buf));
+                        }
+                    }
+
                     ppp::telemetry::Count("server.session.rejected", 1);
                     ppp::telemetry::Log(Level::kInfo, "server", "session rejected");
                     return STATUS_ERROR;
@@ -1705,6 +1755,26 @@ namespace ppp {
                         envelope.Extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Failed;
                         envelope.Extensions.IPv6StatusMessage = "server-ipv6-dataplane-install-failed";
                     }
+
+                    // Fill ClientExitIP from the client's remote TCP endpoint.
+                    // The client uses this value (priority-2) for EDNS Client Subnet
+                    // when dns.ecs.override_ip is not configured.  GetRemoteEndPoint()
+                    // returns the peer address of the underlying socket; it is
+                    // "usually correct" but may differ from the real DNS exit IP in
+                    // multi-WAN, proxy-chain, or transparent-proxy scenarios.
+                    {
+                        boost::asio::ip::tcp::endpoint remote_ep = transmission->GetRemoteEndPoint();
+                        boost::asio::ip::address remote_addr = remote_ep.address();
+                        if (!remote_addr.is_unspecified()) {
+                            envelope.Extensions.ClientExitIP = remote_addr;
+                        }
+                    }
+
+                    // Refresh ExtendedJson so the serialized payload reflects both
+                    // the IPv6 extensions (possibly mutated above) and the newly
+                    // populated ClientExitIP.
+                    envelope.ExtendedJson = envelope.Extensions.ToJson();
+
                     run = channel->DoInformation(transmission, envelope, y);
                     if (run) {
                         // Use Unix wall-clock time (time(NULL)) to compare against the server-issued
@@ -1868,6 +1938,7 @@ namespace ppp {
                 }
 
                 if (channel) {
+                    DeleteIPv4Lease(channel->GetId());
                     ppp::telemetry::Count("server.exchanger.remove", 1);
                     ppp::telemetry::Log(Level::kInfo, "server", "exchanger removed");
                     channel->Dispose();
@@ -2004,6 +2075,35 @@ namespace ppp {
                     OpenNamespaceCacheIfNeed() &&
                     OpenDatagramSocket() &&
                     OpenIPv6NeighborProxyIfNeed();
+
+                // Configure the IPv4 lease pool from configuration.
+                // Failure is non-fatal: log and continue so the server
+                // still operates without IPv4 pool assignment.
+                if (configuration_->server.ipv4_pool.configured) {
+                    boost::system::error_code ec;
+                    boost::asio::ip::address network_addr = StringToAddress(configuration_->server.ipv4_pool.network, ec);
+                    if (!ec && network_addr.is_v4()) {
+                        ec.clear();
+                        boost::asio::ip::address mask_addr = StringToAddress(configuration_->server.ipv4_pool.mask, ec);
+                        if (!ec && mask_addr.is_v4()) {
+                            if (!ipv4_pool_.Configure(network_addr.to_v4(), mask_addr.to_v4())) {
+                                ppp::telemetry::Log(Level::kInfo, "server", "ipv4 pool configure failed");
+                                ppp::telemetry::Count("server.ipv4.pool.configure_failed", 1);
+                            }
+                            else {
+                                ppp::telemetry::Log(Level::kInfo, "server", "ipv4 pool configured");
+                            }
+                        }
+                        else {
+                            ppp::telemetry::Log(Level::kInfo, "server", "ipv4 pool mask invalid");
+                            ppp::telemetry::Count("server.ipv4.pool.mask_invalid", 1);
+                        }
+                    }
+                    else {
+                        ppp::telemetry::Log(Level::kInfo, "server", "ipv4 pool network invalid");
+                        ppp::telemetry::Count("server.ipv4.pool.network_invalid", 1);
+                    }
+                }
 
                 // Update IPv6 data-plane runtime state atomically so all cross-thread
                 // readers (GetIPv6RuntimeState, OnTick, inet6: console field) observe a
@@ -3039,6 +3139,13 @@ namespace ppp {
                      */
                     ClearIPv6ExchangersUnsafe();
 
+                    // Release all IPv4 leases before moving exchangers out.
+                    for (const auto& kv : exchangers_) {
+                        if (kv.second) {
+                            ipv4_pool_.Release(kv.first);
+                        }
+                    }
+
                     ipv6_transit_tap = std::move(ipv6_transit_tap_);
                     nats             = std::move(nats_);
                     logger           = std::move(logger_);
@@ -3218,6 +3325,9 @@ namespace ppp {
                 // Dispose outside the lock to avoid holding syncobj_ across
                 // boost::asio::post() calls inside VirtualEthernetExchanger::Dispose().
                 for (auto& ex : stale) {
+                    if (ex) {
+                        DeleteIPv4Lease(ex->GetId());
+                    }
                     IDisposable::Dispose(*ex);
                 }
             }
@@ -3323,6 +3433,55 @@ namespace ppp {
                 SynchronizedObjectScope scope(syncobj_);
                 ipv6_leases_.erase(session_id);
                 ipv6_requests_.erase(session_id);
+            }
+
+            /**
+             * @brief Releases the IPv4 lease held by the specified session.
+             * @param session_id Session whose IPv4 lease should be released.
+             */
+            void VirtualEthernetSwitcher::DeleteIPv4Lease(const Int128& session_id) noexcept {
+                ipv4_pool_.Release(session_id);
+            }
+
+            /**
+             * @brief Reserves a specific IPv4 address in the lease pool for a session.
+             *
+             * @details See header for full contract.  Implementation strategy:
+             *          AcquireManual() will (a) succeed when the requested IP is free,
+             *          or (b) fall back to AcquireAuto and return a *different* IP with
+             *          accepted=false.  The legacy Arp() caller does not actually want
+             *          a different IP — it has already committed to the address it
+             *          announced — so on a non-accepted result we Release() the
+             *          fallback to keep the pool consistent with reality.
+             *
+             *          When the pool is not configured we return false silently;
+             *          legacy clients keep functioning unchanged.
+             */
+            bool VirtualEthernetSwitcher::ReserveIPv4Lease(const Int128& session_id, uint32_t ip) noexcept {
+                if (NULLPTR == configuration_ || !configuration_->server.ipv4_pool.configured) {
+                    return false;
+                }
+
+                if (IPEndPoint::IsInvalid(IPEndPoint(ip, IPEndPoint::MinPort))) {
+                    return false;
+                }
+
+                boost::asio::ip::address addr = ppp::net::Ipep::ToAddress(ip);
+                if (!addr.is_v4()) {
+                    return false;
+                }
+
+                IPv4LeasePool::Result r = ipv4_pool_.AcquireManual(session_id, addr.to_v4());
+                if (r.ok && r.accepted) {
+                    return true;
+                }
+
+                // Manual reservation conflicted; AcquireManual already swapped in a
+                // fallback IP for this session.  The legacy caller does not consume
+                // that fallback, so release it now to leave the pool unchanged from
+                // the legacy caller's perspective.
+                ipv4_pool_.Release(session_id);
+                return false;
             }
 
             /**
@@ -3464,6 +3623,79 @@ namespace ppp {
                     response.RequestedIPv6Address = request.RequestedIPv6Address;
                 }
                 return response.HasAny();
+            }
+
+            /**
+             * @brief Processes a client IPv4 address request and fills the response.
+             *
+             * @details If the pool is configured, allocates (auto or manual) and
+             *          fills the ClientIPv4Assignment in @p response.  If the pool
+             *          is not configured, this is a no-op and returns false.
+             *
+             * @param session_id Session that sent the request.
+             * @param request    Client-supplied IPv4 request extensions.
+             * @param response   Filled with the server's IPv4 assignment response.
+             * @return true if an IPv4 assignment was processed (pool is configured).
+             */
+            bool VirtualEthernetSwitcher::UpdateIPv4Request(const Int128& session_id, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept {
+                if (!request.ClientIPv4Req.enabled) {
+                    return false;
+                }
+
+                // If the pool was never configured, tell the client.
+                if (!configuration_->server.ipv4_pool.configured) {
+                    response.ClientIPv4Assign.enabled  = true;
+                    response.ClientIPv4Assign.accepted = false;
+                    response.ClientIPv4Assign.reason   = "pool-unavailable";
+                    return true;
+                }
+
+                const ppp::string& mode    = request.ClientIPv4Req.mode;
+                const ppp::string& address = request.ClientIPv4Req.address;
+
+                IPv4LeasePool::Result result;
+                if (mode == "manual" && !address.empty()) {
+                    boost::system::error_code ec;
+                    boost::asio::ip::address req_addr = StringToAddress(address, ec);
+                    if (!ec && req_addr.is_v4()) {
+                        result = ipv4_pool_.AcquireManual(session_id, req_addr.to_v4());
+                    }
+                    else {
+                        // Address parse failed — fall back to auto.
+                        result = ipv4_pool_.AcquireAuto(session_id);
+                    }
+                }
+                else {
+                    result = ipv4_pool_.AcquireAuto(session_id);
+                }
+
+                // Populate the response regardless of success/failure so
+                // the client can inspect reason / conflict flags.
+                response.ClientIPv4Assign.enabled  = true;
+                response.ClientIPv4Assign.accepted = result.accepted;
+                response.ClientIPv4Assign.conflict = result.conflict;
+                response.ClientIPv4Assign.mode     = mode;
+                if (!result.reason.empty()) {
+                    response.ClientIPv4Assign.reason = result.reason;
+                }
+
+                if (result.ok) {
+                    std::string addr_str = result.address.to_string();
+                    response.ClientIPv4Assign.address = ppp::string(addr_str.data(), addr_str.size());
+
+                    std::string gw_str = result.gateway.to_string();
+                    response.ClientIPv4Assign.gateway = ppp::string(gw_str.data(), gw_str.size());
+
+                    std::string mask_str = result.mask.to_string();
+                    response.ClientIPv4Assign.mask = ppp::string(mask_str.data(), mask_str.size());
+                }
+
+                if (!result.requested_address.is_unspecified()) {
+                    std::string req_str = result.requested_address.to_string();
+                    response.ClientIPv4Assign.requested_address = ppp::string(req_str.data(), req_str.size());
+                }
+
+                return result.ok;
             }
 
             /**

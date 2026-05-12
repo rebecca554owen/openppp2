@@ -36,17 +36,17 @@ namespace ppp
         {
         private:
             typedef ppp::unordered_map<int, void*>                          ThreadLocalStorageData;
-            
-        public:                 
+
+        public:
             typedef std::mutex                                              SynchronizedObject;
             typedef std::lock_guard<SynchronizedObject>                     SynchronizedObjectScope;
             typedef ppp::function<void(Thread*)>                            ThreadStart;
-            
+
         public:
             /**
              * @brief Constructs an empty thread instance.
              */
-            Thread() noexcept;          
+            Thread() noexcept;
             /**
              * @brief Constructs a thread instance bound to an entry callback.
              * @param start Callback invoked on thread start.
@@ -56,8 +56,8 @@ namespace ppp
              * @brief Detaches the underlying thread on destruction when joinable.
              */
             ~Thread() noexcept;
-            
-        public:         
+
+        public:
             /** @brief Unique numeric thread identifier assigned at construction (0 until started). */
             int64_t                                                         Id       = 0;
             /** @brief Current runtime state of the managed thread. */
@@ -65,7 +65,7 @@ namespace ppp
             /** @brief Scheduling priority to apply when the thread is started. */
             ThreadPriority                                                  Priority = ThreadPriority::Normal;
 
-        public:                     
+        public:
             /**
              * @brief Starts execution of the configured callback.
              * @return true when thread creation succeeds; otherwise false.
@@ -105,7 +105,7 @@ namespace ppp
              */
             void                                                            SetPriority(ThreadPriority priority) noexcept;
 
-        public:                 
+        public:
             /**
              * @brief Issues a full sequentially-consistent memory fence.
              */
@@ -122,9 +122,9 @@ namespace ppp
              */
             template <typename T>
             static T                                                        VolatileRead(std::atomic<T>& v) noexcept
-            {           
-                return v.load(std::memory_order_acquire);           
-            }           
+            {
+                return v.load(std::memory_order_acquire);
+            }
 
             /**
              * @brief Performs an operation intended as a volatile write helper.
@@ -163,8 +163,8 @@ namespace ppp
              * @return Processor count.
              */
             static int                                                      GetProcessorCount() noexcept;
-                    
-        private:                    
+
+        private:
             /** @brief Underlying OS thread object. */
             std::thread                                                     _thread;
             /** @brief Mutex guarding lifecycle state transitions. */

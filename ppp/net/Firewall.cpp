@@ -393,7 +393,7 @@ namespace ppp
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsAddressInvalid);
                 return false;
             }
-            
+
             /** @brief Fast path for exact domain match. */
             if (contains(host))
             {
@@ -408,15 +408,15 @@ namespace ppp
             }
 
             std::size_t label_size = lables.size();
-            if (label_size < 2) 
+            if (label_size < 2)
             {
                 return false;
             }
 
-            for (ppp::string& i : lables) 
+            for (ppp::string& i : lables)
             {
                 i = LTrim(RTrim(i));
-                if (i.empty()) 
+                if (i.empty())
                 {
                     return true;
                 }
@@ -426,20 +426,20 @@ namespace ppp
             {
                 ppp::string next;
                 /** @brief Rebuild suffix candidate from current label to the end. */
-                for (std::size_t j = i; j < label_size; j++) 
+                for (std::size_t j = i; j < label_size; j++)
                 {
-                    ppp::string label = lables[j];
-                    if (next.empty()) 
+                    const ppp::string& label = lables[j];
+                    if (next.empty())
                     {
-                        next += label;
+                        next = label;
                     }
                     else
                     {
-                        next += "." + label;
+                        next += '.';
+                        next.append(label);
                     }
                 }
 
-                next = next.data();
                 if (!next.empty() && contains(next))
                 {
                     return true;
@@ -516,7 +516,7 @@ namespace ppp
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                     return false;
                 }
-                
+
                 prefix = static_cast<int>(parsed);
             }
 
@@ -563,7 +563,7 @@ namespace ppp
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                 return false;
             }
-            
+
             int32_t network_port = static_cast<int32_t>(parsed_port);
 
             std::size_t slash_index = line.find('/');
@@ -583,7 +583,7 @@ namespace ppp
                     }
                 }
             }
-            
+
             return fw->DropNetworkPort(network_port);
         }
 
@@ -653,10 +653,10 @@ namespace ppp
                 ppp::string drop_command;
                 /** @brief Parsing and insertion routine for the command payload. */
                 DropProc drop_proc;
-            } 
-            drop_commands[] = 
-            { 
-                { "ip", LoadWithRulesDropIP }, 
+            }
+            drop_commands[] =
+            {
+                { "ip", LoadWithRulesDropIP },
                 { "port", LoadWithRulesDropPort },
                 { "dns", LoadWithRulesDropDns },
             };

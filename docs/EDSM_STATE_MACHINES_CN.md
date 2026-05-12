@@ -463,11 +463,10 @@ static UInt32 NewId() noexcept;
 |-----------|------|
 | `SessionDisposed` | 会话已释放，操作被拒绝 |
 | `KeepaliveTimeout` | 心跳超时，会话被主动关闭 |
-| `PacketInputError` | `PacketInput` 收到无效操作码或格式错误的帧 |
-| `ConnectionTableFull` | 会话连接表已满，无法建立新 TCP 连接 |
-| `RemoteConnectionFailed` | 服务端出站 TCP 连接失败（`SYNOK` 错误码非零） |
-| `FrpEntryConflict` | FRP 规则注册冲突（端口已被占用） |
-| `MuxHandshakeFailed` | MUX 通道建立失败 |
+| `SessionHandshakeFailed` | 握手超时或收到畸形响应 |
+| `TunnelReadFailed` | `ITransmission::Read()` 返回 null |
+| `TunnelWriteFailed` | `ITransmission::Write()` 返回 false |
+| `RuntimeCoroutineSpawnFailed` | `YieldContext::Spawn()` 协程栈分配失败 |
 
 ---
 

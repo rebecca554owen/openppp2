@@ -18,7 +18,7 @@ The shared core lives in `ppp/`. Platform-specific implementations live in:
 |-----------|--------|
 | `windows/` | Windows (Vista+, primarily Win10/Win11) |
 | `linux/` | Linux (kernel 4.x+, includes Android kernel) |
-| `darwin/` | macOS (10.15+ recommended) |
+| `darwin/` | macOS (13.0+ Ventura; set via `CMAKE_OSX_DEPLOYMENT_TARGET`) |
 | `android/` | Android (API 23+, via JNI shared library) |
 
 The CMake build system selects the correct platform tree at configure time based on `CMAKE_SYSTEM_NAME`.

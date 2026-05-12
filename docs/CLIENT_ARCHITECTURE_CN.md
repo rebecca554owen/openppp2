@@ -451,22 +451,18 @@ sequenceDiagram
 
 ## 错误码参考
 
-客户端相关的 `ppp::diagnostics::ErrorCode` 值：
+客户端相关的 `ppp::diagnostics::ErrorCode` 值（节选自 `ErrorCodes.def`）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `AdapterOpenFailed` | 虚拟网卡无法创建 |
+| `TunnelOpenFailed` | 虚拟网卡或 TAP 设备创建失败 |
+| `TunnelListenFailed` | TAP 读循环无法启动 |
+| `NetworkInterfaceUnavailable` | 指定网卡不存在 |
 | `RouteAddFailed` | 无法向 OS 路由表添加路由 |
-| `DnsConfigFailed` | DNS 配置失败 |
-| `DefaultRouteProtectionFailed` | 默认路由保护失败 |
-| `HandshakeFailed` | 服务端握手失败 |
-| `HandshakeTimeout` | 服务端握手超时 |
+| `SessionHandshakeFailed` | 服务端握手未完成 |
 | `KeepaliveTimeout` | 保活 echo 未得到确认 |
-| `SessionExpired` | 会话因过期被拒绝 |
-| `QuotaExceeded` | 会话因配额被拒绝 |
-| `IPv6AssignmentFailed` | 服务端无法分配 IPv6 地址 |
-| `StaticPathNegotiationFailed` | Static 路径协商失败 |
-| `MuxNegotiationFailed` | MUX 协商失败 |
+| `SessionQuotaExceeded` | 会话因配额被拒绝 |
+| `IPv6ServerPrepareFailed` | IPv6 环境准备失败 |
 
 ---
 

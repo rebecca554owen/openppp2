@@ -330,6 +330,9 @@
     <ClCompile Include="ppp\app\server\VirtualEthernetSwitcher.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\server\IPv4LeasePool.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\server\VirtualEthernetExchanger.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -427,6 +430,12 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\dns\Rule.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\dns\DnsResolver.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\GeoRuleGenerator.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\net\asio\websocket\websocket_accept_sslv_websocket.cpp">
@@ -1361,6 +1370,9 @@
     <ClInclude Include="ppp\app\server\VirtualEthernetSwitcher.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\server\IPv4LeasePool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\app\server\VirtualEthernetExchanger.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1461,6 +1473,12 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\dns\Rule.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\dns\DnsResolver.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\GeoRuleGenerator.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\net\asio\websocket\websocket_accept_sslv_websocket.h">

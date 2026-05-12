@@ -456,22 +456,18 @@ sequenceDiagram
 
 ## Error Code Reference
 
-Client-related `ppp::diagnostics::ErrorCode` values:
+Client-related `ppp::diagnostics::ErrorCode` values (selection from `ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `AdapterOpenFailed` | Virtual adapter could not be created |
+| `TunnelOpenFailed` | Virtual adapter or TAP device creation failed |
+| `TunnelListenFailed` | TAP read loop could not start |
+| `NetworkInterfaceUnavailable` | Named NIC does not exist |
 | `RouteAddFailed` | Route could not be added to OS routing table |
-| `DnsConfigFailed` | DNS configuration failed |
-| `DefaultRouteProtectionFailed` | Default route protection failed |
-| `HandshakeFailed` | Server handshake failed |
-| `HandshakeTimeout` | Server handshake timed out |
+| `SessionHandshakeFailed` | Server handshake did not complete |
 | `KeepaliveTimeout` | Keepalive echo not acknowledged |
-| `SessionExpired` | Session rejected due to expiration |
-| `QuotaExceeded` | Session rejected due to quota |
-| `IPv6AssignmentFailed` | Server could not assign IPv6 address |
-| `StaticPathNegotiationFailed` | Static path negotiation failed |
-| `MuxNegotiationFailed` | MUX negotiation failed |
+| `SessionQuotaExceeded` | Session rejected due to quota |
+| `IPv6ServerPrepareFailed` | IPv6 environment preparation failed |
 
 ---
 

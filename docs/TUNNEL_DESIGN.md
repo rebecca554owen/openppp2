@@ -41,9 +41,9 @@ The outer carrier decides how bytes move between peers.
 
 | Carrier | Description | Config key |
 |---------|-------------|------------|
-| Raw TCP | Plain TCP socket connection | `server.listen.tcp` |
-| WebSocket | HTTP upgrade to WebSocket | `server.listen.ws` |
-| TLS WebSocket | TLS-backed WebSocket | `server.listen.wss` |
+| Raw TCP | Plain TCP socket connection | `tcp.listen.port` |
+| WebSocket | HTTP upgrade to WebSocket | `websocket.listen.ws` |
+| TLS WebSocket | TLS-backed WebSocket | `websocket.listen.wss` |
 | WebSocket over CONNECT proxy | WebSocket through HTTP CONNECT proxy | `client.server-proxy` |
 
 ### Client URI Schemes
@@ -117,11 +117,11 @@ flowchart TD
 
 ### Key Derivation
 
-The configured keys in `appsettings.json` are **base secrets**. Working keys for each connection are derived from the base secret combined with the connection-specific `ivv` and `nmux` values:
+The configured keys in `appsettings.json` are **base secrets**. In the current `ITransmission.cpp` implementation, working cipher state for each connection is rebuilt from the base secret plus the connection-specific `ivv_str`:
 
 ```
-protocol_working_key  = KDF(key.kcp.protocol,  ivv + nmux + session_id)
-transport_working_key = KDF(key.kcp.transport, ivv + nmux + session_id)
+protocol_working_key  = Cipher(key.protocol-key  + ivv_str)
+transport_working_key = Cipher(key.transport-key + ivv_str)
 ```
 
 This provides per-session key isolation: even if one session's working key is compromised, other sessions remain protected because each has a different `ivv`.
@@ -130,9 +130,9 @@ This provides per-session key isolation: even if one session's working key is co
 
 ```mermaid
 flowchart TD
-    A[Plaintext payload] --> B[Protocol cipher\nprotocol-key + ivv + nmux\nProtects header metadata]
+    A[Plaintext payload] --> B[Protocol cipher\nprotocol-key + ivv_str\nProtects header metadata]
     B --> C[Protocol-encrypted payload]
-    C --> D[Transport cipher\ntransport-key + ivv + nmux\nProtects payload body]
+    C --> D[Transport cipher\ntransport-key + ivv_str\nProtects payload body]
     D --> E[Transport-encrypted frame]
     E --> F[Optional transforms\ndelta-encode + shuffle-data + masked]
     F --> G[Carrier transport]
@@ -158,7 +158,7 @@ The framing format changes at handshake completion:
 | Phase | Header format | Cipher state |
 |-------|--------------|-------------|
 | Pre-handshake | Extended header (4+3 bytes), base94 encoding possible | Base key only, or plaintext |
-| Post-handshake | Simple binary header (3 bytes: seed + 2 length bytes) | Working cipher (ivv + nmux derived) |
+| Post-handshake | Simple binary header (3 bytes: seed + 2 length bytes) | Working cipher (`base_key + ivv_str`) |
 
 The transition is controlled by `handshaked_` (atomic bool) and `frame_tn_` / `frame_rn_` (framing state counters).
 
@@ -166,39 +166,47 @@ The transition is controlled by `handshaked_` (atomic bool) and `frame_tn_` / `f
 
 ```cpp
 /**
- * @brief Open the protected transmission and complete the handshake.
- * @param y  Yield context for coroutine suspension.
- * @return   true if handshake succeeded and session is established.
- * @note     Sets diagnostics on failure. Handshake has a configurable timeout.
+ * @brief Run the client-side handshake sequence.
+ * @param y    Yield context for coroutine suspension.
+ * @param mux  Output flag indicating negotiated multiplexing capability.
+ * @return     Negotiated session identifier (Int128), or zero on failure.
+ * @note       Sets diagnostics on failure. Handshake has a configurable timeout.
  */
-virtual bool Open(YieldContext& y) noexcept = 0;
+virtual Int128 HandshakeClient(YieldContext& y, bool& mux) noexcept;
 
 /**
- * @brief Read one framed message from the protected transmission.
+ * @brief Run the server-side handshake sequence.
+ * @param y          Yield context.
+ * @param session_id Session identifier provided by upper layer.
+ * @param mux        Requested multiplexing behavior.
+ * @return           true if handshake succeeds; otherwise false.
+ */
+virtual bool HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept;
+
+/**
+ * @brief Read and decrypt one framed message from the protected transmission.
  * @param y       Yield context.
- * @param buffer  Output buffer.
- * @param length  Length of data read (output).
- * @return        true on success, false on error or EOF.
+ * @param outlen  Output payload length (bytes).
+ * @return        Decrypted payload buffer, or null on failure/EOF.
  * @note          Decrypts and validates the frame before returning to caller.
  */
-virtual bool Read(YieldContext& y, ppp::vector<Byte>& buffer, int& length) noexcept = 0;
+virtual std::shared_ptr<Byte> Read(YieldContext& y, int& outlen) noexcept;
 
 /**
- * @brief Write one framed message to the protected transmission.
- * @param y       Yield context.
- * @param buffer  Data to write.
- * @param offset  Start offset in buffer.
- * @param length  Number of bytes to write.
- * @return        true on success.
- * @note          Encrypts, frames, and writes atomically through the strand.
+ * @brief Encrypt and write one framed message to the protected transmission.
+ * @param y             Yield context.
+ * @param packet        Payload pointer.
+ * @param packet_length Payload length in bytes.
+ * @return              true on success.
+ * @note                Encrypts, frames, and writes atomically through the strand.
  */
-virtual bool Write(YieldContext& y, const Byte* buffer, int offset, int length) noexcept = 0;
+virtual bool Write(YieldContext& y, const void* packet, int packet_length) noexcept;
 
 /**
  * @brief Dispose this transmission and release all resources.
  * @note  Idempotent. Safe to call from any thread. Uses atomic CAS pattern.
  */
-virtual void Dispose() noexcept = 0;
+virtual void Dispose() noexcept override;
 ```
 
 Source: `ppp/transmissions/ITransmission.h`
@@ -220,7 +228,7 @@ sequenceDiagram
 
     Note over Client,Server: Identity phase
     Server->>Client: real session_id (Int128, assigned by VirtualEthernetSwitcher)
-    Client->>Server: ivv (32-bit random, per-connection key variation seed)
+    Client->>Server: ivv (Int128 random value, per-connection key variation seed)
     Server->>Client: nmux (random Int128; low bit = mux enable flag)
 
     Note over Client,Server: Both sides: rebuild protocol_ and transport_ ciphers
@@ -249,7 +257,7 @@ Client:
 5. Receive `nmux`
 6. Set `handshaked_ = true`
 7. Extract mux flag: `mux = (nmux & 1) != 0`
-8. Rebuild both ciphers from `base_key + ivv + nmux`
+8. Rebuild both ciphers from `base_key + ivv_str`
 
 Server:
 1. Send NOP prelude
@@ -258,7 +266,7 @@ Server:
 4. Send `nmux`
 5. Receive `ivv`
 6. Set `handshaked_ = true`
-7. Rebuild both ciphers from `base_key + ivv + nmux`
+7. Rebuild both ciphers from `base_key + ivv_str`
 
 ---
 
@@ -523,20 +531,21 @@ Tunnel-related `ppp::diagnostics::ErrorCode` values:
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `HandshakeFailed` | Protected transport handshake did not complete |
-| `HandshakeTimeout` | Handshake exceeded the configured timeout |
-| `SessionKeyDerivationFailed` | Could not derive working key from base key + ivv |
-| `TransmissionReadFailed` | Framed read from `ITransmission` failed |
-| `TransmissionWriteFailed` | Framed write to `ITransmission` failed |
-| `CarrierConnectionFailed` | Carrier TCP/WebSocket connection failed |
-| `CarrierTlsNegotiationFailed` | TLS negotiation failed (WSS carrier) |
-| `LinkLayerProtocolError` | Invalid action type or malformed action frame |
-| `InvalidOpcode` | Opcode byte not in recognized range |
-| `OpcodeDirectionViolation` | Opcode received from disallowed direction |
+| `SessionHandshakeFailed` | Protected transport handshake did not complete |
+| `SessionHandshakeFailed` | Handshake exceeded the configured timeout |
+| `EvpInitKeyDerivationFailed` | Cipher/KDF initialization failed while rebuilding working cipher state |
+| `TunnelReadFailed` | Framed tunnel read failed |
+| `TunnelWriteFailed` | Framed tunnel write failed |
+| `SocketConnectFailed` / `TcpConnectFailed` | Carrier TCP/WebSocket connection failed |
+| `SslHandshakeFailed` | TLS negotiation failed (WSS carrier) |
+| `ProtocolFrameInvalid` | Invalid action type, malformed action frame, or opcode received from a disallowed direction |
+| `ProtocolPacketActionInvalid` | Opcode byte not in recognized range |
 | `KeepaliveTimeout` | No keepalive reply within timeout |
-| `StaticPathNegotiationFailed` | STATIC/STATICACK exchange failed |
-| `MuxNegotiationFailed` | MUX/MUXON exchange failed |
-| `FrpEntryRegistrationFailed` | Server rejected FRP_ENTRY registration |
+| `SessionHandshakeFailed` | STATIC/STATICACK exchange failed |
+| `ProtocolMuxFailed` | MUX/MUXON exchange failed |
+| `MappingCreateFailed` | Server rejected FRP_ENTRY registration |
+
+> **Note**: Older design-only names for key-derivation, transmission read/write, and carrier-connection failures are not current `ErrorCodes.def` entries; use the nearest existing codes shown in the table above.
 
 ---
 
@@ -558,7 +567,7 @@ The per-thread 64 KB buffer in `Executors` is the key to avoiding repeated heap 
 
 ### Cipher Performance
 
-AES-based ciphers with hardware AES-NI acceleration (x86/x64 with `-DENABLE_SIMD=ON`) operate at several GB/s per core, well above VPN throughput requirements. ChaCha20 is used where AES-NI is unavailable (most ARM platforms).
+AES-based ciphers with hardware AES-NI acceleration (x86/x64 with `-DENABLE_SIMD=ON`) operate at several GB/s per core, well above VPN throughput requirements. AEAD/ChaCha20-family cipher performance should be evaluated after target-build support is verified.
 
 ---
 

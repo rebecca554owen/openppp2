@@ -116,14 +116,14 @@ namespace ppp
                     return NULLPTR;
                 }
 
-                /* ~iphdr->dest == IP_ADDR_ANY_VALUE */ 
-                if (iphdr->src == IP_ADDR_ANY_VALUE || iphdr->src == IP_ADDR_BROADCAST_VALUE) 
+                /* ~iphdr->dest == IP_ADDR_ANY_VALUE */
+                if (iphdr->src == IP_ADDR_ANY_VALUE || iphdr->src == IP_ADDR_BROADCAST_VALUE)
                 {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                     return NULLPTR;
                 }
 
-                // if ((IPH_OFFSET(iphdr) & ntohs((UInt16)(ip_hdr::IP_OFFMASK | ip_hdr::IP_MF)))) 
+                // if ((IPH_OFFSET(iphdr) & ntohs((UInt16)(ip_hdr::IP_OFFMASK | ip_hdr::IP_MF))))
                 // {
                 //     return NULLPTR;
                 // }
@@ -337,7 +337,7 @@ namespace ppp
 
                 return "00:00:00:00:00:00";
             }
-            
+
             /** @brief Parses MAC text in colon or dash format into binary bytes. */
             bool eth_addr::TryParse(const char* mac_string, struct eth_addr& mac) noexcept
             {
@@ -348,7 +348,7 @@ namespace ppp
                 }
 
                 int addr[6];
-                int count = sscanf(mac_string, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                int count = sscanf(mac_string, "%02x:%02x:%02x:%02x:%02x:%02x",
                     &addr[0],
                     &addr[1],
                     &addr[2],
@@ -356,17 +356,17 @@ namespace ppp
                     &addr[4],
                     &addr[5]);
 
-                if (count != 6) 
+                if (count != 6)
                 {
-                    count = sscanf(mac_string, "%02x-%02x-%02x-%02x-%02x-%02x", 
+                    count = sscanf(mac_string, "%02x-%02x-%02x-%02x-%02x-%02x",
                         &addr[0],
                         &addr[1],
                         &addr[2],
                         &addr[3],
                         &addr[4],
                         &addr[5]);
-                        
-                    if (count != 6) 
+
+                    if (count != 6)
                     {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                         return false;
@@ -387,78 +387,78 @@ namespace ppp
             unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept /* MARCO C/C++: __SSE2__ */
             {
                 uint8_t* data = (uint8_t*)dataptr;
-                if (len == 0)  
+                if (len == 0)
                 {
                     return 0;
                 }
-            
+
                 uint32_t acc = 0; // Use a 32-bit accumulator to match the original implementation
                 size_t i = 0;
-            
+
                 // Use SSE2 to process 16-byte blocks
-                if (len >= 16) 
+                if (len >= 16)
                 {
                     __m128i accumulator = _mm_setzero_si128();
                     const size_t simd_bytes = len & ~0x0F; // Align to 16 bytes
-                
-                    for (; i < simd_bytes; i += 16) 
+
+                    for (; i < simd_bytes; i += 16)
                     {
                         // Load unaligned data
                         __m128i chunk = _mm_loadu_si128(
                             reinterpret_cast<const __m128i*>(data + i));
-                        
+
                         // Key point: simulate scalar processing logic
                         // Split 16 bytes into 8 16-bit big-endian words
                         __m128i high_bytes = _mm_slli_epi16(chunk, 8);
                         __m128i low_bytes = _mm_srli_epi16(chunk, 8);
-                        
+
                         // Create masks to clear unnecessary bits
                         __m128i mask = _mm_set1_epi16(0x00FF);
                         __m128i word1 = _mm_and_si128(high_bytes, _mm_slli_epi32(mask, 8));
                         __m128i word2 = _mm_and_si128(low_bytes, mask);
-                        
+
                         // Combine into correct 16-bit words
                         __m128i words = _mm_or_si128(word1, word2);
-                        
+
                         // Split 16-bit words into low and high 64 bits
                         __m128i low64 = _mm_unpacklo_epi16(words, _mm_setzero_si128());
                         __m128i high64 = _mm_unpackhi_epi16(words, _mm_setzero_si128());
-                        
+
                         // Accumulate into 32-bit accumulator
                         accumulator = _mm_add_epi32(accumulator, low64);
                         accumulator = _mm_add_epi32(accumulator, high64);
                     }
-                
+
                     // Horizontal sum: accumulate all 32-bit values
                     alignas(16) uint32_t tmp[4];
                     _mm_store_si128(reinterpret_cast<__m128i*>(tmp), accumulator);
                     acc += tmp[0] + tmp[1] + tmp[2] + tmp[3];
                 }
-            
+
                 // Process remaining bytes
                 uint8_t* octetptr = data + i;
                 int remaining = len - i;
-                while (remaining > 1) 
+                while (remaining > 1)
                 {
                     uint32_t src = (static_cast<uint32_t>(octetptr[0]) << 8) | octetptr[1];
                     acc += src;
                     octetptr += 2;
                     remaining -= 2;
                 }
-            
+
                 // Handle the last odd byte if length is odd
-                if (remaining > 0) 
+                if (remaining > 0)
                 {
                     acc += static_cast<uint32_t>(*octetptr) << 8;
                 }
-            
+
                 // Fold in carries
                 acc = (acc >> 16) + (acc & 0xFFFF);
-                if (acc > 0xFFFF) 
+                if (acc > 0xFFFF)
                 {
                     acc = (acc >> 16) + (acc & 0xFFFF);
                 }
-            
+
                 // Return the result
                 return ntohs(static_cast<uint16_t>(acc));
             }
@@ -469,7 +469,7 @@ namespace ppp
              * @param len Buffer size in bytes.
              * @return 16-bit folded sum value (before one's complement inversion).
              */
-            unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept 
+            unsigned short                                                              ip_standard_chksum(void* dataptr, int len) noexcept
             {
                 unsigned int acc;
                 unsigned short src;
@@ -478,7 +478,7 @@ namespace ppp
                 acc = 0;
                 /* dataptr may be at odd or even addresses */
                 octetptr = (unsigned char*)dataptr;
-                while (len > 1) 
+                while (len > 1)
                 {
                     /* declare first octet as most significant
                        thus assume network order, ignoring host order */
@@ -491,7 +491,7 @@ namespace ppp
                     len -= 2;
                 }
 
-                if (len > 0) 
+                if (len > 0)
                 {
                     /* accumulate remaining octet */
                     src = (unsigned short)((*octetptr) << 8);
@@ -500,7 +500,7 @@ namespace ppp
 
                 /* add deferred carry bits */
                 acc = (unsigned int)((acc >> 16) + (acc & 0x0000ffffUL));
-                if ((acc & 0xffff0000UL) != 0) 
+                if ((acc & 0xffff0000UL) != 0)
                 {
                     acc = (unsigned int)((acc >> 16) + (acc & 0x0000ffffUL));
                 }
@@ -545,17 +545,44 @@ namespace ppp
                     return false;
                 }
 
-                ppp::vector<ppp::string> routes;
-                if (Tokenize<ppp::string>(cidrs, routes, "\r\n") < 1)
+                ppp::vector<ppp::string> lines;
+                if (Tokenize<ppp::string>(cidrs, lines, "\r\n") < 1)
                 {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableAddAllRoutesTokenizeFailed);
                     return false;
                 }
 
                 bool any = false;
-                for (ppp::string& route : routes)
+                for (ppp::string& line : lines)
                 {
-                    any |= AddRoute(route, gw);
+                    std::size_t comment = line.find('#');
+                    if (comment != ppp::string::npos)
+                    {
+                        line = line.substr(0, comment);
+                    }
+
+                    line = ATrim<ppp::string>(line);
+                    if (line.empty())
+                    {
+                        continue;
+                    }
+
+                    ppp::vector<ppp::string> routes;
+                    if (Tokenize<ppp::string>(line, routes, ",; \t") < 1)
+                    {
+                        continue;
+                    }
+
+                    for (ppp::string& route : routes)
+                    {
+                        route = ATrim<ppp::string>(route);
+                        if (route.empty())
+                        {
+                            continue;
+                        }
+
+                        any |= AddRoute(route, gw);
+                    }
                 }
                 return any;
             }
@@ -588,7 +615,7 @@ namespace ppp
 
                     host = cidr.substr(0, i);
                     prefix_f = true;
-                    
+
                     char* endptr = NULLPTR;
                     long parsed_prefix = strtol(cidr.data() + (i + 1), &endptr, 10);
                     if (NULLPTR == endptr || endptr == (cidr.data() + (i + 1)) || *endptr != '\x0') {
@@ -718,7 +745,7 @@ namespace ppp
                 {
                     DeleteRoute(ip, prefix, gw);
                 }
-            
+
                 if (0 < prefixes.size())
                 {
                     return true;
@@ -779,7 +806,7 @@ namespace ppp
             }
 
             /** @brief Performs next-hop lookup using default prefix bounds. */
-            uint32_t ForwardInformationTable::GetNextHop(uint32_t ip, RouteEntriesTable& routes) noexcept 
+            uint32_t ForwardInformationTable::GetNextHop(uint32_t ip, RouteEntriesTable& routes) noexcept
             {
                 return GetNextHop(ip, MIN_PREFIX_VALUE, MAX_PREFIX_VALUE, routes);
             }

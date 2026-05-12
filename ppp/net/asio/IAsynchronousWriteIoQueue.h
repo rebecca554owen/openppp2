@@ -28,15 +28,17 @@
  *   queue logic, which calls @ref DoWriteBytes only when no prior write is
  *   pending.
  * - @ref Dispose / @ref Finalize fail all queued callbacks with `false` and
- *   prevent further enqueuing.
+ *   prevent further enqueuing.  Both funnel through a one-shot `exchange` guard
+ *   so that concurrent or repeated calls drain the queue exactly once.
  *
  * Thread safety
  * -------------
  * - The queue state (@ref disposed_, @ref sending_, @ref queues_) is protected
  *   by @ref syncobj_.
- * - @ref disposed_ is a plain `bool` (NOT a bitfield) to guarantee independent
- *   byte addressability vs. @ref sending_, avoiding a C++17 data race between
- *   lock-free reads of @ref disposed_ and locked writes of @ref sending_.
+ * - @ref disposed_ is `std::atomic_bool` to allow lock-free early-exit reads
+ *   in @ref WriteBytes / @ref DoTryWriteBytesUnsafe without acquiring @ref syncobj_.
+ *   One-shot finalization uses `exchange(acq_rel)`; reads use `load(acquire)` to establish
+ *   happens-before ordering with the full critical-section path.
  *
  * Coroutine support
  * -----------------
@@ -116,9 +118,10 @@ namespace ppp {
                 /**
                  * @brief Stops the queue and fails all pending operations.
                  *
-                 * Sets @ref disposed_ = true and calls @ref Finalize to drain the pending
-                 * queue with failure callbacks.  Subclasses should call this (or the base)
-                 * from their own Dispose overrides.
+                 * Delegates to @ref Finalize, which uses a one-shot `exchange` guard
+                 * to ensure the queue is drained exactly once even when called
+                 * concurrently from multiple threads or after the destructor.
+                 * Subclasses should call this (or the base) from their own Dispose overrides.
                  */
                 virtual void                                            Dispose() noexcept;
 
@@ -134,6 +137,48 @@ namespace ppp {
                  *                   on allocation failure.
                  */
                 static std::shared_ptr<Byte>                            Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen) noexcept;
+
+                /**
+                 * @brief Returns the number of write contexts currently accepted but not yet completed.
+                 * @return  Pending item count (queued + in-flight).
+                 */
+                int                                                     GetPendingItems() const noexcept { return pending_items_.load(std::memory_order_relaxed); }
+
+                /**
+                 * @brief Returns the total bytes of write contexts currently accepted but not yet completed.
+                 * @return  Pending byte count.
+                 */
+                int                                                     GetPendingBytes() const noexcept { return pending_bytes_.load(std::memory_order_relaxed); }
+
+                /**
+                 * @brief Returns the configured maximum pending item count (0 = unlimited).
+                 * @return  Max items threshold.
+                 */
+                int                                                     GetMaxPendingItems() const noexcept { return max_pending_items_.load(std::memory_order_relaxed); }
+
+                /**
+                 * @brief Configures the maximum pending item count.
+                 *
+                 * Negative values are clamped to 0 (unlimited).
+                 *
+                 * @param value  Max items; 0 disables the limit.
+                 */
+                void                                                    SetMaxPendingItems(int value) noexcept { max_pending_items_.store(value < 0 ? 0 : value, std::memory_order_relaxed); }
+
+                /**
+                 * @brief Returns the configured maximum pending byte count (0 = unlimited).
+                 * @return  Max bytes threshold.
+                 */
+                int                                                     GetMaxPendingBytes() const noexcept { return max_pending_bytes_.load(std::memory_order_relaxed); }
+
+                /**
+                 * @brief Configures the maximum pending byte count.
+                 *
+                 * Negative values are clamped to 0 (unlimited).
+                 *
+                 * @param value  Max bytes; 0 disables the limit.
+                 */
+                void                                                    SetMaxPendingBytes(int value) noexcept { max_pending_bytes_.store(value < 0 ? 0 : value, std::memory_order_relaxed); }
 
             private:
                 /**
@@ -237,14 +282,16 @@ namespace ppp {
 
             private:
                 /**
-                 * @brief Starts sending a context while the queue lock is held.
+                 * @brief Starts sending a context after queue state has been pre-armed.
                  *
-                 * Calls @ref DoWriteBytes with the context's packet data and a lambda
-                 * that invokes @ref DoTryWriteBytesNext when the I/O completes.
+                 * The caller must set sending_ = true under syncobj_ before releasing the lock,
+                 * then call this function without holding syncobj_. Calling DoWriteBytes while
+                 * holding syncobj_ can deadlock if the completion path re-enters
+                 * DoTryWriteBytesNext().
                  *
                  * @param context  Write context to dispatch (must not be NULLPTR).
                  * @return         true if the async operation was accepted; false on error.
-                 * @warning        Must be called with @ref syncobj_ already held.
+                 * @warning        Must be called without holding @ref syncobj_.
                  */
                 bool                                                    DoTryWriteBytesUnsafe(const AsynchronousWriteIoContextPtr& context) noexcept;
 
@@ -259,11 +306,17 @@ namespace ppp {
                 int                                                     DoTryWriteBytesNext() noexcept;
 
                 /**
-                 * @brief Marks queue as disposed and completes pending callbacks with failure.
+                 * @brief One-shot finalization that fails all pending operations.
                  *
-                 * Acquires @ref syncobj_, sets @ref disposed_ = true, moves all queued
-                 * contexts to a local list, then releases the lock and calls
-                 * @ref AsynchronousWriteIoContext::Forward(false) on each.
+                 * Uses `disposed_.exchange(true, acq_rel)` to guarantee exactly-once
+                 * semantics: the first caller drains the pending queue and decrements
+                 * backpressure counters; subsequent callers (Dispose, destructor,
+                 * or concurrent threads) return immediately without touching state.
+                 *
+                 * After the exchange succeeds, acquires @ref syncobj_ to reset
+                 * @ref sending_ and detach the pending queue, then releases the lock
+                 * before invoking @ref AsynchronousWriteIoContext::Forward(false) on
+                 * each drained context to avoid lock re-entrancy.
                  */
                 void                                                    Finalize() noexcept;
 
@@ -377,30 +430,53 @@ namespace ppp {
                  * @brief True once Dispose()/Finalize() has been called; read without the lock
                  *        only as an early-exit fast-path (the lock re-checks it to be definitive).
                  *
-                 * @note  Stored as a plain bool -- NOT a bitfield -- so that concurrent lock-free
-                 *        reads of disposed_ and lock-protected writes of sending_ operate on
-                 *        distinct, independently-addressable bytes.  Packing both into a single
-                 *        bitfield struct would force the compiler to emit a read-modify-write
-                 *        sequence on the shared byte, introducing a data race between any thread
-                 *        reading disposed_ outside the lock and any thread writing sending_
-                 *        inside the lock (C++17 [intro.races]/2).
+                 * @note  Stored as `std::atomic_bool` so that concurrent lock-free reads
+                 *        (e.g. in WriteBytes/DoTryWriteBytesUnsafe) do not race with
+                 *        lock-protected writes in Finalize().  One-shot finalization
+                 *        uses `exchange(true, acq_rel)` to ensure exactly-once drain;
+                 *        readers use `load(acquire)` to guarantee visibility of all
+                 *        side-effects performed before the disposal flag was set.
                  */
-                bool                                                    disposed_ = false;
+                std::atomic_bool                                            disposed_{false};
 
                 /**
                  * @brief True while an async write is in flight; always accessed under syncobj_.
                  *
-                 * @note  Kept as a plain bool (not bitfield) for the same reason as disposed_:
-                 *        to guarantee byte-level independence so that lock-free reads of disposed_
-                 *        cannot race with locked writes of sending_.
+                 * @note  Plain bool — safe because every read/write of sending_ is performed
+                 *        while holding syncobj_, so no concurrent access exists.
                  */
                 bool                                                    sending_  = false;
 
-                /** @brief Mutex guarding @ref disposed_, @ref sending_, and @ref queues_. */
+                /** @brief Mutex guarding @ref sending_ and @ref queues_; also used for the
+                 *         lock-protected re-check of @ref disposed_ in WriteBytes(). */
                 SynchronizedObject                                      syncobj_;
 
                 /** @brief FIFO list of pending write contexts waiting for @ref DoWriteBytes. */
                 AsynchronousWriteIoContextQueue                         queues_;
+
+                /** @brief Number of write contexts accepted but not yet completed (queued + in-flight). */
+                std::atomic<int>                                        pending_items_{0};
+
+                /** @brief Total bytes of write contexts accepted but not yet completed. */
+                std::atomic<int>                                        pending_bytes_{0};
+
+                /**
+                 * @brief Maximum number of pending write items before backpressure rejection.
+                 *
+                 * A value of 0 disables the item-count limit.  Default: 4096.
+                 * Stored as std::atomic<int> to avoid data races between setter
+                 * calls from configuration threads and lock-free reads in WriteBytes().
+                 */
+                std::atomic<int>                                        max_pending_items_{4096};
+
+                /**
+                 * @brief Maximum total bytes of pending writes before backpressure rejection.
+                 *
+                 * A value of 0 disables the byte-count limit.  Default: 16 MiB.
+                 * Stored as std::atomic<int> to avoid data races between setter
+                 * calls from configuration threads and lock-free reads in WriteBytes().
+                 */
+                std::atomic<int>                                        max_pending_bytes_{16 * 1024 * 1024};
             };
         }
     }

@@ -413,18 +413,18 @@ That sequence keeps action vocabulary separate from transport and separate from 
 
 ## Error Code Reference
 
-Linklayer-related `ppp::diagnostics::ErrorCode` values:
+Linklayer-related `ppp::diagnostics::ErrorCode` values (from `ppp/diagnostics/ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `InvalidOpcode` | Received opcode not recognized |
-| `OpcodeDirectionViolation` | Opcode received from wrong direction |
-| `HandshakeFailed` | INFO exchange during handshake failed |
-| `KeepaliveTimeout` | KEEPALIVED echo not acknowledged |
-| `TcpRelayConnectFailed` | SYN could not be fulfilled |
-| `StaticPathNegotiationFailed` | STATIC/STATICACK exchange failed |
-| `MuxNegotiationFailed` | MUX/MUXON exchange failed |
-| `FrpEntryRegistrationFailed` | FRP_ENTRY not accepted by server |
+| `ProtocolPacketActionInvalid` | Received opcode not recognized |
+| `ProtocolFrameInvalid` | Opcode frame structure invalid |
+| `SessionHandshakeFailed` | INFO exchange during handshake failed |
+| `SessionAuthFailed` | Session authentication failed |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
+| `ProtocolMuxFailed` | MUX/MUXON exchange failed |
+| `MappingCreateFailed` | FRP entry registration failed |
+| `SocketConnectFailed` | TCP relay connect failed |
 
 ---
 

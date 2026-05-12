@@ -23,6 +23,8 @@
 #include <ppp/app/mux/vmux_net.h>
 #include <ppp/app/mux/vmux_skt.h>
 
+#include <atomic>
+
 namespace ppp {
     namespace app {
         namespace client {
@@ -60,7 +62,7 @@ namespace ppp {
                      * @param socket Accepted local client socket.
                      */
                     VEthernetLocalProxyConnection(const VEthernetLocalProxySwitcherPtr& proxy,
-                        const VEthernetExchangerPtr&                                    exchanger, 
+                        const VEthernetExchangerPtr&                                    exchanger,
                         const std::shared_ptr<boost::asio::io_context>&                 context,
                         const ppp::threading::Executors::StrandPtr&                     strand,
                         const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket) noexcept;
@@ -70,7 +72,7 @@ namespace ppp {
                     virtual ~VEthernetLocalProxyConnection() noexcept;
 
                 public:
-                    bool                                                                IsDisposed()         noexcept { return disposed_; }
+                    bool                                                                IsDisposed()         noexcept { return disposed_.load(std::memory_order_acquire); }
                     VEthernetExchangerPtr&                                              GetExchanger()       noexcept { return exchanger_; }
                     ContextPtr&                                                         GetContext()         noexcept { return context_; }
                     ppp::threading::Executors::StrandPtr&                               GetStrand()          noexcept { return strand_; }
@@ -95,7 +97,7 @@ namespace ppp {
                      * @brief Schedules asynchronous disposal on the appropriate executor.
                      */
                     virtual void                                                        Dispose() noexcept;
-                    bool                                                                IsPortAging(uint64_t now) noexcept { return disposed_ || now >= timeout_; }
+                    bool                                                                IsPortAging(uint64_t now) noexcept { return disposed_.load(std::memory_order_acquire) || now >= timeout_; }
                     /**
                      * @brief Converts host/port text into a protocol endpoint descriptor.
                      * @param host Host, IP literal, or endpoint text.
@@ -134,7 +136,7 @@ namespace ppp {
                     bool                                                                SendBufferToPeer(YieldContext& y, const void* messages, int messages_size) noexcept;
 
                 private:
-                    bool                                                                disposed_ = false;
+                    std::atomic_bool                                                    disposed_{false};
                     std::shared_ptr<boost::asio::io_context>                            context_;
                     ppp::threading::Executors::StrandPtr                                strand_;
                     UInt64                                                              timeout_  = 0;

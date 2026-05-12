@@ -106,7 +106,7 @@ flowchart TD
 
 ### Rules
 
-- Every failure branch in startup, environment preparation, open path, and rollback code must call `SetLastErrorCode(...)` or `SetLastError(...)` before returning a failure sentinel.
+- Every failure branch in startup, environment preparation, open path, and rollback code must call `SetLastErrorCode(...)` or `SetLastError(code, value)` before returning a failure sentinel.
 - Returning only `false`, `-1`, or `NULLPTR` without diagnostics is treated as incomplete propagation.
 - User-facing operational surfaces (Console UI, JNI return paths) consume diagnostic snapshots.
 
@@ -117,25 +117,23 @@ flowchart TD
  * @brief Set the last error code for the current diagnostics context.
  * @param code  Error code to record.
  */
-void SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+ppp::diagnostics::ErrorCode SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
 
 /**
- * @brief Set a free-form error message for the current diagnostics context.
- * @param message  Error message string.
+ * @brief Set the last error code and return a caller-provided value.
+ * @tparam T Return type.
+ * @param code  Error code to record.
+ * @param value Value to return.
+ * @return      The provided value.
  */
-void SetLastError(const ppp::string& message) noexcept;
+template <typename T>
+T SetLastError(ppp::diagnostics::ErrorCode code, T value) noexcept;
 
 /**
  * @brief Retrieve the last recorded error code.
  * @return  The most recently set error code.
  */
 ppp::diagnostics::ErrorCode GetLastErrorCode() noexcept;
-
-/**
- * @brief Retrieve the last recorded error message.
- * @return  The most recently set error message.
- */
-ppp::string GetLastError() noexcept;
 ```
 
 Source: `ppp/diagnostics/Error.h`
@@ -330,7 +328,7 @@ sequenceDiagram
 | "duplicate instance" at startup | Another ppp running | Stop existing instance |
 | Routes not applied | Route add failed | Check privilege and existing routes |
 | DNS not working through tunnel | DNS bypass route missing | Check `AddRouteWithDnsServers()` |
-| Sessions drop every N minutes | Keepalive interval too short | Increase `keepalive.interval` |
+| Sessions drop every N minutes | Inactivity timeout too short | Increase `tcp.inactive.timeout` or `udp.inactive.timeout` |
 | Backend auth fails | Wrong credentials or wrong URL | Verify `server.backend` URL and keys |
 | IPv6 not working | IPv6 transit plane not opened | Check `server.ipv6` config and NIC support |
 | Routes not restored after exit | Forced kill bypassed Dispose | Use graceful shutdown signal |
@@ -399,23 +397,22 @@ nssm start openppp2
 
 ## Error Code Reference
 
-Operations-related `ppp::diagnostics::ErrorCode` values:
+Operations-related `ppp::diagnostics::ErrorCode` values (from `ppp/diagnostics/ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `PrivilegeRequired` | Process requires administrator/root |
-| `DuplicateInstanceDetected` | Another ppp instance is running |
-| `ConfigurationNotFound` | Config file not found |
-| `ConfigurationLoadFailed` | Config file parse or normalization failed |
-| `AdapterOpenFailed` | Virtual NIC failed to open |
+| `AppPrivilegeRequired` | Process requires administrator/root |
+| `AppAlreadyRunning` | Another ppp instance is running |
+| `ConfigFileNotFound` | Config file not found |
+| `ConfigLoadFailed` | Config file parse or normalization failed |
+| `NetworkInterfaceOpenFailed` | Virtual NIC failed to open |
 | `RouteAddFailed` | Route add to OS routing table failed |
 | `RouteDeleteFailed` | Route delete from OS routing table failed |
-| `DnsConfigFailed` | DNS configuration failed |
-| `ServerListenerOpenFailed` | Listener failed to bind |
-| `HandshakeFailed` | Client-server handshake failed |
-| `KeepaliveTimeout` | Keepalive echo not acknowledged in time |
-| `ManagedServerConnectionFailed` | Go backend connection failed |
-| `AutoRestartTriggered` | Auto-restart condition was met |
+| `DnsResolveFailed` | DNS resolution failed |
+| `SocketBindFailed` | Listener failed to bind |
+| `SessionHandshakeFailed` | Client-server handshake failed |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
+| `SessionQuotaExceeded` | Session quota exhausted |
 
 ---
 

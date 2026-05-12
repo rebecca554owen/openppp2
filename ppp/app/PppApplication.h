@@ -336,6 +336,16 @@ private:
     void GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addresses, int argc, const char* argv[]) noexcept;
 
     /**
+     * @brief Variant that also returns parallel-indexed labels.
+     *
+     * When @p labels is non-null it is filled with one entry per address. A
+     * non-empty label string indicates a human-readable rendering preference
+     * (typically a DoH/DoT hostname plus protocol tag); an empty string
+     * means the caller should fall back to formatting the IP literal.
+     */
+    void GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addresses, ppp::vector<ppp::string>* labels, int argc, const char* argv[]) noexcept;
+
+    /**
      * @brief Configures the loopback environment for the resolved network interface.
      *
      * @param network_interface Resolved network interface descriptor.

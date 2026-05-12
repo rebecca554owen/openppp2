@@ -299,10 +299,10 @@ The server can expose multiple ingress types:
 
 | Listener type | Config key | Protocol |
 |--------------|------------|---------|
-| TCP | `server.listen.tcp` | Raw TCP |
-| WebSocket | `server.listen.ws` | HTTP WebSocket |
-| TLS WebSocket | `server.listen.wss` | HTTPS WebSocket |
-| UDP static | `server.listen.udp` | Raw UDP (static echo) |
+| TCP | `tcp.listen.port` | Raw TCP |
+| WebSocket | `websocket.listen.ws` | HTTP WebSocket |
+| TLS WebSocket | `websocket.listen.wss` | HTTPS WebSocket |
+| UDP static | `udp.listen.port` | Raw UDP (static echo) |
 
 The exact set enabled depends on configuration.
 All listener types deliver connections to `VirtualEthernetSwitcher::AcceptConnection`.
@@ -351,9 +351,9 @@ Static UDP bypasses the per-session mechanism. It is handled as a separate liste
 
 | Config field | Effect |
 |-------------|--------|
-| `server.listen.tcp` | Enable/disable TCP listener |
-| `server.listen.ws` | Enable/disable WebSocket listener |
-| `server.listen.wss` | Enable/disable TLS WebSocket listener |
+| `tcp.listen.port` | Enable/disable TCP listener |
+| `websocket.listen.ws` | Enable/disable WebSocket listener |
+| `websocket.listen.wss` | Enable/disable TLS WebSocket listener |
 | `server.backend` | Enable/configure management backend URL |
 | `server.firewall` | Firewall policy file path |
 | `server.ipv6` | Enable IPv6 transit plane |
@@ -383,20 +383,19 @@ The server is both a forwarding node and a policy coordination node.
 
 ## Error Code Reference
 
-Server-related `ppp::diagnostics::ErrorCode` values:
+Server-related `ppp::diagnostics::ErrorCode` values (selection from `ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `ServerListenerOpenFailed` | Could not open TCP or WebSocket listener |
-| `ServerFirewallOpenFailed` | Firewall initialization failed |
-| `HandshakeFailed` | Client handshake did not complete |
-| `HandshakeTimeout` | Client handshake exceeded timeout |
-| `AuthenticationFailed` | Session rejected |
-| `ManagedServerConnectionFailed` | Cannot reach management backend |
-| `ManagedServerAuthenticationFailed` | Backend denied user |
+| `TunnelOpenFailed` | Could not open TCP or WebSocket listener |
+| `TunnelListenFailed` | Listener accept loop failed to start |
+| `SessionHandshakeFailed` | Client handshake did not complete |
+| `SessionAuthFailed` | Session authentication failed |
+| `SessionQuotaExceeded` | User quota exhausted |
 | `KeepaliveTimeout` | Client keepalive timed out |
-| `SessionExpired` | Session expired per policy |
-| `QuotaExceeded` | Session quota exhausted |
+| `IPv6ServerPrepareFailed` | Server IPv6 environment preparation failed |
+| `VEthernetManagedConnectUrlEmpty` | Managed server URL is empty |
+| `VEthernetManagedPacketJsonParseFailed` | Invalid JSON frame from backend |
 
 ---
 

@@ -4,11 +4,11 @@
 
 This page is generated from `ppp/diagnostics/ErrorCodes.def`, which is the single source of truth for `ppp::diagnostics::ErrorCode`.
 
-**Live total: 595 error codes.**
+**Live total: 628 error codes.**
 
-Severity distribution: kInfo=8, kWarning=25, kError=539, kFatal=23.
+Severity distribution: kInfo=9, kWarning=64, kError=531, kFatal=24.
 
-`ERROR_CODES.md` currently keeps the original core taxonomy tables (220 baseline entries) for readability.
+`ERROR_CODES.md` currently keeps the original core taxonomy tables for readability.
 For the complete live catalog (including extended subsystem-specific entries and reserved slots),
 use `ppp/diagnostics/ErrorCodes.def` as the single source of truth.
 
@@ -36,15 +36,13 @@ bool ppp::diagnostics::IsValidErrorCodeValue(int);           // raw integer vali
 
 ```mermaid
 graph TD
-    A[ErrorCode] --> C0[Generic - 12]
-    A[ErrorCode] --> C0H[Android Lib - 3]
     A[ErrorCode] --> C0A[Main Entry - 1]
+    A[ErrorCode] --> C0H[Android Lib - 3]
     A[ErrorCode] --> C0B[Socket Runtime - 7]
     A[ErrorCode] --> C0C[VNetstack - 4]
-    A[ErrorCode] --> C0D[SYSNAT - 14]
+    A[ErrorCode] --> C0D[VEthernet Exchanger/Switcher - 2]
+    A[ErrorCode] --> C0D2[SYSNAT - 14]
     A[ErrorCode] --> C0E[TapLinux - 3]
-    A[ErrorCode] --> C0F[VEthernet Switcher - 1]
-    A[ErrorCode] --> C0G[VEthernet Exchanger - 1]
     A[ErrorCode] --> C1[Application - 8]
     A[ErrorCode] --> C2[Configuration - 11]
     A[ErrorCode] --> C3[Runtime - 12]
@@ -72,25 +70,6 @@ graph TD
     A[ErrorCode] --> C25[Resource Exhaustion - 2]
     A[ErrorCode] --> C26[Internal Logic - 1]
 ```
-
----
-
-## Category: Generic (12)
-
-| Name | Description | Severity |
-|------|-------------|----------|
-| `Success` | Success | `kInfo` |
-| `GenericUnknown` | Generic unknown error | `kError` |
-| `GenericInvalidArgument` | Invalid argument | `kError` |
-| `GenericInvalidState` | Invalid state | `kError` |
-| `GenericNotSupported` | Operation not supported | `kFatal` |
-| `GenericAlreadyExists` | Requested item already exists | `kError` |
-| `GenericInsufficientBuffer` | Insufficient buffer size | `kError` |
-| `GenericOutOfMemory` | Out of memory | `kError` |
-| `GenericOperationFailed` | Operation failed | `kError` |
-| `GenericParseFailed` | Parse failed | `kError` |
-| `GenericConflict` | Resource conflict | `kError` |
-| `GenericOverflow` | Numeric overflow | `kError` |
 
 ---
 
@@ -172,7 +151,7 @@ graph TD
 
 | Name | Description | Severity |
 |------|-------------|----------|
-| `VEthernetNetworkSwitcherDnsRulesEmpty` | VEthernetNetworkSwitcher DNS rule input is empty | `kError` |
+| `VEthernetNetworkSwitcherDnsRulesEmpty` | VEthernetNetworkSwitcher DNS rule input is empty | `kWarning` |
 
 ---
 
@@ -180,7 +159,7 @@ graph TD
 
 | Name | Description | Severity |
 |------|-------------|----------|
-| `VEthernetExchangerTimeoutEntryConflict` | VirtualEthernetExchanger timeout entry already exists | `kError` |
+| `VEthernetExchangerTimeoutEntryConflict` | VirtualEthernetExchanger timeout entry already exists | `kWarning` |
 
 ---
 
@@ -188,9 +167,9 @@ graph TD
 
 | Name | Description | Severity |
 |------|-------------|----------|
-| `AppAlreadyRunning` | Application already running | `kWarning` |
+| `AppAlreadyRunning` | Another OPENPPP2 instance already owns the application lock | `kWarning` |
 | `AppLockAcquireFailed` | Application lock acquisition failed | `kError` |
-| `AppLockReleaseFailed` | Application lock release failed | `kWarning` |
+| `AppLockReleaseFailed` | Application lock cleanup failed after close | `kWarning` |
 | `AppInvalidCommandLine` | Invalid command-line arguments | `kWarning` |
 | `AppConfigurationMissing` | Application configuration missing | `kFatal` |
 | `AppContextUnavailable` | Application context unavailable | `kError` |
@@ -212,7 +191,7 @@ graph TD
 | `ConfigValueOutOfRange` | Configuration value out of range | `kFatal` |
 | `ConfigTypeMismatch` | Configuration type mismatch | `kFatal` |
 | `ConfigPathInvalid` | Configuration path invalid | `kFatal` |
-| `ConfigDnsRuleLoadFailed` | Failed to load DNS rules | `kError` |
+| `ConfigDnsRuleLoadFailed` | Failed to load DNS rules | `kWarning` |
 | `ConfigRouteLoadFailed` | Failed to load route list | `kError` |
 
 ---
@@ -277,8 +256,8 @@ graph TD
 | `NetworkMaskInvalid` | Network mask invalid | `kError` |
 | `NetworkGatewayInvalid` | Network gateway invalid | `kError` |
 | `NetworkPortInvalid` | Network port invalid | `kError` |
-| `NetworkProtocolUnsupported` | Network protocol unsupported | `kError` |
-| `NetworkFirewallBlocked` | Network blocked by firewall | `kWarning` |
+| `NetworkProtocolUnsupported` | Required base transport protocol is unavailable for this operation | `kError` |
+| `NetworkFirewallBlocked` | Network access blocked by configured firewall policy | `kWarning` |
 | `NetworkAddressFamilyMismatch` | Network address family mismatch | `kError` |
 | `NetworkPacketMalformed` | Malformed network packet | `kError` |
 | `NetworkPacketTooLarge` | Network packet too large | `kError` |
@@ -501,7 +480,7 @@ graph TD
 
 | Name | Description | Severity |
 |------|-------------|----------|
-| `CryptoAlgorithmUnsupported` | Crypto algorithm unsupported | `kError` |
+| `CryptoAlgorithmUnsupported` | Requested cryptographic algorithm is unsupported or unavailable | `kError` |
 
 ---
 
@@ -537,6 +516,22 @@ graph TD
 | Name | Description | Severity |
 |------|-------------|----------|
 | `InternalLogicNullPointer` | Internal logic null pointer | `kFatal` |
+
+---
+
+## Category: Security Posture Warnings (6)
+
+Non-fatal warnings emitted during configuration validation.
+These never block startup -- legacy settings remain functional for backward compatibility.
+
+| Name | Description | Severity |
+|------|-------------|----------|
+| `ConfigWeakKeyDefault` | Protocol or transport key equals the well-known default value ("ppp"); insecure for production use | `kWarning` |
+| `ConfigWeakKeyShort` | Protocol or transport key is shorter than 8 bytes; trivially brute-forced | `kWarning` |
+| `ConfigPlaintextEnabled` | Plaintext mode is enabled (key.plaintext=true); no encryption applied | `kWarning` |
+| `ConfigLegacyCipherAlgorithm` | Protocol or transport cipher uses a legacy algorithm (RC4, DES/3DES, Blowfish, CAST5, SEED, IDEA) | `kWarning` |
+| `ConfigLegacyCipherShortKey` | Cipher key length is below 128 bits | `kWarning` |
+| `ConfigLegacyKdfMd5` | Key derivation uses MD5 internally (EVP_BytesToKey); legacy KDF | `kWarning` |
 
 ---
 

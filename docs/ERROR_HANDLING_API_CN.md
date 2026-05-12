@@ -342,20 +342,19 @@ jint openppp2_run(...) {
 | ErrorCode | 值 | 描述 |
 |-----------|-----|------|
 | `Success` | 0 | 无错误 |
-| `GenericUnknown` | 1 | 通用未知错误 |
-| `ConfigLoadFailed` | 54 | 配置加载或验证失败 |
-| `AppPrivilegeRequired` | 52 | OS 权限不足 |
-| `AppAlreadyRunning` | 46 | 另一个实例已在运行 |
-| `TunnelOpenFailed` | 141 | 虚拟适配器打开失败 |
-| `RouteAddFailed` | 156 | 路由表修改失败 |
-| `ConfigDnsRuleLoadFailed` | 63 | DNS 配置失败 |
-| `SocketBindFailed` | 107 | Socket 绑定操作失败 |
-| `SessionHandshakeFailed` | 193 | 传输握手未完成 |
-| `TcpConnectTimeout` | 121 | 握手超时 |
-| `SessionAuthFailed` | 192 | 认证被拒绝 |
-| `NetworkInterfaceOpenFailed` | 94 | 无法连接管理后端 |
-| `AuthCredentialInvalid` | 214 | 后端拒绝认证 |
-| `SessionQuotaExceeded` | 196 | 用户额度耗尽 |
+| `AppAlreadyRunning` | 35 | 另一个实例已持有应用锁 |
+| `AppPrivilegeRequired` | 41 | OS 权限不足 |
+| `ConfigLoadFailed` | 43 | 配置加载或验证失败 |
+| `ConfigDnsRuleLoadFailed` | 52 | DNS 配置失败 |
+| `NetworkInterfaceOpenFailed` | 83 | 无法连接管理后端 |
+| `SocketBindFailed` | 96 | Socket 绑定操作失败 |
+| `TcpConnectTimeout` | 109 | 握手超时 |
+| `TunnelOpenFailed` | 130 | 虚拟适配器打开失败 |
+| `RouteAddFailed` | 145 | 路由表修改失败 |
+| `SessionAuthFailed` | 181 | 认证被拒绝 |
+| `SessionHandshakeFailed` | 182 | 传输握手未完成 |
+| `SessionQuotaExceeded` | 185 | 用户额度耗尽 |
+| `AuthCredentialInvalid` | 537 | 后端拒绝认证 |
 
 完整枚举定义参见 `ppp/diagnostics/Error.h`。
 

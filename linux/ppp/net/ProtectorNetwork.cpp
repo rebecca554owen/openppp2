@@ -28,7 +28,7 @@
 #include <sys/time.h>
 #include <netinet/tcp.h>
 
-#if defined(__MUSL__)
+#if defined(__MUSL__) || defined(__BIONIC__) || defined(_ANDROID)
 #include <err.h>
 #include <poll.h>
 #else
@@ -405,18 +405,16 @@ namespace ppp
                 {
                     // Reverse-calling the Java class member static function protects the socket without passing through VPNService / Android-Ko.
                     std::shared_ptr<boost::asio::io_context> jni;
+                    JNIEnv* env = NULLPTR;
                     {
                         SynchronizedObjectScope scope(syncobj_);
                         jni = jni_;
+                        env = env_;
+                    }
 
-                        if (NULLPTR != jni)
-                        {
-                            JNIEnv* env = env_;
-                            if (NULLPTR != env)
-                            {
-                                ok = ProtectorNetwork::ProtectJNI(env, sockfd);
-                            }
-                        }
+                    if (NULLPTR != jni && NULLPTR != env)
+                    {
+                        ok = ProtectorNetwork::ProtectJNI(env, sockfd);
                     }
 
                     // Wake up the coroutine waiting for this protect network socket service to prevent coroutines from getting stuck.
@@ -443,9 +441,14 @@ namespace ppp
             }
 
 #if defined(_ANDROID)
-            // If JNIEnv is set, it means that PPP PRIVATE NETWORK™ 2 is embedded in the Android application as a DLL/SO, 
+            // If JNIEnv is set, it means that PPP PRIVATE NETWORK™ 2 is embedded in the Android application as a DLL/SO,
             // In the form of a JNI reverse call to the JAVA class member static function protect, otherwise it is a sendfd/recvfd structures.
-            std::shared_ptr<boost::asio::io_context> context = jni_;
+            // jni_ may be reassigned by JoinJNI/DetachJNI, so snapshot it while holding syncobj_.
+            std::shared_ptr<boost::asio::io_context> context;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                context = jni_;
+            }
             if (NULLPTR != context)
             {
                 return ProtectJNI(context, sockfd, y);
@@ -466,6 +469,41 @@ namespace ppp
                 return true;
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
+#endif
+        }
+
+        bool ProtectorNetwork::ProtectSync(int sockfd) noexcept
+        {
+            if (sockfd == -1)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+                return false;
+            }
+
+            ProtectEventHandler e = ProtectEvent;
+            if (NULLPTR != e)
+            {
+                return e(sockfd);
+            }
+
+#if defined(_ANDROID)
+            // On Android without ProtectEvent, we cannot protect synchronously
+            // without a JNI environment or YieldContext.  Return false so the
+            // caller can fall back to route-based protection.
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+            return false;
+#else
+            if (dev_.empty())
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                return false;
+            }
+            if (::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1)
+            {
+                return true;
+            }
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
             return false;
 #endif

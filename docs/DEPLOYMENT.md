@@ -63,7 +63,7 @@ flowchart TD
 | Surface | Components | Notes |
 |---------|-----------|-------|
 | Host | Privileges, virtual adapters, OS routing, DNS settings | Must be ready before runtime opens |
-| Listener | TCP, WebSocket, TLS WebSocket, static UDP | Configured in `server.listen.*` |
+| Listener | TCP, WebSocket, TLS WebSocket, static UDP | Configured in `tcp.listen/websocket.listen/udp.listen` |
 | Data plane | Sessions, NAT mappings, IPv6 transit, static echo | Per-session runtime state |
 | Management | Go backend via WebSocket | Optional; extends policy, not packet transport |
 
@@ -163,8 +163,8 @@ flowchart TD
 |------|-------------|
 | 1 | Privilege: root on Linux, administrator on Windows |
 | 2 | Configuration file present |
-| 3 | At least one listener enabled (`server.listen.tcp` or `server.listen.ws`) |
-| 4 | `server.listen.port` set to a valid, available port |
+| 3 | At least one listener enabled (`tcp.listen.port` or `websocket.listen.ws`) |
+| 4 | Listener port set to a valid, available value |
 | 5 | Firewall config file present if `server.firewall` is set |
 | 6 | Go backend reachable if `server.backend` is set |
 | 7 | IPv6 capable interface if `server.ipv6` is enabled |
@@ -173,10 +173,10 @@ flowchart TD
 
 | Listener | Config Key | Protocol | TLS |
 |----------|-----------|----------|-----|
-| TCP | `server.listen.tcp` | Raw TCP | No |
-| WebSocket | `server.listen.ws` | HTTP WebSocket | No |
-| TLS WebSocket | `server.listen.wss` | HTTPS WebSocket | Yes |
-| Static UDP | `server.listen.udp` | Raw UDP | No |
+| TCP | `tcp.listen.port` | Raw TCP | No |
+| WebSocket | `websocket.listen.ws` | HTTP WebSocket | No |
+| TLS WebSocket | `websocket.listen.wss` | HTTPS WebSocket | Yes |
+| Static UDP | `udp.listen.port` | Raw UDP | No |
 
 ---
 
@@ -317,26 +317,29 @@ Minimum viable server configuration:
 ```json
 {
   "concurrent": 4,
-  "cdn": [0, 0],
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
-    "masked": false,
-    "plaintext": false,
-    "delta-encode": false,
-    "shuffle-data": false
+    "transport-key": "OpenPPP2-Test-Transport-Key"
+  },
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
+  "udp": {
+    "listen": { "port": 20000 }
+  },
+  "websocket": {
+    "path": "/tun"
   },
   "server": {
-    "node": 1,
-    "subnet": true,
-    "listen": {
-      "port": 20000,
-      "ws": false,
-      "wss": false
+    "ipv4-pool": {
+      "network": "10.0.0.0",
+      "mask": "255.255.255.0"
     }
   }
 }
@@ -346,19 +349,16 @@ Minimum viable client configuration:
 
 ```json
 {
-  "concurrent": 4,
-  "cdn": [0, 0],
+  "concurrent": 2,
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
-    "masked": false,
-    "plaintext": false,
-    "delta-encode": false,
-    "shuffle-data": false
+    "transport-key": "OpenPPP2-Test-Transport-Key"
   },
   "client": {
     "guid": "{F4519CF1-7A8A-4B00-89C8-9172A87B96DB}",
@@ -375,15 +375,15 @@ Deployment-related `ppp::diagnostics::ErrorCode` values:
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `PrivilegeRequired` | Process requires administrator/root |
-| `ConfigurationNotFound` | Config file not found at any search path |
-| `ConfigurationLoadFailed` | Config file found but failed to parse |
-| `AdapterOpenFailed` | Virtual adapter could not be opened |
-| `ServerListenerOpenFailed` | TCP or WebSocket listener failed to bind |
-| `ServerFirewallOpenFailed` | Firewall subsystem failed to initialize |
-| `ManagedServerConnectionFailed` | Go backend WebSocket connection failed |
-| `IPv6TransitOpenFailed` | IPv6 transit plane failed to open |
-| `DuplicateInstanceDetected` | Another instance of ppp is already running |
+| `AppPrivilegeRequired` | Process requires administrator/root |
+| `ConfigFileNotFound` | Config file not found at any search path |
+| `ConfigLoadFailed` | Config file found but failed to parse |
+| `NetworkInterfaceOpenFailed` | Virtual adapter could not be opened |
+| `SocketBindFailed` | TCP or WebSocket listener failed to bind |
+| `FirewallCreateFailed` | Firewall subsystem failed to initialize |
+| `VEthernetManagedConnectUrlEmpty` | Go backend WebSocket connection failed |
+| `IPv6TransitTapOpenFailed` | IPv6 transit TAP failed to open |
+| `AppAlreadyRunning` | Another instance of ppp is already running |
 
 ---
 
