@@ -63,32 +63,31 @@ flowchart TD
 ```mermaid
 classDiagram
     class ITransmission {
-        +HandshakeClient(y) bool
-        +HandshakeServer(y) bool
-        +Read(y, buffer, length) bool
-        +Write(y, buffer, offset, length) bool
-        +Encrypt(buffer, offset, length) bool
-        +Decrypt(buffer, offset, length) bool
-        +GetKind() TransmissionKind
-        +IsHandshaked() bool
-        +GetSessionId() Int128
-        +GetIvv() UInt32
+        +HandshakeClient(y, mux) Int128
+        +HandshakeServer(y, session_id, mux) bool
+        +Read(y, outlen) shared_ptr~Byte~
+        +Write(y, packet, length) bool
+        +Encrypt(data, datalen, outlen) shared_ptr~Byte~
+        +Decrypt(data, datalen, outlen) shared_ptr~Byte~
         +Dispose() void
-        #protocol_ ICipher
-        #transport_ ICipher
-        #handshaked_ bool
-        #session_id_ Int128
-        #ivv_ UInt32
+        #DoReadBytes(y, length) shared_ptr~Byte~
+        -protocol_  CiphertextPtr
+        -transport_ CiphertextPtr
+        -handshaked_ atomic_bool
+        -disposed_  atomic_bool
+        -frame_rn_  atomic_bool
+        -frame_tn_  atomic_bool
     }
     class ITcpipTransmission {
-        #socket_ boost_tcp_socket
-        #DoRead(y, buffer) bool
-        #DoWrite(y, buffer, length) bool
+        #socket_ shared_ptr~tcp_socket~
+        #remoteEP_ tcp_endpoint
+        #DoReadBytes(y, length) shared_ptr~Byte~
+        #DoWriteBytes(packet, offset, length, cb) bool
     }
     class IWebsocketTransmission {
         #ws_ websocket_stream
-        #DoRead(y, buffer) bool
-        #DoWrite(y, buffer, length) bool
+        #DoReadBytes(y, length) shared_ptr~Byte~
+        #DoWriteBytes(packet, offset, length, cb) bool
     }
     class ISslWebsocketTransmission {
         #ssl_ctx_ ssl_context
@@ -108,11 +107,12 @@ classDiagram
  * 发送 NOP 前奏，接收 session_id，发送 ivv，接收 nmux，重建 cipher 状态。
  * 成功后 handshaked_ 置为 true。
  *
- * @param y  协程 yield 上下文，握手在协程内挂起等待 I/O。
- * @return   握手成功返回 true；失败时设置诊断错误码并返回 false。
- * @note     仅在未握手状态下调用一次；重复调用行为未定义。
+ * @param y    协程 yield 上下文，握手在协程内挂起等待 I/O。
+ * @param mux  输出标志，指示协商后的多路复用能力。
+ * @return     协商得到的会话标识符（Int128），失败时返回零。
+ * @note       仅在未握手状态下调用一次；重复调用行为未定义。
  */
-virtual bool HandshakeClient(YieldContext& y) noexcept = 0;
+virtual Int128 HandshakeClient(YieldContext& y, bool& mux) noexcept;
 
 /**
  * @brief 作为服务端执行握手序列。
@@ -120,38 +120,38 @@ virtual bool HandshakeClient(YieldContext& y) noexcept = 0;
  * 发送 NOP 前奏，发送 session_id，发送 nmux，接收 ivv，重建 cipher 状态。
  * 成功后 handshaked_ 置为 true。
  *
- * @param y  协程 yield 上下文。
- * @return   握手成功返回 true；失败时设置诊断错误码并返回 false。
+ * @param y          协程 yield 上下文。
+ * @param session_id 上层提供的会话标识符。
+ * @param mux        请求的多路复用行为。
+ * @return           握手成功返回 true；失败时设置诊断错误码并返回 false。
  */
-virtual bool HandshakeServer(YieldContext& y) noexcept = 0;
+virtual bool HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept;
 
 /**
- * @brief 从受保护传输读取一个完整的分帧消息。
+ * @brief 从受保护传输读取并解密一个分帧消息。
  *
  * 根据当前帧化模式（base94 或二进制受保护）读取头部，解析长度，
- * 读取负载正文，执行解密和逆变换流水线，将原始字节填入 buffer。
+ * 读取负载正文，执行解密和逆变换流水线。
  *
  * @param y       协程 yield 上下文。
- * @param buffer  [out] 接收解码后负载的向量；函数负责调整大小。
- * @param length  [out] 实际有效字节数。
- * @return        成功返回 true；连接关闭或错误返回 false。
+ * @param outlen  [out] 实际有效字节数。
+ * @return        解密后的 payload 缓冲区；连接关闭或错误返回 null。
  * @note          线程安全前提：同一 transmission 实例的读操作需由 strand 串行化。
  */
-virtual bool Read(YieldContext& y, ppp::vector<Byte>& buffer, int& length) noexcept = 0;
+virtual std::shared_ptr<Byte> Read(YieldContext& y, int& outlen) noexcept;
 
 /**
  * @brief 向受保护传输写入一个分帧消息。
  *
  * 执行加密和变换流水线，编码帧头，将帧写入底层承载 socket。
  *
- * @param y       协程 yield 上下文。
- * @param buffer  要写入的原始数据指针。
- * @param offset  buffer 内的起始偏移。
- * @param length  要写入的有效字节数。
- * @return        成功返回 true；写入错误返回 false。
- * @warning       length 为 0 时行为由实现定义；调用方应避免零长度写入。
+ * @param y             协程 yield 上下文。
+ * @param packet        要写入的原始数据指针。
+ * @param packet_length 要写入的有效字节数。
+ * @return              成功返回 true；写入错误返回 false。
+ * @warning             packet_length 为 0 时行为由实现定义；调用方应避免零长度写入。
  */
-virtual bool Write(YieldContext& y, const Byte* buffer, int offset, int length) noexcept = 0;
+virtual bool Write(YieldContext& y, const void* packet, int packet_length) noexcept;
 ```
 
 ---
@@ -330,7 +330,7 @@ flowchart TD
 | 滚动 XOR masking | 内部实现 | 用基于位置的密钥流对字节做 XOR |
 | 确定性 shuffling | `key.shuffle-data` | 按确定性置换表重排负载字节 |
 | delta encoding | `key.delta-encode` | 将字节编码为相邻差值，增加流量随机性 |
-| transport cipher | `key.kcp.transport` | 使用 transport cipher 对整个负载加密 |
+| transport cipher | `key.transport-key` | 使用 transport cipher 对整个负载加密 |
 
 运行时会在握手前使用更保守的行为（base94 路径，变换集有限），在握手后使用更完整的变换流水线（二进制保护路径）。
 
@@ -371,8 +371,8 @@ OPENPPP2 保留两个 cipher 槽位：
 **密钥派生路径**：
 
 ```
-protocol_working_key  = KDF(key.kcp.protocol,  ivv + nmux + session_id)
-transport_working_key = KDF(key.kcp.transport, ivv + nmux + session_id)
+protocol_working_key  = Cipher(key.protocol-key  + ivv_str)
+transport_working_key = Cipher(key.transport-key + ivv_str)
 ```
 
 握手完成后，两个 cipher 的内部状态使用 `ivv` 重建，确保每条连接的密钥材料唯一。
@@ -389,11 +389,11 @@ transport_working_key = KDF(key.kcp.transport, ivv + nmux + session_id)
 
 1. 发送 NOP 前奏（variable-length dummy bytes，`session_id == 0`）
 2. 接收真实 `session_id`（`Int128`，128 位）
-3. 生成新的随机 `ivv`（32 位随机值）
+3. 生成新的随机 `ivv`（`Int128` 随机值）
 4. 发送 `ivv`（经 base94 帧编码）
 5. 接收 `nmux`（服务端多路复用参数，低位为 mux 使能标志）
 6. 设置 `handshaked_ = true`
-7. 用 `ivv + nmux + session_id` 重建两个 cipher 状态
+7. 用 `protocol-key + ivv_str` / `transport-key + ivv_str` 重建两个 cipher 状态
 
 **服务端侧**：
 
@@ -402,7 +402,7 @@ transport_working_key = KDF(key.kcp.transport, ivv + nmux + session_id)
 3. 生成并发送 `nmux`
 4. 接收 `ivv`
 5. 设置 `handshaked_ = true`
-6. 用 `ivv + nmux + session_id` 重建两个 cipher 状态
+6. 用 `protocol-key + ivv_str` / `transport-key + ivv_str` 重建两个 cipher 状态
 
 ```mermaid
 sequenceDiagram
@@ -415,11 +415,11 @@ sequenceDiagram
 
     Note over C,S: 身份与密钥材料交换阶段
     S->>C: session_id（Int128，128 位会话标识）
-    C->>S: ivv（32 位随机值，连接级密钥种子）
+    C->>S: ivv（Int128 随机值，连接级密钥种子）
     S->>C: nmux（多路复用参数，低位 = mux 使能）
 
     Note over C,S: 双方均设置 handshaked_ = true
-    Note over C,S: 使用 ivv + nmux + session_id 重建 protocol_ 和 transport_
+    Note over C,S: 使用 ivv_str 重建 protocol_ 和 transport_
     Note over C,S: 切换到二进制受保护帧族
 ```
 
@@ -461,7 +461,7 @@ flowchart TD
     A[连接建立] --> B[启动握手超时计时器]
     B --> C{握手是否完成?}
     C -->|是| D[取消计时器\n切换到正常运行模式]
-    C -->|超时| E[SetLastErrorCode HandshakeTimeout\n销毁 transmission 对象]
+    C -->|超时| E[SetLastErrorCode SessionHandshakeFailed\n销毁 transmission 对象]
     D --> F[正常数据传输]
     E --> G[连接清理]
 ```
@@ -472,13 +472,15 @@ flowchart TD
 
 | ErrorCode | 描述 |
 |-----------|------|
-| `HandshakeFailed` | 握手序列执行失败 |
-| `HandshakeTimeout` | 握手超过配置的超时时间 |
-| `SessionKeyDerivationFailed` | 无法从基础密钥 + ivv 派生工作密钥 |
-| `TransmissionReadFailed` | 分帧读取失败 |
-| `TransmissionWriteFailed` | 分帧写入失败 |
-| `CarrierConnectionFailed` | 承载 TCP/WebSocket 连接失败 |
-| `TlsNegotiationFailed` | TLS 协商失败（WSS 承载） |
+| `SessionHandshakeFailed` | 握手序列执行失败 |
+| `SessionHandshakeFailed` | 握手超过配置的超时时间 |
+| `EvpInitKeyDerivationFailed` | cipher/KDF 初始化失败 |
+| `TunnelReadFailed` | 分帧读取失败 |
+| `TunnelWriteFailed` | 分帧写入失败 |
+| `SocketConnectFailed` / `TcpConnectFailed` | 承载 TCP/WebSocket 连接失败 |
+| `SslHandshakeFailed` | TLS 协商失败（WSS 承载） |
+
+> **注**：密钥派生、传输读写、承载连接和 TLS 协商失败等旧设计名不是当前 `ErrorCodes.def` 条目；请使用上表列出的近似现有码。
 
 ---
 

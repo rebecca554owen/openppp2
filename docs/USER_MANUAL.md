@@ -92,7 +92,7 @@ Depending on platform and role, OPENPPP2 may change:
 |------|--------|---------|
 | 1 | Obtain the release package | `openppp2-linux-amd64-simd.zip` |
 | 2 | Extract and enter the directory | `mkdir -p openppp2 && cd openppp2` |
-| 3 | Edit the server config | Set `server.listen.port`, `key.*` fields |
+| 3 | Edit the server config | Set `tcp.listen.port`, `key.*` fields |
 | 4 | Start the runtime | `sudo ./ppp` |
 
 Minimal server config:
@@ -100,27 +100,26 @@ Minimal server config:
 ```json
 {
   "concurrent": 4,
-  "cdn": [0, 0],
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
+    "transport-key": "OpenPPP2-Test-Transport-Key",
     "masked": false,
     "plaintext": false,
     "delta-encode": false,
     "shuffle-data": false
   },
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
   "server": {
     "node": 1,
-    "subnet": true,
-    "listen": {
-      "port": 20000,
-      "ws": false,
-      "wss": false
-    }
+    "subnet": true
   }
 }
 ```
@@ -139,14 +138,15 @@ Minimal client config:
 ```json
 {
   "concurrent": 4,
-  "cdn": [0, 0],
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
+    "transport-key": "OpenPPP2-Test-Transport-Key",
     "masked": false,
     "plaintext": false,
     "delta-encode": false,
@@ -212,11 +212,12 @@ flowchart TD
 | Parameter | Type | Example | Description |
 |-----------|------|---------|-------------|
 | `server.node` | int | `1` | Server node ID |
-| `server.listen.port` | int | `20000` | Listener port |
-| `server.listen.ws` | bool | `false` | Enable WebSocket listener |
-| `server.listen.wss` | bool | `false` | Enable TLS WebSocket listener |
+| `tcp.listen.port` | int | `20000` | TCP tunnel listener port |
+| `websocket.listen.ws` | int | `20080` | WebSocket listener port (0 = disabled) |
+| `websocket.listen.wss` | int | `20443` | TLS WebSocket listener port (0 = disabled) |
 | `server.backend` | string | `"ws://backend:80/ppp/webhook"` | Optional management backend |
-| `server.firewall` | string | `"/etc/openppp2/firewall.txt"` | Firewall policy file |
+| `server.ipv4-pool.network` | string | `"10.0.0.0"` | IPv4 address pool for client assignment |
+| `server.ipv4-pool.mask` | string | `"255.255.255.0"` | IPv4 pool subnet mask |
 
 ---
 
@@ -288,12 +289,12 @@ Expected result: Mainland China IPs go direct; all other traffic through tunnel.
 
 ```json
 {
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
   "server": {
     "node": 1,
     "subnet": true,
-    "listen": {
-      "port": 20000
-    },
     "backend": "ws://192.168.0.100/ppp/webhook"
   }
 }
@@ -305,11 +306,11 @@ Expected result: client sessions authenticated and accounted by Go backend.
 
 ```json
 {
-  "server": {
+  "websocket": {
+    "host": "your-domain.com",
+    "path": "/tun",
     "listen": {
-      "port": 8080,
-      "ws": true,
-      "wss": false
+      "ws": 8080
     }
   }
 }

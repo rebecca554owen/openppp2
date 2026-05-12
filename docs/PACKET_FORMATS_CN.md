@@ -426,18 +426,19 @@ flowchart TD
 
 ## 错误码参考
 
-包格式相关错误码（来自 `ppp/diagnostics/Error.h`）：
+包格式相关错误码（来自 `ppp/diagnostics/ErrorCodes.def`）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `PacketMaskIdZero` | 收到 `mask_id == 0` 的 static 包 |
-| `PacketChecksumMismatch` | static 包 checksum 验证失败 |
-| `PacketHeaderLengthInvalid` | `header_length` 映射产生了越界值 |
-| `PacketCipherDecryptFailed` | protocol 或 transport cipher 解密失败 |
-| `PacketPayloadTooLarge` | 恢复的 payload 长度超过预期最大值 |
-| `PacketFamilyInvalid` | `session_id` 符号产生了未识别的包族 |
-| `PacketBase94DecodeFailed` | 头部或 payload 的 base94 解码失败 |
-| `PacketLengthMappingFailed` | base94 长度逆向映射失败 |
+| `ProtocolDecodeFailed` | static 包 checksum、密码或结构解码失败 |
+| `ProtocolFrameInvalid` | 收到的包帧结构无效 |
+| `ProtocolPacketActionInvalid` | 无法识别的包族或操作码 |
+| `SseaDeltaDecodeInvalidInput` | Delta 解码收到无效输入 |
+| `SseaBase94DecodeInvalidInput` | Base94 解码收到无效输入 |
+| `SseaBase94DecodeCharOutOfAlphabet` | Base94 解码发现字母表外字符 |
+| `TransmissionPacketDecryptPayloadAllocFailed` | 包解密分配 payload 缓冲区失败 |
+| `NetworkPacketMalformed` | 网络包结构校验失败 |
+| `NetworkPacketTooLarge` | 恢复的 payload 长度超过预期最大值 |
 
 ---
 

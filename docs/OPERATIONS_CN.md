@@ -105,7 +105,7 @@ flowchart TD
 
 ### 规则
 
-- 启动、环境准备、打开路径、回滚路径中的失败分支，在返回失败哨兵值前必须调用 `SetLastErrorCode(...)` 或 `SetLastError(...)`。
+- 启动、环境准备、打开路径、回滚路径中的失败分支，在返回失败哨兵值前必须调用 `SetLastErrorCode(...)` 或 `SetLastError(code, value)`。
 - 仅返回 `false`、`-1` 或 `NULLPTR` 但不设置诊断，视为传播不完整，会降低可观测性。
 - 面向用户的运维界面（Console UI、JNI 返回路径）应消费统一诊断快照。
 
@@ -116,25 +116,23 @@ flowchart TD
  * @brief 为当前诊断上下文设置最后一个错误码。
  * @param code  要记录的错误码。
  */
-void SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
+ppp::diagnostics::ErrorCode SetLastErrorCode(ppp::diagnostics::ErrorCode code) noexcept;
 
 /**
- * @brief 为当前诊断上下文设置自由格式的错误消息。
- * @param message  错误消息字符串。
+ * @brief 设置最后一个错误码并返回调用方提供的值。
+ * @tparam T 返回类型。
+ * @param code  要记录的错误码。
+ * @param value 要返回的值。
+ * @return      返回传入的值。
  */
-void SetLastError(const ppp::string& message) noexcept;
+template <typename T>
+T SetLastError(ppp::diagnostics::ErrorCode code, T value) noexcept;
 
 /**
  * @brief 获取最后记录的错误码。
  * @return  最近设置的错误码。
  */
 ppp::diagnostics::ErrorCode GetLastErrorCode() noexcept;
-
-/**
- * @brief 获取最后记录的错误消息。
- * @return  最近设置的错误消息。
- */
-ppp::string GetLastError() noexcept;
 ```
 
 源文件：`ppp/diagnostics/Error.h`
@@ -329,7 +327,7 @@ sequenceDiagram
 | 启动时"duplicate instance" | 另一个 ppp 正在运行 | 停止现有实例 |
 | 路由未应用 | 路由添加失败 | 检查权限和现有路由 |
 | 隧道内 DNS 不工作 | DNS bypass 路由缺失 | 检查 `AddRouteWithDnsServers()` |
-| 会话每 N 分钟断开 | 保活间隔过短 | 增大 `keepalive.interval` |
+| 会话每 N 分钟断开 | 不活跃超时过短 | 增大 `tcp.inactive.timeout` 或 `udp.inactive.timeout` |
 | Backend 认证失败 | 凭证错误或 URL 错误 | 验证 `server.backend` URL 和密钥 |
 | IPv6 不工作 | IPv6 transit plane 未打开 | 检查 `server.ipv6` 配置和 NIC 支持 |
 | 退出后路由未恢复 | 强制杀进程绕过了 Dispose | 使用优雅关闭信号 |
@@ -406,23 +404,22 @@ nssm start openppp2
 
 ## 错误码参考
 
-运维相关的 `ppp::diagnostics::ErrorCode` 值：
+运维相关的 `ppp::diagnostics::ErrorCode` 值（来自 `ppp/diagnostics/ErrorCodes.def`）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `PrivilegeRequired` | 进程需要管理员/root 权限 |
-| `DuplicateInstanceDetected` | 已有另一个 ppp 实例运行 |
-| `ConfigurationNotFound` | 找不到配置文件 |
-| `ConfigurationLoadFailed` | 配置文件解析或规范化失败 |
-| `AdapterOpenFailed` | 虚拟 NIC 打开失败 |
+| `AppPrivilegeRequired` | 进程需要管理员/root 权限 |
+| `AppAlreadyRunning` | 已有另一个 ppp 实例运行 |
+| `ConfigFileNotFound` | 找不到配置文件 |
+| `ConfigLoadFailed` | 配置文件解析或规范化失败 |
+| `NetworkInterfaceOpenFailed` | 虚拟 NIC 打开失败 |
 | `RouteAddFailed` | 向 OS 路由表添加路由失败 |
 | `RouteDeleteFailed` | 从 OS 路由表删除路由失败 |
-| `DnsConfigFailed` | DNS 配置失败 |
-| `ServerListenerOpenFailed` | 监听器绑定失败 |
-| `HandshakeFailed` | 客户端-服务端握手失败 |
-| `KeepaliveTimeout` | 保活 echo 未在规定时间内确认 |
-| `ManagedServerConnectionFailed` | Go backend 连接失败 |
-| `AutoRestartTriggered` | 触发了 auto-restart 条件 |
+| `DnsResolveFailed` | DNS 解析失败 |
+| `SocketBindFailed` | 监听器绑定失败 |
+| `SessionHandshakeFailed` | 客户端-服务端握手失败 |
+| `KeepaliveTimeout` | 对端保活心跳超时 |
+| `SessionQuotaExceeded` | 会话额度耗尽 |
 
 ---
 

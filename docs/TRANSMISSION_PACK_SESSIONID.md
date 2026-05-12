@@ -323,20 +323,20 @@ The design expects and handles failures:
 
 ## Error Code Reference
 
-Session and control plane `ppp::diagnostics::ErrorCode` values:
+Session and control plane `ppp::diagnostics::ErrorCode` values (from `ppp/diagnostics/ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `HandshakeFailed` | Transport handshake did not complete |
-| `HandshakeTimeout` | Handshake exceeded configured timeout |
-| `AuthenticationFailed` | Session rejected (no backend or backend denied) |
-| `KeepaliveTimeout` | No keepalive reply within timeout |
-| `SessionExpired` | Session expired per `ExpiredTime` |
-| `QuotaExceeded` | Session quota exhausted |
-| `ManagedServerConnectionFailed` | Backend link not established |
-| `ManagedServerAuthenticationFailed` | Backend denied the user |
-| `ManagedServerQuotaExceeded` | Backend reports quota exhausted |
-| `FrpMappingFailed` | Reverse mapping registration failed |
+| `SessionHandshakeFailed` | Transport handshake did not complete |
+| `SessionAuthFailed` | Session authentication failed |
+| `SessionQuotaExceeded` | Session quota exhausted |
+| `SessionCreateFailed` | Session creation failed |
+| `SessionOpenFailed` | Session open failed |
+| `SessionTransportMissing` | Session transport missing |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
+| `MappingCreateFailed` | Reverse mapping registration failed |
+| `VEthernetManagedAuthDuplicateSession` | Duplicate managed auth for session |
+| `VEthernetManagedConnectUrlEmpty` | Managed server connect URL empty |
 
 ---
 
@@ -347,7 +347,7 @@ Session and control plane `ppp::diagnostics::ErrorCode` values:
 ```cpp
 // ppp/app/server/VirtualEthernetExchanger.cpp
 if (info.ExpiredTime > 0 && now > info.ExpiredTime) {
-    SetLastError(ErrorCode::SessionExpired, false);
+    SetLastError(ErrorCode::SessionDisposed, false);
     Dispose();
     return;
 }
@@ -364,7 +364,7 @@ info.IncomingTraffic  = GetIncomingBytes();
 info.OutgoingTraffic  = GetOutgoingBytes();
 
 if (!linklayer_->SendInformation(y, info)) {
-    return SetLastError(ErrorCode::TransmissionWriteFailed, false);
+    return SetLastError(ErrorCode::TunnelWriteFailed, false);
 }
 ```
 

@@ -342,20 +342,19 @@ Key `ppp::diagnostics::ErrorCode` values relevant to the error handling API:
 | ErrorCode | Value | Description |
 |-----------|-------|-------------|
 | `Success` | 0 | No error |
-| `GenericUnknown` | 1 | Generic unknown error |
-| `ConfigLoadFailed` | 54 | Configuration load or validation failure |
-| `AppPrivilegeRequired` | 52 | Insufficient OS privilege |
-| `AppAlreadyRunning` | 46 | Another instance is already running |
-| `TunnelOpenFailed` | 141 | Virtual adapter open failed |
-| `RouteAddFailed` | 156 | Route table modification failed |
-| `ConfigDnsRuleLoadFailed` | 63 | DNS configuration failed |
-| `SocketBindFailed` | 107 | Socket bind operation failed |
-| `SessionHandshakeFailed` | 193 | Transport handshake did not complete |
-| `TcpConnectTimeout` | 121 | Handshake timed out |
-| `SessionAuthFailed` | 192 | Authentication rejected |
-| `NetworkInterfaceOpenFailed` | 94 | Cannot reach management backend |
-| `AuthCredentialInvalid` | 214 | Backend rejected authentication |
-| `SessionQuotaExceeded` | 196 | User quota exhausted |
+| `AppAlreadyRunning` | 35 | Another instance already owns the application lock |
+| `AppPrivilegeRequired` | 41 | Insufficient OS privilege |
+| `ConfigLoadFailed` | 43 | Configuration load or validation failure |
+| `ConfigDnsRuleLoadFailed` | 52 | DNS configuration failed |
+| `NetworkInterfaceOpenFailed` | 83 | Cannot reach management backend |
+| `SocketBindFailed` | 96 | Socket bind operation failed |
+| `TcpConnectTimeout` | 109 | Handshake timed out |
+| `TunnelOpenFailed` | 130 | Virtual adapter open failed |
+| `RouteAddFailed` | 145 | Route table modification failed |
+| `SessionAuthFailed` | 181 | Authentication rejected |
+| `SessionHandshakeFailed` | 182 | Transport handshake did not complete |
+| `SessionQuotaExceeded` | 185 | User quota exhausted |
+| `AuthCredentialInvalid` | 537 | Backend rejected authentication |
 
 See `ppp/diagnostics/Error.h` for the complete enum definition.
 

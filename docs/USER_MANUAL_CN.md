@@ -91,7 +91,7 @@ flowchart TD
 |------|------|------|
 | 1 | 获取发布包 | `openppp2-linux-amd64-simd.zip` |
 | 2 | 解压并进入目录 | `mkdir -p openppp2 && cd openppp2` |
-| 3 | 编辑服务端配置 | 设置 `server.listen.port`、`key.*` 字段 |
+| 3 | 编辑服务端配置 | 设置 `tcp.listen.port`、`key.*` 字段 |
 | 4 | 启动运行时 | `sudo ./ppp` |
 
 最简服务端配置：
@@ -99,27 +99,26 @@ flowchart TD
 ```json
 {
   "concurrent": 4,
-  "cdn": [0, 0],
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
+    "transport-key": "OpenPPP2-Test-Transport-Key",
     "masked": false,
     "plaintext": false,
     "delta-encode": false,
     "shuffle-data": false
   },
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
   "server": {
     "node": 1,
-    "subnet": true,
-    "listen": {
-      "port": 20000,
-      "ws": false,
-      "wss": false
-    }
+    "subnet": true
   }
 }
 ```
@@ -138,14 +137,15 @@ flowchart TD
 ```json
 {
   "concurrent": 4,
-  "cdn": [0, 0],
   "key": {
     "kf": 154543927,
     "kx": 128,
     "kl": 10,
     "kh": 12,
     "protocol": "aes-128-cfb",
+    "protocol-key": "OpenPPP2-Test-Protocol-Key",
     "transport": "aes-256-cfb",
+    "transport-key": "OpenPPP2-Test-Transport-Key",
     "masked": false,
     "plaintext": false,
     "delta-encode": false,
@@ -211,11 +211,12 @@ flowchart TD
 | 参数 | 类型 | 示例 | 说明 |
 |------|------|------|------|
 | `server.node` | int | `1` | 服务端节点 ID |
-| `server.listen.port` | int | `20000` | 监听端口 |
-| `server.listen.ws` | bool | `false` | 启用 WebSocket 监听器 |
-| `server.listen.wss` | bool | `false` | 启用 TLS WebSocket 监听器 |
+| `tcp.listen.port` | int | `20000` | TCP 隧道监听端口 |
+| `websocket.listen.ws` | int | `20080` | WebSocket 监听端口（0 = 禁用） |
+| `websocket.listen.wss` | int | `20443` | TLS WebSocket 监听端口（0 = 禁用） |
 | `server.backend` | string | `"ws://backend:80/ppp/webhook"` | 可选管理后端 |
-| `server.firewall` | string | `"/etc/openppp2/firewall.txt"` | 防火墙策略文件 |
+| `server.ipv4-pool.network` | string | `"10.0.0.0"` | IPv4 地址池（客户端分配用） |
+| `server.ipv4-pool.mask` | string | `"255.255.255.0"` | IPv4 地址池子网掩码 |
 
 ---
 
@@ -287,12 +288,12 @@ sudo ./ppp --mode=client
 
 ```json
 {
+  "tcp": {
+    "listen": { "port": 20000 }
+  },
   "server": {
     "node": 1,
     "subnet": true,
-    "listen": {
-      "port": 20000
-    },
     "backend": "ws://192.168.0.100/ppp/webhook"
   }
 }
@@ -304,11 +305,11 @@ sudo ./ppp --mode=client
 
 ```json
 {
-  "server": {
+  "websocket": {
+    "host": "your-domain.com",
+    "path": "/tun",
     "listen": {
-      "port": 8080,
-      "ws": true,
-      "wss": false
+      "ws": 8080
     }
   }
 }

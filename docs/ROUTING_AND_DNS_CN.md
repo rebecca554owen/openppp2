@@ -364,23 +364,23 @@ vBGP 路由会合并到客户端 RIB 中。
 | `virr.url` | `""` | 周期性刷新的 bypass 列表 URL |
 | `vbgp.update-interval` | `3600` | vBGP 路由刷新间隔（秒） |
 | `vbgp.url` | `""` | vBGP 路由来源 URL |
-| `server.dns` | 系统默认 | 服务端查询用的上游 DNS 服务器 |
+| `dns.servers` | 系统默认 | 服务端查询用的上游 DNS 服务器 |
 
 ---
 
 ## 错误码参考
 
-路由和 DNS 相关的 `ppp::diagnostics::ErrorCode` 值：
+路由和 DNS 相关的 `ppp::diagnostics::ErrorCode` 值（来自 `ppp/diagnostics/ErrorCodes.def`）：
 
 | ErrorCode | 说明 |
 |-----------|------|
 | `RouteAddFailed` | 向 OS 路由表添加路由失败 |
 | `RouteDeleteFailed` | 删除路由失败 |
-| `DnsConfigFailed` | DNS 配置失败 |
-| `DnsResolverUnreachable` | 配置的 DNS resolver 不可达 |
-| `IPListLoadFailed` | 加载 IP bypass 列表失败 |
-| `DefaultRouteProtectionFailed` | 保护默认路由失败 |
-| `VirtualAdapterSubnetConflict` | 虚拟网卡子网与 bypass 列表冲突 |
+| `RouteReplaceFailed` | 替换现有路由失败 |
+| `ConfigDnsRuleLoadFailed` | 从已配置来源加载 DNS 规则失败 |
+| `ConfigRouteLoadFailed` | 从已配置来源加载路由列表失败 |
+| `DnsResolveFailed` | DNS 解析失败 |
+| `DnsAddressInvalid` | DNS 地址无效 |
 
 ---
 

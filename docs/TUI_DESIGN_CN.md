@@ -403,19 +403,21 @@ sequenceDiagram
 
 ### 状态栏语义
 
-底部状态栏仅显示诊断错误快照：
+底部状态栏分为左右两栏：
 
-- 当前错误码为 `ErrorCode::Success` 时显示 `[INFO] 0 Success: Success`。
-- 有错误时显示 `[%LEVEL%] <数值ID> <CodeName>: <message> (<age>)`。
-- ANSI 颜色按严重级别区分：info=绿色、warn=黄色、error=红色、fatal=亮红色。
+- **左栏**：诊断错误快照。
+  - 当前错误码为 `ErrorCode::Success` 时显示 `[INFO] 0 Success: Success`。
+  - 有错误时显示 `[%LEVEL%] <数值ID> <CodeName>: <message> (<age>)`。
+  - ANSI 颜色按严重级别区分：info=绿色、warn=黄色、error=红色、fatal=亮红色。
+- **右栏**：VPN 状态与吞吐摘要（如 `VPN: connected  ↑ 1.2MB/s  ↓ 3.4MB/s`）。
 
-VPN 状态与吞吐仍在内部更新用于其他输出路径，但不再显示在底部状态栏。
+两栏通过 `BoxSplitRow()` 一次性渲染，中间有垂直分隔线。
 
 ---
 
 ## 错误码参考
 
-TUI 子系统相关的错误码（来自 `ppp/diagnostics/Error.h`）：
+TUI 子系统相关的错误码（来自 `ppp/diagnostics/ErrorCodes.def`）：
 
 | ErrorCode | 说明 |
 |-----------|------|

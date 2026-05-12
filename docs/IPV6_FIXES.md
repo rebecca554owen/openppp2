@@ -389,13 +389,15 @@ IPv6-related error codes from `ppp/diagnostics/Error.h`:
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `IPv6AddressInIPv4OnlyPath` | IPv6 address encountered in VNetstack IPv4-only code path |
+| `IPv6PacketRejected` | IPv6 address encountered in VNetstack IPv4-only code path |
 | `IPv6AddressAssignFailed` | Failed to assign IPv6 address to virtual NIC |
 | `IPv6RouteAddFailed` | Failed to add IPv6 route entry |
 | `IPv6InterfaceIndexInvalid` | `ClientContext::InterfaceIndex` is `-1` at use site |
-| `IPv6IsNoneFalsePositive` | `IsNone()` incorrectly matched a valid IPv6 multicast address |
+| `IPv6AddressInvalid` | `IsNone()` incorrectly matched a valid IPv6 multicast address |
 | `SocketOptionSetFailed` | `setsockopt(IPV6_V6ONLY)` failed |
 | `IPv6ResolutionFailed` | AAAA record resolution failed for domain endpoint |
+
+> **Note**: The following error codes are proposed/design items not yet in `ErrorCodes.def`: `IPv6AddressAssignFailed` (nearest existing: `IPv6ClientAddressApplyFailed`), `IPv6RouteAddFailed` (nearest: `RouteAddFailed` or `IPv6TransitRouteAddFailed`), `IPv6InterfaceIndexInvalid` (nearest: `RouteInterfaceInvalid`), `IPv6ResolutionFailed` (nearest: `DnsResolveFailed`).
 
 ---
 

@@ -1,11 +1,15 @@
 # `std::atomic_load/store(shared_ptr*)` 兼容 Helper 设计文档
 
+[English Version](ATOMIC_SHARED_PTR_HELPER_DESIGN.md)
+
 > 编号：S-4-HELPER
-> 状态：**设计文档，暂不实施**
-> 决策日期：2026-05-11
+> 状态：**第一阶段已实施（helper 头文件 + 文档，未迁移调用点）**
+> 设计日期：2026-05-11
+> 实施日期：2026-05-12
 > 关联审计文档：`docs/openppp2-deep-code-audit-cn.md` §14.6 S-4、§16
 > 关联设计文档：`docs/FIREWALL_RCU_RULE_SNAPSHOT_DESIGN_CN.md` §3.3、§4
 > 语言标准：C++17
+> 实施文件：`ppp/net/AtomicSharedPtr.h`（header-only，无 .cpp）
 
 ---
 
@@ -79,72 +83,152 @@
 ### 3.1 设计目标
 
 1. **零行为变更：** 现有调用模式不改变，仅包装为命名函数。
-2. **编译期版本检测：** C++20+ 时通过 `static_assert` 或编译器诊断提示迁移。
+2. **C++20 迁移可发现性：** 通过统一 `_compat` 命名和文档记录提示后续迁移；当前 helper 不在 C++20+ 下主动 `static_assert` 失败。
 3. **最小侵入：** 单头文件，无运行时开销（inline 展开），无新依赖。
 4. **便于 grep 迁移：** 统一命名后，C++20 迁移时可通过 `grep -r atomic_load_compat` 精确定位所有调用点。
 
 ### 3.2 API 原型
 
+> **实施说明：** 第一阶段已扩展 API 面，覆盖项目迁移所需的 C++17 `shared_ptr` atomic
+> load/store/exchange/CAS free functions；暂不包装 `std::atomic_is_lock_free`。
+> 设计文档原始版本仅包含 `atomic_load_compat` / `atomic_store_compat`；经评估，
+> 将 `exchange` 和 `compare_exchange` 一并包装的边际成本接近零（纯 inline 委托），
+> 而统一命名带来的 grep 可搜索性和 C++20 迁移便利性收益更高。
+> 详见 §3.3 更新后的决策记录。
+
+实际实现文件：`ppp/net/AtomicSharedPtr.h`
+
 ```cpp
-// ppp/net/AtomicSharedPtr.h（未来新增，暂不实施）
+// ppp/net/AtomicSharedPtr.h（第一阶段已实施）
 
 #pragma once
 
-#include <memory>      // std::shared_ptr
-#include <utility>     // std::move
+#include <memory>
+#include <atomic>
+#include <utility>
 
 namespace ppp {
 namespace net {
 
-/**
- * @brief C++17 兼容的 atomic shared_ptr 读取包装。
- *
- * 封装 std::atomic_load(shared_ptr*) free function。
- * C++20 迁移时，删除此函数，改用 std::atomic<std::shared_ptr<T>>::load()。
- *
- * @tparam T shared_ptr 指向的类型（含 cv 限定符）
- * @param p 指向 shared_ptr 对象的指针，不得为 nullptr
- * @return p 指向的 shared_ptr 的原子副本
- *
- * @note 线程安全：参照 C++17 §[util.smartptr.shared.atomic]
- * @note 性能：主流实现为全局 spinlock 表，非 lock-free
- */
+// ---- load ----
+
 template<class T>
-std::shared_ptr<T> atomic_load_compat(const std::shared_ptr<T>* p) noexcept
+inline std::shared_ptr<T> atomic_load_compat(const std::shared_ptr<T>* p) noexcept
 {
-    // C++20+: 此包装仍调用 free function 以保持接口一致。
-    // 迁移时直接删除此函数，改用 atomic<shared_ptr<T>>::load()。
     return std::atomic_load(p);
 }
 
-/**
- * @brief C++17 兼容的 atomic shared_ptr 写入包装。
- *
- * 封装 std::atomic_store(shared_ptr*, shared_ptr) free function。
- * C++20 迁移时，删除此函数，改用 std::atomic<std::shared_ptr<T>>::store()。
- *
- * @tparam T shared_ptr 指向的类型（含 cv 限定符）
- * @param p 指向 shared_ptr 对象的指针，不得为 nullptr
- * @param r 要存储的值，调用后 r 仍保持有效（与 std::atomic_store 行为一致）
- *
- * @note 线程安全：参照 C++17 §[util.smartptr.shared.atomic]
- * @note 性能：同 atomic_load_compat
- */
 template<class T>
-void atomic_store_compat(std::shared_ptr<T>* p, std::shared_ptr<T> r) noexcept
+inline std::shared_ptr<T> atomic_load_explicit_compat(
+    const std::shared_ptr<T>* p, std::memory_order mo) noexcept
+{
+    return std::atomic_load_explicit(p, mo);
+}
+
+// ---- store ----
+
+template<class T>
+inline void atomic_store_compat(std::shared_ptr<T>* p, std::shared_ptr<T> r) noexcept
 {
     std::atomic_store(p, std::move(r));
+}
+
+template<class T>
+inline void atomic_store_explicit_compat(
+    std::shared_ptr<T>* p, std::shared_ptr<T> r, std::memory_order mo) noexcept
+{
+    std::atomic_store_explicit(p, std::move(r), mo);
+}
+
+// ---- exchange ----
+
+template<class T>
+inline std::shared_ptr<T> atomic_exchange_compat(
+    std::shared_ptr<T>* p, std::shared_ptr<T> r) noexcept
+{
+    return std::atomic_exchange(p, std::move(r));
+}
+
+template<class T>
+inline std::shared_ptr<T> atomic_exchange_explicit_compat(
+    std::shared_ptr<T>* p, std::shared_ptr<T> r, std::memory_order mo) noexcept
+{
+    return std::atomic_exchange_explicit(p, std::move(r), mo);
+}
+
+// ---- compare_exchange (weak) ----
+
+template<class T>
+inline bool atomic_compare_exchange_weak_compat(
+    std::shared_ptr<T>* p,
+    std::shared_ptr<T>* expected,
+    std::shared_ptr<T>  desired) noexcept
+{
+    return std::atomic_compare_exchange_weak(p, expected, std::move(desired));
+}
+
+template<class T>
+inline bool atomic_compare_exchange_weak_explicit_compat(
+    std::shared_ptr<T>* p,
+    std::shared_ptr<T>* expected,
+    std::shared_ptr<T>  desired,
+    std::memory_order    success,
+    std::memory_order    failure) noexcept
+{
+    return std::atomic_compare_exchange_weak_explicit(
+        p, expected, std::move(desired), success, failure);
+}
+
+// ---- compare_exchange (strong) ----
+
+template<class T>
+inline bool atomic_compare_exchange_strong_compat(
+    std::shared_ptr<T>* p,
+    std::shared_ptr<T>* expected,
+    std::shared_ptr<T>  desired) noexcept
+{
+    return std::atomic_compare_exchange_strong(p, expected, std::move(desired));
+}
+
+template<class T>
+inline bool atomic_compare_exchange_strong_explicit_compat(
+    std::shared_ptr<T>* p,
+    std::shared_ptr<T>* expected,
+    std::shared_ptr<T>  desired,
+    std::memory_order    success,
+    std::memory_order    failure) noexcept
+{
+    return std::atomic_compare_exchange_strong_explicit(
+        p, expected, std::move(desired), success, failure);
 }
 
 } // namespace net
 } // namespace ppp
 ```
 
-### 3.3 为什么暂不提供 `atomic_exchange_compat`
+函数清单（10 个 inline 模板）：
+
+| 函数 | 标准对应 | 用途 |
+|------|----------|------|
+| `atomic_load_compat` | `std::atomic_load` | 原子读 |
+| `atomic_load_explicit_compat` | `std::atomic_load_explicit` | 原子读（显式 memory order） |
+| `atomic_store_compat` | `std::atomic_store` | 原子写 |
+| `atomic_store_explicit_compat` | `std::atomic_store_explicit` | 原子写（显式 memory order） |
+| `atomic_exchange_compat` | `std::atomic_exchange` | 原子交换 |
+| `atomic_exchange_explicit_compat` | `std::atomic_exchange_explicit` | 原子交换（显式 memory order） |
+| `atomic_compare_exchange_weak_compat` | `std::atomic_compare_exchange_weak` | CAS（weak，允许伪失败） |
+| `atomic_compare_exchange_weak_explicit_compat` | `std::atomic_compare_exchange_weak_explicit` | CAS weak（显式 memory order） |
+| `atomic_compare_exchange_strong_compat` | `std::atomic_compare_exchange_strong` | CAS（strong，无伪失败） |
+| `atomic_compare_exchange_strong_explicit_compat` | `std::atomic_compare_exchange_strong_explicit` | CAS strong（显式 memory order） |
+
+### 3.3 `atomic_exchange` / `atomic_compare_exchange` 的包装决策
+
+> **设计变更（2026-05-12）：** 原始设计决定不提供 `atomic_exchange_compat` 包装。
+> 第一阶段实施时重新评估，决定一并提供 exchange 和 CAS 包装，理由如下：
 
 **标准事实：C++17 提供 `shared_ptr` 版 atomic exchange/CAS free functions。**
 
-C++17 `shared_ptr` atomic free functions（§[util.smartptr.shared.atomic]）覆盖以下操作：
+C++17 `shared_ptr` atomic free functions（§[util.smartptr.shared.atomic]）覆盖以下操作；本 helper 第一阶段仅包装项目迁移所需的 load/store/exchange/CAS，不包装 `atomic_is_lock_free`：
 
 - `std::atomic_is_lock_free(const shared_ptr<T>*)`
 - `std::atomic_load(const shared_ptr<T>*)`
@@ -156,23 +240,25 @@ C++17 `shared_ptr` atomic free functions（§[util.smartptr.shared.atomic]）覆
 - `std::atomic_compare_exchange_weak/strong(shared_ptr<T>*, shared_ptr<T>*, shared_ptr<T>)`
 - `std::atomic_compare_exchange_weak_explicit/strong_explicit(...)`
 
-因此，当前代码中的：
+**提供 exchange/CAS 包装的理由：**
 
-```cpp
-std::shared_ptr<IPFragment> fragment =
-    std::atomic_exchange(&fragment_, std::shared_ptr<IPFragment>());
-```
+1. **零额外风险：** 包装函数是纯 inline 委托，行为与直接调用标准 free function 完全等价。
+2. **统一迁移表面：** 所有 `shared_ptr` atomic 访问使用统一的 `_compat` 命名，
+   C++20 迁移时可通过 `grep -r _compat` 精确定位全部调用点。
+3. **exchange 语义明确：** `atomic_exchange` 是单次原子操作，具备真正的原子交换语义，
+   与 `atomic_load + atomic_store` 的"两次独立操作"有本质区别（见 §4）。
+4. **CAS 用途预留：** RCU 快照发布、lock-free 队列等场景可能需要 CAS，
+   提供包装避免未来每个场景重新发明。
+5. **文档已充分警告：** §4 中已详细说明 `load + store` ≠ `exchange` 语义差异，
+   以及使用 CAS 时应注意的 ABA 问题（shared_ptr 控制块地址通常稳定，ABA 风险较低）。
 
-在 C++17 下应匹配标准提供的 `shared_ptr` atomic free function overload，
-不依赖 `shared_ptr` 为 `TriviallyCopyable`，也不应被描述为非标准行为。
+**原始设计中"不提供 exchange"的理由重新评估：**
 
-**设计决策：** 本阶段仍不提供 `atomic_exchange_compat` 包装。理由：
-
-- 当前 helper 目标只覆盖最常见的 `atomic_load/store` 迁移封装，避免扩大 API 面。
-- `exchange` 常用于 exactly-once take-and-clear 语义，调用点需要逐一审查外部同步、生命周期与重复 Dispose 风险，不能与普通 load/store 机械同等处理。
-- 如果 C++17 代码确实需要唯一取走语义，应直接显式使用标准 `std::atomic_exchange(shared_ptr*)` free function，或使用 strand/mutex 保护复合操作。
-- C++20 迁移时，已有 `std::atomic_exchange` free function 调用点应直接映射到 `std::atomic<std::shared_ptr<T>>::exchange()`。
-- 不把 `atomic_load + atomic_store({})` 包装成 exchange 风格 helper，避免误导使用者以为两次独立原子操作具备 atomic exchange 语义。
+| 原始理由 | 重新评估 |
+|----------|----------|
+| 避免扩大 API 面 | 10 个 inline 模板的维护成本可忽略 |
+| exchange 调用点需逐一审查 | 正确——但这不阻止提供包装；审查仍需在迁移调用点（阶段 2）时进行 |
+| load+store 不等价于 exchange | 正确——但提供 exchange 包装不会误导，反而比裸调用更容易关联文档 |
 
 ### 3.4 Base/Derived 显式转换规则
 
@@ -322,19 +408,15 @@ local_A->Dispose()              local_B->Dispose()
 | `std::atomic_load(&snapshot_)` | Firewall RCU（未来） | `ppp::net::atomic_load_compat(&snapshot_)` |
 | `std::atomic_store(&snapshot_, ...)` | Firewall RCU（未来） | `ppp::net::atomic_store_compat(&snapshot_, ...)` |
 
-### 5.2 不替换的调用点
+### 5.2 `atomic_exchange` 调用点（已可使用 helper，未来独立迁移）
 
-以下调用点使用 `atomic_exchange`，不在 helper 范围内：
+以下调用点使用 `atomic_exchange`，现在已有 `atomic_exchange_compat` 包装可用；由于这些调用点通常承担 exactly-once take-and-clear 语义，后续应作为独立迁移小批次逐一审查外部同步与生命周期，不并入阶段 2 的 load/store 首批迁移：
 
-| 调用点 | 文件 | 原因 |
-|--------|------|------|
-| `std::atomic_exchange(&fragment_, ...)` | `VEthernet.cpp` | 使用 `atomic_exchange`，非 helper 范围 |
-| `std::atomic_exchange(&netstack_, ...)` | `VEthernet.cpp` | 同上 |
-| `std::atomic_exchange(&socket, ...)` | `VNetstack.cpp` | 同上 |
-| `std::atomic_load(&link->socket)` | `VNetstack.cpp` (4 处) | 可替换，但需与同文件 `atomic_exchange` 统一评估 |
-| `std::atomic_load/store(&sync_ack_*)` | `VNetstack.cpp` (6 处) | 可替换 |
-| `std::atomic_load(&fragment_)` | `VEthernet.cpp` (2 处) | 可替换，但需与同文件 `atomic_exchange` 统一评估 |
-| `std::atomic_load(&netstack_)` | `VEthernet.cpp` (7 处) | 可替换，但需与同文件 `atomic_exchange` 统一评估 |
+| 调用点 | 文件 | 替换为 |
+|--------|------|--------|
+| `std::atomic_exchange(&fragment_, ...)` | `VEthernet.cpp` | `ppp::net::atomic_exchange_compat(&fragment_, ...)` |
+| `std::atomic_exchange(&netstack_, ...)` | `VEthernet.cpp` | `ppp::net::atomic_exchange_compat(&netstack_, ...)` |
+| `std::atomic_exchange(&socket, ...)` | `VNetstack.cpp` | `ppp::net::atomic_exchange_compat(&socket, ...)` |
 
 ---
 
@@ -370,11 +452,15 @@ local_A->Dispose()              local_B->Dispose()
 
 ## 7. 实施计划
 
-### 阶段 1：新增 helper 头文件（低风险，当前不实施）
+### 阶段 1：新增 helper 头文件 ✅ 已完成（2026-05-12）
 
-1. 创建 `ppp/net/AtomicSharedPtr.h`。
-2. 包含 `atomic_load_compat` 和 `atomic_store_compat` 模板。
-3. 添加 `#include` 到 `ppp/stdafx.h`（可选，或在使用点单独 include）。
+1. ✅ 创建 `ppp/net/AtomicSharedPtr.h`（header-only，10 个 inline 模板）。
+2. ✅ 覆盖 `atomic_load`、`atomic_store`、`atomic_exchange`、`atomic_compare_exchange_weak/strong`
+   及其 `_explicit` 变体。
+3. ✅ 不修改 `ppp/stdafx.h`（使用点按需 include，降低侵入面）。
+4. ✅ 创建英文设计文档 `docs/ATOMIC_SHARED_PTR_HELPER_DESIGN.md`。
+5. ✅ 更新本文档状态和实施记录。
+6. ✅ 未迁移任何调用点（阶段 2 任务）。
 
 ### 阶段 2：替换调用点（中风险，当前不实施）
 
@@ -383,6 +469,7 @@ local_A->Dispose()              local_B->Dispose()
 3. 替换 ITransmission.cpp 中的调用。
 4. 替换 VNetstack.cpp 中的 `atomic_load/store` 调用（不含 `atomic_exchange`）。
 5. 替换 VEthernet.cpp 中的 `atomic_load` 调用（不含 `atomic_exchange`）。
+6. `atomic_exchange` 调用点后续独立迁移，必须逐一复核 exactly-once 语义、外部同步与生命周期。
 
 ### 阶段 3：C++20 迁移（未来）
 
@@ -420,13 +507,19 @@ local_A->Dispose()              local_B->Dispose()
 - 统一命名便于 grep 迁移。
 - 纯包装，零运行时开销。
 
-### 9.2 不提供 `atomic_exchange_compat`
+### 9.2 提供 `atomic_exchange_compat` / `atomic_compare_exchange_*_compat`
 
-**决策：** 不提供。理由：
-- 当前 helper 仅覆盖 `atomic_load/store` 迁移封装，避免扩大 API 面。
-- 当前使用 `atomic_exchange` 的位置需要逐一审查外部同步和 exactly-once 语义，无法仅通过 helper 保证安全性。
-- C++17 若需要真正原子 exchange，直接使用标准 `std::atomic_exchange(shared_ptr*)` free function；本 helper 不重新包装该 API。
-- C++20 迁移后直接使用 `std::atomic<std::shared_ptr<T>>::exchange()`。
+> **决策变更（2026-05-12）：** 原始决策为"不提供"；第一阶段重新评估后改为"提供"。
+
+**决策：** 提供。理由：
+- 包装是纯 inline 委托，零额外风险。
+- 统一命名 (`_compat`) 便于 C++20 迁移时 grep 定位。
+- `atomic_exchange` 具备真正的原子交换语义，包装不会引入语义歧义。
+- CAS 包装为 RCU 快照、lock-free 队列等未来场景预留。
+
+**保留的约束：**
+- 未来独立迁移 exchange/CAS 调用点时，仍需逐一审查外部同步和生命周期。
+- 不在 helper 中将 `atomic_load + atomic_store({})` 包装为伪 exchange。
 
 ### 9.3 不提供隐式 Base/Derived 转换
 

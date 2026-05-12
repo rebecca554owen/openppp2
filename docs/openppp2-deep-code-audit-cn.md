@@ -1684,7 +1684,7 @@ Android 上没有等价 CA 加载路径。若上游配置了 `verify_peer = true
         ssl_context->load_verify_file(ca, ec);
         if (ec) {
             ppp::diagnostics::SetLastErrorCode(
-                ppp::diagnostics::ErrorCode::SslCaBundleLoadFailed);
+                ppp::diagnostics::ErrorCode::SslInternalError);
             return NULLPTR;
         }
     }
@@ -1978,7 +1978,7 @@ ppp/dns/DnsResolverCore.cpp
         ssl_context->load_verify_file(ca, ec);
         if (ec) {
             ppp::diagnostics::SetLastErrorCode(
-                ppp::diagnostics::ErrorCode::SslCaBundleLoadFailed);
+                ppp::diagnostics::ErrorCode::SslInternalError);
             return NULLPTR;
         }
     }

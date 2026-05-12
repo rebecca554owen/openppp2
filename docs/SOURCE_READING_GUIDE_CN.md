@@ -143,7 +143,7 @@ sequenceDiagram
     participant Coroutine as 协程（YieldContext）
     participant Asio as Boost.Asio
 
-    Thread->>Coroutine: 通过 Executors::Spawn 派生
+    Thread->>Coroutine: 通过 YieldContext::Spawn 派生
     Coroutine->>Asio: async_read（yield）
     Asio-->>Coroutine: 以数据恢复
     Coroutine->>Coroutine: 处理帧
@@ -165,7 +165,7 @@ sequenceDiagram
 
 `nullof<T>()` 模式遍布代码库，大多数初次阅读者都会困惑。下面解释它的含义。
 
-`nullof<YieldContext>()` 返回一个指向已知地址的零初始化哨兵对象的引用。被调用方检查 `if (y)` 或将地址与 NULLPTR 等效值比较，以检测这个哨兵。检测到哨兵时，切换到线程阻塞代码路径，而不是协程异步路径。
+`nullof<YieldContext>()` 返回一个位于空指针地址的引用（在 `ppp/stdafx.h` 中定义为 `*(T*)NULLPTR`）。被调用方通过 `&y == nullof<YieldContext>()` 检测此哨兵。检测到哨兵时，切换到线程阻塞代码路径，而不是协程异步路径。
 
 这在 `DoKeepAlived()` 中被故意使用，用于在主接收协程之外发送保活包。不要将其替换为真正的默认构造对象或指针——地址检查是有意为之的设计，而非 UB。
 
@@ -484,17 +484,15 @@ stateDiagram-v2
 
 ## 错误码参考
 
-源码阅读相关的错误码（来自 `ppp/diagnostics/Error.h`）：
+源码阅读相关的错误码（来自 `ppp/diagnostics/ErrorCodes.def`，节选）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `HandshakeFailed` | 承载握手未完成 |
-| `ProtocolViolation` | 意外的 opcode 或 wire 格式 |
-| `TransmissionNotReady` | 握手完成前执行了动作 |
-| `SessionTimeout` | 保活定时器超时 |
-| `PacketDecryptFailed` | 内层数据包解密失败 |
-| `PacketEncryptFailed` | 数据包无法加密 |
-| `AddressResolutionFailed` | 域名端点的 DNS 解析失败 |
-| `FirewallDrop` | 数据包被本地防火墙规则丢弃 |
-| `RouteInstallFailed` | 平台路由安装失败 |
-| `TapDeviceOpenFailed` | 虚拟网卡设备无法打开 |
+| `SessionHandshakeFailed` | 会话握手未完成 |
+| `TunnelOpenFailed` | TAP/TUN 或监听器创建失败 |
+| `TunnelListenFailed` | TAP 打开或监听器启动失败 |
+| `KeepaliveTimeout` | 对端心跳超时 |
+| `SessionQuotaExceeded` | 会话额度超限 |
+| `RouteAddFailed` | 平台路由安装失败 |
+| `NetworkInterfaceUnavailable` | 虚拟网卡设备未找到 |
+| `IPv6ServerPrepareFailed` | 服务端 IPv6 环境设置失败 |

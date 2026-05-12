@@ -1,5 +1,8 @@
 # 服务端自动下发 IPv4 方案
 
+> **状态**: 已实施。`IPv4LeasePool` 类已实现并集成到 `VirtualEthernetSwitcher`（`ipv4_pool_` 成员，`.h:837`）。
+> **实现文件**: `ppp/app/server/IPv4LeasePool.h`、`ppp/app/server/IPv4LeasePool.cpp`
+
 ## 目标
 
 客户端默认不需要显式配置隧道 IPv4。
@@ -457,7 +460,7 @@ struct ClientIPv4Assignment {
 
 ## IPv4LeasePool 接口
 
-建议新增：
+已实现：
 
 ```text
 ppp/app/server/IPv4LeasePool.h

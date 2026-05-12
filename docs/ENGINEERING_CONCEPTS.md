@@ -368,7 +368,7 @@ There is no logging inside failure paths. The error code propagates to the calle
 // Example: correct failure path
 bool VirtualEthernetLinklayer::DoConnect(/*...*/) noexcept {
     if (NULLPTR == transmission_) {
-        SetLastErrorCode(Error::TransmissionNotReady);
+        SetLastErrorCode(Error::SessionDisposed);
         return false;
     }
     // ...
@@ -455,17 +455,18 @@ flowchart LR
 
 ## Error Code Reference
 
-Engineering-concept-level error codes from `ppp/diagnostics/Error.h`:
+Engineering-concept-level error codes from `ppp/diagnostics/ErrorCodes.def` (selection):
 
 | ErrorCode | Description |
 |-----------|-------------|
-| `TransmissionNotReady` | Action attempted before handshake completed |
-| `SessionNotAuthenticated` | Packet received before session authenticated |
-| `ConfigurationInvalid` | AppConfiguration normalization failed |
-| `RoleConflict` | Both client and server role requested simultaneously |
-| `LifecycleViolation` | Method called in incorrect lifecycle phase |
-| `PlatformIntegrationFailed` | Host adapter, route, or DNS setup failed |
-| `BackendUnavailable` | Go backend connection failed (non-fatal, local policy used) |
+| `AppPreflightCheckFailed` | Startup preflight check failed |
+| `RuntimeEnvironmentInvalid` | Runtime environment invalid |
+| `SessionDisposed` | Runtime object already disposed |
+| `SessionHandshakeFailed` | Session-level handshake did not complete |
+| `SessionAuthFailed` | Session authentication failed |
+| `SessionQuotaExceeded` | Session quota exceeded |
+| `IPv6ServerPrepareFailed` | Server IPv6 environment preparation failed |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
 
 ---
 

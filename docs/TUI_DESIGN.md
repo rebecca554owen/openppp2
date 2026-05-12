@@ -565,14 +565,15 @@ from any thread including the IO thread at high frequency.
 
 ### Status bar semantics
 
-The bottom status row displays only diagnostics snapshot text:
+The bottom status row is split into two columns:
 
-- `[INFO] 0 Success: Success` when `ErrorCode::Success` is active.
-- `[%LEVEL%] <numeric_id> <CodeName>: <message> (<age>)` for the last non-success error.
-- ANSI color follows severity: info=green, warn=yellow, error=red, fatal=bright red.
+- **Left column**: Diagnostics snapshot text.
+  - `[INFO] 0 Success: Success` when `ErrorCode::Success` is active.
+  - `[%LEVEL%] <numeric_id> <CodeName>: <message> (<age>)` for the last non-success error.
+  - ANSI color follows severity: info=green, warn=yellow, error=red, fatal=bright red.
+- **Right column**: VPN state and throughput summary (e.g. `VPN: connected  ↑ 1.2MB/s  ↓ 3.4MB/s`).
 
-VPN state and throughput are still maintained for other UI paths, but they are not shown
-in the bottom status row.
+Both columns are rendered in a single `BoxSplitRow()` call with a vertical divider.
 
 ---
 
@@ -590,7 +591,7 @@ It is not a ring buffer; it reflects the current VPN state snapshot.
 
 ## Error Code Reference
 
-TUI subsystem error codes (from `ppp/diagnostics/Error.h`):
+TUI subsystem error codes (from `ppp/diagnostics/ErrorCodes.def`):
 
 | ErrorCode                | Description                                               |
 |--------------------------|-----------------------------------------------------------|

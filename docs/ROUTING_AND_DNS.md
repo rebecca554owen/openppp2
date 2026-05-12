@@ -26,14 +26,14 @@ flowchart TD
     B --> C{Traffic classification}
     C -->|bypass list match| D[Direct path: local NIC]
     C -->|no bypass match| E[Tunnel path: VEthernetExchanger]
-    
+
     F[DNS query] --> G{DNS rule match}
     G -->|rule: use resolver X| H[Route to resolver X]
     G -->|no rule| I[Default resolver]
     H --> J{Resolver reachable?}
     J -->|yes| K[Query resolver X]
     J -->|no| L[Fallback to default]
-    
+
     E --> M[Server VirtualEthernetExchanger]
     M --> N{DNS redirect?}
     N -->|yes| O[VirtualEthernetNamespaceCache]
@@ -370,23 +370,23 @@ Routing and DNS are not separate knobs. They form a unified traffic classificati
 | `virr.url` | `""` | Bypass list URL for periodic refresh |
 | `vbgp.update-interval` | `3600` | vBGP route refresh interval (seconds) |
 | `vbgp.url` | `""` | vBGP route source URL |
-| `server.dns` | system | Upstream DNS server for server-side queries |
+| `dns.servers` | system | Upstream DNS server for server-side queries |
 
 ---
 
 ## Error Code Reference
 
-Routing and DNS `ppp::diagnostics::ErrorCode` values:
+Routing and DNS `ppp::diagnostics::ErrorCode` values (from `ppp/diagnostics/ErrorCodes.def`):
 
 | ErrorCode | Description |
 |-----------|-------------|
 | `RouteAddFailed` | Failed to add a route to the OS routing table |
 | `RouteDeleteFailed` | Failed to remove a route |
-| `DnsConfigFailed` | DNS configuration failed |
-| `DnsResolverUnreachable` | Configured DNS resolver not reachable |
-| `IPListLoadFailed` | Failed to load IP bypass list |
-| `DefaultRouteProtectionFailed` | Failed to protect the default route |
-| `VirtualAdapterSubnetConflict` | Virtual adapter subnet overlaps with bypass list |
+| `RouteReplaceFailed` | Failed to replace an existing route |
+| `ConfigDnsRuleLoadFailed` | Failed to load DNS rules from configured source |
+| `ConfigRouteLoadFailed` | Failed to load route list from configured source |
+| `DnsResolveFailed` | DNS resolution failed |
+| `DnsAddressInvalid` | DNS address is invalid |
 
 ---
 

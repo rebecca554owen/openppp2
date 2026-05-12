@@ -221,10 +221,10 @@ classDiagram
         +Write(buffer) int
         +Close()
     }
-    class INetworkInterface {
-        +AddRoute(cidr, gateway) bool
-        +DeleteRoute(cidr) bool
-        +SetDNS(servers) bool
+    class NetworkInterface {
+        +NICName string
+        +IPAddress uint32
+        +GatewayServer uint32
     }
     class LinuxTap {
         +Open() bool
@@ -236,8 +236,6 @@ classDiagram
     }
     ITap <|-- LinuxTap
     ITap <|-- WindowsTap
-    INetworkInterface <|-- LinuxNetworkInterface
-    INetworkInterface <|-- WindowsNetworkInterface
 ```
 
 ---
@@ -438,17 +436,18 @@ sequenceDiagram
 
 ## 错误码参考
 
-架构层面的错误码（来自 `ppp/diagnostics/Error.h`）：
+架构层面的错误码（来自 `ppp/diagnostics/ErrorCodes.def`，节选）：
 
 | ErrorCode | 说明 |
 |-----------|------|
-| `ConfigurationInvalid` | AppConfiguration 归一化失败 |
-| `RoleConflict` | 同时请求了 client 和 server 角色 |
-| `TransmissionHandshakeFailed` | ITransmission 握手未完成 |
-| `SessionEstablishFailed` | 链路层 INFO 交换失败 |
-| `PlatformSetupFailed` | 宿主适配器 / 路由 / DNS 设置失败 |
-| `BackendConnectionFailed` | 可选后端不可达（非致命） |
-| `ShutdownTimeout` | 优雅关闭超时 |
+| `AppPrivilegeRequired` | 进程未以 root/管理员权限运行 |
+| `TunnelOpenFailed` | TAP/TUN 或监听器创建失败 |
+| `TunnelListenFailed` | TAP 打开或监听器启动失败 |
+| `NetworkInterfaceUnavailable` | 指定网卡不存在 |
+| `IPv6ServerPrepareFailed` | 服务端 IPv6 环境设置失败 |
+| `SessionHandshakeFailed` | 会话级握手未完成 |
+| `KeepaliveTimeout` | 对端心跳超时 |
+| `RuntimeTimerStartFailed` | 维护定时器无法启动 |
 
 ---
 

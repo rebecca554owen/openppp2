@@ -1,12 +1,14 @@
 # 诊断错误系统
 
+[English Version](DIAGNOSTICS_ERROR_SYSTEM.md)
+
 > **子系统：** `ppp::diagnostics`
 > **相关文件：**
-> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（595 条实时条目）
+> - `ppp/diagnostics/ErrorCodes.def` — X-macro 错误码定义（628 条实时条目）
 > - `ppp/diagnostics/Error.h` — 公共 API、`ErrorCode` 枚举、`ErrorSeverity` 枚举
 > - `ppp/diagnostics/Error.cpp` — 自由函数委托实现
 > - `ppp/diagnostics/ErrorHandler.h` — `ErrorHandler` 单例声明
-> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` 实现（173 行）
+> - `ppp/diagnostics/ErrorHandler.cpp` — `ErrorHandler` 实现（196 行）
 
 ---
 
@@ -42,7 +44,7 @@
 | **热路径零分配** | 错误码基于 `uint32_t` 枚举；`SetLastErrorCode` 写入 `thread_local` 及原子变量，无堆分配 |
 | **线程隔离** | 每个线程维护独立的 `tls_last_error_code_`，读写无需加锁 |
 | **全进程可观测性** | `last_error_code_snapshot_` 是 `std::atomic<uint32_t>`，所有线程均可见 |
-| **单一信息源** | 所有 595 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
+| **单一信息源** | 所有 628 个错误码均在 `ErrorCodes.def` 一个文件中以 X-macro 定义 |
 | **错误报告不抛异常** | `SetLastErrorCode` 声明为 `noexcept`；错误条件通过返回值传递 |
 | **观察者模式** | 通过 `RegisterErrorHandler` 注册具名回调，错误发生时同步调用 |
 | **严重级别感知** | 每个错误码携带 `kTrace`/`kDebug`/`kInfo`/`kWarn`/`kError`/`kFatal` 分级 |
@@ -54,7 +56,7 @@
 ```mermaid
 graph TB
     subgraph ppp/diagnostics
-        Def[ErrorCodes.def\nX-macro 定义\n595 个错误码]
+        Def[ErrorCodes.def\nX-macro 定义\n628 个错误码]
         Eh[Error.h\nErrorSeverity 枚举\nErrorCode 枚举\n自由函数]
         Ec[Error.cpp\n委托给 ErrorHandler::GetDefault()]
         Ehh[ErrorHandler.h\nErrorHandler 类\n单例]
@@ -97,8 +99,8 @@ X(名称, 描述文本, 严重级别)
 
 // 示例（第 1–25 行）：
 X(Success,                "Success",               ErrorSeverity::kInfo)
-X(GenericUnknown,         "Generic unknown error", ErrorSeverity::kError)
-X(SocketTimeout,          "Socket timeout",        ErrorSeverity::kWarning)
+X(SocketTimeout,           "Socket timeout",        ErrorSeverity::kWarning)
+X(SocketReadFailed,        "Socket read failed",    ErrorSeverity::kError)
 X(RuntimeInitializationFailed, "Runtime initialization failed", ErrorSeverity::kFatal)
 X(IPv6LeaseConflict,      "IPv6 lease conflict",   ErrorSeverity::kError)
 ```
@@ -119,8 +121,8 @@ enum class ErrorCode : uint32_t {
 ```cpp
 enum class ErrorCode : uint32_t {
     Success = 0,
-    GenericUnknown = 1,
-    GenericInvalidArgument = 2,
+    SocketTimeout = 1,
+    SocketReadFailed = 2,
     // ... 其他条目
 };
 ```
@@ -212,10 +214,10 @@ enum class ErrorSeverity : uint8_t {
 
 ```mermaid
 pie title ErrorCode 严重级别分布
-    "kInfo (8)" : 8
-    "kWarning (25)" : 25
-    "kError (539)" : 539
-    "kFatal (23)" : 23
+    "kInfo (9)" : 9
+    "kWarning (64)" : 64
+    "kError (531)" : 531
+    "kFatal (24)" : 24
 ```
 
 ---
@@ -232,7 +234,7 @@ enum class ErrorCode : uint32_t {
 };
 ```
 
-`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 595 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配，`kErrorCodeMax` 则是原始整数校验时使用的独占上界。
+`ErrorCode` 是以 `uint32_t` 为底层类型的强类型枚举，当前 `ErrorCodes.def` 包含 628 个值。每个错误码的数值按其在 `ErrorCodes.def` 中的定义顺序分配，`kErrorCodeMax` 则是原始整数校验时使用的独占上界。
 
 ### `ErrorCodes.def` 的分类结构
 
@@ -488,8 +490,8 @@ ErrorCode ErrorHandler::GetLastErrorCodeSnapshot() noexcept {
 示例：
 ```
 0 Success: Success
-301 IPv6LeasePoolExhausted: The IPv6 lease pool has no remaining addresses available after exhausting all retry attempts.
-293 IPv6NeighborProxyEnableFailed: IPv6 neighbor proxy enable failed
+174 IPv6LeaseConflict: IPv6 lease conflict
+68 MemoryPoolExhausted: Memory pool exhausted
 ```
 
 ### 实现形态
@@ -516,7 +518,7 @@ ppp::string ErrorHandler::FormatErrorTriplet(ErrorCode code) noexcept {
 ```cpp
 auto triplet = ppp::diagnostics::FormatErrorTriplet(
     ppp::diagnostics::GetLastErrorCode());
-// 输出："297 IPv6LeaseConflict: IPv6 lease conflict"
+// 输出："174 IPv6LeaseConflict: IPv6 lease conflict"
 ```
 
 ---
@@ -634,7 +636,7 @@ void OnErrorObserved(int err_int) {
     if (ppp::diagnostics::IsErrorFatal(code)) {
         // 安排受控关机并重启
         ScheduleRestart();
-    } elif (ppp::diagnostics::GetErrorSeverity(code) ==
+    } else if (ppp::diagnostics::GetErrorSeverity(code) ==
             ppp::diagnostics::ErrorSeverity::kWarning) {
         // 仅记录日志；继续运行
         LogWarning(ppp::diagnostics::FormatErrorTriplet(code));
@@ -665,6 +667,8 @@ graph TD
 | `IPv6Unsupported` | IPv6 unsupported on this platform | 切换至 NAT66 或禁用 IPv6 |
 | `PlatformNotSupportGUAMode` | GUA mode not supported | 在非 Linux 平台使用 NAT66 |
 | `GenericNotSupported` | Operation not supported | 检查平台兼容性 |
+
+> **注意：** `GenericNotSupported` 在当前 `ErrorCodes.def` 中不存在。上表条目仅作历史参考保留。实际使用前请以 `ErrorCodes.def` 为准。
 
 ### Warning 级别控制结果
 
@@ -731,8 +735,8 @@ graph TB
 |---|---|
 | `<子系统><条件>Failed` | `IPv6TransitTapOpenFailed` |
 | `<子系统><资源>Invalid` | `IPv6PrefixInvalid` |
-| `<子系统><资源>Exhausted` | `IPv6LeasePoolExhausted` |
-| `<子系统><资源>Conflict` | `IPv6AddressConflict` |
+| `<子系统><资源>Exhausted` | `MemoryPoolExhausted` |
+| `<子系统><资源>Conflict` | `IPv6LeaseConflict` |
 | `<子系统><条件>` | `VmuxSocketSendInvalidPayload` |
 | `App<阶段>Failed` | `AppPreflightCheckFailed` |
 | `Config<字段/阶段>Invalid` | `ConfigFieldInvalid` |

@@ -476,7 +476,7 @@ not rendered in the bottom status bar.
 | `--dns-rules` | `./dns-rules.txt` |
 | `--firewall-rules` | `./firewall-rules.txt` |
 | `--tun-host` | `yes` |
-| `--rt` | `no` |
+| `--rt` | `yes` |
 | `--tun-mux` | `0` (disabled) |
 
 ---
@@ -543,15 +543,15 @@ CLI-related error codes (from `ppp/diagnostics/Error.h`):
 | ErrorCode | Description |
 |-----------|-------------|
 | `ConfigFileNotFound` | Config file not found at any lookup path |
-| `ConfigFileParseFailed` | Config file JSON parsing failed |
-| `ModeInvalid` | `--mode` value not recognized |
-| `DnsAddressParseError` | `--dns` value contained an invalid IP address |
-| `BypassFileNotFound` | `--bypass` file not found |
-| `DnsRulesFileNotFound` | `--dns-rules` file not found |
-| `FirewallRulesFileNotFound` | `--firewall-rules` file not found |
-| `NetworkInterfaceNotFound` | `--nic` specified interface not found |
-| `GatewayAddressParseError` | `--ngw` or `--bypass-ngw` value invalid |
-| `TunAddressParseError` | `--tun-ip`, `--tun-ipv6`, or `--tun-gw` value invalid |
+| `ConfigFileMalformed` | Config file JSON parsing failed or is malformed |
+| `AppInvalidCommandLine` | CLI option or `--mode` value not recognized |
+| `DnsAddressInvalid` | DNS address value contained an invalid IP address |
+| `FileNotFound` | Referenced file path not found |
+| `ConfigDnsRuleLoadFailed` | DNS rules file failed to load |
+| `FirewallLoadFileFullPathEmpty` | Firewall rules file path was empty or invalid for loading |
+| `NetworkInterfaceUnavailable` | `--nic` specified interface not found |
+| `NetworkGatewayInvalid` | `--ngw` or `--bypass-ngw` value invalid |
+| `NetworkAddressInvalid` | `--tun-ip`, `--tun-ipv6`, or `--tun-gw` value invalid |
 
 ---
 

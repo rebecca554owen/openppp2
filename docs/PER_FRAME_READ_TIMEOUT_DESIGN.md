@@ -345,7 +345,7 @@ No changes needed for MUX paths.
 
 ## 4. New Error Code
 
-Add to `ppp/diagnostics/ErrorCodes.def`:
+Add to `ppp/diagnostics/ErrorCodes.def` (**proposed/design item, not yet in current ErrorCodes.def**):
 
 ```cpp
 X(TunnelReadTimeout,

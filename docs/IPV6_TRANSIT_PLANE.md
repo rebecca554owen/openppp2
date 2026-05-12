@@ -1,8 +1,10 @@
 # IPv6 Transit Plane
 
-> **Subsystem:** `ppp::app::server::VirtualEthernetSwitcher`  
-> **Primary file:** `ppp/app/server/VirtualEthernetSwitcher.cpp`  
-> **Header:** `ppp/app/server/VirtualEthernetSwitcher.h`  
+[中文版本](IPV6_TRANSIT_PLANE_CN.md)
+
+> **Subsystem:** `ppp::app::server::VirtualEthernetSwitcher`
+> **Primary file:** `ppp/app/server/VirtualEthernetSwitcher.cpp`
+> **Header:** `ppp/app/server/VirtualEthernetSwitcher.h`
 > **Supporting files:** `ppp/ipv6/IPv6Auxiliary.cpp`, `ppp/ipv6/IPv6Auxiliary.h`, `ppp/tap/ITap.h`
 
 ---
@@ -73,12 +75,12 @@ graph TB
 
 | Component | File | Responsibility |
 |---|---|---|
-| `ipv6_transit_tap_` | `VirtualEthernetSwitcher.h:788` | Virtual TAP device that terminates the transit IPv6 prefix on-server. |
-| `ipv6_transit_ssmt_contexts_` | `VirtualEthernetSwitcher.h:789` | Per-CPU `io_context` pool for multi-threaded TAP packet dispatch. |
-| `ipv6_runtime_state_` | `VirtualEthernetSwitcher.h:790` | Atomic uint8 encoding current IPv6 plane status (0/1/2/3). |
-| `ipv6_runtime_cause_` | `VirtualEthernetSwitcher.h:791` | Atomic uint32 storing the last failure `ErrorCode` when state == 3. |
-| `OpenIPv6TransitIfNeed()` | `VirtualEthernetSwitcher.cpp:2133` | Creates and configures the transit TAP device. |
-| `OpenIPv6TransitSsmtIfNeed()` | `VirtualEthernetSwitcher.cpp:2334` | Creates the per-CPU io_context pool for the transit TAP. |
+| `ipv6_transit_tap_` | `VirtualEthernetSwitcher.h:824` | Virtual TAP device that terminates the transit IPv6 prefix on-server. |
+| `ipv6_transit_ssmt_contexts_` | `VirtualEthernetSwitcher.h:825` | Per-CPU `io_context` pool for multi-threaded TAP packet dispatch. |
+| `ipv6_runtime_state_` | `VirtualEthernetSwitcher.h:826` | Atomic uint8 encoding current IPv6 plane status (0/1/2/3). |
+| `ipv6_runtime_cause_` | `VirtualEthernetSwitcher.h:827` | Atomic uint32 storing the last failure `ErrorCode` when state == 3. |
+| `OpenIPv6TransitIfNeed()` | `VirtualEthernetSwitcher.cpp:2338` | Creates and configures the transit TAP device. |
+| `OpenIPv6TransitSsmtIfNeed()` | `VirtualEthernetSwitcher.cpp:2539` | Creates the per-CPU io_context pool for the transit TAP. |
 | `IPv6Auxiliary.cpp` | `ppp/ipv6/IPv6Auxiliary.cpp` | Platform-level helpers for address assignment, route injection, DNS. |
 
 ---
@@ -167,7 +169,7 @@ stateDiagram-v2
 
 ## 5. `OpenIPv6TransitIfNeed`
 
-**Location:** `VirtualEthernetSwitcher.cpp`, line 2133  
+**Location:** `VirtualEthernetSwitcher.cpp`, line 2338
 **Signature:**
 
 ```cpp
@@ -218,7 +220,7 @@ Before creating the TAP device, `ppp::ipv6::auxiliary::PrepareServerEnvironment(
 
 ## 6. `OpenIPv6TransitSsmtIfNeed`
 
-**Location:** `VirtualEthernetSwitcher.cpp`, line 2334  
+**Location:** `VirtualEthernetSwitcher.cpp`, line 2539
 **Signature:**
 
 ```cpp
@@ -511,3 +513,5 @@ sequenceDiagram
 | `IPv6Nat66Unavailable` | `kError` | ip6tables NAT module not loaded or MASQUERADE rule failed. |
 | `IPv6TransitIfaceCreateFailed` | `kError` | Virtual transit TAP interface could not be created. |
 | `PlatformNotSupportGUAMode` | `kFatal` | GUA mode requested on non-Linux platform. |
+
+> **Note**: The following error codes are proposed/design items not yet in `ErrorCodes.def`: `IPv6ServerFinalizeFailed` (nearest existing: `IPv6ServerPrepareFailed`, but for teardown phase), `IPv6TransitIfaceCreateFailed` (nearest: `IPv6TransitTapOpenFailed`).

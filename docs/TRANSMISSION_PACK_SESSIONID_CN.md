@@ -323,20 +323,20 @@ bool SendKeepalive(YieldContext& y) noexcept;
 
 ## 错误码参考
 
-会话与控制面相关的 `ppp::diagnostics::ErrorCode` 值：
+会话与控制面相关的 `ppp::diagnostics::ErrorCode` 值（来自 `ppp/diagnostics/ErrorCodes.def`）：
 
 | ErrorCode | 描述 |
 |-----------|------|
-| `HandshakeFailed` | 传输握手未完成 |
-| `HandshakeTimeout` | 握手超过配置的超时时间 |
-| `AuthenticationFailed` | 会话被拒绝（无后端或后端拒绝） |
-| `KeepaliveTimeout` | 超时内未收到保活响应 |
-| `SessionExpired` | 会话因 `ExpiredTime` 而过期 |
-| `QuotaExceeded` | 会话额度耗尽 |
-| `ManagedServerConnectionFailed` | 后端链路未建立 |
-| `ManagedServerAuthenticationFailed` | 后端拒绝用户 |
-| `ManagedServerQuotaExceeded` | 后端报告额度耗尽 |
-| `FrpMappingFailed` | 反向映射注册失败 |
+| `SessionHandshakeFailed` | 传输握手未完成 |
+| `SessionAuthFailed` | 会话认证失败 |
+| `SessionQuotaExceeded` | 会话额度耗尽 |
+| `SessionCreateFailed` | 会话创建失败 |
+| `SessionOpenFailed` | 会话打开失败 |
+| `SessionTransportMissing` | 会话传输缺失 |
+| `KeepaliveTimeout` | 对端保活心跳超时 |
+| `MappingCreateFailed` | 反向映射注册失败 |
+| `VEthernetManagedAuthDuplicateSession` | 管理后端认证重复会话 |
+| `VEthernetManagedConnectUrlEmpty` | 管理后端连接 URL 为空 |
 
 ---
 
@@ -347,7 +347,7 @@ bool SendKeepalive(YieldContext& y) noexcept;
 ```cpp
 // ppp/app/server/VirtualEthernetExchanger.cpp
 if (info.ExpiredTime > 0 && now > info.ExpiredTime) {
-    SetLastError(ErrorCode::SessionExpired, false);
+    SetLastError(ErrorCode::SessionDisposed, false);
     Dispose();
     return;
 }
@@ -364,7 +364,7 @@ info.IncomingTraffic  = GetIncomingBytes();
 info.OutgoingTraffic  = GetOutgoingBytes();
 
 if (!linklayer_->SendInformation(y, info)) {
-    return SetLastError(ErrorCode::TransmissionWriteFailed, false);
+    return SetLastError(ErrorCode::TunnelWriteFailed, false);
 }
 ```
 

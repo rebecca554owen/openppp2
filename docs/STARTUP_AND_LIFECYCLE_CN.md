@@ -409,7 +409,7 @@ flowchart TD
 4. 重新执行 `PreparedLoopbackEnvironment()`，重建 TAP 和 Switcher。
 5. 调用 `NextTickAlwaysTimeout(true)` 立即触发首次 tick，使重连尽快启动。
 
-若重连次数超过 `max_restart_count`（若有），进程最终以 `AppRestartFailed` 退出。
+若重连次数超过 `max_restart_count`（若有），进程最终以 `AppRestartFailed`（拟新增/设计项，不在当前 `ErrorCodes.def`；无近似现有码，需新增）退出。
 
 ### --link-restart（链路级重启）
 
@@ -599,10 +599,10 @@ graph TD
 3. **密码验证**：`key.kf`、`key.kl`、`key.kh` 超出合法枚举范围时置为默认值；`key.protocol`、`key.transport` 中的 cipher 名称若不在支持列表内，则置为空字符串（表示无加密）。
 4. **超时夹紧**：`tcp.inactive.timeout`、`tcp.connect.timeout` 低于最小值时夹紧。
 5. **DNS 规则加载**：若 `dns.rules` 字段有值，调用 `FirewallRule::LoadBy()` 加载规则列表；失败时设置 `ConfigDnsRuleLoadFailed`。
-6. **防火墙规则加载**：同上，失败时设置 `ConfigFirewallRuleLoadFailed`。
+6. **防火墙规则加载**：同上，失败时设置 `ConfigFirewallRuleLoadFailed`（拟新增/设计项，不在当前 `ErrorCodes.def`；近似现有码 `FirewallLoadFileFullPathEmpty`）。
 7. **路由列表加载**：`ip.routes` 字段（可选），失败时设置 `ConfigRouteLoadFailed`。
 8. **IPv6 模式验证**：检查 `ipv6.prefix`、`ipv6.gateway` 是否为合法的 IPv6 地址和前缀长度。
-9. **cipher 健全检查**：若 `key.cipher_method` 指向不支持的算法，置为空（不加密），并在诊断中记录 `ConfigCipherInvalid`。
+9. **cipher 健全检查**：若 `key.cipher_method` 指向不支持的算法，置为空（不加密），并在诊断中记录 `ConfigCipherInvalid`（拟新增/设计项，不在当前 `ErrorCodes.def`；近似现有码 `CryptoAlgorithmUnsupported` 或 `ConfigLegacyCipherAlgorithm`）。
 
 ### Loaded() 失败对启动的影响
 
@@ -635,7 +635,7 @@ flowchart TD
 TUI 状态面板会将 `GetLastErrorCodeSnapshot()` 与 `GetLastErrorTimestamp()` 组合显示为底部状态栏的最后一行，格式类似：
 
 ```
-[23:45:12.345] Last Error: ProtocolKeepAliveTimeout (0x0034)
+[23:45:12.345] Last Error: KeepaliveTimeout (0x0034)
 ```
 
 这使运维人员能在不翻阅日志的情况下直观了解最近出现的问题。

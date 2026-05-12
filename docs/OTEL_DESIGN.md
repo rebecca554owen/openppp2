@@ -26,7 +26,7 @@ The telemetry system described in this document has been fully implemented:
 
 - **`ppp/diagnostics/Telemetry.h`** — Zero-cost facade. Provides inline no-op stubs when `PPP_TELEMETRY=0`, ensuring no runtime overhead when telemetry is disabled. Exposes `SetEnabled(bool)`, `SetMinLevel(int)`, `SetCountEnabled(bool)`, `SetSpanEnabled(bool)`, `Configure(const char* endpoint)`, `SetLogFile(const char* path)`, `Flush(int timeout_ms)`, `Histogram(...)`, and RAII `SpanScope` for runtime control and tracing.
 - **`ppp/diagnostics/Telemetry.cpp`** — Async backend with bounded queue (4096 entries), drop-on-full semantics, and a background worker thread. Supports three output targets: built-in stderr backend (default), HTTP OTLP exporter (`HttpOtlpExporter`), and optional file output. The OTLP exporter batches up to 256 events and sends them as OTLP/JSON HTTP POST requests to a configured collector endpoint, supporting Logs, Counters, Gauges, Histograms, and completed Spans. OTLP output now includes resource/service metadata and per-event attributes such as `service.name`, `thread.id`, `log.level`, `component`, and non-empty `session.id` on spans. Uses raw POSIX sockets (WinSock2 on Windows) with no external dependencies.
-- **CMake option `PPP_TELEMETRY`** — Compile-time switch, default `OFF`.
+- **CMake option `PPP_TELEMETRY`** — Compile-time hint (defaults to 1 / ON). The telemetry facade is always compiled; runtime behavior is controlled by the `g_enabled` flag (default `false`), activated via `telemetry.enabled = true` in `appsettings.json`.
 - **Instrumentation** — 13 modules instrumented: transmission, protocol, server switcher, server exchanger, client switcher, client exchanger, mux, tap, vnetstack, ITap, tcpip, websocket, managed.
 - **Runtime config** — Loaded from `appsettings.json` via `AppConfiguration::telemetry.*` → `telemetry::SetEnabled/SetMinLevel/SetCountEnabled/SetSpanEnabled/Configure/SetLogFile()`.
 - **Level filtering** — `Log` events are filtered by level both at the call site (fast path) and in the backend thread (defensive), ensuring no TRACE events slip through when level is lowered at runtime.
@@ -56,7 +56,7 @@ Telemetry must **not** duplicate error-code semantics. It records **events** tha
 
 This is non-negotiable.
 
-- **Compile-time**: `#ifdef PPP_TELEMETRY` or CMake option.
+- **Compile-time**: `#ifdef PPP_TELEMETRY` or CMake option. Note: `PPP_TELEMETRY` currently defaults to 1 (always compiled); runtime control is via `g_enabled` flag.
 - **Run-time**: configuration flag `telemetry.enabled = false` by default.
 - **Per-module**: each subsystem can be enabled independently.
 - **Hot-disable**: when disabled, the telemetry facade compiles to no-ops.
@@ -148,22 +148,31 @@ Use the project-internal facade in `ppp/diagnostics/Telemetry.h` (with the async
 ```cpp
 namespace ppp::telemetry {
     void Log(Level level, const char* component, const char* fmt, ...) noexcept;
+    void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept;
     void Count(const char* metric, int64_t delta) noexcept;
     void Gauge(const char* metric, int64_t value) noexcept;
     void Histogram(const char* metric, int64_t value) noexcept;
     void TraceSpan(const char* name, const char* session_id) noexcept;
     void SetEnabled(bool enabled) noexcept;
-    void SetMinLevel(int level) noexcept;
     void SetCountEnabled(bool enabled) noexcept;
     void SetSpanEnabled(bool enabled) noexcept;
+    void SetConsoleLogEnabled(bool enabled) noexcept;
+    void SetConsoleMetricEnabled(bool enabled) noexcept;
+    void SetConsoleSpanEnabled(bool enabled) noexcept;
+    bool IsConsoleLogEnabled() noexcept;
+    bool IsConsoleMetricEnabled() noexcept;
+    bool IsConsoleSpanEnabled() noexcept;
+    int  GetMinLevel() noexcept;
+    void SetMinLevel(int level) noexcept;
     void Configure(const char* endpoint) noexcept;
     void SetLogFile(const char* path) noexcept;
     void Flush(int timeout_ms = 3000) noexcept;
+    void Shutdown() noexcept;
     class SpanScope;
 }
 ```
 
-When `PPP_TELEMETRY` is undefined, these are inline empty functions — zero cost.
+When `PPP_TELEMETRY` is undefined, these are inline empty functions — zero cost. In the current codebase `PPP_TELEMETRY` defaults to 1 (always compiled); runtime disable is via `SetEnabled(false)` or the `telemetry.enabled = false` config.
 
 ---
 
@@ -254,7 +263,7 @@ Metrics follow the same switchability contract as all telemetry:
 
 | Gate | Default | Mechanism |
 |---|---|---|
-| Compile-time | `OFF` | CMake option `PPP_TELEMETRY=OFF` — metric facade calls become inline no-op stubs; optimized builds should eliminate them, with binary-size impact verified from build artifacts |
+| Compile-time | `ON` (always compiled) | CMake option `PPP_TELEMETRY=1` — telemetry facade is always compiled; runtime fast-return when disabled |
 | Runtime master switch | `false` | `appsettings.json` → `telemetry.enabled = false` |
 | Count/Gauge/Histogram switch | `false` | `appsettings.json` → `telemetry.count = false` (controls `Count()`, `Gauge()`, and `Histogram()` emission) |
 | Span switch (traces) | `false` | `appsettings.json` → `telemetry.span = false` (independent from metrics) |
@@ -294,7 +303,7 @@ Phase 3 design is considered complete when all of the following hold:
 - [x] At least one Gauge metric is instrumented per major subsystem (server, tap).
 - [x] At least one Histogram metric covers the critical latency path (session establishment, handshake).
 - [x] `telemetry.count = false` suppresses all metric emission (Gauge, Histogram, Count) with only the runtime fast-path guard cost; no allocation, enqueue, formatting, or exporter work is performed.
-- [x] `PPP_TELEMETRY=OFF` compiles metric calls to inline no-op stubs; binary-size impact should be checked by build artifacts rather than assumed.
+- [x] `PPP_TELEMETRY=ON` compiles telemetry unconditionally; runtime `telemetry.enabled=false` provides the fast-return guard; binary-size impact should be checked by build artifacts rather than assumed.
 - [x] Metric call sites are designed not to introduce blocking, allocation, or shared-lock contention on the packet forwarding path; this remains a code-review requirement for every new metric.
 - [x] Bucket aggregation is minimal but functional — single-sample histograms with fixed bounds are acceptable for initial rollout.
 

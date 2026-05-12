@@ -235,24 +235,45 @@ erDiagram
 
 ## Go Backend Source Layout
 
+The Go backend has two management systems under `go/`:
+
+### Legacy: `go/` (original managed server)
+
 ```
 go/
 ├── main.go                 # Entry point, arg parsing, ManagedServer startup
-├── server/
-│   ├── managed_server.go   # ManagedServer core
-│   ├── ws_handler.go       # WebSocket control link handler
-│   ├── http_handler.go     # HTTP admin API handler
-│   └── tick.go             # Background tick loop
-├── storage/
-│   ├── redis.go            # Redis connection + cache helpers
-│   └── mysql.go            # MySQL connection + query helpers
-├── model/
-│   ├── user.go             # User model
-│   ├── session.go          # Session model
-│   └── node.go             # Node model
-└── config/
-    └── config.go           # Configuration parsing
+├── ppp/
+│   ├── ManagedServer.go    # ManagedServer core (WebSocket control link)
+│   ├── Handler.go          # Command handler dispatch
+│   ├── Server.go           # HTTP admin server
+│   ├── Configuration.go    # Configuration parsing
+│   ├── User.go             # User model
+│   ├── Node.go             # Node model
+│   ├── Packet.go           # Wire protocol encoding
+│   └── Traffic.go          # Traffic accounting
+├── auxiliary/              # Logging, helpers
+├── io/                     # WebSocket server, Redis client, DB wrappers
+└── daemon/                 # Legacy daemon wrapper (superseded by guardian)
 ```
+
+### Newer: `go/guardian/` (multi-instance manager + WebUI + TUI)
+
+```
+go/guardian/
+├── main.go                 # Entry point
+├── guardian.go             # Core guardian logic
+├── config.go               # Configuration
+├── api/                    # HTTP API handlers
+├── auth/                   # Authentication middleware
+├── cmd/                    # CLI commands
+├── instance/               # Per-instance lifecycle management
+├── profile/                # Profile management
+├── service/                # System service integration
+├── webui.go                # WebUI embed and serve
+└── webui/                  # Svelte + Vite frontend source
+```
+
+The guardian system supersedes `go/daemon/` and provides multi-instance management with a Svelte WebUI and Bubble Tea TUI.
 
 ---
 
@@ -353,20 +374,22 @@ See `ppp/app/server/VirtualEthernetManagedServer.*` for the C++ side parsing.
 
 ## Error Code Reference
 
-Relevant `ppp::diagnostics::ErrorCode` values for management backend operations:
+Relevant `ppp::diagnostics::ErrorCode` values for management backend operations (from `ErrorCodes.def`):
 
-| ErrorCode | Symbolic Name | Meaning |
-|-----------|--------------|---------|
-| `0` | `None` | No error |
-| `1` | `Unspecified` | Unspecified failure |
-| `10200` | `ManagedServerConnectionFailed` | Cannot connect to Go backend |
-| `10201` | `ManagedServerAuthenticationFailed` | Backend rejected authentication |
-| `10202` | `ManagedServerQuotaExceeded` | User quota exhausted |
-| `10203` | `ManagedServerUserExpired` | User subscription expired |
-| `10204` | `ManagedServerProtocolError` | Invalid frame received from backend |
-| `10205` | `ManagedServerReconnecting` | Backend link lost, reconnecting |
+| ErrorCode | Description |
+|-----------|-------------|
+| `VEthernetManagedConnectUrlEmpty` | Managed server connect URL is empty |
+| `VEthernetManagedAuthNullCallback` | Authentication callback is null |
+| `VEthernetManagedAuthDuplicateSession` | Duplicate auth request for same session |
+| `VEthernetManagedPacketLengthOverflow` | Packet length exceeds supported range |
+| `VEthernetManagedPacketJsonParseFailed` | Packet JSON parse failed |
+| `VEthernetManagedVerifyUrlEmpty` | Verify-URI input is empty |
+| `VEthernetManagedEndpointInputUrlEmpty` | Endpoint URL parse input is empty |
+| `SessionAuthFailed` | Session authentication failed |
+| `SessionQuotaExceeded` | Session quota exceeded |
+| `KeepaliveTimeout` | Peer keepalive heartbeat timed out |
 
-These are set via `SetLastErrorCode(...)` in `ppp/app/server/VirtualEthernetManagedServer.cpp`.
+These are set via `SetLastErrorCode(...)` in `ppp/app/server/VirtualEthernetManagedServer.cpp` and `ppp/diagnostics/PreventReturn.cpp`.
 
 ---
 

@@ -454,7 +454,7 @@ VPN 状态和吞吐仍在内部更新用于命令/信息输出，但不再显示
 | `--dns-rules` | `./dns-rules.txt` |
 | `--firewall-rules` | `./firewall-rules.txt` |
 | `--tun-host` | `yes` |
-| `--rt` | `no` |
+| `--rt` | `yes` |
 | `--tun-mux` | `0`（关闭） |
 
 ---
@@ -521,15 +521,15 @@ CLI 相关错误码（来自 `ppp/diagnostics/Error.h`）：
 | ErrorCode | 说明 |
 |-----------|------|
 | `ConfigFileNotFound` | 在所有查找路径均未找到配置文件 |
-| `ConfigFileParseFailed` | 配置文件 JSON 解析失败 |
-| `ModeInvalid` | `--mode` 值无法识别 |
-| `DnsAddressParseError` | `--dns` 值包含无效 IP 地址 |
-| `BypassFileNotFound` | `--bypass` 文件未找到 |
-| `DnsRulesFileNotFound` | `--dns-rules` 文件未找到 |
-| `FirewallRulesFileNotFound` | `--firewall-rules` 文件未找到 |
-| `NetworkInterfaceNotFound` | `--nic` 指定的接口未找到 |
-| `GatewayAddressParseError` | `--ngw` 或 `--bypass-ngw` 值无效 |
-| `TunAddressParseError` | `--tun-ip`、`--tun-ipv6` 或 `--tun-gw` 值无效 |
+| `ConfigFileMalformed` | 配置文件 JSON 解析失败或格式错误 |
+| `AppInvalidCommandLine` | CLI 选项或 `--mode` 值无法识别 |
+| `DnsAddressInvalid` | DNS 地址值包含无效 IP 地址 |
+| `FileNotFound` | 引用的文件路径未找到 |
+| `ConfigDnsRuleLoadFailed` | DNS 规则文件加载失败 |
+| `FirewallLoadFileFullPathEmpty` | 防火墙规则文件路径为空或加载路径无效 |
+| `NetworkInterfaceUnavailable` | `--nic` 指定的接口未找到 |
+| `NetworkGatewayInvalid` | `--ngw` 或 `--bypass-ngw` 值无效 |
+| `NetworkAddressInvalid` | `--tun-ip`、`--tun-ipv6` 或 `--tun-gw` 值无效 |
 
 ---
 

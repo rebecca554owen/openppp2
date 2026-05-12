@@ -1,8 +1,10 @@
 # IPv6 中继平面
 
-> **子系统：** `ppp::app::server::VirtualEthernetSwitcher`  
-> **主要文件：** `ppp/app/server/VirtualEthernetSwitcher.cpp`  
-> **头文件：** `ppp/app/server/VirtualEthernetSwitcher.h`  
+[English Version](IPV6_TRANSIT_PLANE.md)
+
+> **子系统：** `ppp::app::server::VirtualEthernetSwitcher`
+> **主要文件：** `ppp/app/server/VirtualEthernetSwitcher.cpp`
+> **头文件：** `ppp/app/server/VirtualEthernetSwitcher.h`
 > **支持文件：** `ppp/ipv6/IPv6Auxiliary.cpp`、`ppp/ipv6/IPv6Auxiliary.h`、`ppp/tap/ITap.h`
 
 ---
@@ -73,12 +75,12 @@ graph TB
 
 | 组件 | 文件 | 职责 |
 |---|---|---|
-| `ipv6_transit_tap_` | `VirtualEthernetSwitcher.h:788` | 在服务器上终止中继 IPv6 前缀的虚拟 TAP 设备 |
-| `ipv6_transit_ssmt_contexts_` | `VirtualEthernetSwitcher.h:789` | 用于多线程 TAP 数据包分发的每 CPU `io_context` 池 |
-| `ipv6_runtime_state_` | `VirtualEthernetSwitcher.h:790` | 编码当前 IPv6 平面状态的原子 uint8（0/1/2/3） |
-| `ipv6_runtime_cause_` | `VirtualEthernetSwitcher.h:791` | 当状态为 3 时存储最后失败 `ErrorCode` 的原子 uint32 |
-| `OpenIPv6TransitIfNeed()` | `VirtualEthernetSwitcher.cpp:2133` | 创建并配置中继 TAP 设备 |
-| `OpenIPv6TransitSsmtIfNeed()` | `VirtualEthernetSwitcher.cpp:2334` | 为中继 TAP 创建每 CPU io_context 池 |
+| `ipv6_transit_tap_` | `VirtualEthernetSwitcher.h:824` | 在服务器上终止中继 IPv6 前缀的虚拟 TAP 设备 |
+| `ipv6_transit_ssmt_contexts_` | `VirtualEthernetSwitcher.h:825` | 用于多线程 TAP 数据包分发的每 CPU `io_context` 池 |
+| `ipv6_runtime_state_` | `VirtualEthernetSwitcher.h:826` | 编码当前 IPv6 平面状态的原子 uint8（0/1/2/3） |
+| `ipv6_runtime_cause_` | `VirtualEthernetSwitcher.h:827` | 当状态为 3 时存储最后失败 `ErrorCode` 的原子 uint32 |
+| `OpenIPv6TransitIfNeed()` | `VirtualEthernetSwitcher.cpp:2338` | 创建并配置中继 TAP 设备 |
+| `OpenIPv6TransitSsmtIfNeed()` | `VirtualEthernetSwitcher.cpp:2539` | 为中继 TAP 创建每 CPU io_context 池 |
 | `IPv6Auxiliary.cpp` | `ppp/ipv6/IPv6Auxiliary.cpp` | 用于地址分配、路由注入、DNS 的平台级辅助函数 |
 
 ---
@@ -167,7 +169,7 @@ stateDiagram-v2
 
 ## 5. `OpenIPv6TransitIfNeed`
 
-**位置：** `VirtualEthernetSwitcher.cpp`，第 2133 行  
+**位置：** `VirtualEthernetSwitcher.cpp`，第 2338 行
 **签名：**
 
 ```cpp
@@ -218,7 +220,7 @@ flowchart TD
 
 ## 6. `OpenIPv6TransitSsmtIfNeed`
 
-**位置：** `VirtualEthernetSwitcher.cpp`，第 2334 行  
+**位置：** `VirtualEthernetSwitcher.cpp`，第 2539 行
 **签名：**
 
 ```cpp
@@ -441,3 +443,5 @@ sequenceDiagram
 | `IPv6Nat66Unavailable` | `kError` | ip6tables NAT 模块未加载或 MASQUERADE 规则失败 |
 | `IPv6TransitIfaceCreateFailed` | `kError` | 无法创建虚拟中继 TAP 接口 |
 | `PlatformNotSupportGUAMode` | `kFatal` | 在非 Linux 平台上请求 GUA 模式 |
+
+> **注**：以下错误码为拟新增/设计项，不在当前 `ErrorCodes.def`：`IPv6ServerFinalizeFailed`（近似现有码 `IPv6ServerPrepareFailed`，但语义为拆除阶段）、`IPv6TransitIfaceCreateFailed`（近似 `IPv6TransitTapOpenFailed`）。

@@ -297,7 +297,7 @@ MUX 路径无需更改。
 
 ## 4. 新错误码
 
-添加到 `ppp/diagnostics/ErrorCodes.def`：
+添加到 `ppp/diagnostics/ErrorCodes.def`（**拟新增/设计项，尚未收录于当前 ErrorCodes.def**）：
 
 ```cpp
 X(TunnelReadTimeout,

@@ -389,13 +389,15 @@ flowchart TD
 
 | 错误代码 | 描述 |
 |-----------|-------------|
-| `IPv6AddressInIPv4OnlyPath` | 在 VNetstack 的纯 IPv4 代码路径中遇到 IPv6 地址 |
+| `IPv6PacketRejected` | 在 VNetstack 的纯 IPv4 代码路径中遇到 IPv6 地址 |
 | `IPv6AddressAssignFailed` | 向虚拟网卡分配 IPv6 地址失败 |
 | `IPv6RouteAddFailed` | 添加 IPv6 路由条目失败 |
 | `IPv6InterfaceIndexInvalid` | 在使用点 `ClientContext::InterfaceIndex` 为 `-1` |
-| `IPv6IsNoneFalsePositive` | `IsNone()` 错误地将有效的 IPv6 组播地址匹配为无效 |
+| `IPv6AddressInvalid` | `IsNone()` 错误地将有效的 IPv6 组播地址匹配为无效 |
 | `SocketOptionSetFailed` | `setsockopt(IPV6_V6ONLY)` 失败 |
 | `IPv6ResolutionFailed` | 域名端点的 AAAA 记录解析失败 |
+
+> **注**：以下错误码为拟新增/设计项，不在当前 `ErrorCodes.def`：`IPv6AddressAssignFailed`（近似现有码 `IPv6ClientAddressApplyFailed`）、`IPv6RouteAddFailed`（近似 `RouteAddFailed` 或 `IPv6TransitRouteAddFailed`）、`IPv6InterfaceIndexInvalid`（近似 `RouteInterfaceInvalid`）、`IPv6ResolutionFailed`（近似 `DnsResolveFailed`）。
 
 ---
 

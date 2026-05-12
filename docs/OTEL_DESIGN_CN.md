@@ -26,7 +26,7 @@ Telemetry（结构化日志 / OTel）是**可选补充层**，不是错误码的
 
 - **`ppp/diagnostics/Telemetry.h`** — 零开销门面。当 `PPP_TELEMETRY=0` 时提供内联空操作存根，确保禁用时无运行时开销。暴露 `SetEnabled(bool)`、`SetMinLevel(int)`、`SetCountEnabled(bool)`、`SetSpanEnabled(bool)`、`Configure(const char* endpoint)`、`SetLogFile(const char* path)`、`Flush(int timeout_ms)`、`Histogram(...)` 以及 RAII `SpanScope` 用于运行期控制和追踪。
 - **`ppp/diagnostics/Telemetry.cpp`** — 异步后端，使用有界队列（4096 条目）、满时丢弃策略及后台工作线程。支持三种输出目标：内置 stderr 后端（默认）、HTTP OTLP exporter（`HttpOtlpExporter`）和可选的文件输出。OTLP exporter 批量收集最多 256 个事件并以 OTLP/JSON HTTP POST 发送至配置的采集器端点，支持日志、计数器、Gauge、Histogram 和完成态 Span。OTLP 输出现在包含资源/服务元数据以及每个事件的结构化属性，例如 `service.name`、`thread.id`、日志的 `log.level` / `component`，以及 span 在非空时的 `session.id`。使用原始 POSIX socket（Windows 上为 WinSock2），无外部依赖。
-- **CMake 选项 `PPP_TELEMETRY`** — 编译期开关，默认 `OFF`。
+- **CMake 选项 `PPP_TELEMETRY`** — 编译期提示（默认 1 / ON）。Telemetry 门面始终编译；运行期行为由 `g_enabled` 标志控制（默认 `false`），通过 `appsettings.json` 中 `telemetry.enabled = true` 激活。
 - **插桩覆盖** — 已有 13 个模块完成插桩：transmission、protocol、server switcher、server exchanger、client switcher、client exchanger、mux、tap、vnetstack、ITap、tcpip、websocket、managed。
 - **运行期配置** — 从 `appsettings.json` 加载，路径为 `AppConfiguration::telemetry.*` → `telemetry::SetEnabled/SetMinLevel/SetCountEnabled/SetSpanEnabled/Configure/SetLogFile()`。
 - **级别过滤** — `Log` 事件在调用点（快速路径）和后端线程（防御性）均按级别过滤，确保运行期降低级别时不会有 TRACE 事件漏过。
@@ -56,7 +56,7 @@ Telemetry **不得** 重复错误码的语义。它只记录错误码**不覆盖
 
 这是不可妥协的。
 
-- **编译期**：`#ifdef PPP_TELEMETRY` 或 CMake 选项。
+- **编译期**：`#ifdef PPP_TELEMETRY` 或 CMake 选项。注意：`PPP_TELEMETRY` 当前默认为 1（始终编译）；运行期控制通过 `g_enabled` 标志。
 - **运行期**：配置项 `telemetry.enabled = false` 为默认值。
 - **按模块**：每个子系统可独立开启。
 - **热关闭**：禁用时 telemetry facade 编译为空操作。
@@ -148,22 +148,31 @@ Telemetry 导出事件时，推荐包含以下字段：
 ```cpp
 namespace ppp::telemetry {
     void Log(Level level, const char* component, const char* fmt, ...) noexcept;
+    void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept;
     void Count(const char* metric, int64_t delta) noexcept;
     void Gauge(const char* metric, int64_t value) noexcept;
     void Histogram(const char* metric, int64_t value) noexcept;
     void TraceSpan(const char* name, const char* session_id) noexcept;
     void SetEnabled(bool enabled) noexcept;
-    void SetMinLevel(int level) noexcept;
     void SetCountEnabled(bool enabled) noexcept;
     void SetSpanEnabled(bool enabled) noexcept;
+    void SetConsoleLogEnabled(bool enabled) noexcept;
+    void SetConsoleMetricEnabled(bool enabled) noexcept;
+    void SetConsoleSpanEnabled(bool enabled) noexcept;
+    bool IsConsoleLogEnabled() noexcept;
+    bool IsConsoleMetricEnabled() noexcept;
+    bool IsConsoleSpanEnabled() noexcept;
+    int  GetMinLevel() noexcept;
+    void SetMinLevel(int level) noexcept;
     void Configure(const char* endpoint) noexcept;
     void SetLogFile(const char* path) noexcept;
     void Flush(int timeout_ms = 3000) noexcept;
+    void Shutdown() noexcept;
     class SpanScope;
 }
 ```
 
-当 `PPP_TELEMETRY` 未定义时，这些函数是内联空函数 —— 零开销。
+当 `PPP_TELEMETRY` 未定义时，这些函数是内联空函数 —— 零开销。在当前代码库中 `PPP_TELEMETRY` 默认为 1（始终编译）；运行期禁用通过 `SetEnabled(false)` 或 `telemetry.enabled = false` 配置实现。
 
 ---
 
@@ -254,7 +263,7 @@ Metrics 遵循与所有 telemetry 相同的可开关性契约：
 
 | 门控层 | 默认值 | 机制 |
 |---|---|---|
-| 编译期 | `OFF` | CMake 选项 `PPP_TELEMETRY=OFF` —— metrics 门面调用变为内联空操作存根；优化构建应消除这些调用，二进制体积影响需通过构建产物确认 |
+| 编译期 | `ON`（始终编译） | CMake 选项 `PPP_TELEMETRY=1` —— telemetry 门面始终编译；运行期禁用时走快速返回路径 |
 | 运行期主开关 | `false` | `appsettings.json` → `telemetry.enabled = false` |
 | Count/Gauge/Histogram 开关 | `false` | `appsettings.json` → `telemetry.count = false`（控制 `Count()`、`Gauge()` 和 `Histogram()` 的发出） |
 | Span 开关（traces） | `false` | `appsettings.json` → `telemetry.span = false`（与 metrics 独立） |
@@ -294,7 +303,7 @@ Phase 3 设计在以下条件全部满足时视为完成：
 - [x] 每个主要子系统（server、tap）至少插桩了一个 Gauge 指标。
 - [x] 关键延迟路径（会话建立、握手）至少有一个 Histogram 指标覆盖。
 - [x] `telemetry.count = false` 能以运行期快速守卫的极低成本抑制所有指标发出（Gauge、Histogram、Count）；不会分配、入队、格式化或触发 exporter 工作。
-- [x] `PPP_TELEMETRY=OFF` 将指标调用编译为内联空操作存根；二进制体积影响应通过构建产物检查确认，而不是预先假定。
+- [x] `PPP_TELEMETRY=ON` 无条件编译 telemetry；运行期 `telemetry.enabled=false` 提供快速返回守卫；二进制体积影响应通过构建产物检查确认，而不是预先假定。
 - [x] 指标调用点设计上不应在报文转发路径上引入阻塞、分配或共享锁竞争；每个新增指标仍需代码审查确认。
 - [x] 桶聚合虽轻量但功能完整 —— 单样本 histogram 配固定边界在初始发布阶段可接受。
 

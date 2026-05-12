@@ -23,7 +23,7 @@
 | structured entries 主路径 | ✅ 已实现 | `ResolveAsyncWithEntries()` 接入 `RedirectDnsServer` unmatched 路径，array/object 配置会真实生效 |
 | Bootstrap DNS helper | ⚠️ helper 已有 | `ResolveHostnameAsync()` 已实现，但主路径尚未使用；提供商表中已硬编码 IP，无需动态解析 |
 | OPT RR 合并（ARCOUNT > 0） | ✅ 已实现 | `InjectEcsOptRr()` 完整实现 OPT RR 扫描与 ECS option 合并 |
-| TLS 连接池 | ❌ 未实现 | 每请求新建 TLS 连接，无复用 |
+| TLS 会话缓存（session resumption） | ✅ 已实现 | `AcquireTlsSession()`/`StoreTlsSession()` LRU 缓存，握手成功后存入、下次握手前取出，支持 TLS 1.2/1.3 session resumption（1-RTT 或 0-RTT） |
 | ECS IPv6 支持 | ❌ 未实现 | 首版仅 IPv4，IPv6 地址会被跳过 |
 | DoQ（DNS over QUIC） | ❌ 未来 | 无 QUIC 传输；配置层 `doq` 值会归一化为 `dot`（见下文） |
 | DoH3（DNS over HTTP/3） | ❌ 未来 | 无代码、无引用 |
@@ -724,7 +724,7 @@ private:
         const ppp::string& hostname,
         const ExitIpCallback& callback) noexcept;
 
-    // 实际成员变量（无 ssl_contexts_ 连接池）
+    // 实际成员变量（无 ssl_contexts_ 完整连接池；有 TLS session cache）
     boost::asio::io_context&    context_;
     ProtectSocketCallback       protect_socket_;
     ppp::string                 default_domestic_;
@@ -735,12 +735,16 @@ private:
     bool                        tls_verify_peer_ = true;
     ppp::vector<StunCandidate>  stun_candidates_;
     std::atomic<std::size_t>    stun_rotation_;
+    // TLS session cache (LRU): SSL_SESSION* keyed by "<host>:<port>"
+    mutable std::mutex                              tls_session_mutex_;
+    ppp::list<ppp::string>                          tls_session_lru_;
+    ppp::unordered_map<ppp::string, TlsSessionCacheEntry> tls_session_cache_;
 };
 
 } // namespace ppp::dns
 ```
 
-> **与早期设计文档的差异**：实际代码中**没有** `ssl_contexts_`（TLS 连接池），每请求新建 TLS 连接。但 `DetectExitIPViaStun()`（STUN）和 `ResolveHostnameAsync()`（bootstrap helper）**均已实现**。提供商表中已预解析 IP 地址，bootstrap helper 暂未接入主路径；object/array 配置则通过 `ResolveAsyncWithEntries()` 接入未命中规则路径。
+> **与早期设计文档的差异**：实际代码中**没有** `ssl_contexts_`（完整 TLS 连接池），每查询仍新建 TCP 连接。但 TLS session resumption 缓存已实现（`AcquireTlsSession()`/`StoreTlsSession()` LRU 缓存），DoH/DoT 握手成功后存储 `SSL_SESSION`，下次到同一上游时复用以减少握手延迟。此外 `DetectExitIPViaStun()`（STUN）和 `ResolveHostnameAsync()`（bootstrap helper）**均已实现**。提供商表中已预解析 IP 地址，bootstrap helper 暂未接入主路径；object/array 配置则通过 `ResolveAsyncWithEntries()` 接入未命中规则路径。
 
 ### 关键实现细节
 
@@ -753,6 +757,7 @@ void DnsResolver::SendDoh(const ServerEntry& entry, ..., const ResolveCallback& 
     //    - 创建 ssl::context，调用 CreateClientSslContext(tls_verify_peer_)
     //    - 设置 SNI（entry.hostname 或 URL host）
     //    - 如 tls_verify_peer_，设置 host_name_verification
+    //    - 尝试从 TLS session cache 恢复 SSL_SESSION（AcquireTlsSession）
     //    - connect 前对 native_handle 调用 protect_socket_
     // 3. 构造 HTTP/1.1 POST 请求:
     //    POST /dns-query HTTP/1.1
@@ -762,7 +767,8 @@ void DnsResolver::SendDoh(const ServerEntry& entry, ..., const ResolveCallback& 
     //    <binary DNS message>
     // 4. boost::beast::http::async_write / async_read
     // 5. 提取响应 body 作为原始 DNS message
-    // 6. callback(response_bytes)
+    // 6. 成功后将 SSL_SESSION 存入 TLS session cache（StoreTlsSession）
+    // 7. callback(response_bytes)
 }
 ```
 
@@ -772,10 +778,12 @@ void DnsResolver::SendDoh(const ServerEntry& entry, ..., const ResolveCallback& 
 void DnsResolver::SendDot(const ServerEntry& entry, ..., const ResolveCallback& callback) noexcept {
     // 1. 从 entry.address 解析预置 IP
     // 2. 建立 TLS 连接，SNI 设置为 entry.hostname
+    //    - 尝试从 TLS session cache 恢复 SSL_SESSION（AcquireTlsSession）
     //    - connect 前对 native_handle 调用 protect_socket_
     // 3. 发送 2 字节长度前缀 + DNS message（RFC 7858）
     // 4. 先读 2 字节长度，再读完整响应
-    // 5. callback(response_bytes)
+    // 5. 成功后将 SSL_SESSION 存入 TLS session cache（StoreTlsSession）
+    // 6. callback(response_bytes)
 }
 ```
 
@@ -1000,9 +1008,10 @@ if (NULLPTR != dns_resolver_ && !extensions.ClientExitIP.is_unspecified()) {
 
 ### Phase B：TLS 连接池
 
-- 按 hostname 复用 SSL context 和/或连接
+- TLS 会话缓存（session resumption）已实现：`AcquireTlsSession()`/`StoreTlsSession()` 基于 LRU 的 `SSL_SESSION` 缓存，DoH/DoT 握手成功后存储 session ticket，下次到同一上游时复用以减少握手 RTT
+- 剩余 backlog：完整连接复用（保持 TCP/TLS 连接到同一上游跨多次查询不断开）尚未实现，当前每查询仍新建 TCP 连接
 - 减少 DoH/DoT 首次查询延迟
-- 需评估连接生命周期管理复杂度
+- 需评估长连接生命周期管理复杂度
 
 ### Phase C：ECS IPv6 支持
 

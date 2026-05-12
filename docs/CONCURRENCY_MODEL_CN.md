@@ -516,25 +516,27 @@ stateDiagram-v2
 ### 9.2 Awaitable API
 
 ```cpp
-// 由异步操作生产
-auto awaitable = Executors::NewAwaitable<bool>();
+// 创建一个 Awaitable 信号
+auto awaitable = make_shared_object<Executors::Awaitable>();
 
-// 在 io_context 线程上——标记完成
-awaitable->Complete(result_value);
+// 在 io_context 线程上——标记完成（无参数）
+awaitable->Processed();
 
-// 在调用方 OS 线程上——阻塞直至 Complete() 被调用
-bool result = awaitable->Await();
+// 在调用方 OS 线程上——阻塞直至 Processed() 被调用
+bool completed = awaitable->Await();
 ```
 
-`Await()` 使用 `std::condition_variable` 进行阻塞。`Complete()` 存储值并通知条件变量。一旦收到通知，`Await()` 返回，Awaitable 被消费。
+`Await()` 使用 `std::condition_variable` 进行阻塞。`Processed()` 设置内部标志并通知条件变量。一旦收到通知，`Await()` 返回 `true`。如果 `Awaitable` 在 `Processed()` 调用前被销毁，`Await()` 返回 `false`。
+
+**注意**：`Awaitable` 是二元信号原语，不是类型化结果载体。它不携带返回值——只通信"工作完成"与"未完成"。如果需要传回结果，请在调用 `Processed()` 之前将其捕获到共享变量中。
 
 ### 9.3 Awaitable 的适用场景
 
 | 调用方类型 | 适用机制 |
 |-----------|---------|
 | `io_context` 协程 | `YieldContext::Suspend()` / `Resume()` |
-| 专用 worker OS 线程 | `Executors::Awaitable<T>::Await()` |
-| 单元测试或同步 API 调用 | `Executors::Awaitable<T>::Await()` |
+| 专用 worker OS 线程 | `Executors::Awaitable::Await()` |
+| 单元测试或同步 API 调用 | `Executors::Awaitable::Await()` |
 
 **切勿**在 `io_context` 线程内调用 `Awaitable::Await()`——若信号来自同一上下文，则会永久死锁。
 
@@ -554,16 +556,17 @@ bool SomeLinklayerOperation(YieldContext* y, int param) noexcept
     else
     {
         // 线程阻塞模式：使用 Awaitable
-        auto aw = Executors::NewAwaitable<bool>();
+        auto aw = make_shared_object<Executors::Awaitable>();
         asio::post(*context_, [aw, param]() {
-            aw->Complete(DoAsyncVariant(nullptr, param));
+            DoAsyncVariant(nullptr, param);
+            aw->Processed();
         });
-        return aw->Await();
+        aw->Await();
     }
 }
 ```
 
-`nullof<YieldContext>()` 在 `ppp/coroutines/YieldContext.h` 中定义为 constexpr，返回一个零初始化静态变量的地址——始终非空，但 `operator bool()` 返回 `false`。这允许协程调用方在不额外分配堆内存的情况下，跳过阻塞分支。
+`nullof<YieldContext>()` 在 `ppp/stdafx.h` 中定义为 constexpr，返回 `*(T*)NULLPTR`——一个位于空指针地址（0）的引用。被调用方通过 `&y == nullof<YieldContext>()` 检测此哨兵。检测到哨兵时，切换到线程阻塞代码路径，而不是协程异步路径。这允许单一实现同时服务于协程调用者和线程阻塞调用者。这**不是**未定义行为——该引用永远不会被解引用，只比较其地址。
 
 ---
 
@@ -580,7 +583,7 @@ bool SomeLinklayerOperation(YieldContext* y, int param) noexcept
 | Android | `pthread_setname_np()` | `"ppp-worker-0"` |
 | macOS | `pthread_setname_np()` | `"ppp-worker-0"` |
 
-若命名失败，会设置 `RuntimeThreadNameFailed`，但执行继续——线程命名仅作为提示信息。
+若命名失败，会设置 `RuntimeThreadNameFailed`（拟新增/设计项，不在当前 `ErrorCodes.def`；近似现有码 `StdAfxSetThreadNameEmptyName`），但执行继续——线程命名仅作为提示信息。
 
 ### 10.2 线程优先级
 

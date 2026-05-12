@@ -121,11 +121,11 @@ Important defaults from `Clear()` include:
 | `tcp.listen.backlog` | 511 | Standard listen backlog |
 | `websocket.listen.ws.port` | 0 | WS disabled |
 | `websocket.listen.wss.port` | 0 | WSS disabled |
-| `key.kf` | 154 | Default XOR masking seed |
-| `key.kh` | 181 | Default header shuffle seed |
-| `key.kl` | 152 | Default length encoding seed |
-| `key.kx` | 191 | Default extra masking seed |
-| `key.sb` | 0 | Default seed baseline |
+| `key.kf` | 154 | Key-frame interval default |
+| `key.kh` | 181 | Key hash iterations default |
+| `key.kl` | 152 | Key length in bits default |
+| `key.kx` | 191 | Key exchange algorithm selector default |
+| `key.sb` | 0 | Shuffle block size default (0 = disabled) |
 | `key.masked` | `true` | Payload XOR masking on |
 | `key.delta_encode` | `true` | Delta encoding on |
 | `key.shuffle_data` | `true` | Byte shuffling on |
@@ -202,18 +202,18 @@ Defines protocol identity and packet transformation policy:
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `kf` | uint8 | Packet-level XOR masking factor seed |
-| `kh` | uint8 | Header shuffle seed |
-| `kl` | uint8 | Length encoding seed |
-| `kx` | uint8 | Extra masking factor |
-| `sb` | uint8 | Seed baseline added to random seed byte |
-| `protocol` | string | Protocol-layer cipher name (e.g., `aes-128-cfb`) |
+| `kf` | int | Key-frame interval (packets between re-key events) |
+| `kh` | int | Key hash iterations for KDF strengthening |
+| `kl` | int | Key length in bits (e.g. 128, 256) |
+| `kx` | int | Key exchange algorithm selector |
+| `sb` | int | Shuffle block size used by `shuffle-data` mode |
+| `protocol` | string | Protocol-layer cipher name (e.g. `aes-128-cfb`) |
 | `protocol-key` | string | Protocol-layer cipher key string |
-| `transport` | string | Transport-layer cipher name (e.g., `aes-256-cfb`) |
+| `transport` | string | Transport-layer cipher name (e.g. `aes-256-cfb`) |
 | `transport-key` | string | Transport-layer cipher key string |
 | `masked` | bool | Enable payload XOR masking |
-| `delta_encode` | bool | Enable delta encoding of header |
-| `shuffle_data` | bool | Enable deterministic byte shuffling |
+| `delta-encode` | bool | Enable delta encoding of header |
+| `shuffle-data` | bool | Enable deterministic byte shuffling |
 | `plaintext` | bool | Disable all cipher protection (debug/testing only) |
 
 Unsupported cipher names fall back to a no-op cipher (equivalent to `plaintext = true`) and a warning is set in diagnostics.
@@ -239,8 +239,10 @@ Defines server-side node identity and behavior:
 Defines client-side identity, target server, and traffic policy:
 - `client.guid` — client identity UUID; used in session identification.
 - `client.bandwidth` — upload/download bandwidth cap in bytes/second (0 = unlimited).
-- `client.server.host` / `client.server.port` — VPN server address.
-- `client.http.proxy.*` — HTTP CONNECT proxy settings.
+- `client.server` — VPN server URI (e.g. `ppp://host:port/`, `ppp://ws/host:port/`, `ppp://wss/host:port/`).
+- `client.server-proxy` — HTTP/SOCKS proxy used to reach the VPN server (empty = direct).
+- `client.http.proxy.*` — Local HTTP proxy listener settings (bind address and port).
+- `client.socks-proxy.*` — Local SOCKS5 proxy listener settings (bind address, port, username, password).
 - `client.routes` — static routes to inject into the OS routing table.
 - `client.mappings` — static port mapping declarations (array of `{local, remote}` endpoint pairs).
 - `client.static.port` — static tunnel port for server-side static mapping.
@@ -483,7 +485,9 @@ The configuration decides the shape of the runtime:
     "connect": { "timeout": 15 },
     "inactive": { "timeout": 300 },
     "turbo": true,
-    "fast-open": false
+    "fast-open": false,
+    "cwnd": 0,
+    "rwnd": 0
   },
   "mux": {
     "connect": { "timeout": 15 },
@@ -517,40 +521,47 @@ The configuration decides the shape of the runtime:
     "transport-key": "ChangeThisTransportKey",
     "masked": true,
     "plaintext": false,
-    "delta_encode": true,
-    "shuffle_data": true
+    "delta-encode": true,
+    "shuffle-data": true
   },
   "server": {
     "node": 0,
     "log": "",
     "backend": "",
+    "backend-key": "",
     "subnet": true,
     "mapping": true,
+    "ipv4-pool": {
+      "network": "",
+      "mask": ""
+    },
     "ipv6": {
       "mode": "",
       "cidr": "",
       "prefix-length": 0,
-      "gateway": ""
+      "gateway": "",
+      "dns1": "",
+      "dns2": "",
+      "lease-time": 300
     }
   },
   "client": {
     "guid": "00000000-0000-0000-0000-000000000000",
     "bandwidth": 0,
-    "server": {
-      "host": "your-server.example.com",
-      "port": 2096
+    "server": "ppp://your-server.example.com:20000/",
+    "server-proxy": "",
+    "http-proxy": {
+      "bind": "",
+      "port": 0
     },
-    "http": {
-      "proxy": {
-        "host": "",
-        "port": 0,
-        "username": "",
-        "password": ""
-      }
+    "socks-proxy": {
+      "bind": "",
+      "port": 0,
+      "username": "",
+      "password": ""
     },
     "routes": [],
     "mappings": [],
-    "static": { "port": 0 },
     "dns-rules": ""
   },
   "virr": {
