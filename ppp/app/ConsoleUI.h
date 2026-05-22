@@ -125,6 +125,30 @@ public:
      */
     void                    SetTelemetryLines(const ppp::vector<ppp::string>& lines) noexcept;
 
+    /**
+     * @brief Returns true when the TUI render and input threads are running.
+     *
+     * Safe to call from any thread (uses an atomic load).  Returns false
+     * before Start() or after Stop().
+     */
+    static bool             IsRunning() noexcept;
+
+    /**
+     * @brief Appends one telemetry event line to the internal ring buffer.
+     *
+     * ANSI escape codes and trailing newlines are stripped before storage.
+     * The line is displayed in the telemetry panel during the next render
+     * frame.  Thread-safe — may be called from the telemetry backend thread.
+     *
+     * @param line  Pre-formatted telemetry line (may contain ANSI escapes).
+     */
+    void                    AppendTelemetryEventLine(const char* line) noexcept;
+
+    /**
+     * @brief Clears all telemetry event lines from the ring buffer.
+     */
+    void                    ClearTelemetryEventLines() noexcept;
+
 private:
     ConsoleUI() = default;
     ~ConsoleUI() = default;
@@ -369,6 +393,14 @@ private:
      */
     std::atomic<int>            pending_shell_threads_{0};
 
+    /**
+     * @brief Last monotonic millisecond timestamp when telemetry woke renderer.
+     *
+     * Telemetry events may arrive in large bursts; event ingestion sets dirty_
+     * for every line but only notifies render_cv_ at a bounded cadence.
+     */
+    std::atomic<uint64_t>        last_telemetry_dirty_notify_ms_{0};
+
     // -----------------------------------------------------------------------
     // Shared mutable state (all accesses must hold lock_)
     // -----------------------------------------------------------------------
@@ -380,6 +412,8 @@ private:
     ppp::vector<ppp::string>    info_lines_;
     /** @brief Telemetry lines displayed in the right column (two-column mode). */
     ppp::vector<ppp::string>    telemetry_lines_;
+    /** @brief Telemetry event stream ring buffer (newest at back). */
+    std::deque<ppp::string>     telemetry_event_lines_;
     /**
      * @brief Info section scroll offset.
      *
@@ -489,7 +523,11 @@ private:
     // -----------------------------------------------------------------------
 
     /** @brief Maximum number of lines retained in the command output buffer. */
-    static constexpr int        kMaxCmdLines        = 10000;
+    static constexpr int        kMaxCmdLines                = 10000;
+    /** @brief Maximum number of telemetry event lines in the ring buffer. */
+    static constexpr int        kMaxTelemetryEventLines     = 500;
+    /** @brief Minimum interval between telemetry-triggered render wakeups. */
+    static constexpr uint64_t   kTelemetryDirtyNotifyIntervalMs = 100;
     /** @brief Maximum number of history entries. */
     static constexpr int        kMaxHistoryEntries  = 200;
     /**

@@ -184,10 +184,62 @@ terminal themes with low contrast.
 | `openppp2 exit`       | Exit via `ShutdownApplication(false)`            |
 | `openppp2 info`       | Pull and print full runtime environment snapshot |
 | `openppp2 clear`      | Clear cmd output ring buffer                     |
+| `openppp2 telemetry status` | Print current telemetry configuration      |
+| `openppp2 telemetry help`   | Print telemetry subcommand usage            |
+| `openppp2 telemetry log on\|off\|toggle`     | Enable / disable / toggle telemetry log console output filter |
+| `openppp2 telemetry metric on\|off\|toggle`  | Enable / disable / toggle metric console output filter |
+| `openppp2 telemetry span on\|off\|toggle`    | Enable / disable / toggle span console output filter |
+| `openppp2 telemetry level 0\|1\|2\|3`        | Set telemetry verbosity threshold (0=Info … 3=Trace) |
+| `openppp2 telemetry all`     | Enable all console telemetry filters (log + metric + span) |
+| `openppp2 telemetry quiet`   | Disable all console telemetry filters |
+| `openppp2 telemetry clear`   | Clear telemetry event buffer |
 | *(any other input)*   | Execute as shell command, capture output         |
 
 Bare commands such as `help`, `restart`, `exit`, `clear`, and `status` are not mapped to
 built-in handlers. They are executed as shell commands.
+
+### Telemetry Control Commands
+
+> **Migration note:** Previous versions exposed single-character telemetry hotkeys (`l`, `m`,
+> `s`, `0`–`3`, `a`, `q`, `?`) that were intercepted immediately on keypress. These hotkeys
+> have been **removed** because they interfered with normal shell input — for example, typing
+> an `l` in a shell command could unintentionally toggle telemetry logging.
+>
+> Telemetry is now controlled exclusively through the `openppp2 telemetry …` command
+> namespace. The TUI only parses telemetry commands after `Enter` is pressed, treating the
+> entire input line as a complete command. This eliminates the interception and input
+> truncation problems of the old hotkey model.
+
+| Command | Equivalent to |
+|---------|---------------|
+| `openppp2 telemetry` | `openppp2 telemetry status` |
+| `openppp2 telemetry status` | Prints current enabled/disabled state of log, metric, span, and the active verbosity threshold |
+| `openppp2 telemetry help` | Prints the full telemetry subcommand reference |
+| `openppp2 telemetry log on` | Enables telemetry log console output filter (`SetConsoleLogEnabled`) |
+| `openppp2 telemetry log off` | Disables telemetry log console output filter |
+| `openppp2 telemetry log toggle` | Toggles telemetry log console output filter |
+| `openppp2 telemetry metric on` | Enables metric console output filter (`SetConsoleMetricEnabled`) |
+| `openppp2 telemetry metric off` | Disables metric console output filter |
+| `openppp2 telemetry metric toggle` | Toggles metric console output filter |
+| `openppp2 telemetry span on` | Enables span console output filter (`SetConsoleSpanEnabled`) |
+| `openppp2 telemetry span off` | Disables span console output filter |
+| `openppp2 telemetry span toggle` | Toggles span console output filter |
+| `openppp2 telemetry level 0` | Verbosity threshold: Info only |
+| `openppp2 telemetry level 1` | Verbosity threshold: Info + Verb |
+| `openppp2 telemetry level 2` | Verbosity threshold: Info + Verb + Debug |
+| `openppp2 telemetry level 3` | Verbosity threshold: Info + Verb + Debug + Trace (all) |
+| `openppp2 telemetry all` | Enables all console telemetry filters (log + metric + span) |
+| `openppp2 telemetry quiet` | Disables all console telemetry filters (log + metric + span) |
+| `openppp2 telemetry clear` | Clears telemetry event buffer (TUI right panel) |
+
+> **Note:** The `log`, `metric`, and `span` commands only toggle console/local output
+> filters. They do **not** change global telemetry runtime gates (`telemetry.enabled`,
+> count gates, or span gates) or the verbosity threshold configured in
+> `appsettings.json`. Similarly, `level` controls only the console verbosity threshold
+> and does not affect the configuration file setting.
+
+The `telemetry` namespace requires the `openppp2` prefix — bare `telemetry` input will be
+executed as a shell command.
 
 ### System Command Execution
 
@@ -567,9 +619,12 @@ from any thread including the IO thread at high frequency.
 
 The bottom status row is split into two columns:
 
-- **Left column**: Diagnostics snapshot text.
+- **Left column**: Diagnostics snapshot text and telemetry filter indicators.
   - `[INFO] 0 Success: Success` when `ErrorCode::Success` is active.
   - `[%LEVEL%] <numeric_id> <CodeName>: <message> (<age>)` for the last non-success error.
+  - Telemetry filter state: `  | T:LMS @<level> (openppp2 telemetry help)` where each of `L`, `M`, `S` is shown when the
+    corresponding console filter (log, metric, span) is enabled, or `-` when disabled. `<level>`
+    is the current verbosity threshold (0–3).
   - ANSI color follows severity: info=green, warn=yellow, error=red, fatal=bright red.
 - **Right column**: VPN state and throughput summary (e.g. `VPN: connected  ↑ 1.2MB/s  ↓ 3.4MB/s`).
 

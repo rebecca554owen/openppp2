@@ -143,9 +143,55 @@ graph TD
 | `openppp2 exit`       | 通过 `ShutdownApplication(false)` 退出 |
 | `openppp2 info`       | 拉取并打印完整运行时环境快照 |
 | `openppp2 clear`      | 清空命令输出环形缓冲区 |
+| `openppp2 telemetry status` | 打印当前遥测配置状态 |
+| `openppp2 telemetry help`   | 打印遥测子命令用法 |
+| `openppp2 telemetry log on\|off\|toggle`     | 遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry metric on\|off\|toggle`  | 指标控制台/本地输出过滤器 |
+| `openppp2 telemetry span on\|off\|toggle`    | span 控制台/本地输出过滤器 |
+| `openppp2 telemetry level 0\|1\|2\|3`        | 设置遥测 verbosity 阈值（0=仅 Info … 3=全部） |
+| `openppp2 telemetry all`     | 启用所有控制台遥测过滤器 |
+| `openppp2 telemetry quiet`   | 禁用所有控制台遥测过滤器 |
+| `openppp2 telemetry clear`   | 清空遥测事件缓冲区 |
 | *(其他任意输入)*      | 作为 shell 命令执行，捕获输出 |
 
 `help`、`restart`、`exit`、`clear`、`status` 等裸命令不会映射为内置命令，会按 shell 命令执行。
+
+### 遥测控制命令
+
+> **迁移说明：** 旧版本通过单字符热键（`l`、`m`、`s`、`0`–`3`、`a`、`q`、`?`）控制遥测功能，
+> 按键后立即生效。这些热键已被**移除**，因为它们会干扰正常的 shell 输入 —— 例如在 shell 命令中
+> 输入 `l` 时可能意外切换遥测日志。
+>
+> 遥测现在完全通过 `openppp2 telemetry …` 命令命名空间控制。TUI 仅在按下 `Enter` 后才解析遥测
+> 命令，将整行输入视为完整命令。这消除了旧热键模型的输入截获和截断问题。
+
+| 命令 | 等效说明 |
+|------|----------|
+| `openppp2 telemetry` | 等同于 `openppp2 telemetry status` |
+| `openppp2 telemetry status` | 打印日志、指标、span 的当前过滤器状态及 verbosity 阈值 |
+| `openppp2 telemetry help` | 打印完整的遥测子命令参考 |
+| `openppp2 telemetry log on` | 启用遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry log off` | 禁用遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry log toggle` | 切换遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry metric on` | 启用指标控制台/本地输出过滤器 |
+| `openppp2 telemetry metric off` | 禁用指标控制台/本地输出过滤器 |
+| `openppp2 telemetry metric toggle` | 切换指标控制台/本地输出过滤器 |
+| `openppp2 telemetry span on` | 启用 span 控制台/本地输出过滤器 |
+| `openppp2 telemetry span off` | 禁用 span 控制台/本地输出过滤器 |
+| `openppp2 telemetry span toggle` | 切换 span 控制台/本地输出过滤器 |
+| `openppp2 telemetry level 0` | 仅 Info（verbosity 阈值 0） |
+| `openppp2 telemetry level 1` | Info + Verb（verbosity 阈值 1） |
+| `openppp2 telemetry level 2` | Info + Verb + Debug（verbosity 阈值 2） |
+| `openppp2 telemetry level 3` | Info + Verb + Debug + Trace（verbosity 阈值 3） |
+| `openppp2 telemetry all` | 启用所有控制台遥测过滤器（日志 + 指标 + span） |
+| `openppp2 telemetry quiet` | 禁用所有控制台遥测过滤器（日志 + 指标 + span） |
+| `openppp2 telemetry clear` | 清空遥测事件缓冲区（TUI 右侧面板） |
+
+`telemetry` 命名空间必须使用 `openppp2` 前缀 —— 裸输入 `telemetry` 会作为 shell 命令执行。
+
+> **注意：** 上述 `log`、`metric`、`span`、`all`、`quiet` 命令仅控制控制台/本地输出过滤器
+> （对应 `SetConsoleLogEnabled`、`SetConsoleMetricEnabled`、`SetConsoleSpanEnabled`），
+> 不会改变 `telemetry.enabled` 配置或运行期全局开关。`level` 命令设置的是 verbosity 阈值，不涉及 severity 过滤。
 
 ### 系统命令执行
 
@@ -405,7 +451,7 @@ sequenceDiagram
 
 底部状态栏分为左右两栏：
 
-- **左栏**：诊断错误快照。
+- **左栏**：诊断快照 + telemetry filter 指示（`| T:<LMS flags> @<level> (openppp2 telemetry help)`）。
   - 当前错误码为 `ErrorCode::Success` 时显示 `[INFO] 0 Success: Success`。
   - 有错误时显示 `[%LEVEL%] <数值ID> <CodeName>: <message> (<age>)`。
   - ANSI 颜色按严重级别区分：info=绿色、warn=黄色、error=红色、fatal=亮红色。

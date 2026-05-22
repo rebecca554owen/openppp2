@@ -138,8 +138,12 @@ jobs:
             if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
           }
 
+          $zip = "openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path (Join-Path $artifactDir '*') -DestinationPath $zip -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: artifact
+          path: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}.zip
           if-no-files-found: error

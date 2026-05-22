@@ -109,3 +109,8 @@ android/app/release
 android/.metadata
 android/**/jniLibs/**/*.so
 
+# Android release signing material (provide via local files or CI secrets)
+android/android/keystore/*.p12
+android/android/keystore/*.jks
+android/android/keystore/*.keystore
+android/android/keystore/*.properties

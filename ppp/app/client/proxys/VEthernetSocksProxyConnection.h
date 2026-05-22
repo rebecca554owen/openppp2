@@ -17,12 +17,14 @@ namespace ppp {
 
                 /**
                  * @class VEthernetSocksProxyConnection
-                 * @brief Handles SOCKS5 handshake, authentication, and CONNECT request processing.
+                 * @brief Handles SOCKS5 handshake, authentication, CONNECT, and UDP ASSOCIATE processing.
                  * @note This connection serves local SOCKS clients and forwards validated targets to the bridge layer.
                  */
                 class VEthernetSocksProxyConnection : public VEthernetLocalProxyConnection {
                 public:
                     typedef std::shared_ptr<VEthernetSocksProxySwitcher>                VEthernetSocksProxySwitcherPtr;
+                    typedef ppp::unordered_map<boost::asio::ip::udp::endpoint,
+                        boost::asio::ip::udp::endpoint>                                 UdpAssociateEndpointTable;
 
                 public:
                     /**
@@ -38,6 +40,10 @@ namespace ppp {
                         const std::shared_ptr<boost::asio::io_context>&                 context,
                         const ppp::threading::Executors::StrandPtr&                     strand,
                         const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket) noexcept;
+                    /**
+                     * @brief Releases UDP ASSOCIATE resources owned by this SOCKS connection.
+                     */
+                    virtual ~VEthernetSocksProxyConnection() noexcept;
 
                 private:
                     /**
@@ -62,15 +68,44 @@ namespace ppp {
                      */
                     int                                                                 Authentication(YieldContext& y) noexcept;
                     /**
-                     * @brief Reads and validates a SOCKS5 CONNECT request.
+                     * @brief Reads and validates a SOCKS5 CONNECT or UDP ASSOCIATE request.
                      * @param y Coroutine yield context for asynchronous I/O.
                      * @param address Output destination host string.
                      * @param port Output destination port.
                      * @param address_type Output destination address type.
+                     * @param command Output SOCKS command id.
                      * @return SOCKS request status code.
                      * @note This method writes the SOCKS request-reply packet to the client.
                      */
-                    int                                                                 Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept;
+                    int                                                                 Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type, int& command) noexcept;
+                    /**
+                     * @brief Opens the UDP relay socket used by SOCKS5 UDP ASSOCIATE.
+                     * @param y Coroutine yield context for asynchronous operations.
+                     * @return true if the relay socket is bound and receive loop scheduled.
+                     */
+                    bool                                                                OpenUdpAssociate(YieldContext& y) noexcept;
+                    /**
+                     * @brief Starts one asynchronous receive operation for SOCKS5 UDP datagrams.
+                     * @return true if the receive operation was scheduled.
+                     */
+                    bool                                                                UdpAssociateLoopback() noexcept;
+                    /**
+                     * @brief Parses one SOCKS5 UDP request and forwards its payload through the exchanger.
+                     * @param packet SOCKS UDP request bytes.
+                     * @param packet_length Request length in bytes.
+                     * @param sourceEP UDP endpoint of the local SOCKS client.
+                     * @return true if parsed and accepted for forwarding.
+                     */
+                    bool                                                                ForwardUdpAssociatePacket(YieldContext& y, Byte* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
+                    /**
+                     * @brief Sends one SOCKS5 UDP response packet back to the local client endpoint.
+                     * @param sourceEP Remote UDP source endpoint encoded in the SOCKS header.
+                     * @param destinationEP Local SOCKS client UDP endpoint.
+                     * @param packet UDP payload bytes.
+                     * @param packet_length Payload length in bytes.
+                     * @return true if the response datagram was sent.
+                     */
+                    bool                                                                SendUdpAssociatePacketToClient(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_length) noexcept;
 
                 protected:
                     /**
@@ -79,6 +114,19 @@ namespace ppp {
                      * @return true when handshake succeeds and bridge setup is completed.
                      */
                     virtual bool                                                        Handshake(YieldContext& y) noexcept override;
+                    /**
+                     * @brief Keeps the SOCKS5 UDP ASSOCIATE control connection alive after handshake.
+                     * @param y Coroutine yield context.
+                     * @return false when the control connection closes or errors.
+                     */
+                    virtual bool                                                        RunAfterHandshakeWithoutBridge(YieldContext& y) noexcept override;
+
+                private:
+                    std::shared_ptr<boost::asio::ip::udp::socket>                       udp_socket_;
+                    std::shared_ptr<Byte>                                               udp_buffer_;
+                    boost::asio::ip::udp::endpoint                                      udp_remote_ep_;
+                    boost::asio::ip::udp::endpoint                                      udp_client_ep_;
+                    UdpAssociateEndpointTable                                           udp_destination_clients_;
                 };
             }
         }

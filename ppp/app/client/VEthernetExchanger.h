@@ -107,6 +107,8 @@ namespace ppp {
                 typedef ppp::unordered_map<void*, TimerPtr>                             TimerTable;
                 /** @brief Shared pointer alias for a UDP datagram relay port. */
                 typedef std::shared_ptr<VEthernetDatagramPort>                          VEthernetDatagramPortPtr;
+                /** @brief Callback used by local proxy UDP handlers before TAP injection. */
+                typedef ppp::function<bool(const boost::asio::ip::udp::endpoint&, const boost::asio::ip::udp::endpoint&, void*, int)> DatagramPacketHandler;
                 /** @brief Strand pointer alias used for serialized IO operations. */
                 typedef ppp::threading::Executors::StrandPtr                            StrandPtr;
                 /** @brief Internal mutex type. */
@@ -118,6 +120,9 @@ namespace ppp {
                 /** @brief Map from source UDP endpoint to datagram relay port. */
                 typedef ppp::unordered_map<boost::asio::ip::udp::endpoint,
                     VEthernetDatagramPortPtr>                                           VEthernetDatagramPortTable;
+                /** @brief Map from local UDP source endpoint to optional proxy response handler. */
+                typedef ppp::unordered_map<boost::asio::ip::udp::endpoint,
+                    DatagramPacketHandler>                                              DatagramPacketHandlerTable;
                 /** @brief Mapping port alias (FRP port-forwarding). */
                 typedef ppp::app::protocol::VirtualEthernetMappingPort                  VirtualEthernetMappingPort;
                 /** @brief Shared pointer alias for mapping port. */
@@ -339,6 +344,27 @@ namespace ppp {
                  * @return true if the datagram was forwarded; false on error.
                  */
                 virtual bool                                                            SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept;
+
+                /**
+                 * @brief Registers an optional local handler for inbound UDP replies keyed by source endpoint.
+                 * @param sourceEP Local UDP source endpoint used as the datagram relay key.
+                 * @param handler Callback invoked before default TAP injection.
+                 * @return true if the handler is stored.
+                 */
+                bool                                                                    RegisterDatagramHandler(const boost::asio::ip::udp::endpoint& sourceEP, const DatagramPacketHandler& handler) noexcept;
+
+                /**
+                 * @brief Removes a previously registered local UDP reply handler.
+                 * @param sourceEP Local UDP source endpoint key.
+                 * @return true if a handler was removed.
+                 */
+                bool                                                                    ReleaseDatagramHandler(const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
+
+                /**
+                 * @brief Dispatches an inbound UDP reply to a registered local handler, if any.
+                 * @return true when a handler consumed the packet.
+                 */
+                bool                                                                    TryHandleDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size) noexcept;
 
                 /**
                  * @brief Performs periodic maintenance: keepalive, static-echo rotation, mux events.
@@ -1023,7 +1049,7 @@ namespace ppp {
                 virtual bool                                                            OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept override;
 
             private:
-                /** @brief Guards datagrams_ and deadline_timers_ tables. */
+                /** @brief Guards datagrams_, datagram_handlers_, and deadline_timers_ tables. */
                 SynchronizedObject                                                      syncobj_;
 
                 /** @brief Atomic one-shot disposed flag; safe for cross-strand reads. */
@@ -1045,6 +1071,8 @@ namespace ppp {
                 std::shared_ptr<VirtualEthernetInformation>                             information_;
                 /** @brief Active UDP datagram relay port table (guarded by syncobj_). */
                 VEthernetDatagramPortTable                                              datagrams_;
+                /** @brief Optional local proxy UDP reply handlers (guarded by syncobj_). */
+                DatagramPacketHandlerTable                                              datagram_handlers_;
                 /** @brief Active transport channel; null when not established. */
                 ITransmissionPtr                                                        transmission_;
                 /** @brief Atomic network state for safe cross-thread reads. */

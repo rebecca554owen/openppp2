@@ -1160,6 +1160,12 @@ namespace ppp {
                     return false;
                 }
 
+                if (NULLPTR != packet && packet_length > 0) {
+                    if (TryHandleDatagram(sourceEP, destinationEP, packet, packet_length)) {
+                        return true;
+                    }
+                }
+
                 VEthernetDatagramPortPtr datagram = GetDatagramPort(sourceEP);
                 if (NULLPTR != datagram) {
                     if (NULLPTR != packet && packet_length > 0) {
@@ -1198,6 +1204,57 @@ namespace ppp {
                 }
 
                 return datagram->SendTo(packet, packet_size, destinationEP);
+            }
+
+            /** @brief Registers a local datagram reply handler for a specific source endpoint. */
+            bool VEthernetExchanger::RegisterDatagramHandler(const boost::asio::ip::udp::endpoint& sourceEP, const DatagramPacketHandler& handler) noexcept {
+                if (!handler) {
+                    return false;
+                }
+
+                if (disposed_.load(std::memory_order_acquire)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
+                }
+
+                SynchronizedObjectScope scope(syncobj_);
+                datagram_handlers_[sourceEP] = handler;
+                return true;
+            }
+
+            /** @brief Removes a local datagram reply handler. */
+            bool VEthernetExchanger::ReleaseDatagramHandler(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
+                bool removed = false;
+                VEthernetDatagramPortPtr datagram;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    removed = datagram_handlers_.erase(sourceEP) > 0;
+                    datagram = Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
+                }
+
+                if (NULLPTR != datagram) {
+                    datagram->MarkFinalize();
+                    datagram->Dispose();
+                }
+
+                return removed;
+            }
+
+            /** @brief Dispatches a datagram reply to a registered local handler before TAP injection. */
+            bool VEthernetExchanger::TryHandleDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size) noexcept {
+                DatagramPacketHandler handler;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    auto tail = datagram_handlers_.find(sourceEP);
+                    if (tail != datagram_handlers_.end()) {
+                        handler = tail->second;
+                    }
+                }
+
+                if (!handler) {
+                    return false;
+                }
+
+                return handler(sourceEP, destinationEP, packet, packet_size);
             }
 
             /** @brief Sends ACK-based keepalive/echo packet through active transport. */

@@ -89,6 +89,14 @@ namespace ppp {
                             connection_mux->close();
                         }
 
+                        if (NULLPTR != exchanger_) {
+                            boost::system::error_code ec;
+                            boost::asio::ip::tcp::endpoint remote_endpoint = socket_ ? socket_->remote_endpoint(ec) : boost::asio::ip::tcp::endpoint();
+                            if (!ec && remote_endpoint.port() > ppp::net::IPEndPoint::MinPort) {
+                                exchanger_->ReleaseDatagramHandler(boost::asio::ip::udp::endpoint(remote_endpoint.address(), remote_endpoint.port()));
+                            }
+                        }
+
                         ppp::net::Socket::Closesocket(socket_);
                         break;
                     }
@@ -121,8 +129,13 @@ namespace ppp {
                         return connection->run();
                     }
                     else {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        return RunAfterHandshakeWithoutBridge(y);
                     }
+                }
+
+                /** @brief Default no-bridge handler reports a missing transport. */
+                bool VEthernetLocalProxyConnection::RunAfterHandshakeWithoutBridge(YieldContext& y) noexcept {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 /**

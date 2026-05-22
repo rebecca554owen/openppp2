@@ -120,6 +120,12 @@ namespace ppp {
                      */
                     virtual bool                                                        Handshake(YieldContext& y) noexcept = 0;
                     /**
+                     * @brief Handles protocol modes that complete handshake without creating a TCP bridge.
+                     * @param y Coroutine yield context.
+                     * @return true if the derived protocol handled the no-bridge mode.
+                     */
+                    virtual bool                                                        RunAfterHandshakeWithoutBridge(YieldContext& y) noexcept;
+                    /**
                      * @brief Establishes a bridge from the local socket to a remote peer.
                      * @param destinationEP Target remote endpoint descriptor.
                      * @param y Coroutine yield context.

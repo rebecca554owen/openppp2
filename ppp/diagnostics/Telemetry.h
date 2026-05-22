@@ -89,5 +89,35 @@ namespace ppp {
         void Flush(int timeout_ms = 3000) noexcept;
         void Shutdown() noexcept;
 
+        /**
+         * @brief Callback type for intercepting console telemetry output.
+         *
+         * When a sink is installed, all telemetry lines that would normally be
+         * written to stderr are instead delivered to this callback.  The file
+         * sink is still written regardless.
+         *
+         * @param line  Fully-formatted telemetry line (including ANSI escapes
+         *              and a trailing newline when the backend is attached to
+         *              a terminal).
+         */
+        using ConsoleSinkFn = void(*)(const char* line);
+
+        /**
+         * @brief Installs a callback that intercepts console telemetry output.
+         *
+         * When @p fn is non-null, all Print* methods in the backend call
+         * @p fn instead of writing to stderr.  Pass nullptr to restore the
+         * default stderr behavior.
+         *
+         * @param fn  Callback function pointer, or nullptr to disable.
+         */
+        void SetConsoleSink(ConsoleSinkFn fn) noexcept;
+
+        /**
+         * @brief Returns the currently installed console sink callback.
+         * @return The active sink, or nullptr when stderr is the output target.
+         */
+        ConsoleSinkFn GetConsoleSink() noexcept;
+
     }
 }

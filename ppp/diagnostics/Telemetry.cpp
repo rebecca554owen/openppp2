@@ -51,6 +51,7 @@ namespace ppp {
         std::atomic<bool> g_console_log{true};
         std::atomic<bool> g_console_metric{true};
         std::atomic<bool> g_console_span{true};
+        std::atomic<ConsoleSinkFn> g_console_sink{nullptr};
         std::string       g_endpoint;
         std::string       g_log_file;
 
@@ -205,6 +206,14 @@ namespace ppp {
 
         bool IsConsoleSpanEnabled() noexcept {
             return g_console_span.load(std::memory_order_relaxed);
+        }
+
+        void SetConsoleSink(ConsoleSinkFn fn) noexcept {
+            g_console_sink.store(fn, std::memory_order_release);
+        }
+
+        ConsoleSinkFn GetConsoleSink() noexcept {
+            return g_console_sink.load(std::memory_order_acquire);
         }
 
         int GetMinLevel() noexcept {
@@ -819,7 +828,12 @@ namespace ppp {
                         line += "}";
                     }
                     line += "\n";
-                    std::fputs(line.c_str(), stderr);
+                    ConsoleSinkFn sink = g_console_sink.load(std::memory_order_acquire);
+                    if (sink) {
+                        sink(line.c_str());
+                    } else {
+                        std::fputs(line.c_str(), stderr);
+                    }
                     file_sink_.Write(line.c_str());
                 }
 
@@ -835,7 +849,12 @@ namespace ppp {
                     }
                     line += " tid=" + std::to_string(ev.thread_id);
                     line += " delta=" + std::to_string(ev.delta) + "\n";
-                    std::fputs(line.c_str(), stderr);
+                    ConsoleSinkFn sink = g_console_sink.load(std::memory_order_acquire);
+                    if (sink) {
+                        sink(line.c_str());
+                    } else {
+                        std::fputs(line.c_str(), stderr);
+                    }
                     file_sink_.Write(line.c_str());
                 }
 
@@ -854,7 +873,12 @@ namespace ppp {
                         line += " session=" + ev.session_id;
                     }
                     line += " dur=" + std::to_string((ev.end_time_ns - ev.start_time_ns) / 1000ULL) + "us\n";
-                    std::fputs(line.c_str(), stderr);
+                    ConsoleSinkFn sink = g_console_sink.load(std::memory_order_acquire);
+                    if (sink) {
+                        sink(line.c_str());
+                    } else {
+                        std::fputs(line.c_str(), stderr);
+                    }
                     file_sink_.Write(line.c_str());
                 }
 
@@ -870,7 +894,12 @@ namespace ppp {
                     }
                     line += " tid=" + std::to_string(ev.thread_id);
                     line += " value=" + std::to_string(ev.value) + "\n";
-                    std::fputs(line.c_str(), stderr);
+                    ConsoleSinkFn sink = g_console_sink.load(std::memory_order_acquire);
+                    if (sink) {
+                        sink(line.c_str());
+                    } else {
+                        std::fputs(line.c_str(), stderr);
+                    }
                     file_sink_.Write(line.c_str());
                 }
 
@@ -885,7 +914,12 @@ namespace ppp {
                         line += " span=" + ShortHex64(ev.span_id);
                     }
                     line += " v=" + std::to_string(ev.value) + "\n";
-                    std::fputs(line.c_str(), stderr);
+                    ConsoleSinkFn sink = g_console_sink.load(std::memory_order_acquire);
+                    if (sink) {
+                        sink(line.c_str());
+                    } else {
+                        std::fputs(line.c_str(), stderr);
+                    }
                     file_sink_.Write(line.c_str());
                 }
 

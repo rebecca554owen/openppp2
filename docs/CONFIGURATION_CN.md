@@ -319,7 +319,7 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内
 | `http-proxy.bind` | string | HTTP 代理监听地址 |
 | `http-proxy.port` | int | HTTP 代理端口 |
 | `socks-proxy.bind` | string | SOCKS5 代理监听地址 |
-| `socks-proxy.port` | int | SOCKS5 代理端口 |
+| `socks-proxy.port` | int | SOCKS5 代理端口，支持 TCP `CONNECT` 和 SOCKS5 `UDP ASSOCIATE`（UDP 通过客户端 datagram 隧道路由转发） |
 | `socks-proxy.username` | string | SOCKS5 认证用户名 |
 | `socks-proxy.password` | string | SOCKS5 认证密码 |
 | `mappings` | array | FRP 端口映射规则列表 |

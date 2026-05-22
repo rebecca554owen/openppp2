@@ -398,12 +398,22 @@ ppp --pull-iplist ./cn.txt
 | `openppp2 exit` | 通过 `ShutdownApplication(false)` 退出 |
 | `openppp2 info` | 拉取并打印完整运行时环境快照 |
 | `openppp2 clear` | 清空命令输出环形缓冲区并重置滚动 |
+| `openppp2 telemetry status` | 打印当前遥测配置状态 |
+| `openppp2 telemetry help` | 打印遥测子命令用法 |
+| `openppp2 telemetry log on\|off\|toggle` | 遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry metric on\|off\|toggle` | 指标控制台/本地输出过滤器 |
+| `openppp2 telemetry span on\|off\|toggle` | span 控制台/本地输出过滤器 |
+| `openppp2 telemetry level 0\|1\|2\|3` | 设置遥测 verbosity 阈值 |
+| `openppp2 telemetry all` | 启用所有控制台遥测过滤器 |
+| `openppp2 telemetry quiet` | 禁用所有控制台遥测过滤器 |
+| `openppp2 telemetry clear` | 清空遥测事件缓冲区（TUI 右侧面板） |
 | *（其他任意输入）* | 作为 shell 命令执行，将输出捕获到命令区 |
 
 说明：
 
 - `help`、`restart`、`exit`、`clear`、`status` 等裸命令会按系统 shell 命令处理。
 - 内置命令必须使用 `openppp2` 前缀命名空间。
+- `openppp2 telemetry`（不带子命令）等同于 `openppp2 telemetry status`。
 
 ### 键盘控制
 
@@ -419,6 +429,43 @@ ppp --pull-iplist ./cn.txt
 | `Ctrl+E` | 光标移至行尾 |
 | `Enter` | 执行命令 |
 
+### 遥测命令
+
+> **迁移说明：** 旧版本使用单字符热键（`l`、`m`、`s`、`0`–`3`、`a`、`q`、`?`）在按键时立即
+> 切换遥测子系统。这些热键已被**移除**，因为它们会干扰正常的 shell 输入 —— 在 shell 命令中
+> 输入 `l` 时可能意外切换遥测日志。
+>
+> 遥测现在完全通过 `openppp2 telemetry …` 命令命名空间控制。命令仅在按下 `Enter` 后解析，
+> 因此正常的 shell 输入不会被截获或截断。
+
+| 命令 | 说明 |
+|------|------|
+| `openppp2 telemetry` / `openppp2 telemetry status` | 打印当前遥测状态（日志、指标、span 过滤器状态，verbosity 阈值） |
+| `openppp2 telemetry help` | 打印遥测子命令用法指南 |
+| `openppp2 telemetry log on` | 启用遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry log off` | 禁用遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry log toggle` | 切换遥测日志控制台/本地输出过滤器 |
+| `openppp2 telemetry metric on` | 启用指标控制台/本地输出过滤器 |
+| `openppp2 telemetry metric off` | 禁用指标控制台/本地输出过滤器 |
+| `openppp2 telemetry metric toggle` | 切换指标控制台/本地输出过滤器 |
+| `openppp2 telemetry span on` | 启用 span 控制台/本地输出过滤器 |
+| `openppp2 telemetry span off` | 禁用 span 控制台/本地输出过滤器 |
+| `openppp2 telemetry span toggle` | 切换 span 控制台/本地输出过滤器 |
+| `openppp2 telemetry level 0` | 仅 Info（verbosity 阈值 0） |
+| `openppp2 telemetry level 1` | Info + Verb（verbosity 阈值 1） |
+| `openppp2 telemetry level 2` | Info + Verb + Debug（verbosity 阈值 2） |
+| `openppp2 telemetry level 3` | Info + Verb + Debug + Trace（verbosity 阈值 3） |
+| `openppp2 telemetry all` | 启用所有控制台遥测过滤器（日志 + 指标 + span） |
+| `openppp2 telemetry quiet` | 禁用所有控制台遥测过滤器（日志 + 指标 + span） |
+| `openppp2 telemetry clear` | 清空遥测事件缓冲区（TUI 右侧面板中显示） |
+
+`telemetry` 命名空间必须使用 `openppp2` 前缀 —— 裸输入 `telemetry` 会作为 shell 命令执行。
+底层遥测子系统架构和 `appsettings.json` 配置项详见 `OTEL_DESIGN_CN.md`。
+
+> **注意：** 上述 `log`、`metric`、`span`、`all`、`quiet` 命令仅控制控制台/本地输出过滤器
+> （对应 `SetConsoleLogEnabled`、`SetConsoleMetricEnabled`、`SetConsoleSpanEnabled`），
+> 不会改变 `telemetry.enabled` 配置或运行期全局开关。`level` 命令设置的是 verbosity 阈值，不涉及 severity 过滤。
+
 ### 布局
 
 TUI 帧分为以下区域：
@@ -427,19 +474,19 @@ TUI 帧分为以下区域：
 2. **信息区**（动态，约中间区域的 60%）：可滚动 VPN 状态行，`Home`/`End` 控制
 3. **命令区**（动态，约中间区域的 40%）：可滚动命令输出，`PageUp`/`PageDown` 控制
 4. **输入行**（1 行）：带白底光标的编辑器
-5. **状态栏**（1 行）：最新诊断错误快照
+5. **状态栏**（1 行）：左侧诊断快照 + telemetry filter 指示（`| T:<LMS flags> @<level> (openppp2 telemetry help)`），右侧 VPN 状态和吞吐摘要
 
 完整的布局规范参见 `TUI_DESIGN_CN.md`。
 
 ### 状态栏语义
 
-状态栏展示单一诊断行，基于进程级错误快照生成：
+状态栏分为左右两栏：
 
-- `[INFO] 0 Success: Success`：当前错误码为 `ErrorCode::Success`。
-- `[%LEVEL%] <数值ID> <CodeName>: <message> (<age>)`：最近一次非成功错误，其中
-  `<age>` 基于 `GetLastErrorTimestamp()` 计算并显示为 `Ns ago`。
-
-VPN 状态和吞吐仍在内部更新用于命令/信息输出，但不再显示在底部状态栏。
+- **左栏**：诊断快照 + telemetry filter 指示（`| T:<LMS flags> @<level> (openppp2 telemetry help)`）。
+  - `[INFO] 0 Success: Success`：当前错误码为 `ErrorCode::Success`。
+  - `[%LEVEL%] <数值ID> <CodeName>: <message> (<age>)`：最近一次非成功错误，其中
+    `<age>` 基于 `GetLastErrorTimestamp()` 计算并显示为 `Ns ago`。
+- **右栏**：VPN 状态与吞吐摘要（如 `VPN: connected  ↑ 1.2MB/s  ↓ 3.4MB/s`）。
 
 ---
 

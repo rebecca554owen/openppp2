@@ -6,6 +6,7 @@
 #include <ppp/app/client/proxys/VEthernetSocksProxyConnection.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/net/Socket.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
@@ -83,6 +84,10 @@ namespace ppp {
                  * @brief SOCKS command id for UDP ASSOCIATE.
                  */
                 static constexpr int SOCKS_CMD_UDP              = 3;
+                /**
+                 * @brief Minimum SOCKS5 UDP request header size for IPv4 targets.
+                 */
+                static constexpr int SOCKS_UDP_MIN_PACKET_SIZE  = 10;
 
                 static int PublishSocketReadFailure(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket) noexcept {
                     if (NULLPTR == socket) {
@@ -183,6 +188,58 @@ namespace ppp {
                     return ok ? true : PublishSocketWriteFailure(socket);
                 }
 
+                VEthernetSocksProxyConnection::~VEthernetSocksProxyConnection() noexcept {
+                    VEthernetExchangerPtr exchanger = GetExchanger();
+                    if (NULLPTR != exchanger && udp_client_ep_.port() > ppp::net::IPEndPoint::MinPort) {
+                        exchanger->ReleaseDatagramHandler(udp_client_ep_);
+                    }
+
+                    ppp::net::Socket::Closesocket(udp_socket_);
+                }
+
+                /** @brief Sends a SOCKS5 request reply with an explicit UDP bind endpoint. */
+                static bool SendSocksRequestReply(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, Byte rep, const boost::asio::ip::udp::endpoint& bind_endpoint, ppp::coroutines::YieldContext& y) noexcept {
+                    if (NULLPTR == socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (!socket->is_open()) {
+                        return false;
+                    }
+
+                    Byte data[32];
+                    int packet_length = 0;
+                    data[packet_length++] = SOCKS_VER;
+                    data[packet_length++] = rep;
+                    data[packet_length++] = 0;
+
+                    boost::asio::ip::address local_ip = bind_endpoint.address();
+                    if (local_ip.is_v4()) {
+                        data[packet_length++] = SOCKS_ATYPE_IPV4;
+                        auto bytes = local_ip.to_v4().to_bytes();
+                        memcpy(data + packet_length, bytes.data(), bytes.size());
+                        packet_length += bytes.size();
+                    }
+                    elif(local_ip.is_v6()) {
+                        data[packet_length++] = SOCKS_ATYPE_IPV6;
+                        auto bytes = local_ip.to_v6().to_bytes();
+                        memcpy(data + packet_length, bytes.data(), bytes.size());
+                        packet_length += bytes.size();
+                    }
+                    else {
+                        data[packet_length++] = SOCKS_ATYPE_IPV4;
+                        memset(data + packet_length, 0, 4);
+                        packet_length += 4;
+                    }
+
+                    int local_port = bind_endpoint.port();
+                    data[packet_length++] = (Byte)(local_port >> 8);
+                    data[packet_length++] = (Byte)(local_port);
+
+                    bool ok = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
+                    return ok ? true : PublishSocketWriteFailure(socket);
+                }
+
                 /**
                  * @brief Executes the full SOCKS5 handshake and target bridge setup.
                  * @param y Coroutine yield context.
@@ -216,10 +273,11 @@ namespace ppp {
                     }
 
                     int port = ppp::net::IPEndPoint::MinPort;
+                    int command = SOCKS_CMD_CONNECT;
                     ppp::string host;
                     ppp::app::protocol::AddressType address_type = ppp::app::protocol::AddressType::Domain;
 
-                    int command_status = Requirement(y, host, port, address_type);
+                    int command_status = Requirement(y, host, port, address_type, command);
                     if (command_status != SOCKS_ERR_OK) {
                         if (command_status == SOCKS_ERR_ATYPE) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocksAddressTypeUnsupported);
@@ -233,6 +291,23 @@ namespace ppp {
 
                         SendSocksRequestReply(GetSocket(), (Byte)command_status, y);
                         return false;
+                    }
+
+                    if (command == SOCKS_CMD_UDP) {
+                        if (!OpenUdpAssociate(y)) {
+                            SendSocksRequestReply(GetSocket(), SOCKS_ERR_NO, y);
+                            return false;
+                        }
+
+                        boost::system::error_code ec;
+                        boost::asio::ip::udp::endpoint local_endpoint = udp_socket_->local_endpoint(ec);
+                        if (ec) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                            SendSocksRequestReply(GetSocket(), SOCKS_ERR_NO, y);
+                            return false;
+                        }
+
+                        return SendSocksRequestReply(GetSocket(), SOCKS_ERR_OK, local_endpoint, y);
                     }
 
                     std::shared_ptr<ppp::app::protocol::AddressEndPoint> address_endpoint = make_shared_object<ppp::app::protocol::AddressEndPoint>();
@@ -432,20 +507,20 @@ namespace ppp {
                 }
             
                 /**
-                 * @brief Parses SOCKS5 CONNECT request and replies with bind endpoint information.
+                 * @brief Parses SOCKS5 CONNECT or UDP ASSOCIATE request.
                  * @param y Coroutine yield context.
                  * @param address Output destination host string.
                  * @param port Output destination port in host order.
                  * @param address_type Output parsed address type.
-                 * @return SOCKS status code indicating request parse and reply result.
-                 * @note This routine both parses input request and writes the required request reply.
+                 * @return SOCKS status code indicating request parse result.
                  */
-                int VEthernetSocksProxyConnection::Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type) noexcept {
+                int VEthernetSocksProxyConnection::Requirement(YieldContext& y, ppp::string& address, int& port, ppp::app::protocol::AddressType& address_type, int& command) noexcept {
                     std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
                     address.clear();
 
                     port = ppp::net::IPEndPoint::MinPort;
                     address_type = ppp::app::protocol::AddressType::Domain;
+                    command = SOCKS_CMD_CONNECT;
 
                     if (NULLPTR == socket) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
@@ -477,7 +552,8 @@ namespace ppp {
                             return SOCKS_ERR_CMD;
                         }
 
-                        if (data[1] != SOCKS_CMD_CONNECT) {
+                        command = data[1];
+                        if (command != SOCKS_CMD_CONNECT && command != SOCKS_CMD_UDP) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                             return SOCKS_ERR_CMD;
                         }
@@ -548,61 +624,295 @@ namespace ppp {
                         break;
                     }
 
-                    /**
-                     * @brief Build and send the SOCKS5 request-reply packet to acknowledge CONNECT.
-                     */
-                    for (;;) {
-                        int packet_length = 0;
-                        data[packet_length++] = SOCKS_VER;
-                        data[packet_length++] = cmd;
-                        data[packet_length++] = 0;
+                    return SOCKS_ERR_OK;
+                }
 
-                        boost::system::error_code ec;
-                        boost::asio::ip::tcp::endpoint local_endpoint = socket->local_endpoint(ec);
-                        if (ec) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
-                            return SOCKS_ERR_ER;
-                        }
-                        else {
-                            local_endpoint = ppp::net::Ipep::V6ToV4(local_endpoint);
-                        }
-                    
-                        boost::asio::ip::address local_ip = local_endpoint.address();
-                        if (local_ip.is_v4()) {
-                            data[packet_length++] = SOCKS_ATYPE_IPV4;
-
-                            boost::asio::ip::address_v4 in4 = local_ip.to_v4();
-                            boost::asio::ip::address_v4::bytes_type bytes = in4.to_bytes();
-                            memcpy(data + packet_length, bytes.data(), bytes.size());
-
-                            packet_length += bytes.size();
-                        }
-                        elif(local_ip.is_v6()) {
-                            data[packet_length++] = SOCKS_ATYPE_IPV6;
-
-                            boost::asio::ip::address_v6 in6 = local_ip.to_v6();
-                            boost::asio::ip::address_v6::bytes_type bytes = in6.to_bytes();
-                            memcpy(data + packet_length, bytes.data(), bytes.size());
-                            
-                            packet_length += bytes.size();
-                        }
-                        else {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
-                            return SOCKS_ERR_ER;
-                        }
-
-                        int local_port = local_endpoint.port();
-                        data[packet_length++] = (Byte)(local_port >> 8);
-                        data[packet_length++] = (Byte)(local_port);
-
-                        bool writed = ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(data, packet_length), y);
-                        if (!writed) {
-                            PublishSocketWriteFailure(socket);
-                            return SOCKS_ERR_ER;
-                        }
-
-                        return SOCKS_ERR_OK;
+                /** @brief Opens and binds the local UDP socket for SOCKS5 UDP ASSOCIATE. */
+                bool VEthernetSocksProxyConnection::OpenUdpAssociate(YieldContext& y) noexcept {
+                    std::shared_ptr<boost::asio::io_context>& context = GetContext();
+                    std::shared_ptr<boost::asio::ip::tcp::socket>& tcp_socket = GetSocket();
+                    if (NULLPTR == context || NULLPTR == tcp_socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
+
+                    if (!tcp_socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    }
+
+                    if (IsDisposed()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    }
+
+                    boost::system::error_code ec;
+                    boost::asio::ip::tcp::endpoint local_tcp_endpoint = tcp_socket->local_endpoint(ec);
+                    if (ec) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                    }
+
+                    boost::asio::ip::address bind_ip = ppp::net::Ipep::V6ToV4(local_tcp_endpoint).address();
+                    if (bind_ip.is_unspecified()) {
+                        bind_ip = bind_ip.is_v6() ? boost::asio::ip::address(boost::asio::ip::address_v6::any()) : boost::asio::ip::address(boost::asio::ip::address_v4::any());
+                    }
+
+                    std::shared_ptr<boost::asio::ip::udp::socket> udp_socket = make_shared_object<boost::asio::ip::udp::socket>(*context);
+                    if (NULLPTR == udp_socket) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    }
+
+                    if (!ppp::net::Socket::OpenSocket(*udp_socket, bind_ip, ppp::net::IPEndPoint::MinPort)) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
+                    }
+
+                    udp_buffer_ = Executors::GetCachedBuffer(context);
+                    if (NULLPTR == udp_buffer_) {
+                        ppp::net::Socket::Closesocket(udp_socket);
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    }
+
+                    udp_socket_ = std::move(udp_socket);
+
+                    return UdpAssociateLoopback();
+                }
+
+                /** @brief Schedules one SOCKS5 UDP ASSOCIATE receive operation. */
+                bool VEthernetSocksProxyConnection::UdpAssociateLoopback() noexcept {
+                    std::shared_ptr<boost::asio::ip::udp::socket> udp_socket = udp_socket_;
+                    std::shared_ptr<Byte> udp_buffer = udp_buffer_;
+                    std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
+                    std::shared_ptr<boost::asio::io_context> context = GetContext();
+                    if (NULLPTR == udp_socket || NULLPTR == udp_buffer) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (NULLPTR == allocator || NULLPTR == context) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                    }
+
+                    if (!udp_socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    }
+
+                    if (IsDisposed()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    }
+
+                    auto self = std::dynamic_pointer_cast<VEthernetSocksProxyConnection>(shared_from_this());
+                    udp_socket->async_receive_from(boost::asio::buffer(udp_buffer.get(), PPP_BUFFER_SIZE), udp_remote_ep_,
+                        [self, this, udp_socket, udp_buffer, allocator, context](const boost::system::error_code& ec, std::size_t sz) noexcept {
+                            bool disposing = false;
+                            if (ec == boost::system::errc::success) {
+                                if (sz > 0) {
+                                    std::shared_ptr<Byte> packet = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, udp_buffer.get(), (int)sz);
+                                    if (NULLPTR == packet) {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                                    }
+                                    else {
+                                        boost::asio::ip::udp::endpoint sourceEP = udp_remote_ep_;
+                                        auto self_yield = self;
+                                        bool spawned = YieldContext::Spawn(allocator.get(), *context,
+                                            [self_yield, packet, sourceEP, sz](YieldContext& y) noexcept {
+                                                if (self_yield) {
+                                                    self_yield->ForwardUdpAssociatePacket(y, packet.get(), (int)sz, sourceEP);
+                                                }
+                                            });
+
+                                        if (!spawned) {
+                                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
+                                        }
+                                    }
+                                }
+                            }
+                            elif(ec == boost::system::errc::operation_canceled) {
+                                disposing = true;
+                            }
+                            else {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
+                                disposing = true;
+                            }
+
+                            if (disposing) {
+                                Dispose();
+                            }
+                            elif(!IsDisposed()) {
+                                UdpAssociateLoopback();
+                            }
+                        });
+                    return true;
+                }
+
+                /** @brief Maintains the SOCKS5 TCP control channel for UDP ASSOCIATE. */
+                bool VEthernetSocksProxyConnection::RunAfterHandshakeWithoutBridge(YieldContext& y) noexcept {
+                    std::shared_ptr<boost::asio::ip::udp::socket> udp_socket = udp_socket_;
+                    if (NULLPTR == udp_socket || !udp_socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    std::shared_ptr<boost::asio::ip::tcp::socket>& socket = GetSocket();
+                    if (NULLPTR == socket || !socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    }
+
+                    Byte data = 0;
+                    for (;;) {
+                        if (IsDisposed()) {
+                            return false;
+                        }
+
+                        bool ok = ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(&data, 1), y);
+                        if (!ok) {
+                            return false;
+                        }
+                    }
+                }
+
+                /** @brief Parses and forwards a SOCKS5 UDP request datagram. */
+                bool VEthernetSocksProxyConnection::ForwardUdpAssociatePacket(YieldContext& y, Byte* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
+                    if (NULLPTR == packet || packet_length < SOCKS_UDP_MIN_PACKET_SIZE) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    }
+
+                    if (packet[0] != 0 || packet[1] != 0 || packet[2] != 0) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                    }
+
+                    int offset = 3;
+                    int atyp = packet[offset++];
+                    boost::asio::ip::address destination_address;
+                    if (atyp == SOCKS_ATYPE_IPV4) {
+                        if (packet_length < offset + 4 + 2) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                        }
+
+                        boost::asio::ip::address_v4::bytes_type bytes;
+                        memcpy(bytes.data(), packet + offset, bytes.size());
+                        destination_address = boost::asio::ip::address_v4(bytes);
+                        offset += bytes.size();
+                    }
+                    elif(atyp == SOCKS_ATYPE_IPV6) {
+                        if (packet_length < offset + 16 + 2) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                        }
+
+                        boost::asio::ip::address_v6::bytes_type bytes;
+                        memcpy(bytes.data(), packet + offset, bytes.size());
+                        destination_address = boost::asio::ip::address_v6(bytes);
+                        offset += bytes.size();
+                    }
+                    elif(atyp == SOCKS_ATYPE_DOMAIN) {
+                        if (packet_length < offset + 1 + 2) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                        }
+
+                        int address_length = packet[offset++];
+                        if (address_length < 1 || packet_length < offset + address_length + 2) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                        }
+
+                        ppp::string host(reinterpret_cast<char*>(packet + offset), address_length);
+                        offset += address_length;
+                        int port = (packet[offset] << 8) | packet[offset + 1];
+                        if (port <= ppp::net::IPEndPoint::MinPort || port > ppp::net::IPEndPoint::MaxPort) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                        }
+
+                        destination_address = ppp::coroutines::asio::GetAddressByHostName<boost::asio::ip::udp>(host.data(), port, y).address();
+                        if (ppp::net::IPEndPoint::IsInvalid(destination_address)) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                        }
+                    }
+                    else {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocksAddressTypeUnsupported);
+                    }
+
+                    int destination_port = (packet[offset] << 8) | packet[offset + 1];
+                    offset += 2;
+                    if (destination_port <= ppp::net::IPEndPoint::MinPort || destination_port > ppp::net::IPEndPoint::MaxPort) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                    }
+
+                    int payload_length = packet_length - offset;
+                    if (payload_length < 1) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    }
+
+                    boost::asio::ip::udp::endpoint destinationEP(destination_address, destination_port);
+                    if (ppp::net::IPEndPoint::IsInvalid(destination_address)) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                    }
+
+                    udp_client_ep_ = sourceEP;
+                    udp_destination_clients_[destinationEP] = sourceEP;
+
+                    VEthernetExchangerPtr exchanger = GetExchanger();
+                    if (NULLPTR == exchanger) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    auto self = std::dynamic_pointer_cast<VEthernetSocksProxyConnection>(shared_from_this());
+                    exchanger->RegisterDatagramHandler(sourceEP,
+                        [self](const boost::asio::ip::udp::endpoint& replySourceEP, const boost::asio::ip::udp::endpoint& relaySourceEP, void* responsePacket, int responsePacketLength) noexcept -> bool {
+                            if (NULLPTR == self || NULLPTR == responsePacket || responsePacketLength < 1) {
+                                return false;
+                            }
+
+                            return self->SendUdpAssociatePacketToClient(replySourceEP, relaySourceEP, responsePacket, responsePacketLength);
+                        });
+
+                    return exchanger->SendTo(sourceEP, destinationEP, packet + offset, payload_length);
+                }
+
+                /** @brief Encodes and sends a SOCKS5 UDP response datagram to the local client. */
+                bool VEthernetSocksProxyConnection::SendUdpAssociatePacketToClient(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_length) noexcept {
+                    std::shared_ptr<boost::asio::ip::udp::socket> udp_socket = udp_socket_;
+                    if (NULLPTR == udp_socket || !udp_socket->is_open()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketDisconnected);
+                    }
+
+                    if (NULLPTR == packet || packet_length < 1) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    }
+
+                    Byte buffer[PPP_BUFFER_SIZE + 32];
+                    int packet_offset = 0;
+                    buffer[packet_offset++] = 0;
+                    buffer[packet_offset++] = 0;
+                    buffer[packet_offset++] = 0;
+
+                    boost::asio::ip::address source_address = sourceEP.address();
+                    if (source_address.is_v4()) {
+                        buffer[packet_offset++] = SOCKS_ATYPE_IPV4;
+                        auto bytes = source_address.to_v4().to_bytes();
+                        memcpy(buffer + packet_offset, bytes.data(), bytes.size());
+                        packet_offset += bytes.size();
+                    }
+                    elif(source_address.is_v6()) {
+                        buffer[packet_offset++] = SOCKS_ATYPE_IPV6;
+                        auto bytes = source_address.to_v6().to_bytes();
+                        memcpy(buffer + packet_offset, bytes.data(), bytes.size());
+                        packet_offset += bytes.size();
+                    }
+                    else {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                    }
+
+                    int source_port = sourceEP.port();
+                    buffer[packet_offset++] = (Byte)(source_port >> 8);
+                    buffer[packet_offset++] = (Byte)(source_port);
+
+                    if (packet_length > (int)sizeof(buffer) - packet_offset) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    }
+
+                    memcpy(buffer + packet_offset, packet, packet_length);
+                    packet_offset += packet_length;
+
+                    boost::system::error_code ec;
+                    udp_socket->send_to(boost::asio::buffer(buffer, packet_offset), destinationEP, boost::asio::socket_base::message_end_of_record, ec);
+                    if (ec) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
+                    }
+
+                    return true;
                 }
             }
         }
