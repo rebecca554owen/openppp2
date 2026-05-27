@@ -296,6 +296,12 @@
 #include <boost/beast/http/message.hpp>
 #include <boost/beast/http/string_body.hpp>
 
+#include <openssl/opensslv.h>
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 4
+#   ifndef BOOST_ASIO_NO_DEPRECATED
+#       define BOOST_ASIO_NO_DEPRECATED
+#   endif
+#endif
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/ssl.hpp>
 
