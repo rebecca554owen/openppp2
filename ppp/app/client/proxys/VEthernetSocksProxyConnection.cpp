@@ -325,7 +325,7 @@ namespace ppp {
                         return false;
                     }
 
-                    return true;
+                    return SendSocksRequestReply(GetSocket(), SOCKS_ERR_OK, y);
                 }
 
                 /**
