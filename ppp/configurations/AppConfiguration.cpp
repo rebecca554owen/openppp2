@@ -320,6 +320,19 @@ namespace ppp {
             config.telemetry.console_metric = true;
             config.telemetry.console_span = true;
 
+            config.p2p.enabled = false;
+            config.p2p.mode = "relay";
+            config.p2p.punch_timeout = 5;
+            config.p2p.keep_alived = 15;
+            config.p2p.stun_servers.clear();
+            config.p2p.max_probes = 2;
+            config.p2p.probe_timeout_ms = 2000;
+            config.p2p.heartbeat_interval_ms = 1000;
+            config.p2p.heartbeat_miss_max = 2;
+            config.p2p.suspect_timeout_ms = 2000;
+            config.p2p.migration_grace_ms = 5000;
+            config.p2p.buffer_pool_count = 64;
+
             config.dns.servers.domestic = "";
             config.dns.servers.foreign = "";
             config.dns.servers.domestic_entries.clear();
@@ -454,6 +467,7 @@ namespace ppp {
                     &config.geo_rules.dns_provider_foreign,
                     &config.geo_rules.output_bypass,
                     &config.geo_rules.output_dns_rules,
+                    &config.p2p.mode,
                 };
                 LRTrim(strings, arraysizeof(strings));
             }
@@ -646,7 +660,8 @@ namespace ppp {
             }
 
             for (auto* vec : { &config.geo_rules.geoip, &config.geo_rules.geosite,
-                               &config.geo_rules.append_bypass, &config.geo_rules.append_dns_rules }) {
+                               &config.geo_rules.append_bypass, &config.geo_rules.append_dns_rules,
+                               &config.p2p.stun_servers }) {
                 for (auto& s : *vec) {
                     s = LTrim(RTrim(s));
                 }
@@ -986,6 +1001,23 @@ namespace ppp {
             config.virr.retry_interval = std::max<int>(1, config.virr.retry_interval);
             config.virr.update_interval = std::max<int>(1, config.virr.update_interval);
             config.vbgp.update_interval = std::max<int>(1, config.vbgp.update_interval);
+
+            config.p2p.mode = ToLower(config.p2p.mode);
+            if (config.p2p.mode != "direct-preferred") {
+                config.p2p.mode = "relay";
+            }
+            if (!config.p2p.enabled) {
+                config.p2p.mode = "relay";
+            }
+            config.p2p.punch_timeout = std::max<int>(1, config.p2p.punch_timeout);
+            config.p2p.keep_alived = std::max<int>(1, config.p2p.keep_alived);
+            config.p2p.max_probes = std::clamp<int>(config.p2p.max_probes, 1, 10);
+            config.p2p.probe_timeout_ms = std::clamp<int>(config.p2p.probe_timeout_ms, 500, 10000);
+            config.p2p.heartbeat_interval_ms = std::clamp<int>(config.p2p.heartbeat_interval_ms, 500, 5000);
+            config.p2p.heartbeat_miss_max = std::clamp<int>(config.p2p.heartbeat_miss_max, 1, 10);
+            config.p2p.suspect_timeout_ms = std::clamp<int>(config.p2p.suspect_timeout_ms, 500, 10000);
+            config.p2p.migration_grace_ms = std::clamp<int>(config.p2p.migration_grace_ms, 1000, 30000);
+            config.p2p.buffer_pool_count = std::clamp<int>(config.p2p.buffer_pool_count, 8, 256);
 
             // Validate dns.ecs.override_ip: if non-empty, must be a valid IP address.
             // Accept both IPv4 and IPv6.  ECS first version primarily uses IPv4,
@@ -1605,6 +1637,34 @@ namespace ppp {
             AssignBoolIfPresent(config.telemetry.console_metric, json["telemetry"]["console-metric"]);
             AssignBoolIfPresent(config.telemetry.console_span, json["telemetry"]["console-span"]);
 
+            {
+                const Json::Value& p2p_json = json["p2p"];
+                if (p2p_json.isObject()) {
+                    AssignBoolIfPresent(config.p2p.enabled, p2p_json["enabled"]);
+                    AssignIfPresent(config.p2p.mode, p2p_json["mode"]);
+                    AssignIfPresent(config.p2p.punch_timeout, p2p_json["punch-timeout"]);
+                    AssignIfPresent(config.p2p.keep_alived, p2p_json["keep-alived"]);
+
+                    const Json::Value& stun_json = p2p_json["stun"]["servers"];
+                    if (stun_json.isArray()) {
+                        config.p2p.stun_servers.clear();
+                        for (Json::ArrayIndex i = 0; i < stun_json.size(); i++) {
+                            ppp::string s = LTrim(RTrim(JsonAuxiliary::AsString(stun_json[i])));
+                            if (!s.empty()) {
+                                config.p2p.stun_servers.emplace_back(std::move(s));
+                            }
+                        }
+                    }
+                    AssignIfPresent(config.p2p.max_probes, p2p_json["max-probes"]);
+                    AssignIfPresent(config.p2p.probe_timeout_ms, p2p_json["probe-timeout-ms"]);
+                    AssignIfPresent(config.p2p.heartbeat_interval_ms, p2p_json["heartbeat-interval-ms"]);
+                    AssignIfPresent(config.p2p.heartbeat_miss_max, p2p_json["heartbeat-miss-max"]);
+                    AssignIfPresent(config.p2p.suspect_timeout_ms, p2p_json["suspect-timeout-ms"]);
+                    AssignIfPresent(config.p2p.migration_grace_ms, p2p_json["migration-grace-ms"]);
+                    AssignIfPresent(config.p2p.buffer_pool_count, p2p_json["buffer-pool-count"]);
+                }
+            }
+
             // DNS resolver extension configuration.
             // domestic/foreign accept three forms:
             //   string  → legacy shorthand stored in domestic/foreign + single entry
@@ -1930,6 +1990,27 @@ namespace ppp {
             telemetry["console-span"] = config.telemetry.console_span;
             root["telemetry"] = telemetry;
 
+            Json::Value p2p;
+            p2p["enabled"] = config.p2p.enabled;
+            p2p["mode"] = config.p2p.mode;
+            p2p["punch-timeout"] = config.p2p.punch_timeout;
+            p2p["keep-alived"] = config.p2p.keep_alived;
+            p2p["max-probes"] = config.p2p.max_probes;
+            p2p["probe-timeout-ms"] = config.p2p.probe_timeout_ms;
+            p2p["heartbeat-interval-ms"] = config.p2p.heartbeat_interval_ms;
+            p2p["heartbeat-miss-max"] = config.p2p.heartbeat_miss_max;
+            p2p["suspect-timeout-ms"] = config.p2p.suspect_timeout_ms;
+            p2p["migration-grace-ms"] = config.p2p.migration_grace_ms;
+            p2p["buffer-pool-count"] = config.p2p.buffer_pool_count;
+            if (!config.p2p.stun_servers.empty()) {
+                Json::Value stun_servers(Json::arrayValue);
+                for (const ppp::string& s : config.p2p.stun_servers) {
+                    stun_servers.append(s);
+                }
+                p2p["stun"]["servers"] = stun_servers;
+            }
+            root["p2p"] = p2p;
+
             Json::Value dns;
             // Serialize domestic/foreign: emit structured array when entries exist,
             // otherwise emit legacy string shorthand.
@@ -2058,14 +2139,14 @@ namespace ppp {
                 ++warnings;
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
                     "Plaintext mode enabled (key.plaintext=true); packets transmitted without encryption");
-                ppp::ConsoleFormat("[security] WARN: plaintext mode enabled (key.plaintext=true) — not suitable for untrusted networks\n");
+                    ppp::ConsoleFormat("[security] WARN: plaintext mode enabled (key.plaintext=true) - not suitable for untrusted networks\n");
             }
 
             /* Summary */
             if (warnings > 0) {
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",
-                    "Startup security diagnostics: %d warning(s) — startup continues (non-fatal)", warnings);
-                ppp::ConsoleFormat("[security] Startup security diagnostics: %d warning(s) — startup continues (non-fatal)\n", warnings);
+                    "Startup security diagnostics: %d warning(s) - startup continues (non-fatal)", warnings);
+                ppp::ConsoleFormat("[security] Startup security diagnostics: %d warning(s) - startup continues (non-fatal)\n", warnings);
             }
             else {
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "security",

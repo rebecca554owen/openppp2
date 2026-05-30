@@ -420,7 +420,7 @@ namespace ppp
             }
 
             std::shared_ptr<ITap> self = shared_from_this();
-            stream->async_read_some(boost::asio::buffer(_packet, ITap::Mtu), 
+            stream->async_read_some(boost::asio::buffer(_packet, sizeof(_packet)), 
                 [self, this, stream](const boost::system::error_code& ec, std::size_t sz) noexcept
                 {
                     if (ec == boost::system::errc::operation_canceled)

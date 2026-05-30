@@ -96,6 +96,7 @@ jobs:
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DCMAKE_EXE_LINKER_FLAGS="-L${{ runner.temp }}/libunwind/lib" \
+            -DCMAKE_CXX_FLAGS="-DOPENSSL_API_COMPAT=0x10100000L" \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP"
           make -j$(nproc)
 

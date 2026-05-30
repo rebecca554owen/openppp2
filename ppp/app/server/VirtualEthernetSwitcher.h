@@ -43,6 +43,7 @@
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/server/IPv4LeasePool.h>
+#include <ppp/p2p/P2PNatClassifier.h>
 #include <ppp/tap/ITap.h>
 
 namespace ppp {
@@ -136,6 +137,22 @@ namespace ppp {
                 };
                 typedef ppp::unordered_map<Int128, IPv6RequestEntry>     IPv6RequestTable;
                 typedef ppp::unordered_map<Int128, IPv6LeaseEntry>       IPv6LeaseTable;
+
+            public:
+                struct P2PPeerRecord {
+                    Int128                                               SessionId = 0;            ///< Session that owns this peer record.
+                    uint32_t                                             VirtualIP = 0;            ///< Client virtual IPv4 in network byte order.
+                    ppp::string                                          Mode;                     ///< Client-requested P2P mode.
+                    boost::asio::ip::udp::endpoint                       ObservedEndpoint;         ///< Coordinator-observed endpoint hint.
+                    ppp::vector<ppp::app::protocol::P2PEndpointCandidate> Candidates;              ///< Client-advertised UDP/STUN candidates.
+                    UInt64                                               LastSeen = 0;             ///< Last control update tick.
+                    UInt64                                               LastOfferAt = 0;          ///< Last peer-offer send tick for coarse throttling.
+                    std::weak_ptr<VirtualEthernetExchanger>              Exchanger;                ///< Owning exchanger.
+                    ppp::p2p::P2PNatType                                 NatType = ppp::p2p::P2PNatType::Unknown; ///< Inferred NAT type from relay traffic.
+                };
+                typedef ppp::unordered_map<Int128, P2PPeerRecord>        P2PPeerTable;
+
+            private:
                 typedef ppp::cryptography::Ciphertext                   Ciphertext;
                 typedef std::shared_ptr<Ciphertext>                     CiphertextPtr;
 
@@ -763,6 +780,12 @@ namespace ppp {
                  * @return Shared pointer to the new entry; null if insertion fails.
                  */
                 NatInformationPtr                                       AddNatInformation(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, uint32_t ip, uint32_t mask) noexcept;
+                /** @brief Updates server-side P2P peer state from an INFO extension. */
+                bool                                                    UpdateP2PPeer(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, const ITransmissionPtr& transmission, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept;
+                /** @brief Removes P2P peer state for a disconnected session. */
+                bool                                                    DeleteP2PPeer(const Int128& session_id) noexcept;
+                /** @brief Sends peer endpoint hints to both sides while preserving server relay fallback. */
+                bool                                                    OfferP2PPeerHints(uint32_t source_ip, uint32_t destination_ip, YieldContext& y) noexcept;
 
             private:
                 template <typename TTransmission>
@@ -807,6 +830,9 @@ namespace ppp {
                 IPv6ExchangerTable                                      ipv6s_;                         ///< IPv6 address → exchanger mapping.
                 IPv6RequestTable                                        ipv6_requests_;                 ///< Per-session IPv6 request state.
                 IPv6LeaseTable                                          ipv6_leases_;                   ///< Active IPv6 lease records.
+                P2PPeerTable                                            p2p_peers_;                     ///< P2P control-plane peer records (key = session_id).
+                ppp::unordered_map<uint32_t, Int128>                    p2p_virtual_ips_;               ///< Reverse index: virtual_ip → session_id for dedup and NAT-ownership validation.
+                ppp::p2p::P2PNatClassifier                              p2p_nat_classifier_;            ///< Server-side NAT type inference from relay traffic.
                 FirewallPtr                                             firewall_;                      ///< Packet firewall.
                 VirtualEthernetExchangerTable                           exchangers_;                    ///< Active session exchangers (key = session_id).
                 TimerPtr                                                timeout_;                       ///< Global maintenance timer.

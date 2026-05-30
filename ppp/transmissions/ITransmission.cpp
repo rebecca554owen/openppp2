@@ -45,6 +45,13 @@ namespace ppp {
         static constexpr int EVP_HEADER_MSS = EVP_HEADER_TSS + 1; // 3 bytes: total header after first key byte
         static constexpr int EVP_HEADER_XSS = EVP_HEADER_MSS + 1; // 4 bytes: simple header (random key + filler + swapped length)
 
+        // Maximum base94-encoded frame payload size.  Base94 expands 9 input bytes
+        // into 11 output bytes, so a PPP_BUFFER_SIZE plaintext can produce up to
+        // ceil(PPP_BUFFER_SIZE * 11/9) encoded bytes.  The frame-length check on the
+        // receive side must allow this expansion; the decoded output is still bounded
+        // by PPP_BUFFER_SIZE in DecryptBinary.
+        static constexpr int EVP_BASE94_MAX_FRAME = (PPP_BUFFER_SIZE * 11 / 9) + 64;
+
         // Forward declaration of the full packet read helper (used by ReadBinary).
         static std::shared_ptr<Byte> Transmission_Packet_Read(
             const AppConfigurationPtr&                  APP,
@@ -434,8 +441,23 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
                 }
 
-                /** @brief Frame length upper-bound check (P0-4A): reject in-memory base94 frames exceeding PPP_BUFFER_SIZE. */
-                if (payload_length > PPP_BUFFER_SIZE) {
+                /**
+                 * @brief Frame length upper-bound check (P0-4A): reject in-memory base94 frames
+                 *        exceeding the encoded ceiling.
+                 *
+                 * @details The send side caps plaintext/base94 TCP chunks (see
+                 *          VirtualEthernetTcpipConnection / vmux_skt) so a conforming peer never
+                 *          emits a frame this large.  We still accept up to EVP_BASE94_MAX_FRAME
+                 *          (PPP_BUFFER_SIZE expanded by the base94 11/9 ratio) rather than the raw
+                 *          PPP_BUFFER_SIZE so that a peer running an older, un-capped build can
+                 *          still interoperate during a rolling upgrade.
+                 */
+                if (payload_length > EVP_BASE94_MAX_FRAME) {
+                    ppp::telemetry::Log(Level::kInfo,
+                        "transmission",
+                        "base94 frame too large payload_length=%d max=%d in_memory=yes",
+                        payload_length,
+                        EVP_BASE94_MAX_FRAME);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
                 }
 
@@ -539,8 +561,13 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                /** @brief Frame length upper-bound check (P0-4A): reject frames that exceed PPP_BUFFER_SIZE. */
-                if (payload_length > PPP_BUFFER_SIZE) {
+                /** @brief Frame length upper-bound check (P0-4A): reject base94 frames that exceed the encoded ceiling. */
+                if (payload_length > EVP_BASE94_MAX_FRAME) {
+                    ppp::telemetry::Log(Level::kInfo,
+                        "transmission",
+                        "base94 frame too large payload_length=%d max=%d in_memory=no",
+                        payload_length,
+                        EVP_BASE94_MAX_FRAME);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
                 }
 
@@ -1272,6 +1299,16 @@ namespace ppp {
                 else {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
                 }
+            }
+
+            if (NULLPTR == result) {
+                ppp::telemetry::Log(Level::kInfo,
+                    "transmission",
+                    "Read failed outlen=%d error=%d disposed=%s finalized=%s",
+                    outlen,
+                    (int)ppp::diagnostics::GetLastErrorCode(),
+                    disposed_.load(std::memory_order_acquire) ? "yes" : "no",
+                    finalized_.load(std::memory_order_acquire) ? "yes" : "no");
             }
 
             return result;

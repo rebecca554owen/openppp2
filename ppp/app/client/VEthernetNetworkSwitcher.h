@@ -810,6 +810,9 @@ namespace ppp {
                  */
                 bool                                                                DeleteTimeout(void* k) noexcept;
 
+                /** @brief Applies deferred hosted-network routes once the remote session is established. */
+                bool                                                                TryApplyHostedNetworkRoutes() noexcept;
+
             private:
                 /** @brief Releases all managed runtime objects in safe order. */
                 void                                                                ReleaseAllObjects() noexcept;
@@ -1113,6 +1116,8 @@ namespace ppp {
 #else
                 /** @brief Whether VPN routes have been added to the OS table. */
                 bool                                                                route_added_   = false;
+                /** @brief Whether route/DNS setup has enough Open() state to run. */
+                bool                                                                route_apply_ready_ = false;
                 /** @brief IP-list file sources registered for deferred loading. */
                 LoadIPListFileVectorPtr                                             ribs_;
 

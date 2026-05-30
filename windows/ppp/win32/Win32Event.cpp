@@ -51,27 +51,45 @@ namespace ppp
                 return -1;
             }
 
-            hKrlEvt = OpenEventA(EVENT_ALL_ACCESS, FALSE, name.c_str());
-            if (NULLPTR == hKrlEvt)
+            HANDLE existing = OpenEventA(EVENT_ALL_ACCESS, FALSE, name.c_str());
+            if (NULLPTR != existing)
             {
                 if (openOrCreate)
                 {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventOpenFailed);
-                    return -1;
+                    // Open-only mode: attaching to an already-published event is the success case.
+                    hKrlEvt = existing;
+                    return 0;
                 }
 
-                if (initialState)
-                {
-                    hKrlEvt = CreateEventA(NULLPTR, FALSE, TRUE, name.c_str());
-                }
-                else
-                {
-                    hKrlEvt = CreateEventA(NULLPTR, TRUE, FALSE, name.c_str());
-                }
+                // Create/acquire mode (single-instance guard): the named object already exists,
+                // which means another instance currently owns the guard. Do NOT adopt its handle
+                // as if we were the owner - that was the historical bug that let a second instance
+                // believe it acquired the lock. Report contention instead.
+                CloseHandle(existing);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventCreateFailed);
+                return 1;
             }
 
-            if (NULLPTR != hKrlEvt)
+            if (openOrCreate)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventOpenFailed);
+                return -1;
+            }
+
+            HANDLE created = CreateEventA(NULLPTR, initialState ? FALSE : TRUE, initialState ? TRUE : FALSE, name.c_str());
+            if (NULLPTR != created)
+            {
+                // CreateEventA returns a valid handle to a pre-existing object and sets
+                // ERROR_ALREADY_EXISTS. This closes the OpenEventA->CreateEventA race window:
+                // if another acquirer created the guard meanwhile, we are not the owner.
+                if (ERROR_ALREADY_EXISTS == GetLastError())
+                {
+                    CloseHandle(created);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32EventCreateFailed);
+                    return 1;
+                }
+
+                hKrlEvt = created;
                 return 0;
             }
 

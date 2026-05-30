@@ -91,6 +91,7 @@ namespace ppp
             int flags = fcntl(sock, F_GETFL, 0);
             if (flags == -1)
             {
+                Socket::Closesocket(sock);
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                 return -1013;
             }
@@ -99,6 +100,7 @@ namespace ppp
             {
                 if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0)
                 {
+                    Socket::Closesocket(sock);
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return -1014;
                 }

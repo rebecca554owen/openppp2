@@ -231,6 +231,7 @@ namespace ppp {
                 // if the constructor did not receive a valid switcher reference.
                 if (switcher_) {
                     switcher_->DeleteIPv6Exchanger(GetId());
+                    switcher_->DeleteP2PPeer(GetId());
                     switcher_->DeleteExchanger(this);
                     switcher_->DeleteNatInformation(this, address_);
 
@@ -307,13 +308,14 @@ namespace ppp {
                 const VirtualEthernetInformationExtensions& request = information.Extensions;
                 bool has_ipv6_request = request.RequestedIPv6Address.is_v6();
                 bool has_ipv4_request = request.ClientIPv4Req.enabled;
+                bool has_p2p_request = request.P2P.HasAny();
                 bool is_server_response = request.AssignedIPv6Address.is_v6() || request.IPv6StatusCode != VirtualEthernetInformationExtensions::IPv6Status_None;
                 if (is_server_response) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                     return false;
                 }
 
-                if (!has_ipv6_request && !has_ipv4_request) {
+                if (!has_ipv6_request && !has_ipv4_request && !has_p2p_request) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                     return false;
                 }
@@ -329,6 +331,11 @@ namespace ppp {
                 // Process IPv4 request if present.
                 if (has_ipv4_request) {
                     switcher_->UpdateIPv4Request(GetId(), request, response);
+                }
+
+                if (has_p2p_request) {
+                    auto self = std::dynamic_pointer_cast<VirtualEthernetExchanger>(shared_from_this());
+                    switcher_->UpdateP2PPeer(self, transmission, request, response);
                 }
 
                 // The base info quota/expire fields MUST satisfy the client-side
@@ -1284,7 +1291,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
                 /** @brief Delivers a packet to the exchanger that owns destination address. */
                 static const auto forward =
-                    [](VirtualEthernetSwitcher* switcher, uint32_t destination, Byte* packet, int packet_length, YieldContext& y) noexcept -> int {
+                    [](VirtualEthernetSwitcher* switcher, uint32_t source, uint32_t destination, Byte* packet, int packet_length, YieldContext& y) noexcept -> int {
                         VES::NatInformationPtr nat = switcher->FindNatInformation(destination);
                         if (NULLPTR == nat) {
                             return 0;
@@ -1299,11 +1306,16 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
                         ITransmissionPtr transmission = exchanger->GetTransmission();
                         if (NULLPTR != transmission) {
+                            // Fix #2: NAT relay MUST execute first. P2P offer is best-effort and
+                            // must never block or affect the relay forward status.
                             if (exchanger->DoNat(transmission, packet, packet_length, y)) {
                                 VirtualEthernetLoggerPtr logger = switcher->GetLogger();
                                 if (NULLPTR != logger) {
                                     logger->Packet(exchanger->GetId(), packet, packet_length, VirtualEthernetLogger::PacketDirection::ServerToClient);
                                 }
+
+                                // Best-effort P2P hint — failure does not affect relay.
+                                switcher->OfferP2PPeerHints(source, destination, y);
                                 return 1;
                             }
 
@@ -1314,7 +1326,14 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     };
 
                 if (uint32_t destination = ip->dest; destination != IPEndPoint::BroadcastAddress) {
-                    return forward(switcher_.get(), destination, packet, packet_length, y) > 0;
+                    int status = forward(switcher_.get(), ip->src, destination, packet, packet_length, y);
+                    // NOTE: NAT classification observations must come from actual UDP
+                    // relay traffic (e.g., static-echo or UDP sendto paths), NOT from
+                    // TCP control channel endpoints.  TCP endpoints reflect TCP NAT
+                    // behavior and do not predict UDP NAT mapping patterns (#14).
+                    // Observations should be recorded in the UDP datagram port paths
+                    // when UDP relay traffic is processed.
+                    return status > 0;
                 }
                 else {
                     // BUG-19: The original loop iterated every host address in the subnet,
@@ -1341,7 +1360,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                         }
 
                         walked++;
-                        int status = forward(switcher_.get(), htonl(address), packet, packet_length, y);
+                        int status = forward(switcher_.get(), ip->src, htonl(address), packet, packet_length, y);
                         if (status < 0) {
                             break;
                         }

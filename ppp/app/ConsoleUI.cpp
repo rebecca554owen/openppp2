@@ -25,6 +25,8 @@
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/threading/Executors.h>
 
+#include <cstdlib>
+
 #if defined(_WIN32)
 #   include <conio.h>
 #   include <io.h>
@@ -111,6 +113,48 @@ static constexpr const char kHH[]   = "\xe2\x94\x80";
 /** @brief Vertical line:     │ (U+2502) */
 static constexpr const char kVV[]   = "\xe2\x94\x82";
 
+static bool g_use_unicode_ui_glyphs = true;
+
+static bool IsEnvEnabled(const char* name) noexcept {
+    const char* value = std::getenv(name);
+    if (NULLPTR == value || '\0' == value[0]) {
+        return false;
+    }
+
+    char first = value[0];
+    return first != '0' && first != 'n' && first != 'N' && first != 'f' && first != 'F';
+}
+
+static bool SelectUnicodeUiGlyphs() noexcept {
+    if (IsEnvEnabled("PPP_TUI_ASCII")) {
+        return false;
+    }
+    if (IsEnvEnabled("PPP_TUI_UTF8")) {
+        return true;
+    }
+
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
+#endif
+}
+
+static bool UseUnicodeUiGlyphs() noexcept {
+    return g_use_unicode_ui_glyphs;
+}
+
+static const char* BoxBL() noexcept { return UseUnicodeUiGlyphs() ? kBL  : "+"; }
+static const char* BoxBR() noexcept { return UseUnicodeUiGlyphs() ? kBR  : "+"; }
+static const char* BoxBBL() noexcept { return UseUnicodeUiGlyphs() ? kBBL : "+"; }
+static const char* BoxBBR() noexcept { return UseUnicodeUiGlyphs() ? kBBR : "+"; }
+static const char* BoxLT() noexcept { return UseUnicodeUiGlyphs() ? kLT  : "+"; }
+static const char* BoxRT() noexcept { return UseUnicodeUiGlyphs() ? kRT  : "+"; }
+static const char* BoxTT() noexcept { return UseUnicodeUiGlyphs() ? kTT  : "+"; }
+static const char* BoxBT() noexcept { return UseUnicodeUiGlyphs() ? kBT  : "+"; }
+static const char* BoxHH() noexcept { return UseUnicodeUiGlyphs() ? kHH  : "-"; }
+static const char* BoxVV() noexcept { return UseUnicodeUiGlyphs() ? kVV  : "|"; }
+
 // ---------------------------------------------------------------------------
 // ANSI escape sequences
 // ---------------------------------------------------------------------------
@@ -185,7 +229,7 @@ ppp::string ConsoleUI::RepeatHoriz(int count) noexcept {
     ppp::string s;
     s.reserve(static_cast<std::size_t>(count) * 3u);
     for (int i = 0; i < count; ++i) {
-        s += kHH;
+        s += BoxHH();
     }
     return s;
 }
@@ -219,10 +263,10 @@ ppp::string ConsoleUI::BoxContentRow(const ppp::string& content, int width) noex
     // never appears flush against the │ wall.
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(inner) + 3u + 1u);
-    row += kVV;
+    row += BoxVV();
     row += FitWidth(content, inner - 1);
     row += " ";
-    row += kVV;
+    row += BoxVV();
     row += "\n";
     return row;
 }
@@ -248,11 +292,11 @@ ppp::string ConsoleUI::BoxSplitRow(
     row.reserve(3u + static_cast<std::size_t>(left_inner)
               + 3u + static_cast<std::size_t>(right_inner)
               + 3u + 1u);
-    row += kVV;
+    row += BoxVV();
     row += FitWidth(left, left_inner);
-    row += kVV;
+    row += BoxVV();
     row += FitWidth(right, right_inner);
-    row += kVV;
+    row += BoxVV();
     row += "\n";
     return row;
 }
@@ -264,9 +308,9 @@ ppp::string ConsoleUI::BoxSepRow(int width) noexcept {
 
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(width - 2) * 3u + 3u + 1u);
-    row += kLT;
+    row += BoxLT();
     row += RepeatHoriz(width - 2);
-    row += kRT;
+    row += BoxRT();
     row += "\n";
     return row;
 }
@@ -280,11 +324,11 @@ ppp::string ConsoleUI::BoxSplitSepRow(int width, int split) noexcept {
     row.reserve(3u + static_cast<std::size_t>(split - 1) * 3u
               + 3u + static_cast<std::size_t>(width - split - 2) * 3u
               + 3u + 1u);
-    row += kLT;
+    row += BoxLT();
     row += RepeatHoriz(split - 1);
-    row += kTT;
+    row += BoxTT();
     row += RepeatHoriz(width - split - 2);
-    row += kRT;
+    row += BoxRT();
     row += "\n";
     return row;
 }
@@ -296,9 +340,9 @@ ppp::string ConsoleUI::BoxBotRow(int width) noexcept {
 
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(width - 2) * 3u + 3u + 1u);
-    row += kBBL;
+    row += BoxBBL();
     row += RepeatHoriz(width - 2);
-    row += kBBR;
+    row += BoxBBR();
     row += "\n";
     return row;
 }
@@ -312,11 +356,11 @@ ppp::string ConsoleUI::BoxBotSplitRow(int width, int split) noexcept {
     row.reserve(3u + static_cast<std::size_t>(split - 1) * 3u
               + 3u + static_cast<std::size_t>(width - split - 2) * 3u
               + 3u + 1u);
-    row += kBBL;
+    row += BoxBBL();
     row += RepeatHoriz(split - 1);
-    row += kBT;
+    row += BoxBT();
     row += RepeatHoriz(width - split - 2);
-    row += kBBR;
+    row += BoxBBR();
     row += "\n";
     return row;
 }
@@ -340,7 +384,7 @@ ppp::string ConsoleUI::RenderArtLine(
 
     ppp::string row;
     row.reserve(3u + static_cast<std::size_t>(inner_width + 1) * 8u);
-    row += kVV;  // left border
+    row += BoxVV();  // left border
 
     // Left padding
     if (0 < padding) {
@@ -393,7 +437,7 @@ ppp::string ConsoleUI::RenderArtLine(
         }
     }
 
-    row += kVV;  // right border
+    row += BoxVV();  // right border
     row += "\n";
     return row;
 }
@@ -541,6 +585,10 @@ ppp::string ConsoleUI::FormatAge(uint64_t now_ms, uint64_t then_ms) noexcept {
 // ---------------------------------------------------------------------------
 
 bool ConsoleUI::ShouldEnable() noexcept {
+    if (IsEnvEnabled("PPP_NO_TUI")) {
+        return false;
+    }
+
 #if defined(_WIN32)
     return 0 != ::_isatty(::_fileno(stdout));
 #else
@@ -558,13 +606,7 @@ bool ConsoleUI::Start() noexcept {
         return true;  // already running
     }
 
-    vt_enabled_ = EnableVirtualTerminal();
-
-    if (!PrepareInputTerminal()) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeOptionalUiStartFailed);
-        running_.store(false, std::memory_order_release);
-        return false;
-    }
+    g_use_unicode_ui_glyphs = SelectUnicodeUiGlyphs();
 
     // -----------------------------------------------------------------------
     // Save the current console state so Stop() can restore it verbatim.
@@ -575,6 +617,12 @@ bool ConsoleUI::Start() noexcept {
     win_stdout_handle_  = ::GetStdHandle(STD_OUTPUT_HANDLE);
     win_out_mode_saved_ = false;
     win_cursor_saved_   = false;
+    win_output_cp_saved_ = false;
+
+    // Save the current console output code page before EnableVirtualTerminal()
+    // may switch it to UTF-8 when Unicode UI glyphs are explicitly enabled.
+    win_original_output_cp_ = ::GetConsoleOutputCP();
+    win_output_cp_saved_    = true;
 
     if (NULLPTR != win_stdout_handle_ && INVALID_HANDLE_VALUE != win_stdout_handle_) {
         DWORD mode = 0;
@@ -591,6 +639,34 @@ bool ConsoleUI::Start() noexcept {
     }
 #endif
 
+    vt_enabled_ = EnableVirtualTerminal();
+
+    if (!PrepareInputTerminal()) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeOptionalUiStartFailed);
+        running_.store(false, std::memory_order_release);
+#if defined(_WIN32)
+        if (NULLPTR != win_stdout_handle_ && INVALID_HANDLE_VALUE != win_stdout_handle_) {
+            if (win_out_mode_saved_) {
+                ::SetConsoleMode(static_cast<HANDLE>(win_stdout_handle_), win_original_out_mode_);
+            }
+            if (win_cursor_saved_) {
+                CONSOLE_CURSOR_INFO cci{};
+                cci.dwSize   = 25;
+                cci.bVisible = win_cursor_visible_ ? TRUE : FALSE;
+                ::SetConsoleCursorInfo(static_cast<HANDLE>(win_stdout_handle_), &cci);
+            }
+        }
+        if (win_output_cp_saved_) {
+            ::SetConsoleOutputCP(win_original_output_cp_);
+        }
+        win_stdout_handle_   = NULLPTR;
+        win_out_mode_saved_  = false;
+        win_cursor_saved_    = false;
+        win_output_cp_saved_ = false;
+#endif
+        return false;
+    }
+
     // Enter alternate screen buffer + permanently hide the real cursor.
     // The synthetic reverse-video cursor block inside the editor line is the
     // only indicator of input position, eliminating all cursor flicker.
@@ -603,6 +679,14 @@ bool ConsoleUI::Start() noexcept {
             ppp::HideConsoleCursor(false);
             self.LeaveAlternateScreen();
         }
+#if defined(_WIN32)
+        // Restore the console output code page on abnormal exit so that
+        // the user's shell is not left in UTF-8 mode if the process is
+        // killed without going through Stop().
+        if (self.win_output_cp_saved_) {
+            ::SetConsoleOutputCP(self.win_original_output_cp_);
+        }
+#endif
     });
 
     force_redraw_.store(true, std::memory_order_release);
@@ -683,9 +767,14 @@ void ConsoleUI::Stop() noexcept {
             ::SetConsoleCursorInfo(static_cast<HANDLE>(win_stdout_handle_), &cci);
         }
     }
+    // Restore the original console output code page when Start() saved it.
+    if (win_output_cp_saved_) {
+        ::SetConsoleOutputCP(win_original_output_cp_);
+    }
     win_stdout_handle_  = NULLPTR;
     win_out_mode_saved_ = false;
     win_cursor_saved_   = false;
+    win_output_cp_saved_ = false;
 #endif
 }
 
@@ -901,7 +990,7 @@ void ConsoleUI::DrainStatusQueue() noexcept {
             ppp::string rx_val = (ppp::string::npos == end_pos)
                 ? txt.substr(rx_pos + 3u)
                 : txt.substr(rx_pos + 3u, end_pos - rx_pos - 3u);
-            last_speed += "\xe2\x86\x93 ";
+            last_speed += UseUnicodeUiGlyphs() ? "\xe2\x86\x93 " : "rx ";
             last_speed += rx_val;
         }
 
@@ -917,7 +1006,7 @@ void ConsoleUI::DrainStatusQueue() noexcept {
                 last_speed += "  ";
             }
 
-            last_speed += "\xe2\x86\x91 ";
+            last_speed += UseUnicodeUiGlyphs() ? "\xe2\x86\x91 " : "tx ";
             last_speed += tx_val;
         }
     }
@@ -1193,28 +1282,30 @@ void ConsoleUI::RenderFrame() noexcept {
 
     // --- Row 0: top border ┌─────┐ ---
     {
-        frame += kBL;
+        frame += BoxBL();
         frame += RepeatHoriz(width - 2);
-        frame += kBR;
+        frame += BoxBR();
         frame += "\n";
     }
 
     // --- Row 1: hint 1 + right-aligned title ---
     {
         static constexpr const char kLeftHint1[]   = " PageUp/PageDown: Scroll command input/output";
-        static constexpr const char kRightTitle[]  = "PPP PRIVATE NETWORK\xe2\x84\xa2 2 ";
-        // kRightTitle display width: P-P-P- -P-R-I-V-A-T-E- -N-E-T-W-O-R-K-TM- -2-space = 23 cols
-        static constexpr int kRightTitleDisplayW   = 23;
+        const bool unicode_ui = UseUnicodeUiGlyphs();
+        const char* kRightTitle = unicode_ui
+            ? "PPP PRIVATE NETWORK\xe2\x84\xa2 2 "
+            : "PPP PRIVATE NETWORK(TM) 2 ";
+        const int kRightTitleDisplayW = unicode_ui ? 23 : 26;
 
         int left_avail  = inner - kRightTitleDisplayW;
         if (0 > left_avail) {
             left_avail = 0;
         }
 
-        frame += kVV;
+        frame += BoxVV();
         frame += FitWidth(kLeftHint1, left_avail);
         frame += kRightTitle;
-        frame += kVV;
+        frame += BoxVV();
         frame += "\n";
     }
 
@@ -1342,7 +1433,7 @@ void ConsoleUI::RenderFrame() noexcept {
     // --- Input row ---
     int cursor_col = 0;
     {
-        frame += kVV;
+        frame += BoxVV();
 
         if (input_snap.empty()) {
             // Placeholder mode: show the white-block cursor at column 2 (after "> ")
@@ -1377,7 +1468,7 @@ void ConsoleUI::RenderFrame() noexcept {
             frame += editor_content;
         }
 
-        frame += kVV;
+        frame += BoxVV();
         frame += "\n";
     }
 
@@ -1471,13 +1562,13 @@ void ConsoleUI::RenderFrame() noexcept {
 
             ppp::string row;
             row.reserve(static_cast<std::size_t>(width) * 4u + 64u);
-            row += kVV;
+            row += BoxVV();
             row += status_color;
             row += FitWidth(status_text, left_inner);
             row += kColorReset;
-            row += kVV;
+            row += BoxVV();
             row += FitWidth(right_text, right_inner);
-            row += kVV;
+            row += BoxVV();
             row += "\n";
             frame += row;
         } else {
@@ -2221,6 +2312,11 @@ void ConsoleUI::InputLoop() noexcept {
 
 bool ConsoleUI::EnableVirtualTerminal() noexcept {
 #if defined(_WIN32)
+    // UTF-8 is needed only when Unicode UI glyphs are explicitly enabled.
+    if (UseUnicodeUiGlyphs()) {
+        ::SetConsoleOutputCP(CP_UTF8);
+    }
+
     HANDLE h = ::GetStdHandle(STD_OUTPUT_HANDLE);
     if (NULLPTR == h || INVALID_HANDLE_VALUE == h) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);

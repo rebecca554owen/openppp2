@@ -389,7 +389,7 @@ bool                                                                        libo
         return false;
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
     if (NULLPTR == client) {
         return false;
     }
@@ -456,7 +456,7 @@ bool                                                                        libo
         return false;
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&client_);
     if (NULLPTR == client) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
         return false;
@@ -550,7 +550,7 @@ bool                                                                        libo
     outgoing_traffic = 0;
 
     // The transport layer network statistics are obtained only when the current client switch or server switch is not released.
-    std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&client_);
     if (NULLPTR != client && !client->IsDisposed()) {
         // Obtain transport layer traffic statistics from the client switch or server switch management object.
         std::shared_ptr<ppp::transmissions::ITransmissionStatistics>transmission_statistics = client->GetStatistics();
@@ -613,7 +613,7 @@ bool                                                                        libo
         timeout->Dispose();
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = std::move(client_);
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_exchange(&client_, std::shared_ptr<VEthernetNetworkSwitcher>());
     if (NULLPTR != client) {
         any = true;
         client->Dispose();
@@ -693,7 +693,7 @@ static int                                                                  libo
         return LIBOPENPPP2_LINK_STATE_APPLICATIION_UNINITIALIZED;
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
     if (NULLPTR == client) {
         return LIBOPENPPP2_LINK_STATE_CLIENT_UNINITIALIZED;
     }
@@ -723,7 +723,7 @@ static int                                                                  libo
         return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
     if (NULLPTR == client) {
         return LIBOPENPPP2_AGGLIGATOR_STATE_UNKNOWN;
     }
@@ -766,7 +766,7 @@ static std::shared_ptr<ppp::string>                                         libo
         return NULLPTR;
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
     if (NULLPTR == client) {
         return app->bypass_ip_list_;
     }
@@ -1452,7 +1452,7 @@ static int                                                                      
         return LIBOPENPPP2_ERROR_UNKNOWN;
     }
 
-    app->client_ = client;
+    std::atomic_store(&app->client_, client);
     libopenppp2_application::Timeout();
     __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "open_switcher: success");
     return LIBOPENPPP2_ERROR_SUCCESS;
@@ -1466,7 +1466,7 @@ static int                                                                      
         return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppContextUnavailable, LIBOPENPPP2_ERROR_APPLICATIION_UNINITIALIZED);
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
     if (NULLPTR != client) {
         return libopenppp2_set_last_error_and_return(ppp::diagnostics::ErrorCode::AppAlreadyRunning, LIBOPENPPP2_ERROR_IT_IS_RUNING);
     }
@@ -1557,7 +1557,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
     boost::asio::post(*context,
         [&err, env, context, key_]() noexcept {
             auto start = [env, context](const std::shared_ptr<libopenppp2_application>& app) noexcept -> int {
-                    std::shared_ptr<VEthernetNetworkSwitcher> ethernet = app->client_;
+                    std::shared_ptr<VEthernetNetworkSwitcher> ethernet = std::atomic_load(&app->client_);
                     if (NULLPTR != ethernet) {
                         return LIBOPENPPP2_ERROR_IT_IS_RUNING;
                     }
@@ -1784,7 +1784,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1http_1p
         [&address_string]() noexcept -> int {
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
             if (NULLPTR != app) {
-                std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+                std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
                 if (NULLPTR != client) {
                     std::shared_ptr<VEthernetHttpProxySwitcher> http_proxy = client->GetHttpProxy();
                     if (NULLPTR != http_proxy) {
@@ -1818,7 +1818,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1socks_1
         [&address_string]() noexcept -> int {
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
             if (NULLPTR != app) {
-                std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+                std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
                 if (NULLPTR != client) {
                     std::shared_ptr<VEthernetSocksProxySwitcher> socks_proxy = client->GetSocksProxy();
                     if (NULLPTR != socks_proxy) {
@@ -1855,7 +1855,7 @@ __LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1etherne
             std::shared_ptr<VirtualEthernetInformation> information;
             std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
             if (NULLPTR != app) {
-                std::shared_ptr<VEthernetNetworkSwitcher> client = app->client_;
+                std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&app->client_);
                 if (NULLPTR != client) {
                     std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
                     if (NULLPTR != exchanger) {

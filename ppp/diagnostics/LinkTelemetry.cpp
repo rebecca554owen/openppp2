@@ -42,14 +42,14 @@ namespace ppp {
 
         const char* LinkTelemetry::GetQualityGradeName(LinkQualityGrade grade) noexcept {
             switch (grade) {
-                case LinkQualityGrade::Excellent:   return "[极好]";
-                case LinkQualityGrade::Outstanding: return "[优秀]";
-                case LinkQualityGrade::Good:        return "[良好]";
-                case LinkQualityGrade::Average:     return "[一般]";
-                case LinkQualityGrade::Poor:        return "[很差]";
-                case LinkQualityGrade::Terrible:    return "[极差]";
-                case LinkQualityGrade::Unusable:    return "[不可用]";
-                default:                            return "[未知]";
+                case LinkQualityGrade::Excellent:   return "[excellent]";
+                case LinkQualityGrade::Outstanding: return "[outstanding]";
+                case LinkQualityGrade::Good:        return "[good]";
+                case LinkQualityGrade::Average:     return "[average]";
+                case LinkQualityGrade::Poor:        return "[poor]";
+                case LinkQualityGrade::Terrible:    return "[terrible]";
+                case LinkQualityGrade::Unusable:    return "[unusable]";
+                default:                            return "[unknown]";
             }
         }
 
@@ -102,13 +102,13 @@ namespace ppp {
         ppp::string LinkTelemetry::GetQualityPolicyDocument() noexcept {
             static const char kPolicy[] =
                 "Link Quality Policy:\n"
-                "  >= 99%  [极好] Excellent\n"
-                "  >= 97%  [优秀] Outstanding\n"
-                "  >= 95%  [良好] Good\n"
-                "  >= 93%  [一般] Average\n"
-                "  >= 92%  [很差] Poor\n"
-                "  >= 90%  [极差] Terrible\n"
-                "  <  90%  [不可用] Unusable\n"
+                "  >= 99%  [excellent] Excellent\n"
+                "  >= 97%  [outstanding] Outstanding\n"
+                "  >= 95%  [good] Good\n"
+                "  >= 93%  [average] Average\n"
+                "  >= 92%  [poor] Poor\n"
+                "  >= 90%  [terrible] Terrible\n"
+                "  <  90%  [unusable] Unusable\n"
                 "\n"
                 "When quality < 90%, users MUST immediately stop using OPENPPP2\n"
                 "and switch to a more advanced VPN/tunnel technology.\n"
@@ -188,7 +188,7 @@ namespace ppp {
                         desc = "WARNING: Tunnel quality is terrible! Action required.";
                         break;
                     case LinkQualityGrade::Unusable:
-                        desc = "CRITICAL: Tunnel quality < 90% — STOP using OPENPPP2 immediately!";
+                        desc = "CRITICAL: Tunnel quality < 90% - STOP using OPENPPP2 immediately!";
                         break;
                     default:
                         desc = "No link events recorded yet.";

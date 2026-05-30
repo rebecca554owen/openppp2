@@ -1334,6 +1334,17 @@ namespace ppp {
                     }
                 }
 
+                if (extensions.P2P.HasAny()) {
+                    const auto& p2p = extensions.P2P;
+                    ppp::telemetry::Log(Level::kInfo, "p2p", "control action=%s mode=%s peer=%s candidates=%zu reason=%s",
+                        p2p.action.c_str(),
+                        p2p.mode.c_str(),
+                        ppp::net::IPEndPoint::ToAddressString(p2p.peer_virtual_ip).c_str(),
+                        p2p.candidates.size(),
+                        p2p.reason.c_str());
+                    ppp::telemetry::Count("p2p.control", 1);
+                }
+
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = qos_;
                 if (NULLPTR != qos) {
                     int64_t bandwidth = static_cast<int64_t>(info->BandwidthQoS) * (1024 >> 3); /* Kbps. */
@@ -2012,59 +2023,9 @@ namespace ppp {
                 }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                // Add VPN route table information to the operating system.
-                if (tap->IsHostedNetwork() && !exchangeof(route_added_, true)) {
-#if defined(_WIN32)
-                    // Use the Paper-Airplane NSP/LSP session layer forwarding plugins!
-                    if (!UsePaperAirplaneController()) {
-                        return false;
-                    }
-#endif
-
-                    // VPN routes need to be configured for the operating system to configure the bearer network and overlapping network links.
-                    AddRoute();
-
-                    {
-                        ppp::telemetry::SpanScope span("client.dns.apply");
-                        struct ScopedDnsApplyHistogram final {
-                            std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
-
-                            ~ScopedDnsApplyHistogram() noexcept {
-                                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
-                                ppp::telemetry::Histogram("client.dns.apply.us", elapsed);
-                            }
-                        } dns_apply_histogram;
-
-#if defined(_WIN32)
-                        // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
-                        auto tun_ni = tun_ni_;
-                        if (NULLPTR != tun_ni) {
-                            ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
-                        }
-
-                        // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after
-                        // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record
-                        // Available in the region where the VPN server is located.
-                        ppp::tap::TapWindows::DnsFlushResolverCache();
-
-                        // Delete the default route of a physical network card in a single attempt without a reason.
-                        auto underlying_ni = underlying_ni_;
-                        if (NULLPTR != underlying_ni) {
-                            ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
-                        }
-#else
-                        // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
-                        auto tun_ni = tun_ni_;
-                        if (NULLPTR != tun_ni) {
-                            ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
-                        }
-#endif
-                    }
-                    ppp::telemetry::Log(Level::kDebug, "client", "DNS setup");
-                    ppp::telemetry::Count("client.dns.setup", 1);
-
-                    // Run the default gateway route protector.
-                    ProtectDefaultRoute();
+                route_apply_ready_ = true;
+                if (!TryApplyHostedNetworkRoutes()) {
+                    return false;
                 }
 #endif
                 ppp::telemetry::Log(Level::kInfo, "client", "client connected");
@@ -2127,6 +2088,97 @@ namespace ppp {
                 }
 
                 return false;
+            }
+
+            /** @brief Applies hosted-network route and DNS changes after the remote session is usable. */
+            bool VEthernetNetworkSwitcher::TryApplyHostedNetworkRoutes() noexcept {
+#if defined(_ANDROID) || defined(_IPHONE)
+                return true;
+#else
+                std::shared_ptr<ITap> tap = GetTap();
+                if (NULLPTR == tap || !tap->IsHostedNetwork()) {
+                    return true;
+                }
+
+                if (route_added_) {
+                    return true;
+                }
+
+                if (!route_apply_ready_) {
+                    ppp::telemetry::Log(Level::kInfo, "client", "route setup deferred: Open() is still preparing route state");
+                    ppp::telemetry::Count("client.route.defer", 1);
+                    return true;
+                }
+
+                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
+                if (NULLPTR == exchanger || exchanger->GetNetworkState() != VEthernetExchanger::NetworkState_Established) {
+                    ppp::telemetry::Log(Level::kInfo, "client", "route setup deferred: exchanger is not established");
+                    ppp::telemetry::Count("client.route.defer", 1);
+                    return true;
+                }
+
+                if (exchangeof(route_added_, true)) {
+                    return true;
+                }
+
+#if defined(_WIN32)
+                // Use the Paper-Airplane NSP/LSP session layer forwarding plugins!
+                if (!UsePaperAirplaneController()) {
+                    route_added_ = false;
+                    ppp::telemetry::Log(Level::kInfo, "client", "route setup failed: paper-airplane controller unavailable");
+                    ppp::telemetry::Count("client.route.fail.paper_airplane", 1);
+                    return false;
+                }
+#endif
+
+                // VPN routes need to be configured for the operating system to configure the bearer network and overlapping network links.
+                AddRoute();
+
+                {
+                    ppp::telemetry::SpanScope span("client.dns.apply");
+                    struct ScopedDnsApplyHistogram final {
+                        std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
+
+                        ~ScopedDnsApplyHistogram() noexcept {
+                            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
+                            ppp::telemetry::Histogram("client.dns.apply.us", elapsed);
+                        }
+                    } dns_apply_histogram;
+
+#if defined(_WIN32)
+                    // Configure all network card DNS servers in the entire operating system, because not doing so will cause DNS Leak and DNS contamination problems only Windows.
+                    auto tun_ni = tun_ni_;
+                    if (NULLPTR != tun_ni) {
+                        ppp::win32::network::SetAllNicsDnsAddresses(tun_ni->DnsAddresses, ni_dns_servers_);
+                    }
+
+                    // Windows clients need to request the operating system FLUSH to reset all DNS query cache immediately after
+                    // The VPN is constructed, because the original DNS cache may not be the best destination IP resolution record
+                    // Available in the region where the VPN server is located.
+                    ppp::tap::TapWindows::DnsFlushResolverCache();
+
+                    // Delete the default route of a physical network card in a single attempt without a reason.
+                    auto underlying_ni = underlying_ni_;
+                    if (NULLPTR != underlying_ni) {
+                        ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni->GatewayServer);
+                    }
+#else
+                    // Set tun/tap vnic binding dns servers list to the linux operating system configuration files.
+                    auto tun_ni = tun_ni_;
+                    if (NULLPTR != tun_ni) {
+                        ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni->DnsAddresses);
+                    }
+#endif
+                }
+                ppp::telemetry::Log(Level::kDebug, "client", "DNS setup");
+                ppp::telemetry::Count("client.dns.setup", 1);
+
+                // Run the default gateway route protector.
+                ProtectDefaultRoute();
+
+                ppp::telemetry::Log(Level::kInfo, "client", "route setup applied after exchanger established");
+                return true;
+#endif
             }
 
             /** @brief Installs VPN route entries into host operating system. */
@@ -2955,6 +3007,7 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 RestoreAssignedIPv6();
+                route_apply_ready_ = false;
 
                 // Delete VPN route table information configured in the operating system!
                 if (exchangeof(route_added_, false)) {

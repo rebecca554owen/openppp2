@@ -6,10 +6,33 @@
 
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/net/Ipep.h>
 
 #include <cstring>
 
 using ppp::auxiliary::JsonAuxiliary;
+
+namespace {
+    static ppp::string P2PIPv4ToString(uint32_t ip) noexcept {
+        if (ip == 0) {
+            return ppp::string();
+        }
+        return ppp::net::IPEndPoint::ToAddressString(ip);
+    }
+
+    static uint32_t P2PStringToIPv4(const ppp::string& value) noexcept {
+        if (value.empty()) {
+            return 0;
+        }
+
+        boost::system::error_code ec;
+        boost::asio::ip::address address = StringToAddress(value, ec);
+        if (ec || !address.is_v4()) {
+            return 0;
+        }
+        return htonl(address.to_v4().to_uint());
+    }
+}
 
 namespace ppp {
     namespace app {
@@ -110,6 +133,7 @@ namespace ppp {
                 ClientExitIP = boost::asio::ip::address();
                 ClientIPv4Req.Clear();
                 ClientIPv4Assign.Clear();
+                P2P.Clear();
             }
 
             /** @brief Returns whether any IPv6 extension field is currently populated. */
@@ -128,7 +152,8 @@ namespace ppp {
                     !IPv6StatusMessage.empty() ||
                     !ClientExitIP.is_unspecified() ||
                     ClientIPv4Req.HasAny() ||
-                    ClientIPv4Assign.HasAny();
+                    ClientIPv4Assign.HasAny() ||
+                    P2P.HasAny();
             }
 
             /** @brief Writes IPv6 extension fields to a JSON object. */
@@ -188,6 +213,12 @@ namespace ppp {
                     Json::Value ipv4_assign;
                     ClientIPv4Assign.ToJson(ipv4_assign);
                     json["client-ipv4"] = ipv4_assign;
+                }
+
+                if (P2P.HasAny()) {
+                    Json::Value p2p;
+                    P2P.ToJson(p2p);
+                    json["p2p"] = p2p;
                 }
             }
 
@@ -289,6 +320,132 @@ namespace ppp {
                 // Parse "client-ipv4": IPv4 assignment response from server to client.
                 if (json.isMember("client-ipv4") && json["client-ipv4"].isObject()) {
                     ClientIPv4Assignment::FromJson(value.ClientIPv4Assign, json["client-ipv4"]);
+                }
+
+                if (json.isMember("p2p") && json["p2p"].isObject()) {
+                    P2PControlMessage::FromJson(value.P2P, json["p2p"]);
+                }
+
+                return value.HasAny();
+            }
+
+            // ---- P2P control ----
+
+            void P2PEndpointCandidate::Clear() noexcept {
+                endpoint.clear();
+                source.clear();
+            }
+
+            bool P2PEndpointCandidate::HasAny() const noexcept {
+                return !endpoint.empty();
+            }
+
+            void P2PEndpointCandidate::ToJson(Json::Value& json) const noexcept {
+                if (!endpoint.empty()) {
+                    json["endpoint"] = Json::Value(endpoint.c_str());
+                }
+                if (!source.empty()) {
+                    json["source"] = Json::Value(source.c_str());
+                }
+            }
+
+            bool P2PEndpointCandidate::FromJson(P2PEndpointCandidate& value, const Json::Value& json) noexcept {
+                value.Clear();
+                if (!json.isObject()) {
+                    return false;
+                }
+
+                value.endpoint = JsonAuxiliary::AsString(json["endpoint"]);
+                value.source = JsonAuxiliary::AsString(json["source"]);
+                return value.HasAny();
+            }
+
+            void P2PControlMessage::Clear() noexcept {
+                enabled = false;
+                mode.clear();
+                action.clear();
+                virtual_ip = 0;
+                peer_virtual_ip = 0;
+                token.clear();
+                reason.clear();
+                candidates.clear();
+            }
+
+            bool P2PControlMessage::HasAny() const noexcept {
+                return enabled ||
+                    !mode.empty() ||
+                    !action.empty() ||
+                    virtual_ip != 0 ||
+                    peer_virtual_ip != 0 ||
+                    !token.empty() ||
+                    !reason.empty() ||
+                    !candidates.empty();
+            }
+
+            void P2PControlMessage::ToJson(Json::Value& json) const noexcept {
+                json["enabled"] = enabled;
+                if (!mode.empty()) {
+                    json["mode"] = Json::Value(mode.c_str());
+                }
+                if (!action.empty()) {
+                    json["action"] = Json::Value(action.c_str());
+                }
+                ppp::string vip = P2PIPv4ToString(virtual_ip);
+                if (!vip.empty()) {
+                    json["virtual-ip"] = Json::Value(vip.c_str());
+                }
+                ppp::string peer_vip = P2PIPv4ToString(peer_virtual_ip);
+                if (!peer_vip.empty()) {
+                    json["peer-virtual-ip"] = Json::Value(peer_vip.c_str());
+                }
+                if (!token.empty()) {
+                    json["token"] = Json::Value(token.c_str());
+                }
+                if (!reason.empty()) {
+                    json["reason"] = Json::Value(reason.c_str());
+                }
+                if (!candidates.empty()) {
+                    Json::Value arr(Json::arrayValue);
+                    for (const P2PEndpointCandidate& candidate : candidates) {
+                        if (!candidate.HasAny()) {
+                            continue;
+                        }
+                        Json::Value item;
+                        candidate.ToJson(item);
+                        arr.append(item);
+                    }
+                    json["candidates"] = arr;
+                }
+            }
+
+            ppp::string P2PControlMessage::ToJson() const noexcept {
+                Json::Value json;
+                ToJson(json);
+                return JsonAuxiliary::ToString(json);
+            }
+
+            bool P2PControlMessage::FromJson(P2PControlMessage& value, const Json::Value& json) noexcept {
+                value.Clear();
+                if (!json.isObject()) {
+                    return false;
+                }
+
+                value.enabled = JsonAuxiliary::AsValue<bool>(json["enabled"]);
+                value.mode = JsonAuxiliary::AsString(json["mode"]);
+                value.action = JsonAuxiliary::AsString(json["action"]);
+                value.virtual_ip = P2PStringToIPv4(JsonAuxiliary::AsString(json["virtual-ip"]));
+                value.peer_virtual_ip = P2PStringToIPv4(JsonAuxiliary::AsString(json["peer-virtual-ip"]));
+                value.token = JsonAuxiliary::AsString(json["token"]);
+                value.reason = JsonAuxiliary::AsString(json["reason"]);
+
+                const Json::Value& candidates_json = json["candidates"];
+                if (candidates_json.isArray()) {
+                    for (Json::ArrayIndex i = 0; i < candidates_json.size(); i++) {
+                        P2PEndpointCandidate candidate;
+                        if (P2PEndpointCandidate::FromJson(candidate, candidates_json[i])) {
+                            value.candidates.emplace_back(std::move(candidate));
+                        }
+                    }
                 }
 
                 return value.HasAny();

@@ -22,6 +22,7 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
+#include <openssl/rand.h>
 #include <chrono>
 
 #if defined(_LINUX)
@@ -222,7 +223,7 @@ namespace ppp {
                 , static_echo_socket_(*context_)
                 , static_echo_bind_port_(IPEndPoint::MinPort) {
                 
-                boost::asio::ip::udp::udp::endpoint dnsserverEP = ParseDNSEndPoint(configuration_->udp.dns.redirect);
+                boost::asio::ip::udp::endpoint dnsserverEP = ParseDNSEndPoint(configuration_->udp.dns.redirect);
                 dnsserverEP_ = dnsserverEP;
 
                 interfaceIP_ = Ipep::ToAddress(configuration_->ip.interface_, true);
@@ -2065,6 +2066,8 @@ namespace ppp {
                     ipv6s_.clear();
                     ipv6_requests_.clear();
                     ipv6_leases_.clear();
+                    p2p_peers_.clear();
+                    p2p_virtual_ips_.clear();
                 }  // Release syncobj_ before heavy subsystem initialization.
 
                 bool ok = CreateAllAcceptors() &&
@@ -3156,6 +3159,8 @@ namespace ppp {
                     connections = std::move(connections_);
                     connections_.clear();
 
+                    p2p_peers_.clear();
+                    p2p_virtual_ips_.clear();
                     static_echo_allocateds_.clear();
                     break;
                 }
@@ -3730,7 +3735,7 @@ namespace ppp {
                     return boost::asio::ip::udp::endpoint(dnsserverIP, dnsserverPort);
                 }
 
-                boost::asio::ip::udp::udp::endpoint dnsserverEP = Ipep::ParseEndPoint(dnserver_endpoint);
+                boost::asio::ip::udp::endpoint dnsserverEP = Ipep::ParseEndPoint(dnserver_endpoint);
                 dnsserverPort = dnsserverEP.port();
                 if (dnsserverPort <= IPEndPoint::MinPort || dnsserverPort > IPEndPoint::MaxPort) {
                     dnsserverPort = PPP_DNS_SYS_PORT;
@@ -3850,6 +3855,380 @@ namespace ppp {
                 else {
                     return NULLPTR;
                 }
+            }
+
+            static ppp::string P2PEndpointToString(const boost::asio::ip::udp::endpoint& endpoint) noexcept {
+                if (endpoint.address().is_unspecified() || endpoint.port() <= IPEndPoint::MinPort) {
+                    return ppp::string();
+                }
+
+                std::string address = endpoint.address().to_string();
+                ppp::string value;
+                if (endpoint.address().is_v6()) {
+                    value.append("[");
+                    value.append(address.data(), address.size());
+                    value.append("]");
+                }
+                else {
+                    value.append(address.data(), address.size());
+                }
+                value.append(":");
+                value.append(stl::to_string<ppp::string>(endpoint.port()));
+                return value;
+            }
+
+            static ppp::vector<ppp::app::protocol::P2PEndpointCandidate> P2PBuildCandidates(const VirtualEthernetSwitcher::P2PPeerRecord& record) noexcept {
+                ppp::vector<ppp::app::protocol::P2PEndpointCandidate> candidates = record.Candidates;
+
+                // C4: TCP control endpoints are NOT usable as UDP P2P candidates.
+                // Do NOT append the TCP control channel's remote endpoint here.
+                // Only actual UDP/STUN candidates from the client's INFO message
+                // are included.  The server-observed TCP endpoint (record.ObservedEndpoint)
+                // is stored for server-side use only (e.g., NAT classifier diagnostics)
+                // but must not be offered to clients for UDP probing.
+
+                return candidates;
+            }
+
+            /**
+             * @brief Generates an opaque random token for a P2P offer.
+             *
+             * M1: Uses OpenSSL RAND_bytes for cryptographically strong randomness.
+             * Output is hex-encoded, preserving the existing string format.
+             */
+            static ppp::string P2PNewToken() noexcept {
+                // Generate 32 random bytes → 64 hex chars. Well within MAX_OFFER_TOKEN_SIZE.
+                uint8_t raw[32];
+                if (RAND_bytes(raw, sizeof(raw)) != 1) {
+                    // CSPRNG failure — return empty to fail closed.
+                    return ppp::string();
+                }
+
+                static constexpr char hex[] = "0123456789abcdef";
+                ppp::string token;
+                token.reserve(64);
+                for (size_t i = 0; i < sizeof(raw); ++i) {
+                    token.append(1, hex[(raw[i] >> 4) & 0x0F]);
+                    token.append(1, hex[raw[i] & 0x0F]);
+                }
+                return token;
+            }
+
+            static VirtualEthernetSwitcher::InformationEnvelope P2PBuildEnvelope(const ppp::app::protocol::P2PControlMessage& message) noexcept {
+                VirtualEthernetSwitcher::InformationEnvelope envelope;
+                envelope.Base.Clear();
+                envelope.Base.BandwidthQoS = 0;
+                envelope.Base.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                envelope.Base.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                envelope.Base.ExpiredTime = std::numeric_limits<UInt32>::max();
+                envelope.Extensions.P2P = message;
+                envelope.ExtendedJson = envelope.Extensions.ToJson();
+                return envelope;
+            }
+
+            bool VirtualEthernetSwitcher::UpdateP2PPeer(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, const ITransmissionPtr& transmission, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept {
+                if (NULLPTR == exchanger || NULLPTR == transmission || NULLPTR == configuration_) {
+                    return false;
+                }
+
+                response.P2P.enabled = configuration_->p2p.enabled;
+                response.P2P.mode = configuration_->p2p.mode;
+                response.P2P.virtual_ip = request.P2P.virtual_ip;
+
+                // Fix #3: Only accept explicit "register" actions with enabled=true.
+                // Other actions/replies must not be treated as registration.
+                if (!request.P2P.enabled || request.P2P.action != "register") {
+                    response.P2P.action = "status";
+                    response.P2P.reason = "not-a-register";
+                    return false;
+                }
+
+                if (!configuration_->p2p.enabled) {
+                    response.P2P.action = "reject";
+                    response.P2P.reason = "p2p-disabled";
+                    return false;
+                }
+
+                if (configuration_->p2p.mode != "direct-preferred") {
+                    response.P2P.action = "status";
+                    response.P2P.reason = "relay-only";
+                    return false;
+                }
+
+                ppp::string requested_mode = ToLower(request.P2P.mode);
+                if (requested_mode != "direct-preferred") {
+                    response.P2P.action = "status";
+                    response.P2P.reason = "client-relay-only";
+                    return false;
+                }
+
+                uint32_t virtual_ip = request.P2P.virtual_ip;
+                if (virtual_ip == 0 || IPEndPoint::IsInvalid(IPEndPoint(virtual_ip, IPEndPoint::MinPort))) {
+                    response.P2P.action = "reject";
+                    response.P2P.reason = "virtual-ip-missing";
+                    return false;
+                }
+
+                // Fix #4: Validate virtual_ip ownership via the authoritative NAT table.
+                // The requesting session must own this virtual_ip in the NAT registry.
+                {
+                    NatInformationPtr nat = FindNatInformation(virtual_ip);
+                    if (NULLPTR == nat || NULLPTR == nat->Exchanger || nat->Exchanger.get() != exchanger.get()) {
+                        response.P2P.action = "reject";
+                        response.P2P.reason = "virtual-ip-not-owned";
+                        return false;
+                    }
+                }
+
+                boost::asio::ip::tcp::endpoint remote_tcp = transmission->GetRemoteEndPoint();
+                boost::asio::ip::udp::endpoint observed(remote_tcp.address(), remote_tcp.port());
+                UInt64 now = Executors::GetTickCount();
+                Int128 session_id = exchanger->GetId();
+
+                P2PPeerRecord record;
+                record.SessionId = session_id;
+                record.VirtualIP = virtual_ip;
+                record.Mode = requested_mode;
+                record.ObservedEndpoint = observed;
+                record.Candidates = request.P2P.candidates;
+                record.LastSeen = now;
+                record.Exchanger = exchanger;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+
+                    // Fix #1 (P2 review): When the same session re-registers with a
+                    // different virtual_ip, remove the stale reverse-index entry for
+                    // the old IP first.  Without this, p2p_virtual_ips_ accumulates
+                    // orphaned entries that point at a session whose p2p_peers_ record
+                    // now holds a completely different virtual_ip.
+                    auto existing_peer_it = p2p_peers_.find(session_id);
+                    if (existing_peer_it != p2p_peers_.end()) {
+                        uint32_t old_vip = existing_peer_it->second.VirtualIP;
+                        if (old_vip != 0 && old_vip != virtual_ip) {
+                            auto old_vip_it = p2p_virtual_ips_.find(old_vip);
+                            if (old_vip_it != p2p_virtual_ips_.end() && old_vip_it->second == session_id) {
+                                p2p_virtual_ips_.erase(old_vip_it);
+                            }
+                        }
+                    }
+
+                    // Fix #5: Clean up any stale record for the same virtual_ip (different session).
+                    auto vip_it = p2p_virtual_ips_.find(virtual_ip);
+                    if (vip_it != p2p_virtual_ips_.end() && vip_it->second != session_id) {
+                        p2p_peers_.erase(vip_it->second);
+                        vip_it->second = session_id;
+                    }
+                    else if (vip_it == p2p_virtual_ips_.end()) {
+                        p2p_virtual_ips_[virtual_ip] = session_id;
+                    }
+
+                    p2p_peers_[session_id] = record;
+                }
+
+                response.P2P.action = "status";
+                response.P2P.reason = "registered";
+                response.P2P.candidates = P2PBuildCandidates(record);
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::DeleteP2PPeer(const Int128& session_id) noexcept {
+                SynchronizedObjectScope scope(syncobj_);
+                auto it = p2p_peers_.find(session_id);
+                if (it == p2p_peers_.end()) {
+                    return false;
+                }
+                // Fix #5: Clean up reverse index entry for this virtual_ip.
+                uint32_t vip = it->second.VirtualIP;
+                auto vip_it = p2p_virtual_ips_.find(vip);
+                if (vip_it != p2p_virtual_ips_.end() && vip_it->second == session_id) {
+                    p2p_virtual_ips_.erase(vip_it);
+                }
+                p2p_peers_.erase(it);
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::OfferP2PPeerHints(uint32_t source_ip, uint32_t destination_ip, YieldContext& y) noexcept {
+                if (NULLPTR == configuration_ || !configuration_->p2p.enabled || configuration_->p2p.mode != "direct-preferred") {
+                    return false;
+                }
+
+                static constexpr UInt64 OFFER_THROTTLE_MS = 10000;
+                UInt64 now = Executors::GetTickCount();
+                P2PPeerRecord source_record;
+                P2PPeerRecord destination_record;
+                bool found = false;
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto& kv : p2p_peers_) {
+                        P2PPeerRecord& record = kv.second;
+                        if (record.VirtualIP == source_ip) {
+                            source_record = record;
+                        }
+                        else if (record.VirtualIP == destination_ip) {
+                            destination_record = record;
+                        }
+                    }
+
+                    if (source_record.SessionId == 0 || destination_record.SessionId == 0 || source_record.SessionId == destination_record.SessionId) {
+                        return false;
+                    }
+
+                    if (source_record.Mode != "direct-preferred" || destination_record.Mode != "direct-preferred") {
+                        return false;
+                    }
+
+                    // Throttle: skip this offer only when BOTH sides are still within
+                    // their per-peer cooldown window.  Using && (not ||) is intentional:
+                    // if either peer's cooldown has expired the pair is eligible again,
+                    // which prevents one stale peer from indefinitely blocking the other
+                    // side from receiving offers in a different pairing.
+                    if (now < source_record.LastOfferAt + OFFER_THROTTLE_MS && now < destination_record.LastOfferAt + OFFER_THROTTLE_MS) {
+                        return false;
+                    }
+
+                    found = true;
+                }
+
+                if (!found) {
+                    return false;
+                }
+
+                // Fix #4: Cross-validate that the NAT table still confirms the same owner for
+                // both virtual IPs.  A stale/expired P2P record could point at a recycled session.
+                {
+                    NatInformationPtr source_nat = FindNatInformation(source_ip);
+                    NatInformationPtr destination_nat = FindNatInformation(destination_ip);
+                    if (NULLPTR == source_nat || NULLPTR == destination_nat) {
+                        // One or both IPs no longer in NAT table — clean up stale P2P records.
+                        SynchronizedObjectScope scope(syncobj_);
+                        if (NULLPTR == source_nat) {
+                            p2p_peers_.erase(source_record.SessionId);
+                            p2p_virtual_ips_.erase(source_ip);
+                        }
+                        if (NULLPTR == destination_nat) {
+                            p2p_peers_.erase(destination_record.SessionId);
+                            p2p_virtual_ips_.erase(destination_ip);
+                        }
+                        return false;
+                    }
+                    if (NULLPTR == source_nat->Exchanger || NULLPTR == destination_nat->Exchanger) {
+                        return false;
+                    }
+                    if (source_nat->Exchanger.get() != source_record.Exchanger.lock().get() ||
+                        destination_nat->Exchanger.get() != destination_record.Exchanger.lock().get()) {
+                        return false;
+                    }
+                }
+
+                // NAT classification check: skip offer if both peers have
+                // symmetric NAT or either is UDP-blocked.
+                //
+                // H2: The NAT classifier requires actual UDP relay observations
+                // (from static-echo or UDP sendto paths) to make meaningful
+                // classifications.  TCP control endpoint observations are NOT
+                // used because they reflect TCP NAT, not UDP NAT behavior.
+                // Until actual UDP observation sources are wired, the classifier
+                // returns Unknown for all peers.  Unknown allows probing
+                // (conservative: let the probe path determine reachability).
+                // Only Symmetric-Symmetric and UdpBlocked (based on real
+                // observations) cause immediate skip.
+                {
+                    ppp::p2p::P2PNatClassification source_class = p2p_nat_classifier_.Classify(source_ip, now);
+                    ppp::p2p::P2PNatClassification dest_class   = p2p_nat_classifier_.Classify(destination_ip, now);
+                    if (!ppp::p2p::P2PNatClassifier::ShouldAttemptPunch(source_class, dest_class)) {
+                        ppp::telemetry::Log(Level::kInfo, "p2p", "NAT classification skip offer source=%s(%d) dest=%s(%d)",
+                            IPEndPoint::ToAddressString(source_ip).c_str(), static_cast<int>(source_class.type),
+                            IPEndPoint::ToAddressString(destination_ip).c_str(), static_cast<int>(dest_class.type));
+                        ppp::telemetry::Count("p2p.nat_skip", 1);
+                        return false;
+                    }
+                    // Update peer records with classified NAT type.
+                    {
+                        SynchronizedObjectScope scope(syncobj_);
+                        auto src_it = p2p_peers_.find(source_record.SessionId);
+                        if (src_it != p2p_peers_.end()) {
+                            src_it->second.NatType = source_class.type;
+                        }
+                        auto dst_it = p2p_peers_.find(destination_record.SessionId);
+                        if (dst_it != p2p_peers_.end()) {
+                            dst_it->second.NatType = dest_class.type;
+                        }
+                    }
+                }
+
+                std::shared_ptr<VirtualEthernetExchanger> source_exchanger = source_record.Exchanger.lock();
+                std::shared_ptr<VirtualEthernetExchanger> destination_exchanger = destination_record.Exchanger.lock();
+                if (NULLPTR == source_exchanger || NULLPTR == destination_exchanger) {
+                    // Fix #4: Clean up stale weak_ptr records.
+                    {
+                        SynchronizedObjectScope scope(syncobj_);
+                        if (NULLPTR == source_exchanger) {
+                            p2p_peers_.erase(source_record.SessionId);
+                            p2p_virtual_ips_.erase(source_ip);
+                        }
+                        if (NULLPTR == destination_exchanger) {
+                            p2p_peers_.erase(destination_record.SessionId);
+                            p2p_virtual_ips_.erase(destination_ip);
+                        }
+                    }
+                    return false;
+                }
+
+                ITransmissionPtr source_transmission = source_exchanger->GetTransmission();
+                ITransmissionPtr destination_transmission = destination_exchanger->GetTransmission();
+                if (NULLPTR == source_transmission || NULLPTR == destination_transmission) {
+                    return false;
+                }
+
+                // M1: Use CSPRNG-backed opaque random token — no session IDs embedded.
+                ppp::string token = P2PNewToken();
+                if (token.empty()) {
+                    // CSPRNG failure — fail closed, do not send offers with empty tokens.
+                    return false;
+                }
+
+                ppp::app::protocol::P2PControlMessage source_offer;
+                source_offer.enabled = true;
+                source_offer.mode = configuration_->p2p.mode;
+                source_offer.action = "offer";
+                source_offer.virtual_ip = source_ip;
+                source_offer.peer_virtual_ip = destination_ip;
+                source_offer.token = token;
+                source_offer.candidates = P2PBuildCandidates(destination_record);
+
+                ppp::app::protocol::P2PControlMessage destination_offer;
+                destination_offer.enabled = true;
+                destination_offer.mode = configuration_->p2p.mode;
+                destination_offer.action = "offer";
+                destination_offer.virtual_ip = destination_ip;
+                destination_offer.peer_virtual_ip = source_ip;
+                destination_offer.token = token;
+                destination_offer.candidates = P2PBuildCandidates(source_record);
+
+                bool source_ok = source_exchanger->DoInformation(source_transmission, P2PBuildEnvelope(source_offer), y);
+                bool destination_ok = destination_exchanger->DoInformation(destination_transmission, P2PBuildEnvelope(destination_offer), y);
+
+                // Fix #9: Only update LastOfferAt when at least one side succeeded.
+                // This allows faster retry when both sides fail (e.g., transient transport error).
+                if (source_ok || destination_ok) {
+                    SynchronizedObjectScope scope(syncobj_);
+                    auto src_it = p2p_peers_.find(source_record.SessionId);
+                    if (src_it != p2p_peers_.end()) {
+                        src_it->second.LastOfferAt = now;
+                    }
+                    auto dst_it = p2p_peers_.find(destination_record.SessionId);
+                    if (dst_it != p2p_peers_.end()) {
+                        dst_it->second.LastOfferAt = now;
+                    }
+
+                    ppp::telemetry::Log(Level::kInfo, "p2p", "peer hints offered source=%s destination=%s",
+                        IPEndPoint::ToAddressString(source_ip).c_str(),
+                        IPEndPoint::ToAddressString(destination_ip).c_str());
+                    ppp::telemetry::Count("p2p.offer", 1);
+                }
+                return source_ok || destination_ok;
             }
 
             /**

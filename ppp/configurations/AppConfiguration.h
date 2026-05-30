@@ -250,6 +250,20 @@ namespace ppp {
                 bool                                                        console_metric; ///< Show counter/gauge/histogram events on local console/file sink.
                 bool                                                        console_span;   ///< Show span events on local console/file sink.
             }                                                               telemetry;       ///< Optional telemetry/observability configuration.
+            struct {
+                bool                                                        enabled;        ///< Enable server-coordinated P2P path discovery.
+                ppp::string                                                 mode;           ///< "relay" keeps server relay only; "direct-preferred" advertises peer candidates.
+                int                                                         punch_timeout;  ///< UDP punch timeout in seconds.
+                int                                                         keep_alived;    ///< P2P keep-alive interval in seconds.
+                ppp::vector<ppp::string>                                    stun_servers;   ///< STUN servers used for future UDP candidate discovery.
+                int                                                         max_probes;             ///< Max probe rounds before relay fallback (default 2).
+                int                                                         probe_timeout_ms;       ///< Per-round probe timeout in ms (default 2000).
+                int                                                         heartbeat_interval_ms;  ///< Heartbeat send interval in ms (default 1000).
+                int                                                         heartbeat_miss_max;     ///< Missed heartbeats before Suspect (default 2).
+                int                                                         suspect_timeout_ms;     ///< Suspect recovery timeout in ms (default 2000).
+                int                                                         migration_grace_ms;     ///< NAT rebind grace period in ms (default 5000).
+                int                                                         buffer_pool_count;      ///< Buffer pool count per channel (default 64).
+            }                                                               p2p;            ///< Optional P2P virtual-subnet coordination settings.
             /**
              * @brief GeoIP/GeoSite rule generation configuration (Phase G).
              *

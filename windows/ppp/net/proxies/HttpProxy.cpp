@@ -25,6 +25,11 @@ namespace ppp
             static constexpr const wchar_t* EXPERIMENTALQUICPROTOCOL_POLICIES_CHROME = L"Software\\Policies\\Google\\Chrome";
             static constexpr const wchar_t* EXPERIMENTALQUICPROTOCOL_POLICIES_EDGE = L"Software\\Policies\\Microsoft\\Edge";
 
+            // Tracks whether THIS process currently has the Windows system proxy engaged.
+            // Used by EmergencyRestoreSystemProxy() so the crash-path restore is a strict
+            // no-op when we never touched the system proxy (don't clobber a user's own proxy).
+            static std::atomic<bool> s_system_proxy_engaged{ false };
+
             static bool STATIC_IsSupportExperimentalQuicProtocol(LPCWSTR path) noexcept
             {
                 bool bOK = false;
@@ -70,7 +75,7 @@ namespace ppp
                 _bstr_t server_bstr(server.data());
 
                 ipi.dwAccessType = INTERNET_OPEN_TYPE_PROXY;
-                ipi.lpszProxy = bypass_bstr;
+                ipi.lpszProxy = server_bstr;
                 ipi.lpszProxyBypass = bypass_bstr;
 
                 bool b = InternetSetOption(NULLPTR, INTERNET_OPTION_PROXY, &ipi, sizeof(INTERNET_PROXY_INFO));
@@ -89,7 +94,7 @@ namespace ppp
             bool HttpProxy::SetSystemProxy(const ppp::string& server, const ppp::string& pac, bool enable) noexcept
             {
                 _bstr_t server_bstr(server.data());
-                _bstr_t pac_bstr(server.data());
+                _bstr_t pac_bstr(pac.data());
 
                 std::wstring server_wcs = server_bstr.GetBSTR();
                 std::wstring pac_wcs = pac_bstr.GetBSTR();
@@ -99,6 +104,8 @@ namespace ppp
             bool HttpProxy::SetSystemProxy(const std::wstring& server, const std::wstring& pac, bool enable) noexcept
             {
                 LPCWSTR PATH = L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+                // Record engaged/cleared state for the crash-path emergency restore.
+                s_system_proxy_engaged.store(enable, std::memory_order_release);
                 ppp::win32::SetRegistryValueString(HKEY_CURRENT_USER, PATH, L"ProxyServer", server);
                 ppp::win32::SetRegistryValueDword(HKEY_CURRENT_USER, PATH, L"ProxyEnable", enable ? 1 : 0);
                 ppp::win32::SetRegistryValueString(HKEY_CURRENT_USER, PATH, L"AutoConfigURL", pac);
@@ -118,6 +125,39 @@ namespace ppp
                     RefreshSystemProxy();
                 }
                 return true;
+            }
+
+            void HttpProxy::EmergencyRestoreSystemProxy() noexcept
+            {
+                // No-op unless this process engaged the system proxy. This keeps the
+                // crash-path restore from disabling a proxy the user set themselves.
+                if (!s_system_proxy_engaged.load(std::memory_order_acquire))
+                {
+                    return;
+                }
+
+                // Allocation-free: only raw Win32 registry + WinINet calls. Safe to run
+                // from an SEH unhandled-exception filter where the CRT heap may be unusable.
+                HKEY hKey = NULLPTR;
+                if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                    L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                    0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+                {
+                    DWORD dwZero = 0;
+                    RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD,
+                        reinterpret_cast<const BYTE*>(&dwZero), sizeof(dwZero));
+                    RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ,
+                        reinterpret_cast<const BYTE*>(L""), sizeof(wchar_t));
+                    RegSetValueExW(hKey, L"AutoConfigURL", 0, REG_SZ,
+                        reinterpret_cast<const BYTE*>(L""), sizeof(wchar_t));
+                    RegCloseKey(hKey);
+                }
+
+                s_system_proxy_engaged.store(false, std::memory_order_release);
+
+                // Notify WinINet so open applications drop the stale proxy immediately.
+                InternetSetOption(NULLPTR, INTERNET_OPTION_SETTINGS_CHANGED, NULLPTR, 0);
+                InternetSetOption(NULLPTR, INTERNET_OPTION_REFRESH, NULLPTR, 0);
             }
 
             bool HttpProxy::OpenProxySettingsWindow() noexcept

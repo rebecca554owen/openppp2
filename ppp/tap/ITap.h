@@ -219,8 +219,13 @@ namespace ppp
             std::shared_ptr<boost::asio::posix::stream_descriptor>          _stream;
             /** @brief Shared io_context used for all asynchronous read/write operations. */
             std::shared_ptr<boost::asio::io_context>                        _context;
-            /** @brief Reusable MTU-sized buffer for single-copy packet reads. */
-            Byte                                                            _packet[ITap::Mtu];
+            /** @brief Reusable buffer for single-copy packet reads.
+             *
+             * Sized to ITap::Mtu + 4 to accommodate the 4-byte address-family
+             * header that Darwin utun prepends to every packet.  On Linux (IFF_NO_PI)
+             * the extra 4 bytes are simply unused.
+             */
+            Byte                                                            _packet[ITap::Mtu + 4];
         };
     }
 }

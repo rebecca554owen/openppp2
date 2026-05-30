@@ -1,6 +1,7 @@
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/win32/Win32Variant.h>
 #include <windows/ppp/win32/Win32RegistryKey.h>
+#include <windows/ppp/net/proxies/HttpProxy.h>
 #include <ppp/io/File.h>
 #include <ppp/text/Encoding.h>
 #include <ppp/threading/Executors.h>
@@ -93,6 +94,13 @@ namespace ppp
                 MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile, MiniDumpWithFullMemory, &exceptionParam, NULLPTR, NULLPTR);
                 CloseHandle(hFile);
             }
+
+            // Best-effort restore of the Windows system proxy before we bail out.
+            // Without this, a crash leaves HKCU ProxyEnable=1 pointing at 127.0.0.1:<port>,
+            // so the user loses all connectivity until they manually clear it or reboot.
+            // EmergencyRestoreSystemProxy() is allocation-free and a no-op unless this
+            // process actually engaged the system proxy.
+            ppp::net::proxies::HttpProxy::EmergencyRestoreSystemProxy();
 
             // The handler either took care of the invalid parameter problem itself,
             // or passed it on to another handler.  "Swallow" it by exiting, paralleling
@@ -558,23 +566,29 @@ namespace ppp
                 return false;
             }
 
-            do
-            {
-                OVERLAPPED overlapped{};
-                overlapped.hEvent = hEvent;
+            OVERLAPPED overlapped{};
+            overlapped.hEvent = hEvent;
 
-                DWORD dw = 0;
-                if (NULLPTR == contents)
-                {
-                    bOK = ::DeviceIoControl((LPVOID)tap, commands,
-                        (LPVOID)contents, 0, (LPVOID)contents, 0, &dw, &overlapped);
-                }
-                else
-                {
-                    bOK = ::DeviceIoControl((LPVOID)tap, commands,
-                        (LPVOID)contents, content_size, (LPVOID)contents, content_size, &dw, &overlapped);
-                }
-            } while (false);
+            DWORD dw = 0;
+            if (NULLPTR == contents)
+            {
+                bOK = ::DeviceIoControl((LPVOID)tap, commands,
+                    (LPVOID)contents, 0, (LPVOID)contents, 0, &dw, &overlapped);
+            }
+            else
+            {
+                bOK = ::DeviceIoControl((LPVOID)tap, commands,
+                    (LPVOID)contents, content_size, (LPVOID)contents, content_size, &dw, &overlapped);
+            }
+
+            // The TAP handle is opened with FILE_FLAG_OVERLAPPED, so the call may complete
+            // asynchronously (returns FALSE + ERROR_IO_PENDING). Wait for completion before
+            // touching the event handle; closing it while the kernel still references the
+            // OVERLAPPED would corrupt the stack object and the event.
+            if (!bOK && ::GetLastError() == ERROR_IO_PENDING)
+            {
+                bOK = ::GetOverlappedResult((LPVOID)tap, &overlapped, &dw, TRUE);
+            }
 
             if (NULLPTR != hEvent)
             {
@@ -583,11 +597,7 @@ namespace ppp
 
             if (!bOK)
             {
-                DWORD last_error = ::GetLastError();
-                if (ERROR_IO_PENDING != last_error)
-                {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
-                }
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
             }
 
             return bOK;

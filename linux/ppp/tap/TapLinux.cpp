@@ -930,6 +930,7 @@ namespace ppp {
                     }
 
                     status = sscanf_s(p, "%lx%lx%lx%lx%lx%lx%lx", &d, &g, &fl, &rc, &us, &metric, &mask);
+                    calli = false;
                     if (status >= 7) {
                         calli = true;
                     }

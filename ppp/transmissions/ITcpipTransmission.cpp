@@ -173,6 +173,11 @@ namespace ppp {
 
             bool ok = ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(packet.get(), length), y);
             if (!ok) {
+                ppp::telemetry::Log(Level::kInfo,
+                    "tcpip",
+                    "ReadBytes failed length=%d disposed=%s",
+                    length,
+                    disposed_.load() != FALSE ? "yes" : "no");
                 Dispose();
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketReadFailed, NULLPTR);
             }
@@ -219,10 +224,17 @@ namespace ppp {
                                 statistics->AddOutgoingTraffic(packet_length);
                             }
                         }
-                        else {
-                            bool disconnected = boost::asio::error::eof == ec ||
-                                boost::asio::error::operation_aborted == ec ||
-                                boost::asio::error::connection_reset == ec ||
+	                        else {
+	                            ppp::telemetry::Log(Level::kInfo,
+	                                "tcpip",
+	                                "DoWriteBytes failed ec=%d msg=%s requested=%d transferred=%zu",
+	                                ec.value(),
+	                                ec.message().c_str(),
+	                                packet_length,
+	                                sz);
+	                            bool disconnected = boost::asio::error::eof == ec ||
+	                                boost::asio::error::operation_aborted == ec ||
+	                                boost::asio::error::connection_reset == ec ||
                                 boost::asio::error::broken_pipe == ec ||
                                 boost::asio::error::not_connected == ec;
                             if (!disconnected) {

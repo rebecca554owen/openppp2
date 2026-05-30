@@ -3,6 +3,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -18,6 +19,9 @@
 namespace ppp {
     namespace app {
         namespace protocol {
+            static constexpr int kTransmissionBinaryHeaderSize = 3;
+            static constexpr int kPlaintextBase94MaxTcpReadSize = (PPP_BUFFER_SIZE / 2) - kTransmissionBinaryHeaderSize;
+
             /**
              * @brief Temporary linklayer helper used during connect/accept handshake.
              */
@@ -328,6 +332,13 @@ namespace ppp {
 
                     ERROR_CODES err = (ERROR_CODES)connector->ErrorCode;
                     if (err != ERROR_CODES::ERRORS_SUCCESS) {
+                        ppp::telemetry::Count("tcpip.peer_connect.reject.protocol", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                            "tcpip",
+                            "peer connect rejected: host=%s port=%d protocol_error=%u",
+                            host.c_str(),
+                            port,
+                            static_cast<unsigned int>(connector->ErrorCode));
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                         return false;
                     }
@@ -640,6 +651,22 @@ namespace ppp {
                     return false;
                 }
 
+                if (configuration_->key.plaintext && packet_length > kPlaintextBase94MaxTcpReadSize) {
+                    const Byte* p = static_cast<const Byte*>(packet);
+                    int remaining = packet_length;
+                    while (remaining > 0) {
+                        int chunk = std::min<int>(remaining, kPlaintextBase94MaxTcpReadSize);
+                        if (!transmission->Write(y, p, chunk)) {
+                            return false;
+                        }
+
+                        p += chunk;
+                        remaining -= chunk;
+                    }
+
+                    return true;
+                }
+
                 return transmission->Write(y, packet, packet_length);
             }
 
@@ -674,8 +701,17 @@ namespace ppp {
                 }
 
                 auto self = shared_from_this();
-                return transmission->Write(buffer.get(), bytes_transferred, 
-                    [self, this, buffer, buffer_size](bool ok) noexcept {
+                return transmission->Write(buffer.get(), bytes_transferred,
+                    [self, this, buffer, buffer_size, bytes_transferred](bool ok) noexcept {
+                        if (!ok) {
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                                "tcpip",
+                                "socket->transmission write callback failed bytes=%d error=%d disposed=%s connected=%s",
+                                bytes_transferred,
+                                (int)ppp::diagnostics::GetLastErrorCode(),
+                                disposed_ ? "yes" : "no",
+                                connected_ ? "yes" : "no");
+                        }
                         ForwardSocketToTransmissionOK(ok, buffer, buffer_size);
                     });
             }
@@ -706,18 +742,40 @@ namespace ppp {
                 auto self = shared_from_this();
                 boost::asio::post(socket_->get_executor(),
                     [self, this, buffer, buffer_size]() noexcept {
+                        // Plaintext transport still wraps binary frames in base94; cap the raw
+                        // TCP chunk so the encoded frame cannot exceed PPP_BUFFER_SIZE.
+                        int read_size = buffer_size;
+                        if (configuration_->key.plaintext) {
+                            read_size = std::min<int>(read_size, kPlaintextBase94MaxTcpReadSize);
+                        }
+
                         // Pick a dynamic read size, then chain read -> write -> next read.
-                        int bytes_transferred = BufferSkateboarding(configuration_->key.sb, buffer_size, PPP_BUFFER_SIZE);
+                        int bytes_transferred = BufferSkateboarding(configuration_->key.sb, read_size, PPP_BUFFER_SIZE);
                         socket_->async_read_some(boost::asio::buffer(buffer.get(), bytes_transferred),
                             [self, this, buffer, buffer_size](const boost::system::error_code& ec, std::size_t sz) noexcept {
                                 int bytes_transferred = std::max<int>(ec ? -1 : static_cast<int>(sz), -1);
                                 if (bytes_transferred < 1) {
+                                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                                        "tcpip",
+                                        "socket->transmission read closed ec=%d msg=%s size=%zu disposed=%s connected=%s",
+                                        ec.value(),
+                                        ec.message().c_str(),
+                                        sz,
+                                        disposed_ ? "yes" : "no",
+                                        connected_ ? "yes" : "no");
                                     Dispose();
                                 }
                                 elif(ForwardSocketToTransmission(buffer, buffer_size, bytes_transferred)) {
                                     Update();
                                 }
                                 else {
+                                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                                        "tcpip",
+                                        "socket->transmission forward failed bytes=%d error=%d disposed=%s connected=%s",
+                                        bytes_transferred,
+                                        (int)ppp::diagnostics::GetLastErrorCode(),
+                                        disposed_ ? "yes" : "no",
+                                        connected_ ? "yes" : "no");
                                     Dispose();
                                 }
                             });
@@ -769,16 +827,35 @@ namespace ppp {
                 }
 
                 bool any = false;
+                bool stop_logged = false;
+                int packets_to_socket = 0;
+                long long bytes_to_socket = 0;
                 while (!disposed_) {
                     // Pull framed payload from transmission, then push to TCP socket.
                     ITransmissionPtr transmission = transmission_;
                     if (NULLPTR == transmission) {
+                        stop_logged = true;
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                            "tcpip",
+                            "transmission->socket stopped: transmission missing packets=%d bytes=%lld",
+                            packets_to_socket,
+                            bytes_to_socket);
                         break;
                     }
 
                     int packet_length = 0;
                     std::shared_ptr<Byte> packet = transmission->Read(y, packet_length);
                     if (NULLPTR == packet || packet_length < 1) {
+                        stop_logged = true;
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                            "tcpip",
+                            "transmission->socket read failed packet_length=%d packets=%d bytes=%lld error=%d disposed=%s connected=%s",
+                            packet_length,
+                            packets_to_socket,
+                            bytes_to_socket,
+                            (int)ppp::diagnostics::GetLastErrorCode(),
+                            disposed_ ? "yes" : "no",
+                            connected_ ? "yes" : "no");
                         break;
                     }
 
@@ -787,11 +864,32 @@ namespace ppp {
 
                     bool ok = ppp::coroutines::asio::async_write(*socket_, boost::asio::buffer(packet.get(), packet_length), y);
                     if (ok) {
+                        packets_to_socket++;
+                        bytes_to_socket += packet_length;
                         Update();
                     }
                     else {
+                        stop_logged = true;
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                            "tcpip",
+                            "transmission->socket write failed packet_length=%d packets=%d bytes=%lld error=%d disposed=%s connected=%s",
+                            packet_length,
+                            packets_to_socket,
+                            bytes_to_socket,
+                            (int)ppp::diagnostics::GetLastErrorCode(),
+                            disposed_ ? "yes" : "no",
+                            connected_ ? "yes" : "no");
                         break;
                     }
+                }
+
+                if (!stop_logged && disposed_) {
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                        "tcpip",
+                        "transmission->socket stopped: disposed externally packets=%d bytes=%lld connected=%s",
+                        packets_to_socket,
+                        bytes_to_socket,
+                        connected_ ? "yes" : "no");
                 }
 
                 Dispose();

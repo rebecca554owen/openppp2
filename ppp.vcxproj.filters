@@ -498,6 +498,21 @@
     <ClCompile Include="ppp\transmissions\proxys\IForwarding.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PChannel.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PCrypto.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PStunClient.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -1200,6 +1215,39 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\configurations\AppConfiguration.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PDefs.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PPacketHeader.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PReplayWindow.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PBufferPool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PCrypto.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PSocketProtector.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PStunClient.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PChannel.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PNatClassifier.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PConfigHelper.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PZeroRTTCache.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\ipv6\IPv6Auxiliary.h">

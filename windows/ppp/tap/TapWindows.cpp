@@ -289,7 +289,7 @@ namespace ppp
                 (ConfigureDriver_SetTunModeWithAddress(tun, ip, gw, mask) || 
                     ConfigureDriver_SetTunModeWithAddress(tun, ip, (ip & mask), mask)) &&
                 ConfigureDriver_SetDhcpMASQ(tun, ip, gw, mask, lease_time_in_seconds) &&
-                ConfigureDriver_SetDhcpOptionData(tun, ip, mask, gw, gw, dns_addresses);
+                ConfigureDriver_SetDhcpOptionData(tun, ip, gw, mask, gw, dns_addresses);
 
             if (!ok)
             {
@@ -584,15 +584,15 @@ namespace ppp
             // IP地址
             dhcpOptionData.emplace_back(0x32);
             dhcpOptionData.emplace_back(0x04);
-            for (uint32_t i = 0; i < sizeof(*mask_bytes); i++)
+            for (uint32_t i = 0; i < sizeof(ip); i++)
             {
-                dhcpOptionData.emplace_back(mask_bytes[i]);
+                dhcpOptionData.emplace_back(ip_bytes[i]);
             }
 
             // 子网地址
             dhcpOptionData.emplace_back(0x01);
             dhcpOptionData.emplace_back(0x04);
-            for (uint32_t i = 0; i < sizeof(*mask_bytes); i++)
+            for (uint32_t i = 0; i < sizeof(mask); i++)
             {
                 dhcpOptionData.emplace_back(mask_bytes[i]);
             }
@@ -600,7 +600,7 @@ namespace ppp
             // 网关服务器
             dhcpOptionData.emplace_back(0x03);
             dhcpOptionData.emplace_back(0x04);
-            for (uint32_t i = 0; i < sizeof(*gw_bytes); i++)
+            for (uint32_t i = 0; i < sizeof(gw); i++)
             {
                 dhcpOptionData.emplace_back(gw_bytes[i]);
             }
@@ -633,7 +633,7 @@ namespace ppp
             // DHCP服务器
             dhcpOptionData.emplace_back(0x36);
             dhcpOptionData.emplace_back(0x04);
-            for (uint32_t i = 0; i < sizeof(*dhcp_bytes); i++)
+            for (uint32_t i = 0; i < sizeof(dhcp); i++)
             {
                 dhcpOptionData.emplace_back(dhcp_bytes[i]);
             }

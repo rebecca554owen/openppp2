@@ -96,6 +96,20 @@ The set is intentionally code-first. Each page is written from actual implementa
 | Android | — | [`ANDROID_NETWORK_FOLLOWUP_GUARD_CN.md`](ANDROID_NETWORK_FOLLOWUP_GUARD_CN.md) |
 | Governance | — | [`dns-server-list-governance-cn.md`](dns-server-list-governance-cn.md) |
 
+## Specialized And Governance Documents
+
+These pages are narrower than the main reading paths. Treat design, audit, and governance notes as implementation evidence only after checking their status lines and the current code.
+
+| Area | Documents | Use |
+|------|-----------|-----|
+| Android design | [`android-dependency-upgrade-plan-cn.md`](android-dependency-upgrade-plan-cn.md), [`ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md`](ANDROID_ICMP_ERROR_FORWARDING_DESIGN_CN.md), [`ANDROID_TLS_SESSION_CACHE_DESIGN_CN.md`](ANDROID_TLS_SESSION_CACHE_DESIGN_CN.md) | Android-specific plans, constraints, and deferred designs. |
+| DNS design | [`DNS_MODULE_DESIGN.md`](DNS_MODULE_DESIGN.md), [`DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md`](DNS_COMPLETION_STATE_TYPE_SAFETY_DESIGN_CN.md), [`DNS_DOH_DOT_SLOT_REUSE_DESIGN_CN.md`](DNS_DOH_DOT_SLOT_REUSE_DESIGN_CN.md), [`dns-server-list-governance-cn.md`](dns-server-list-governance-cn.md) | Resolver behavior, structured DNS config, provider-list governance, and known future hardening. |
+| Security and governance | [`openppp2-deep-code-audit-cn.md`](openppp2-deep-code-audit-cn.md), [`p1-governance-decisions-cn.md`](p1-governance-decisions-cn.md), [`p2-governance-decisions-cn.md`](p2-governance-decisions-cn.md), [`system-command-governance-pilot.md`](system-command-governance-pilot.md), [`SYSTEM_CALL_GOVERNANCE_DESIGN_CN.md`](SYSTEM_CALL_GOVERNANCE_DESIGN_CN.md) | Audit findings, accepted deferrals, and system-command governance decisions. |
+| Focused hardening | [`PER_FRAME_READ_TIMEOUT_DESIGN.md`](PER_FRAME_READ_TIMEOUT_DESIGN.md), [`PER_FRAME_READ_TIMEOUT_DESIGN_CN.md`](PER_FRAME_READ_TIMEOUT_DESIGN_CN.md), [`FIREWALL_RCU_RULE_SNAPSHOT_DESIGN_CN.md`](FIREWALL_RCU_RULE_SNAPSHOT_DESIGN_CN.md), [`SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md`](SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md), [`TCP_NAT_AUDIT_REPORT.md`](TCP_NAT_AUDIT_REPORT.md) | Targeted performance, timeout, firewall, TLS, and TCP NAT analysis. |
+| Compatibility and local notes | [`BOOST_187_COMPATIBILITY.md`](BOOST_187_COMPATIBILITY.md), [`SERVER_IPV4_ASSIGNMENT_CN.md`](SERVER_IPV4_ASSIGNMENT_CN.md), [`debug.md`](debug.md) | Compatibility status, server-side IPv4 assignment notes, and local docs-directory triage. |
+
+When adding a new document, put it in the main map if it is stable reference material. Put it in this section if it is a design note, audit record, migration plan, or governance decision.
+
 ## Reading Principle
 
 Keep these layers separate while reading:

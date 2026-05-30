@@ -169,3 +169,106 @@ jobs:
           name: openppp2-linux-amd64${{ matrix.suffix }}
           path: bin/openppp2-linux-amd64${{ matrix.suffix }}.zip
           if-no-files-found: error
+
+  # ── Debian 10 (Buster) compatibility build ──────────────────────────
+  # Ensures the binary runs on Debian 10 / glibc 2.28 / kernel 4.19+.
+  # io_uring and SYSNAT are disabled (require kernel ≥ 5.10).
+  build-debian10:
+    name: Linux amd64 Debian 10
+    runs-on: ubuntu-latest
+    container: debian:buster
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          # Debian 10 Buster reached EOL — switch to archive mirrors.
+          sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list
+          sed -i 's|deb.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list
+          sed -i '/buster-updates/d' /etc/apt/sources.list
+          apt-get update -y
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git zip unzip curl wget ca-certificates \
+            libkrb5-dev libicu-dev libssl-dev libunwind-dev \
+            autoconf
+
+      - name: Cache third-party libraries
+        id: cache-third
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: linux-amd64-debian10-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+
+      - name: Build Boost
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar jxf boost_*.tar.bz2 && rm boost_*.tar.bz2
+          mv boost_* boost
+          cd boost && ./bootstrap.sh && ./b2 cxxflags=-fPIC -j$(nproc)
+
+      - name: Build OpenSSL
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar zxf openssl-*.tar.gz && rm openssl-*.tar.gz
+          mv openssl-* openssl
+          cd openssl && ./Configure && make -j$(nproc)
+
+      - name: Build jemalloc
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
+          tar jxf jemalloc-*.tar.bz2 && rm jemalloc-*.tar.bz2
+          mv jemalloc-* jemalloc
+          cd jemalloc && ./autogen.sh --with-jemalloc-prefix=je_ && make -j$(nproc)
+
+      - name: Build openppp2
+        shell: bash
+        run: |
+          # Inside a Debian container $GITHUB_WORKSPACE maps to /__w/...
+          # while ${{ github.workspace }} resolves to the host path.
+          TP="$GITHUB_WORKSPACE/third-party"
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DENABLE_SYSNAT=OFF \
+            -DENABLE_IO_URING=OFF
+          make -j$(nproc)
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          ARTIFACT="openppp2-linux-amd64-debian10.zip"
+          ARTIFACT_DIR="artifact"
+          mkdir -p "$ARTIFACT_DIR"
+
+          cp bin/ppp "$ARTIFACT_DIR/"
+
+          for f in appsettings.json cacert.pem cacert.sha256 \
+                   dns-rules.txt firewall-rules.txt ip.txt \
+                   cmcc.txt starrylink.net.key starrylink.net.pem; do
+            if [ -f "$f" ]; then cp "$f" "$ARTIFACT_DIR/"; fi
+          done
+
+          for f in README.md README_CN.md LICENSE; do
+            if [ -f "$f" ]; then cp "$f" "$ARTIFACT_DIR/"; fi
+          done
+
+          cd "$ARTIFACT_DIR" && zip -r "../$ARTIFACT" .
+          cd ..
+          mv "$ARTIFACT" bin/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openppp2-linux-amd64-debian10
+          path: bin/openppp2-linux-amd64-debian10.zip
+          if-no-files-found: error

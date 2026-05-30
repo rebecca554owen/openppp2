@@ -9,6 +9,9 @@
  */
 
 namespace vmux {
+    static constexpr int kTransmissionBinaryHeaderSize = 3;
+    static constexpr int kPlaintextBase94MaxWriteSize = (PPP_BUFFER_SIZE / 2) - kTransmissionBinaryHeaderSize;
+
     /**
      * @brief Initialize a vmux logical socket state.
      * @param mux Parent vmux multiplexer instance.
@@ -864,7 +867,12 @@ namespace vmux {
                     });
             };
         
-        int bytes_transferred = ppp::BufferSkateboarding(mux_->AppConfiguration->key.sb, vmux_net::max_buffers_size, vmux_net::max_buffers_size);
+        int read_size = vmux_net::max_buffers_size;
+        if (mux_->AppConfiguration->key.plaintext) {
+            read_size = std::min<int>(read_size, kPlaintextBase94MaxWriteSize - static_cast<int>(sizeof(vmux_net::vmux_hdr)));
+        }
+
+        int bytes_transferred = ppp::BufferSkateboarding(mux_->AppConfiguration->key.sb, read_size, vmux_net::max_buffers_size);
         vmux_skt_async_read_some(tx_socket, boost::asio::buffer(tx_buffer_.get(), bytes_transferred), reading_cb);
         return true;
     }

@@ -165,6 +165,42 @@ namespace ppp {
             };
 
             /**
+             * @brief One endpoint candidate advertised by the P2P coordinator.
+             */
+            struct P2PEndpointCandidate {
+                ppp::string endpoint;   ///< Candidate endpoint in host:port form.
+                ppp::string source;     ///< Candidate source, e.g. "observed" or "stun".
+
+                void                                                Clear() noexcept;
+                bool                                                HasAny() const noexcept;
+                void                                                ToJson(Json::Value& json) const noexcept;
+                static bool                                         FromJson(P2PEndpointCandidate& value, const Json::Value& json) noexcept;
+            };
+
+            /**
+             * @brief Server-coordinated P2P control message carried in the INFO extension JSON.
+             *
+             * The message is intentionally control-plane only. Data packets still use the
+             * existing NAT relay path until a direct UDP channel consumes these hints.
+             */
+            struct P2PControlMessage {
+                bool                                                enabled = false;     ///< Sender has P2P enabled.
+                ppp::string                                         mode;                ///< "relay" or "direct-preferred".
+                ppp::string                                         action;              ///< "register", "offer", "reject", or "status".
+                uint32_t                                            virtual_ip = 0;      ///< Sender virtual IPv4 in network byte order.
+                uint32_t                                            peer_virtual_ip = 0; ///< Peer virtual IPv4 in network byte order.
+                ppp::string                                         token;               ///< Short-lived coordinator token.
+                ppp::string                                         reason;              ///< Rejection or status reason.
+                ppp::vector<P2PEndpointCandidate>                   candidates;          ///< Candidate endpoints for the peer.
+
+                void                                                Clear() noexcept;
+                bool                                                HasAny() const noexcept;
+                void                                                ToJson(Json::Value& json) const noexcept;
+                ppp::string                                         ToJson() const noexcept;
+                static bool                                         FromJson(P2PControlMessage& value, const Json::Value& json) noexcept;
+            };
+
+            /**
              * @brief Holds optional IPv6 assignment and status extensions for a session.
              */
             struct VirtualEthernetInformationExtensions {
@@ -240,6 +276,9 @@ namespace ppp {
                  * server did not process an IPv4 request.
                  */
                 ClientIPv4Assignment                                ClientIPv4Assign;
+
+                /** @brief Optional P2P control-plane message. */
+                P2PControlMessage                                   P2P;
 
                 /** @brief Detailed IPv6 provisioning outcomes.
                  *

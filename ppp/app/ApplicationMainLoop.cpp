@@ -416,7 +416,7 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
         }
 
         if (snap.grade == ppp::diagnostics::LinkQualityGrade::Unusable) {
-            telemetry_lines.emplace_back("  !! CRITICAL: Quality < 90% — STOP OPENPPP2!");
+            telemetry_lines.emplace_back("  !! CRITICAL: Quality < 90% - STOP OPENPPP2!");
         }
     }
 

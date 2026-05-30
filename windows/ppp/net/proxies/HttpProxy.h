@@ -22,6 +22,12 @@ namespace ppp
                 static bool OpenControlWindow() noexcept;
                 static bool OpenControlWindow(int TabIndex) noexcept;
                 static bool PreferredNetwork(bool in4or6) noexcept;
+
+                // Emergency, allocation-free restore of the Windows system proxy.
+                // Safe to call from an SEH unhandled-exception filter (crash path):
+                // it only touches HKCU registry + WinINet via raw Win32 and is a no-op
+                // unless this process previously engaged the system proxy.
+                static void EmergencyRestoreSystemProxy() noexcept;
             };
         }
     }

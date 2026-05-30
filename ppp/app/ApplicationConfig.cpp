@@ -388,6 +388,14 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
 
         ni->IPAddress = Ipep::FixedIPAddress(ni->IPAddress, ni->GatewayServer, ni->SubmaskAddress);
         ni->StaticMode = ppp::ToBoolean(ppp::GetCommandArgument("--tun-static", argc, argv).data());
+
+        // If the user explicitly passed --tun-ip on the command line, implicitly enable
+        // static mode so the client sends "manual" to the server instead of requesting
+        // DHCP auto-allocation.  This matches user expectation: specifying an IP means
+        // "use this IP, don't let the server override it".
+        if (!ni->StaticMode && ppp::HasCommandArgument("--tun-ip", argc, argv)) {
+            ni->StaticMode = true;
+        }
         ni->HostedNetwork = ppp::ToBoolean(ppp::GetCommandArgument("--tun-host", argc, argv, "y").data());
         ni->VNet = ppp::ToBoolean(ppp::GetCommandArgument("--tun-vnet", argc, argv, "y").data());
 

@@ -277,7 +277,7 @@ namespace ppp
                     return -1;
                 }
 
-                std::string strings[] = { addresses[0].to_string(), addresses[1].to_string(), Ipep::ToAddress(ip).to_string() };
+                std::string strings[] = { addresses[0].to_string(), addresses[1].to_string(), Ipep::ToAddress(mask).to_string() };
                 if (!utun_set_if_ip_gw_and_mask(fd,
                     strings[0].data(),  // ip
                     strings[1].data(),  // gw

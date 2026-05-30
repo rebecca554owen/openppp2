@@ -502,6 +502,10 @@ private:
     bool                        win_cursor_visible_     = true;
     /** @brief True if win_cursor_visible_ is valid. */
     bool                        win_cursor_saved_       = false;
+    /** @brief Original console output code page restored by Stop(). */
+    unsigned int                win_original_output_cp_ = 0;
+    /** @brief True if win_original_output_cp_ is valid. */
+    bool                        win_output_cp_saved_    = false;
 
     /**
      * @brief Handle to stdin used by PrepareInputTerminal() / RestoreInputTerminal().

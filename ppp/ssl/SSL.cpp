@@ -158,12 +158,13 @@ namespace ppp {
                 boost::asio::ssl::context::no_sslv2 |
                 boost::asio::ssl::context::no_sslv3 |
                 boost::asio::ssl::context::single_dh_use);*/
-            ssl_context->use_certificate_chain_file(certificate_chain_file, ec);
-            ssl_context->use_certificate_file(certificate_file, boost::asio::ssl::context::file_format::pem, ec);
-            ssl_context->use_private_key_file(certificate_key_file, boost::asio::ssl::context::file_format::pem, ec);
 
             /**
              * @brief Register password callback used when reading encrypted PEM keys.
+             *
+             * @details This MUST be installed BEFORE use_private_key_file(); otherwise
+             *          OpenSSL/BoringSSL has no way to obtain the passphrase while
+             *          parsing an encrypted private key and the load fails.
              */
             std::string certificate_key_password_ = certificate_key_password;
             ssl_context->set_password_callback([certificate_key_password_](
@@ -171,6 +172,35 @@ namespace ppp {
                 boost::asio::ssl::context_base::password_purpose purpose) noexcept -> std::string {
                     return certificate_key_password_;
                 }, ec);
+            if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                return NULLPTR;
+            }
+
+            /**
+             * @brief Load the chain, leaf certificate, and private key in sequence.
+             *
+             * @details Each step's error_code is checked so that a missing, corrupt,
+             *          password-protected, or mismatched certificate/key surfaces here
+             *          instead of being silently deferred to per-connection handshakes.
+             */
+            ssl_context->use_certificate_chain_file(certificate_chain_file, ec);
+            if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                return NULLPTR;
+            }
+
+            ssl_context->use_certificate_file(certificate_file, boost::asio::ssl::context::file_format::pem, ec);
+            if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                return NULLPTR;
+            }
+
+            ssl_context->use_private_key_file(certificate_key_file, boost::asio::ssl::context::file_format::pem, ec);
+            if (ec) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
+                return NULLPTR;
+            }
 
             /**
              * @brief Populate trust store from system default locations.

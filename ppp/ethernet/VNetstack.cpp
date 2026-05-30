@@ -863,6 +863,9 @@ namespace ppp {
             tcp_hdr::TCPH_HDRLEN_BYTES_SET(tcp, tcp_len);
             tcp_hdr::TCPH_FLAGS_SET(tcp, TcpFlags::TCP_RST);
 
+            int iphdr_len = (char*)tcp - (char*)iphdr;
+            iphdr->len = htons(iphdr_len + tcp_len);
+
             return this->Output(false, iphdr, tcp, tcp_len, NULLPTR);
         }
 
