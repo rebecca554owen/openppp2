@@ -925,6 +925,14 @@ namespace ppp
 
         /**
          * @brief Serializes and outputs parsed IP frame.
+         *
+         * @details Large IP frames (e.g. UDP datagrams reassembled from the tunnel that
+         *          exceed the TAP MTU) are split into MTU-sized IPv4 fragments before
+         *          output.  Without this, Windows (Wintun) and macOS (utun) reject any
+         *          write larger than ITap::Mtu and the datagram is silently dropped,
+         *          while Linux happens to accept the oversized write - a platform
+         *          inconsistency that breaks large reverse UDP (big DNS/EDNS, QUIC, media).
+         *          IPFrame::Subpackages() is a no-op for frames that already fit the MTU.
          */
         bool VEthernet::Output(IPFrame* packet) noexcept
         {
@@ -939,13 +947,47 @@ namespace ppp
             }
 
             std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
-            std::shared_ptr<BufferSegment> messages = IPFrame::ToArray(allocator, packet);
-            if (NULLPTR == messages) 
+
+            ppp::vector<IPFrame::IPFramePtr> fragments;
+            int fragment_count = IPFrame::Subpackages(fragments, std::shared_ptr<IPFrame>(packet, [](const IPFrame*) noexcept {}));
+            if (fragment_count <= 0)
             {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
             }
 
-            return Output(messages->Buffer, messages->Length);
+            // Fast path: a single fragment means the frame already fits the MTU.
+            if (fragment_count == 1)
+            {
+                std::shared_ptr<BufferSegment> messages = IPFrame::ToArray(allocator, packet);
+                if (NULLPTR == messages)
+                {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                }
+
+                return Output(messages->Buffer, messages->Length);
+            }
+
+            bool any = false;
+            for (const IPFrame::IPFramePtr& fragment : fragments)
+            {
+                if (NULLPTR == fragment)
+                {
+                    continue;
+                }
+
+                std::shared_ptr<BufferSegment> messages = IPFrame::ToArray(allocator, fragment.get());
+                if (NULLPTR == messages)
+                {
+                    continue;
+                }
+
+                if (Output(messages->Buffer, messages->Length))
+                {
+                    any = true;
+                }
+            }
+
+            return any;
         }
 
         /**

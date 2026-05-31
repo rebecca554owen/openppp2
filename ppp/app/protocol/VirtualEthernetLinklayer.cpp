@@ -1072,6 +1072,17 @@ namespace ppp {
                 return global::PACKET_Push(PacketAction_FIN, transmission, connection_id, NULLPTR, 0, y);
             }
 
+            // Maximum binary frame size that is safe to emit when key.plaintext is enabled.
+            //
+            // In plaintext mode every transmission frame is wrapped in a base94 envelope
+            // (see ITransmissionBridge::Encrypt).  ssea::base94_encode can expand the binary
+            // payload by up to 2x in the worst case, so the binary frame must stay at or below
+            // PPP_BUFFER_SIZE/2 (minus the small frame header) to guarantee the encoded frame
+            // does not exceed PPP_BUFFER_SIZE on the receiver.  TCP and vmux read paths cap
+            // their socket reads to the same bound; UDP datagrams cannot be split without
+            // breaking datagram boundaries, so an oversized datagram is dropped instead.
+            static constexpr int kPlaintextBase94MaxBinaryFrame = (PPP_BUFFER_SIZE / 2) - 3;
+
             // ---------------------------------------------------------------------
             // Send a UDP datagram with source and destination endpoints.
             // ---------------------------------------------------------------------
@@ -1092,7 +1103,28 @@ namespace ppp {
                         if (global::PACKET_IPEndPoint(ms, sourceEP)) {
                             if (ms.Write(packet, 0, packet_length)) {
                                 std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                                return transmission->Write(y, buffer.get(), ms.GetPosition());
+                                int frame_length = ms.GetPosition();
+
+                                // In plaintext mode the frame is base94-wrapped before transport.
+                                // A frame that would expand past PPP_BUFFER_SIZE on the receiver is
+                                // rejected there with ProtocolFrameInvalid, which tears down the whole
+                                // transmission (Read returns null -> Dispose).  UDP has no MTU contract
+                                // here and cannot be split, so silently drop the oversized datagram and
+                                // report success: a single lost datagram is normal UDP behaviour and far
+                                // less harmful than collapsing the tunnel.
+                                if (frame_length > kPlaintextBase94MaxBinaryFrame) {
+                                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
+                                    if (NULLPTR != configuration && configuration->key.plaintext) {
+                                        ppp::telemetry::Log(Level::kInfo,
+                                            "linklayer",
+                                            "drop oversized plaintext UDP datagram frame_length=%d max=%d",
+                                            frame_length,
+                                            kPlaintextBase94MaxBinaryFrame);
+                                        return true;
+                                    }
+                                }
+
+                                return transmission->Write(y, buffer.get(), frame_length);
                             }
                         }
                     }
@@ -1118,6 +1150,23 @@ namespace ppp {
             /** @brief Sends echo payload packet. */
             bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept 
             {
+                // In plaintext mode the frame is base94-wrapped before transport and may expand
+                // by up to 2x.  An ICMP echo payload large enough to exceed PPP_BUFFER_SIZE after
+                // encoding would be rejected by the peer and collapse the whole transmission.
+                // Echo is a datagram-style message, so drop the oversized one (report success)
+                // rather than tearing down the tunnel.  See DoSendTo for the same rationale.
+                if (NULLPTR != packet && packet_length > kPlaintextBase94MaxBinaryFrame) {
+                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
+                    if (NULLPTR != configuration && configuration->key.plaintext) {
+                        ppp::telemetry::Log(Level::kInfo,
+                            "protocol",
+                            "drop oversized plaintext ECHO packet packet_length=%d max=%d",
+                            packet_length,
+                            kPlaintextBase94MaxBinaryFrame);
+                        return true;
+                    }
+                }
+
                 ppp::telemetry::Log(Level::kDebug, "protocol", "ECHO sent");
                 ppp::telemetry::Count("protocol.echo.sent", 1);
                 return global::PACKET_Push(PacketAction_ECHO, transmission, packet, packet_length, y);

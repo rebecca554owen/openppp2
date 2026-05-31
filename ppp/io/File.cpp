@@ -339,16 +339,14 @@ namespace ppp {
 #if defined(_WIN32)            
             return ppp::win32::Win32Native::GetFullPath(path_new.data());
 #else
-            /* https://man7.org/linux/man-pages/man3/realpath.3.html */
-            char* resolved_path = (char*)::realpath(path, NULLPTR);
-            if (NULLPTR != resolved_path) {
-                ppp::string fullpath_string = resolved_path;
-                ::free(resolved_path);
-                
-                return fullpath_string;
+            /* Keep realpath output on our stack; Darwin system allocation must not be released through jemalloc. */
+            char resolved_path[PATH_MAX + 1];
+            resolved_path[PATH_MAX] = '\x0';
+            if (NULLPTR != ::realpath(path_new.data(), resolved_path)) {
+                return resolved_path;
             }
 
-            ppp::string dir = path;
+            ppp::string dir = path_new;
             ppp::vector<ppp::string> segments;
             /**
              * Walk upward until a resolvable parent is found, then append skipped tail segments.
@@ -372,13 +370,11 @@ namespace ppp {
                     break;
                 }
 
-                resolved_path = (char*)::realpath(dir.data(), NULLPTR);
-                if (NULLPTR == resolved_path) {
+                if (NULLPTR == ::realpath(dir.data(), resolved_path)) {
                     continue;
                 }
 
                 ppp::string fullpath_string = resolved_path;
-                ::free(resolved_path);
 
                 for (ppp::string& i : segments) {
                     fullpath_string.append("/" + i);

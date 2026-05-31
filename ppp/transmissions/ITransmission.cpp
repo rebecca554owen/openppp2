@@ -45,12 +45,17 @@ namespace ppp {
         static constexpr int EVP_HEADER_MSS = EVP_HEADER_TSS + 1; // 3 bytes: total header after first key byte
         static constexpr int EVP_HEADER_XSS = EVP_HEADER_MSS + 1; // 4 bytes: simple header (random key + filler + swapped length)
 
-        // Maximum base94-encoded frame payload size.  Base94 expands 9 input bytes
-        // into 11 output bytes, so a PPP_BUFFER_SIZE plaintext can produce up to
-        // ceil(PPP_BUFFER_SIZE * 11/9) encoded bytes.  The frame-length check on the
-        // receive side must allow this expansion; the decoded output is still bounded
-        // by PPP_BUFFER_SIZE in DecryptBinary.
-        static constexpr int EVP_BASE94_MAX_FRAME = (PPP_BUFFER_SIZE * 11 / 9) + 64;
+        // Maximum base94-encoded frame payload size.
+        //
+        // ssea::base94_encode() encodes input byte-by-byte: a byte whose (value - kf)
+        // is >= 93 expands to 2 output characters, otherwise 1.  In the worst case every
+        // byte expands, so the encoded size is up to 2x the binary input.  A binary
+        // payload bounded by PPP_BUFFER_SIZE can therefore produce up to 2*PPP_BUFFER_SIZE
+        // encoded bytes.  The receive-side frame-length check must allow this full
+        // expansion; the decoded output is still bounded by PPP_BUFFER_SIZE in the
+        // binary decrypt path.  (NOTE: this is NOT 11/9 — that ratio belongs to the
+        // unrelated block-based BASE94_INPUT/OUTPUT_BLOCK_SIZE codec, not this byte codec.)
+        static constexpr int EVP_BASE94_MAX_FRAME = (PPP_BUFFER_SIZE * 2) + 64;
 
         // Forward declaration of the full packet read helper (used by ReadBinary).
         static std::shared_ptr<Byte> Transmission_Packet_Read(
@@ -447,10 +452,11 @@ namespace ppp {
                  *
                  * @details The send side caps plaintext/base94 TCP chunks (see
                  *          VirtualEthernetTcpipConnection / vmux_skt) so a conforming peer never
-                 *          emits a frame this large.  We still accept up to EVP_BASE94_MAX_FRAME
-                 *          (PPP_BUFFER_SIZE expanded by the base94 11/9 ratio) rather than the raw
-                 *          PPP_BUFFER_SIZE so that a peer running an older, un-capped build can
-                 *          still interoperate during a rolling upgrade.
+                 *          emits a frame this large.  We accept up to EVP_BASE94_MAX_FRAME
+                 *          (2 * PPP_BUFFER_SIZE, the worst-case byte-codec expansion) rather than
+                 *          the raw PPP_BUFFER_SIZE, so a peer running an older, un-capped build
+                 *          that emits a full-expansion frame still interoperates.  The decoded
+                 *          output is re-bounded by PPP_BUFFER_SIZE in the binary decrypt path.
                  */
                 if (payload_length > EVP_BASE94_MAX_FRAME) {
                     ppp::telemetry::Log(Level::kInfo,
