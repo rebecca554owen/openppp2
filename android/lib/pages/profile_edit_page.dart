@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../models/config_profile.dart';
 import '../services/profile_store.dart';
+import '../utils/server_endpoint.dart';
 
 /// Edit (or create) a single ConfigProfile.
 ///
@@ -95,10 +96,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     final key = mapAt('key');
 
     final serverUrl = client['server']?.toString() ?? '';
-    final uri = Uri.tryParse(serverUrl);
-    _serverHostController.text = uri?.host ?? '';
-    _serverPortController.text =
-        (uri != null && uri.hasPort) ? uri.port.toString() : '';
+    final endpoint = ServerEndpoint.parse(serverUrl);
+    _serverHostController.text = endpoint.host;
+    _serverPortController.text = endpoint.port?.toString() ?? '';
     _guidController.text = client['guid']?.toString() ?? '';
     _bandwidthController.text = (client['bandwidth'] ?? 0).toString();
 
@@ -145,7 +145,10 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     final host = _serverHostController.text.trim();
     final port = int.tryParse(_serverPortController.text.trim()) ?? 0;
     if (host.isNotEmpty) {
-      client['server'] = 'ppp://$host${port > 0 ? ':$port' : ''}/';
+      client['server'] = ServerEndpoint(
+        host: host,
+        port: port > 0 ? port : null,
+      ).toPppUrl();
     }
     if (_guidController.text.trim().isNotEmpty) {
       client['guid'] = _guidController.text.trim();

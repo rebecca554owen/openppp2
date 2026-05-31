@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../utils/server_endpoint.dart';
 
 /// One JSON snapshot kept in profile history (most recent first).
 class ConfigSnapshot {
@@ -91,10 +92,10 @@ class ConfigProfile {
         if (client is Map) {
           final s = client['server']?.toString();
           if (s == null || s.isEmpty) return null;
-          final uri = Uri.tryParse(s);
-          if (uri != null && uri.host.isNotEmpty) {
-            final port = uri.hasPort ? ':${uri.port}' : '';
-            return '${uri.host}$port';
+          final endpoint = ServerEndpoint.parse(s);
+          if (endpoint.host.isNotEmpty) {
+            final port = endpoint.port != null ? ':${endpoint.port}' : '';
+            return '${endpoint.host}$port';
           }
         }
       }

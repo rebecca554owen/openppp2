@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/config_profile.dart';
+import '../utils/server_endpoint.dart';
 
 /// Persistent store for the list of config profiles (locations) plus
 /// active selection + raw VPN options. Uses SharedPreferences.
@@ -584,8 +585,8 @@ class ProfileStore {
         if (client is Map) {
           final s = client['server']?.toString();
           if (s != null) {
-            final uri = Uri.tryParse(s);
-            if (uri != null && uri.host.isNotEmpty) return uri.host;
+            final endpoint = ServerEndpoint.parse(s);
+            if (endpoint.host.isNotEmpty) return endpoint.host;
           }
         }
       }
