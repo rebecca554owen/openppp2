@@ -114,3 +114,5 @@ android/android/keystore/*.p12
 android/android/keystore/*.jks
 android/android/keystore/*.keystore
 android/android/keystore/*.properties
+/third-party
+.DS_Store

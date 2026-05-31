@@ -189,7 +189,9 @@ void PppApplication::ClearTickAlwaysTimeout() noexcept {
 int RunPreparedApplication(const std::shared_ptr<PppApplication>& app, int prepared_status, int argc, const char* argv[]) noexcept {
     if (ppp::HasCommandArgument("--pull-iplist", argc, argv)) {
         app->PullIPList(ppp::GetCommandArgument("--pull-iplist", argc, argv), false);
-        return ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
+        int rc = ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
+        Executors::Exit();
+        return rc;
     }
 
 #if defined(_WIN32)

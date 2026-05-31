@@ -220,7 +220,10 @@ void PppApplication::PullIPList(const ppp::string& command, bool virr) noexcept 
         ppp::set<ppp::string> ips;
         if (chnroutes2_getiplist(ips, nation) > 0) {
             ok = chnroutes2_saveiplist(path, ips);
-            if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+            if (ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
+            }
+            else if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
             }
         }
