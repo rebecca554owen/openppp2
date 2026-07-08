@@ -447,6 +447,7 @@
     <ClCompile Include="ppp\app\client\ClientConnectionOpener.cpp" />
     <ClCompile Include="ppp\app\client\ClientPacketDispatchHandler.cpp" />
     <ClCompile Include="ppp\app\client\PeerPrefixRouteManager.cpp" />
+    <ClCompile Include="ppp\app\client\RemoteEndpointLoader.cpp" />
     <ClCompile Include="ppp\app\client\SwitcherTimeoutRegistry.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager_mobile.cpp" />
@@ -778,6 +779,7 @@
     <ClInclude Include="ppp\app\client\AssignedAddressManager.h" />
     <ClInclude Include="ppp\app\client\ClientConnectionTeardown.h" />
     <ClInclude Include="ppp\app\client\ClientBypassRouteLoader.h" />
+    <ClInclude Include="ppp\app\client\RemoteEndpointLoader.h" />
     <ClInclude Include="ppp\app\client\ExchangerStaticEchoChannel.h" />
     <ClInclude Include="ppp\app\client\ClientConnectionOpener.h" />
     <ClInclude Include="ppp\app\client\ClientPacketDispatchHandler.h" />

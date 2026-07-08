@@ -363,6 +363,9 @@
     <ClCompile Include="ppp\app\client\VEthernetDatagramPort.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\client\RemoteEndpointLoader.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\client\VEthernetNetworkSwitcher.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -1485,6 +1488,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\VEthernetDatagramPort.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\RemoteEndpointLoader.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\VEthernetNetworkSwitcher.h">

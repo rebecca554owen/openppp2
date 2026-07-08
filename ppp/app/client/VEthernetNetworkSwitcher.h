@@ -44,6 +44,7 @@ namespace ppp {
             class ClientBypassRouteLoader;
             class QuicRejectRateLimiter;
             class PeerPrefixRouteManager;
+            class RemoteEndpointLoader;
             class SwitcherTimeoutRegistry;
 
             namespace dns {
@@ -76,6 +77,7 @@ namespace ppp {
                 friend class ClientPacketDispatchHandler;
                 friend class ClientBypassRouteLoader;
                 friend class PeerPrefixRouteManager;
+                friend class RemoteEndpointLoader;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
 
@@ -336,6 +338,7 @@ namespace ppp {
                 std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
                 std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;
                 std::unique_ptr<PeerPrefixRouteManager>                         peer_prefix_routes_;
+                std::unique_ptr<RemoteEndpointLoader>                           remote_endpoint_loader_;
                 std::unique_ptr<dns::DnsHostPorts>                                  dns_host_ports_cache_;
                 std::weak_ptr<VEthernetExchanger>                                 dns_host_ports_exchanger_;
             };

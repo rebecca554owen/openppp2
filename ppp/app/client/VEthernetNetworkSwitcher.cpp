@@ -10,6 +10,7 @@
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
 #include <ppp/app/client/PeerPrefixRouteManager.h>
+#include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
 #include <ppp/app/client/dns/DnsResponseHandler.h>
 #include <ppp/app/client/dns/DnsHost.h>
@@ -148,6 +149,7 @@ namespace ppp {
                 , bypass_loader_(std::make_unique<ClientBypassRouteLoader>())
                 , quic_reject_limiter_(std::make_unique<QuicRejectRateLimiter>())
                 , peer_prefix_routes_(std::make_unique<PeerPrefixRouteManager>())
+                , remote_endpoint_loader_(std::make_unique<RemoteEndpointLoader>())
                 , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
                 , icmppackets_aid_(0) {
 
@@ -158,6 +160,7 @@ namespace ppp {
                 packet_dispatch_->Bind(this);
                 bypass_loader_->Bind(this);
                 peer_prefix_routes_->Bind(this);
+                remote_endpoint_loader_->Bind(this);
                 timeout_registry_->Bind(&GetSynchronizedObject());
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
@@ -840,177 +843,7 @@ namespace ppp {
 
             /** @brief Adds remote endpoints and static servers to route/bypass tables. */
             bool VEthernetNetworkSwitcher::AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept {
-                using ProtocolType = VEthernetExchanger::ProtocolType;
-
-                // This function must be executed after the remote exchanger object has been created.
-                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
-                if (NULLPTR == exchanger) {
-                    return false;
-                }
-
-                // Initialize and try the proxy forwarding object if the link does require proxy forwarding services.
-                IForwardingPtr forwarding = make_shared_object<IForwarding>(GetContext(), configuration_);
-                if (NULLPTR == forwarding) {
-                    return false;
-                }
-                elif(forwarding->Open()) {
-                    forwarding_ = forwarding;
-#if defined(_LINUX)
-                    forwarding->ProtectorNetwork = GetProtectorNetwork();
-#endif
-                }
-                else {
-                    forwarding->Dispose();
-                    forwarding.reset();
-                }
-
-                boost::asio::ip::tcp::endpoint remoteEP;
-                ppp::string hostname;
-                ppp::string address;
-                ppp::string path;
-                ppp::string server;
-                int port;
-                ProtocolType protocol_type = ProtocolType::ProtocolType_PPP;
-
-                // Obtaining the IP endpoint address of the VPN remote server may involve synchronizing the network, as it may be in domain-name format.
-                static constexpr ppp::coroutines::YieldContext* y = NULLPTR;
-
-                if (!exchanger->GetRemoteEndPoint(y, hostname, address, path, port, protocol_type, server, remoteEP)) {
-                    return false;
-                }
-                else {
-                    server_ru_ = "[";
-                    server_ru_ += hostname;
-                    server_ru_ += "]";
-                    server_ru_ += ":";
-                    server_ru_ += stl::to_string<ppp::string>(NULLPTR != forwarding ? forwarding->GetRemotePort() : port);
-                    server_ru_ += "/";
-
-                    if (protocol_type == ProtocolType::ProtocolType_Http || protocol_type == ProtocolType::ProtocolType_WebSocket) {
-                        server_ru_ += "ppp+ws";
-                    }
-                    elif(protocol_type == ProtocolType::ProtocolType_HttpSSL || protocol_type == ProtocolType::ProtocolType_WebSocketSSL) {
-                        server_ru_ += "ppp+wss";
-                    }
-                    else {
-                        server_ru_ += "ppp+tcp";
-                    }
-
-                    if (NULLPTR != forwarding) {
-                        remoteEP = forwarding->GetProxyEndPoint();
-                    }
-                }
-
-                // Add the default IP address of the vpn virtual network adapter to the RIB route table.
-                RouteInformationTablePtr rib = rib_;
-                if (NULLPTR == rib) {
-                    rib = make_shared_object<RouteInformationTable>();
-                    rib_ = rib;
-                }
-
-                // CIDR: 0.0.0.0/0; 0.0.0.0/1; 128.0.0.0/1
-                if (NULLPTR != rib) {
-                    if (auto tap = GetTap(); NULLPTR != tap) {
-                        rib->AddRoute(IPEndPoint::AnyAddress, 0, tap->GatewayServer);
-                        rib->AddRoute(IPEndPoint::AnyAddress, 1, tap->GatewayServer);
-                        rib->AddRoute(inet_addr("128.0.0.0"), 1, tap->GatewayServer);
-                    }
-                }
-
-                // Note that we only need to set IPV4 routes, not IPV6 routes.
-                boost::asio::ip::address remoteIP = remoteEP.address();
-                IPEndPoint serverEP = IPEndPoint::ToEndPoint(remoteEP);
-                if (IPEndPoint::IsInvalid(serverEP)) {
-                    return false;
-                }
-
-                // Add IPV4 route table settings.
-                auto fib_add_route_ipv4 =
-                    [&rib, &gw](const boost::asio::ip::address& remoteIP) noexcept {
-                        if (remoteIP.is_v6()) {
-                            return true;
-                        }
-
-                        if (NULLPTR == rib) {
-                            return false;
-                        }
-
-                        bool processed = gw.is_v4() && remoteIP.is_v4();
-                        if (!processed) {
-                            return false;
-                        }
-
-                        // First convert the IP addresses of both.
-                        uint32_t ip = htonl(remoteIP.to_v4().to_uint());
-                        uint32_t nx = htonl(gw.to_v4().to_uint());
-
-                        // Add route information to rib!
-                        return rib->AddRoute(ip, 32, nx);
-                    };
-
-                // Check whether the static tunnel specifies an IP address endpoint (required for transit).
-                ppp::unordered_set<boost::asio::ip::tcp::endpoint> servers;
-                /** @brief Parses and registers one static tunnel server endpoint. */
-                auto StaticEchoAddRemoteEndPoint =
-                    [this, &servers, &fib_add_route_ipv4, &exchanger](const ppp::string& server_string) noexcept {
-                        if (server_string.empty()) {
-                            return false;
-                        }
-
-                        ppp::string host_string;
-                        int port;
-
-                        if (!ppp::net::Ipep::ParseEndPoint(server_string, host_string, port)) {
-                            return false;
-                        }
-
-                        if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
-                            return false;
-                        }
-
-                        IPEndPoint remoteEP = ppp::net::Ipep::GetEndPoint(host_string, port);
-                        if (IPEndPoint::IsInvalid(remoteEP)) {
-                            return false;
-                        }
-
-                        boost::asio::ip::udp::endpoint ep =
-                            IPEndPoint::ToEndPoint<boost::asio::ip::udp>(remoteEP);
-                        if (!remoteEP.IsLoopback() && !fib_add_route_ipv4(ep.address())) {
-                            return false;
-                        }
-
-                        if (aggligator_) {
-                            auto r = servers.emplace(
-                                IPEndPoint::ToEndPoint<boost::asio::ip::tcp>(remoteEP));
-                            return r.second;
-                        }
-
-                        return exchanger->StaticEchoAddRemoteEndPoint(ep);
-                    };
-
-                for (const ppp::string& server_string : configuration_->udp.static_.servers) {
-                    if (!StaticEchoAddRemoteEndPoint(server_string)) {
-                        return false;
-                    }
-                }
-
-                // Open the beast network bandwidth aggregator.
-                if (std::shared_ptr<aggligator::aggligator> aggligator = aggligator_; NULLPTR != aggligator) {
-                    if (servers.empty()) {
-                        aggligator_.reset();
-                        aggligator->close();
-                    }
-                    elif(!aggligator->client_open(configuration_->udp.static_.aggligator, servers)) {
-                        return false;
-                    }
-                }
-
-                // The gateway address must be IPV4 or it is considered a failure because there is no V6 gateway serving the V4 address.
-                if (serverEP.IsLoopback()) {
-                    return true;
-                }
-
-                return fib_add_route_ipv4(remoteIP);
+                return remote_endpoint_loader_->Apply(gw);
             }
 
             /** @brief Entry point for DNS redirection decision and async execution. */
