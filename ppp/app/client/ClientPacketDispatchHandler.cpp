@@ -1,6 +1,9 @@
 #include <ppp/app/client/ClientPacketDispatchHandler.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
+#include <ppp/app/client/AssignedAddressManager.h>
+#include <ppp/app/client/QuicRejectRateLimiter.h>
+#include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/Error.h>
