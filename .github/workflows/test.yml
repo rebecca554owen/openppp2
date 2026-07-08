@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Include boundary checks
+        run: bash tools/check_include_boundaries.sh
+
+      - name: MSVC project source parity
+        run: bash tools/check_vcxproj_sources.sh
+
       - name: Install dependencies
         run: |
           sudo apt-get update
