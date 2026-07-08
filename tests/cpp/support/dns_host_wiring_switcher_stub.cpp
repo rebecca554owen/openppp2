@@ -21,6 +21,8 @@ namespace {
 bool g_inject_ok = true;
 bool g_datagram_output_called = false;
 int g_datagram_output_bytes = 0;
+bool g_tunnel_send_called = false;
+bool g_tunnel_send_result = false;
 
 }  // namespace
 
@@ -43,6 +45,15 @@ namespace ppp::app::client::dns::test {
 void ResetDnsHostWiringSpy() noexcept {
     g_datagram_output_called = false;
     g_datagram_output_bytes = 0;
+    g_tunnel_send_called = false;
+}
+
+void SetDnsHostTunnelSendResult(bool result) noexcept {
+    g_tunnel_send_result = result;
+}
+
+bool DnsHostTunnelSendCalled() noexcept {
+    return g_tunnel_send_called;
 }
 
 void SetDnsHostInjectOk(bool inject_ok) noexcept {
@@ -314,7 +325,8 @@ dns::DnsHostPorts VEthernetNetworkSwitcher::BuildDnsHostPorts(
                         const boost::asio::ip::udp::endpoint&,
                         const void*,
                         int) noexcept {
-                        return true;
+                        g_tunnel_send_called = true;
+                        return g_tunnel_send_result;
                     };
             }
             dns::DnsResponseHandler::HandleWithPorts(

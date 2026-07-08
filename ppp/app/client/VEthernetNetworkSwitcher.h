@@ -347,6 +347,7 @@ namespace ppp {
                 std::unique_ptr<PeerPrefixRouteManager>                         peer_prefix_routes_;
                 std::unique_ptr<RemoteEndpointLoader>                           remote_endpoint_loader_;
                 std::unique_ptr<dns::DnsHostPorts>                                  dns_host_ports_cache_;
+                /** prdr_-guarded: DnsHostPortsFor / InvalidateDnsHostPorts share teardown's desktop lock. */
                 std::weak_ptr<VEthernetExchanger>                                 dns_host_ports_exchanger_;
             };
         }

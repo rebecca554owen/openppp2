@@ -17,6 +17,9 @@ namespace ppp {
                     bool DnsHostDatagramOutputCalled() noexcept;
                     int DnsHostDatagramOutputBytes() noexcept;
 
+                    void SetDnsHostTunnelSendResult(bool result) noexcept;
+                    bool DnsHostTunnelSendCalled() noexcept;
+
                 }  // namespace test
             }  // namespace dns
         }  // namespace client

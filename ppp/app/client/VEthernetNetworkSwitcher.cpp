@@ -919,8 +919,11 @@ namespace ppp {
             const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
                 const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
 
+                SynchronizedObjectScope scope(prdr_);
+
                 if (std::shared_ptr<VEthernetExchanger> cached = dns_host_ports_exchanger_.lock();
                     cached == exchanger && NULLPTR != dns_host_ports_cache_ && dns_host_ports_cache_->IsValid()) {
+                    ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache hit");
                     return *dns_host_ports_cache_;
                 }
 
@@ -928,12 +931,15 @@ namespace ppp {
                     dns_host_ports_cache_ = std::make_unique<dns::DnsHostPorts>();
                 }
 
+                ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache rebuild");
                 *dns_host_ports_cache_ = BuildDnsHostPorts(exchanger);
                 dns_host_ports_exchanger_ = exchanger;
                 return *dns_host_ports_cache_;
             }
 
             void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {
+                SynchronizedObjectScope scope(prdr_);
+                ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache invalidate");
                 dns_host_ports_cache_.reset();
                 dns_host_ports_exchanger_.reset();
             }

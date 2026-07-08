@@ -79,6 +79,10 @@ openppp2_add_cpp_test(dns_host_wiring_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/SwitcherTimeoutRegistry.cpp")
+add_test(
+    NAME client_packet_dispatch_compile_test
+    COMMAND bash "${OPENPPP2_ROOT}/tools/check_dispatch_handler_compiles.sh"
+        "${CMAKE_CURRENT_BINARY_DIR}/client_packet_dispatch_compile.o")
 openppp2_add_cpp_test(peer_prefix_route_entry_test SOURCES
     peer_prefix_route_entry_test.cpp
     support/peer_prefix_route_test_stubs.cpp)
