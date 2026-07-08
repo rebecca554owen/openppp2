@@ -15,7 +15,7 @@ namespace ppp::transmissions {
     class ITransmissionStatistics;
     namespace proxys { class IForwarding; }
 }
-#if defined(_LINUX)
+#if defined(__linux__)
 #include <linux/ppp/net/ProtectorNetwork.h>
 #endif
 
