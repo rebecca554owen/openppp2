@@ -846,6 +846,14 @@ namespace ppp {
                 return remote_endpoint_loader_->Apply(gw);
             }
 
+            bool VEthernetNetworkSwitcher::StaticEchoAddRemoteEndPoint(
+                boost::asio::ip::udp::endpoint& remoteEP) noexcept {
+                if (NULLPTR == exchanger_) {
+                    return false;
+                }
+                return exchanger_->StaticEchoAddRemoteEndPoint(remoteEP);
+            }
+
             /** @brief Entry point for DNS redirection decision and async execution. */
             const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
                 const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {

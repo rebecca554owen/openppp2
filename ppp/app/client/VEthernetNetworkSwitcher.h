@@ -254,6 +254,7 @@ namespace ppp {
 
                 void                                                                Finalize() noexcept;
                 bool                                                                AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept;
+                bool                                                                StaticEchoAddRemoteEndPoint(boost::asio::ip::udp::endpoint& remoteEP) noexcept;
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 bool                                                                ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept;

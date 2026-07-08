@@ -132,7 +132,7 @@ bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
     ppp::unordered_set<boost::asio::ip::tcp::endpoint> servers;
     /** @brief Parses and registers one static tunnel server endpoint. */
     auto StaticEchoAddRemoteEndPoint =
-        [this, &servers, &fib_add_route_ipv4, &exchanger](const ppp::string& server_string) noexcept {
+        [this, &servers, &fib_add_route_ipv4](const ppp::string& server_string) noexcept {
             if (server_string.empty()) {
                 return false;
             }
@@ -165,7 +165,7 @@ bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
                 return r.second;
             }
 
-            return exchanger->StaticEchoAddRemoteEndPoint(ep);
+            return owner_->StaticEchoAddRemoteEndPoint(ep);
         };
 
     for (const ppp::string& server_string : owner_->configuration_->udp.static_.servers) {
