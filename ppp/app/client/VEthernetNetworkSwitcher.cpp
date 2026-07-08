@@ -2,6 +2,13 @@
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/AssignedAddressManager.h>
+#include <ppp/app/client/ClientConnectionTeardown.h>
+#include <ppp/app/client/ClientConnectionOpener.h>
+#include <ppp/app/client/ClientPacketDispatchHandler.h>
+#include <ppp/app/client/ClientBypassRouteLoader.h>
+#include <ppp/app/client/QuicRejectRateLimiter.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -129,14 +136,21 @@ namespace ppp {
                 : VEthernet(context, lwip, vnet, mta)
                 , configuration_(configuration)
                 , dns_interceptor_(std::make_unique<dns::DnsInterceptor>())
+                , route_table_(std::make_unique<RouteTableManager>())
+                , address_manager_(std::make_unique<AssignedAddressManager>())
+                , teardown_(std::make_unique<ClientConnectionTeardown>())
+                , connection_opener_(std::make_unique<ClientConnectionOpener>())
+                , packet_dispatch_(std::make_unique<ClientPacketDispatchHandler>())
+                , bypass_loader_(std::make_unique<ClientBypassRouteLoader>())
+                , quic_reject_limiter_(std::make_unique<QuicRejectRateLimiter>())
                 , icmppackets_aid_(0) {
 
-                route_table_.Bind(this);
-                address_manager_.Bind(this);
-                teardown_.Bind(this);
-                connection_opener_.Bind(this);
-                packet_dispatch_.Bind(this);
-                bypass_loader_.Bind(this);
+                route_table_->Bind(this);
+                address_manager_->Bind(this);
+                teardown_->Bind(this);
+                connection_opener_->Bind(this);
+                packet_dispatch_->Bind(this);
+                bypass_loader_->Bind(this);
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 route_added_     = false;
@@ -153,6 +167,19 @@ namespace ppp {
             VEthernetNetworkSwitcher::~VEthernetNetworkSwitcher() noexcept {
                 Finalize();
             }
+
+            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = default;
+            VEthernetNetworkSwitcher& VEthernetNetworkSwitcher::operator=(VEthernetNetworkSwitcher&&) noexcept = default;
+
+#if !defined(_ANDROID) && !defined(_IPHONE)
+            boost::asio::ip::address VEthernetNetworkSwitcher::LastAssignedIPv6() noexcept {
+                return address_manager_->LastAssignedIPv6();
+            }
+
+            bool VEthernetNetworkSwitcher::TryApplyHostedNetworkRoutes() noexcept {
+                return route_table_->TryApplyHostedNetworkRoutes();
+            }
+#endif
 
             /** @brief Creates concrete TCP/IP stack implementation for VEthernet. */
             std::shared_ptr<ppp::ethernet::VNetstack> VEthernetNetworkSwitcher::NewNetstack() noexcept {
@@ -211,22 +238,22 @@ namespace ppp {
 
             /** @brief Handles native IPv4 packet input and forwards eligible NAT traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept {
-                return packet_dispatch_.OnPacketInput(packet, packet_length, header_length, proto, vnet);
+                return packet_dispatch_->OnPacketInput(packet, packet_length, header_length, proto, vnet);
             }
 
             /** @brief Handles raw IPv6 packet input and forwards approved traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept {
-                return packet_dispatch_.OnPacketInput(packet, packet_length, vnet);
+                return packet_dispatch_->OnPacketInput(packet, packet_length, vnet);
             }
 
             /** @brief Routes parsed IP frame to protocol-specific handlers. */
             bool VEthernetNetworkSwitcher::OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept {
-                return packet_dispatch_.OnPacketInput(packet);
+                return packet_dispatch_->OnPacketInput(packet);
             }
 
             /** @brief Resolves ACK identifier and emits appropriate ICMP response packet. */
             bool VEthernetNetworkSwitcher::ERORTE(int ack_id) noexcept {
-                return packet_dispatch_.ERORTE(ack_id);
+                return packet_dispatch_->ERORTE(ack_id);
             }
 
             /** @brief Dispatches switcher finalization and then disposes base VEthernet. */
@@ -256,7 +283,7 @@ namespace ppp {
                 // Clear all ICMP packet container.
                 SynchronizedObjectScope scope(GetSynchronizedObject());
                 icmppackets_.clear();
-                quic_reject_limiter_.Clear();
+                quic_reject_limiter_->Clear();
             }
 
             /** @brief Releases all registered timeout callbacks. */
@@ -274,7 +301,7 @@ namespace ppp {
 
 #if defined(_ANDROID) || defined(_IPHONE)
             void VEthernetNetworkSwitcher::SetBypassIpList(ppp::string&& bypass_ip_list) noexcept {
-                bypass_loader_.SetBypassIpList(std::move(bypass_ip_list));
+                bypass_loader_->SetBypassIpList(std::move(bypass_ip_list));
             }
 #endif
 
@@ -394,19 +421,19 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept {
-                return address_manager_.ApplyAssignedIPv6(extensions);
+                return address_manager_->ApplyAssignedIPv6(extensions);
             }
 
             void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
-                address_manager_.RestoreAssignedIPv6();
+                address_manager_->RestoreAssignedIPv6();
             }
 
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv4(const VirtualEthernetInformationExtensions& extensions) noexcept {
-                return address_manager_.ApplyAssignedIPv4(extensions);
+                return address_manager_->ApplyAssignedIPv4(extensions);
             }
 
             void VEthernetNetworkSwitcher::RestoreAssignedIPv4() noexcept {
-                address_manager_.RestoreAssignedIPv4();
+                address_manager_->RestoreAssignedIPv4();
             }
 
 #endif
@@ -418,10 +445,10 @@ namespace ppp {
                 for (const auto& route : applied_peer_prefix_routes_) {
 #if defined(_WIN32)
                     if (NULLPTR != mib) {
-                        route_table_.DeleteRoute(mib, route.Destination, route.NextHop, route.Prefix);
+                        route_table_->DeleteRoute(mib, route.Destination, route.NextHop, route.Prefix);
                     }
 #elif !defined(_ANDROID) && !defined(_IPHONE)
-                    route_table_.DeleteRoute(route.Destination, route.NextHop, route.Prefix);
+                    route_table_->DeleteRoute(route.Destination, route.NextHop, route.Prefix);
 #endif
                 }
                 applied_peer_prefix_routes_.clear();
@@ -476,7 +503,7 @@ namespace ppp {
                     }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                    if (!route_table_.AddRoute(network, via, route.prefix)) {
+                    if (!route_table_->AddRoute(network, via, route.prefix)) {
                         return false;
                     }
 #endif
@@ -484,10 +511,10 @@ namespace ppp {
                     if (!rib->AddRoute(network, route.prefix, via)) {
 #if defined(_WIN32)
                         if (auto mib = ppp::win32::network::Router::GetIpForwardTable(); NULLPTR != mib) {
-                            route_table_.DeleteRoute(mib, network, via, route.prefix);
+                            route_table_->DeleteRoute(mib, network, via, route.prefix);
                         }
 #elif !defined(_ANDROID) && !defined(_IPHONE)
-                        route_table_.DeleteRoute(network, via, route.prefix);
+                        route_table_->DeleteRoute(network, via, route.prefix);
 #endif
                         return false;
                     }
@@ -551,7 +578,7 @@ namespace ppp {
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 bool previous_assignment = HasManagedIPv6Assignment(information_extensions_);
                 bool current_assignment = HasManagedIPv6Assignment(extensions);
-                if (address_manager_.Ipv6Applied() && (!previous_assignment || !current_assignment || !SameManagedIPv6Configuration(information_extensions_, extensions))) {
+                if (address_manager_->Ipv6Applied() && (!previous_assignment || !current_assignment || !SameManagedIPv6Configuration(information_extensions_, extensions))) {
                     RestoreAssignedIPv6();
                 }
 
@@ -562,14 +589,14 @@ namespace ppp {
                 }
 
                 bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
-                if (!valid_ipv6_assignment && address_manager_.Ipv6Applied()) {
+                if (!valid_ipv6_assignment && address_manager_->Ipv6Applied()) {
                     RestoreAssignedIPv6();
                 }
 
                 if (valid_ipv6_assignment &&
                     (extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
                         extensions.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Gua) &&
-                    !address_manager_.Ipv6Applied()) {
+                    !address_manager_->Ipv6Applied()) {
                     ApplyAssignedIPv6(extensions);
                 }
 
@@ -577,11 +604,11 @@ namespace ppp {
                 {
                     const auto& ipv4 = extensions.ClientIPv4Assign;
                     if (ipv4.enabled && ipv4.accepted) {
-                        if (!address_manager_.Ipv4Applied()) {
+                        if (!address_manager_->Ipv4Applied()) {
                             ApplyAssignedIPv4(extensions);
                         }
                     }
-                    elif (address_manager_.Ipv4Applied()) {
+                    elif (address_manager_->Ipv4Applied()) {
                         RestoreAssignedIPv4();
                     }
                 }
@@ -749,7 +776,7 @@ namespace ppp {
 #if defined(_ANDROID) || defined(_IPHONE)
             /** @brief Builds mobile-side route table including bypass and DNS exceptions. */
             bool VEthernetNetworkSwitcher::AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept {
-                if (!route_table_.AddAllRoute(tap)) {
+                if (!route_table_->AddAllRoute(tap)) {
                     return false;
                 }
 
@@ -786,7 +813,7 @@ namespace ppp {
 
             /** @brief Initializes switcher runtime components and opens all services. */
             bool VEthernetNetworkSwitcher::Open(const std::shared_ptr<ITap>& tap) noexcept {
-                return connection_opener_.Open(tap);
+                return connection_opener_->Open(tap);
             }
 
 #if defined(_WIN32)
@@ -849,9 +876,9 @@ namespace ppp {
             /** @brief Removes VPN route entries and restores system defaults. */
             void VEthernetNetworkSwitcher::DeleteRoute() noexcept {
                 ClearPeerPrefixRoutes();
-                route_table_.DeleteRoute();
+                route_table_->DeleteRoute();
                 FixUnderlyingNgw();
-                route_table_.DeleteRouteWithDnsServers();
+                route_table_->DeleteRouteWithDnsServers();
             }
 
             /** @brief Returns formatted cached remote URI string. */
@@ -878,7 +905,7 @@ namespace ppp {
 #endif
                 const boost::asio::ip::address& gw,
                 const ppp::string& url) noexcept {
-                return bypass_loader_.AddLoadIPList(path,
+                return bypass_loader_->AddLoadIPList(path,
 #if defined(_LINUX)
                     nic,
 #endif
@@ -886,17 +913,17 @@ namespace ppp {
             }
 
             bool VEthernetNetworkSwitcher::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {
-                return bypass_loader_.LoadAllIPListWithFilePaths(gw);
+                return bypass_loader_->LoadAllIPListWithFilePaths(gw);
             }
 #endif
 
             bool VEthernetNetworkSwitcher::IsBypassIpAddress(const boost::asio::ip::address& ip) noexcept {
-                return bypass_loader_.IsBypassIpAddress(ip);
+                return bypass_loader_->IsBypassIpAddress(ip);
             }
 
             /** @brief Releases all runtime services, routes, and related resources. */
             void VEthernetNetworkSwitcher::ReleaseAllObjects() noexcept {
-                teardown_.ReleaseAllObjects();
+                teardown_->ReleaseAllObjects();
             }
 
             /** @brief Removes timeout callback associated with a key. */

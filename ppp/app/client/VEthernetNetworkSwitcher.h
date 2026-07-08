@@ -24,13 +24,7 @@ namespace ppp::transmissions {
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/client/ClientNetworkInterface.h>
 #include <ppp/net/native/rib.h>
-#include <ppp/app/client/RouteTableManager.h>
-#include <ppp/app/client/AssignedAddressManager.h>
-#include <ppp/app/client/ClientConnectionTeardown.h>
-#include <ppp/app/client/ClientConnectionOpener.h>
-#include <ppp/app/client/ClientPacketDispatchHandler.h>
-#include <ppp/app/client/ClientBypassRouteLoader.h>
-#include <ppp/app/client/QuicRejectRateLimiter.h>
+#include <memory>
 
 #if defined(_WIN32)
 struct _MIB_IPFORWARDROW;
@@ -42,6 +36,13 @@ namespace ppp {
         namespace client {
             class VEthernetExchanger;
             class VEthernetDatagramPort;
+            class RouteTableManager;
+            class AssignedAddressManager;
+            class ClientConnectionTeardown;
+            class ClientConnectionOpener;
+            class ClientPacketDispatchHandler;
+            class ClientBypassRouteLoader;
+            class QuicRejectRateLimiter;
 
             namespace dns {
                 class DnsResponseHandler;
@@ -123,6 +124,10 @@ namespace ppp {
 
             public:
                 VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept;
+                VEthernetNetworkSwitcher(const VEthernetNetworkSwitcher&) = delete;
+                VEthernetNetworkSwitcher& operator=(const VEthernetNetworkSwitcher&) = delete;
+                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept;
+                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) noexcept;
                 virtual ~VEthernetNetworkSwitcher() noexcept;
 
 #if defined(_WIN32)
@@ -138,7 +143,7 @@ namespace ppp {
                 void                                                                RequestedIPv6(const ppp::string& value) noexcept { requested_ipv6_ = value; }
                 ppp::string                                                         RequestedIPv6() noexcept { return requested_ipv6_; }
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                boost::asio::ip::address                                            LastAssignedIPv6() noexcept { return address_manager_.LastAssignedIPv6(); }
+                boost::asio::ip::address                                            LastAssignedIPv6() noexcept;
 #else
                 boost::asio::ip::address                                            LastAssignedIPv6() noexcept { return {}; }
 #endif
@@ -228,7 +233,7 @@ namespace ppp {
                 bool                                                                DeleteTimeout(void* k) noexcept;
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                bool                                                                TryApplyHostedNetworkRoutes() noexcept { return route_table_.TryApplyHostedNetworkRoutes(); }
+                bool                                                                TryApplyHostedNetworkRoutes() noexcept;
 #else
                 bool                                                                TryApplyHostedNetworkRoutes() noexcept { return true; }
 #endif
@@ -265,7 +270,7 @@ namespace ppp {
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS>                 qos_;
                 std::shared_ptr<ppp::transmissions::ITransmissionStatistics>          statistics_;
                 VEthernetIcmpPacketTable                                            icmppackets_;
-                QuicRejectRateLimiter                                               quic_reject_limiter_;
+                std::unique_ptr<QuicRejectRateLimiter>                              quic_reject_limiter_;
                 struct {
                     int                                                             icmppackets_aid_  = 0;
                     bool                                                            block_quic_       = false;
@@ -323,12 +328,12 @@ namespace ppp {
                 RouteInformationTablePtr                                            default_routes_;
 #endif
 #endif
-                RouteTableManager                                                   route_table_;
-                AssignedAddressManager                                              address_manager_;
-                ClientConnectionTeardown                                            teardown_;
-                ClientConnectionOpener                                              connection_opener_;
-                ClientPacketDispatchHandler                                         packet_dispatch_;
-                ClientBypassRouteLoader                                             bypass_loader_;
+                std::unique_ptr<RouteTableManager>                                  route_table_;
+                std::unique_ptr<AssignedAddressManager>                             address_manager_;
+                std::unique_ptr<ClientConnectionTeardown>                           teardown_;
+                std::unique_ptr<ClientConnectionOpener>                           connection_opener_;
+                std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
+                std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;
             };
         }
     }

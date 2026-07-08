@@ -321,7 +321,7 @@ namespace ppp {
                         if (self->prdr_.try_lock()) {
                             ok = prepare();
                             if (ok) {
-                                ok = self->route_table_.DeleteAllDefaultRoute();
+                                ok = self->route_table_->DeleteAllDefaultRoute();
                             }
 
                             self->prdr_.unlock();

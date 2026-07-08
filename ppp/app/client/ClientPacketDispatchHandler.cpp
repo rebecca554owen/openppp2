@@ -157,7 +157,7 @@ namespace ppp {
                 const VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions& approved = owner_->information_extensions_;
                 bool valid_mode = approved.AssignedIPv6Mode == VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
                     approved.AssignedIPv6Mode == VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions::IPv6Mode_Gua;
-                if (!owner_->address_manager_.Ipv6Applied() || !valid_mode || approved.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH || !approved.AssignedIPv6Address.is_v6()) {
+                if (!owner_->address_manager_->Ipv6Applied() || !valid_mode || approved.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH || !approved.AssignedIPv6Address.is_v6()) {
                     return false;
                 }
 
@@ -189,10 +189,10 @@ namespace ppp {
                 }
 
                 UInt64 now = Executors::GetTickCount();
-                ppp::string key = owner_->quic_reject_limiter_.BuildKey(packet, frame);
+                ppp::string key = owner_->quic_reject_limiter_->BuildKey(packet, frame);
                 if (!key.empty()) {
                     ppp::ethernet::VEthernet::SynchronizedObjectScope scope(owner_->GetSynchronizedObject());
-                    if (!owner_->quic_reject_limiter_.ShouldEmit(key, now)) {
+                    if (!owner_->quic_reject_limiter_->ShouldEmit(key, now)) {
                         return true;
                     }
                 }
