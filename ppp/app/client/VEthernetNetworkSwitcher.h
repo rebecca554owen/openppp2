@@ -46,6 +46,7 @@ namespace ppp {
             class PeerPrefixRouteManager;
             class RemoteEndpointLoader;
             class SwitcherTimeoutRegistry;
+            class VEthernetNetworkSwitcher;
 
             namespace dns {
                 class DnsResponseHandler;
