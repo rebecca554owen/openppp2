@@ -11,7 +11,6 @@
 #include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
-#include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/ethernet/VEthernet.h>
@@ -234,6 +233,12 @@ VEthernetNetworkSwitcher::ITransmissionStatisticsPtr VEthernetNetworkSwitcher::N
     return ITransmissionStatisticsPtr();
 }
 
+#if defined(_LINUX)
+VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::NewProtectorNetwork() noexcept {
+    return ProtectorNetworkPtr();
+}
+#endif
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
 ppp::string VEthernetNetworkSwitcher::GetRemoteUri() noexcept {
     return ppp::string();
@@ -241,6 +246,9 @@ ppp::string VEthernetNetworkSwitcher::GetRemoteUri() noexcept {
 
 bool VEthernetNetworkSwitcher::AddLoadIPList(
     const ppp::string&,
+#if defined(_LINUX)
+    const ppp::string&,
+#endif
     const boost::asio::ip::address&,
     const ppp::string&) noexcept {
     return false;
