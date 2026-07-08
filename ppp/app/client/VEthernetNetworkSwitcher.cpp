@@ -855,6 +855,67 @@ namespace ppp {
             }
 
             /** @brief Entry point for DNS redirection decision and async execution. */
+            dns::DnsHostPorts VEthernetNetworkSwitcher::BuildDnsHostPorts(
+                const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
+
+                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
+                auto datagram_output =
+                    [self](const boost::asio::ip::udp::endpoint& sourceEP,
+                        const boost::asio::ip::udp::endpoint& destinationEP,
+                        void* packet,
+                        int packet_size,
+                        bool caching) noexcept {
+                        return self->DatagramOutput(
+                            sourceEP, destinationEP, packet, packet_size, caching);
+                    };
+
+                dns::DnsHostPorts host;
+                host.datagram_output = datagram_output;
+                host.get_tap = [self]() noexcept { return self->GetTap(); };
+                host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
+                host.get_buffer_allocator = [self]() noexcept { return self->GetBufferAllocator(); };
+                host.emplace_timeout =
+                    [self](void* key,
+                        const std::shared_ptr<ppp::function<void(ppp::threading::Timer*)>>& timeout) noexcept {
+                        return self->EmplaceTimeout(key, timeout);
+                    };
+                host.delete_timeout = [self](void* key) noexcept { return self->DeleteTimeout(key); };
+#if defined(_LINUX)
+                host.get_protector_network = [self]() noexcept { return self->GetProtectorNetwork(); };
+#endif
+                host.handle_resolver_response =
+                    [exchanger, datagram_output, self](
+                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
+                        const boost::asio::ip::udp::endpoint& sourceEP,
+                        const boost::asio::ip::udp::endpoint& destEP,
+                        ppp::vector<Byte> response) noexcept {
+                        dns::DnsResponseHandlerPorts ports;
+                        const std::shared_ptr<ppp::configurations::AppConfiguration> configuration =
+                            self->GetConfiguration();
+                        if (NULLPTR != configuration && configuration->udp.dns.cache) {
+                            ports.enable_dns_cache = true;
+                            ports.write_cache =
+                                [](const Byte* packet, int packet_size) noexcept {
+                                    ppp::net::asio::vdns::AddCache(packet, packet_size);
+                                };
+                        }
+                        ports.datagram_output = datagram_output;
+                        if (NULLPTR != exchanger) {
+                            ports.tunnel_send =
+                                [exchanger](const boost::asio::ip::udp::endpoint& sourceEP,
+                                    const boost::asio::ip::udp::endpoint& destinationEP,
+                                    const void* packet,
+                                    int packet_size) noexcept {
+                                    return exchanger->SendTo(
+                                        sourceEP, destinationEP, packet, packet_size);
+                                };
+                        }
+                        dns::DnsResponseHandler::HandleWithPorts(
+                            ports, messages, sourceEP, destEP, std::move(response));
+                    };
+                return host;
+            }
+
             const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
                 const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
 
@@ -867,8 +928,7 @@ namespace ppp {
                     dns_host_ports_cache_ = std::make_unique<dns::DnsHostPorts>();
                 }
 
-                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
-                *dns_host_ports_cache_ = dns::MakeDnsHostPorts(self, exchanger);
+                *dns_host_ports_cache_ = BuildDnsHostPorts(exchanger);
                 dns_host_ports_exchanger_ = exchanger;
                 return *dns_host_ports_cache_;
             }

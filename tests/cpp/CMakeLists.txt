@@ -38,7 +38,7 @@ function(openppp2_add_cpp_test target)
         target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
         target_link_options(${target} PRIVATE -fprofile-instr-generate)
     endif()
-    if(target STREQUAL "p2p_replay_window_test" OR target STREQUAL "base64_test" OR target STREQUAL "dns_server_validation_test" OR target STREQUAL "dns_wire_validation_test" OR target STREQUAL "sysctl_validation_test" OR target STREQUAL "dns_redirect_plan_test" OR target STREQUAL "dns_reachability_test" OR target STREQUAL "dns_response_handler_test" OR target STREQUAL "dns_route_dispatcher_test" OR target STREQUAL "dns_udp_relay_test" OR target STREQUAL "dns_host_ports_test" OR target STREQUAL "fake_ip_pool_test" OR target STREQUAL "dns_fake_ip_response_test" OR target STREQUAL "quic_reject_rate_limit_test" OR target STREQUAL "client_bypass_route_loader_test" OR target STREQUAL "exchanger_static_echo_channel_test" OR target STREQUAL "route_table_manager_test" OR target STREQUAL "switcher_timeout_registry_test" OR target STREQUAL "peer_prefix_route_entry_test" OR target STREQUAL "peer_prefix_route_from_json_test")
+    if(target STREQUAL "p2p_replay_window_test" OR target STREQUAL "base64_test" OR target STREQUAL "dns_server_validation_test" OR target STREQUAL "dns_wire_validation_test" OR target STREQUAL "sysctl_validation_test" OR target STREQUAL "dns_redirect_plan_test" OR target STREQUAL "dns_reachability_test" OR target STREQUAL "dns_response_handler_test" OR target STREQUAL "dns_route_dispatcher_test" OR target STREQUAL "dns_udp_relay_test" OR target STREQUAL "dns_host_ports_test" OR target STREQUAL "dns_host_wiring_test" OR target STREQUAL "fake_ip_pool_test" OR target STREQUAL "dns_fake_ip_response_test" OR target STREQUAL "quic_reject_rate_limit_test" OR target STREQUAL "client_bypass_route_loader_test" OR target STREQUAL "exchanger_static_echo_channel_test" OR target STREQUAL "route_table_manager_test" OR target STREQUAL "switcher_timeout_registry_test" OR target STREQUAL "peer_prefix_route_entry_test" OR target STREQUAL "peer_prefix_route_from_json_test")
         target_link_libraries(${target} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
     add_test(NAME ${target} COMMAND ${target})
@@ -70,6 +70,15 @@ openppp2_add_cpp_test(dns_route_dispatcher_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsRouteDispatcher.cpp")
 openppp2_add_cpp_test(dns_udp_relay_test SOURCES dns_udp_relay_test.cpp)
 openppp2_add_cpp_test(dns_host_ports_test SOURCES dns_host_ports_test.cpp)
+openppp2_add_cpp_test(dns_host_wiring_test SOURCES
+    dns_host_wiring_test.cpp
+    support/ppp_test_stubs.cpp
+    support/dns_host_wiring_switcher_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsHost.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/SwitcherTimeoutRegistry.cpp")
 openppp2_add_cpp_test(peer_prefix_route_entry_test SOURCES
     peer_prefix_route_entry_test.cpp
     support/peer_prefix_route_test_stubs.cpp)

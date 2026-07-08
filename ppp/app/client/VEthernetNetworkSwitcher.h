@@ -52,6 +52,9 @@ namespace ppp {
                 class DnsUdpRelay;
                 class DnsInterceptor;
                 struct DnsHostPorts;
+                DnsHostPorts MakeDnsHostPorts(
+                    const std::shared_ptr<VEthernetNetworkSwitcher>& self,
+                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
             }
 
             namespace proxys {
@@ -80,9 +83,6 @@ namespace ppp {
                 friend class RemoteEndpointLoader;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
-                friend dns::DnsHostPorts dns::MakeDnsHostPorts(
-                    const std::shared_ptr<VEthernetNetworkSwitcher>& self,
-                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
 
             private:
                 typedef struct {
@@ -196,6 +196,8 @@ namespace ppp {
                 virtual void                                                        Dispose() noexcept override;
                 virtual std::shared_ptr<ppp::threading::BufferswapAllocator>        GetBufferAllocator() noexcept override;
                 virtual bool                                                        BlockQUIC(bool value) noexcept;
+                dns::DnsHostPorts                                                   BuildDnsHostPorts(
+                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
 
             protected:
                 virtual bool                                                        OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept override;
