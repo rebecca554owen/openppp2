@@ -14,7 +14,7 @@ namespace ppp {
 
                 class FakeIpPool final {
                 public:
-                    FakeIpPool() noexcept = default;
+                    FakeIpPool() noexcept {}
 
                     /** @brief Configures the assignable IPv4 range (e.g. "198.18.0.1/16"). */
                     bool Configure(const ppp::string& cidr) noexcept;

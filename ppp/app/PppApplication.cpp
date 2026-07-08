@@ -7,6 +7,9 @@
 
 namespace ppp::app {
 
+using server::VirtualEthernetSwitcher;
+using client::VEthernetNetworkSwitcher;
+
 std::shared_ptr<PppApplication> DEFAULT_;
 std::atomic<bool> GLOBAL_RESTART{false};
 std::atomic<bool> GLOBAL_VBGP{false};

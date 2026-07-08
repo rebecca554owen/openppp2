@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/asio/ip/address.hpp>
+#include <ppp/net/native/rib.h>
 
 namespace ppp {
     namespace app {
