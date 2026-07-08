@@ -444,7 +444,40 @@
     <ClCompile Include="ppp\app\client\dns\Rule.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsFakeIpResponse.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsInterceptor.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsReachability.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsReachabilityParse.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsRedirectPlan.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsResponseHandlerSwitcher.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsRouteDispatcher.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsUdpRelay.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\FakeIpPool.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\dns\DnsResolver.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\dns\DnsProviderCatalog.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\GeoRuleGenerator.cpp">
@@ -511,6 +544,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\p2p\P2PChannel.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PConfigHelper.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\p2p\P2PCrypto.cpp">
@@ -1538,7 +1574,40 @@
     <ClInclude Include="ppp\app\client\dns\Rule.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsFakeIpResponse.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsInterceptor.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsReachability.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsReachabilityParse.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsRedirectPlan.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsResponseHandler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsRouteDispatcher.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsUdpRelay.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\FakeIpPool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\dns\DnsResolver.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\dns\DnsProviderCatalog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\dns\DnsWireValidation.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\GeoRuleGenerator.h">
