@@ -44,6 +44,7 @@ namespace ppp {
             class ClientBypassRouteLoader;
             class QuicRejectRateLimiter;
             class PeerPrefixRouteManager;
+            class SwitcherTimeoutRegistry;
 
             namespace dns {
                 class DnsResponseHandler;
@@ -74,6 +75,7 @@ namespace ppp {
                 friend class ClientPacketDispatchHandler;
                 friend class ClientBypassRouteLoader;
                 friend class PeerPrefixRouteManager;
+                friend class SwitcherTimeoutRegistry;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
 
@@ -85,8 +87,6 @@ namespace ppp {
 
                 typedef ppp::unordered_map<int, VEthernetIcmpPacket>                VEthernetIcmpPacketTable;
                 typedef ppp::threading::Timer                                       Timer;
-                typedef Timer::TimeoutEventHandlerPtr                                TimeoutEventHandlerPtr;
-                typedef ppp::unordered_map<void*, TimeoutEventHandlerPtr>            TimeoutEventHandlerTable;
                 typedef ppp::vector<std::pair<ppp::string, uint32_t>/**/>           LoadIPListFileVector;
                 typedef std::shared_ptr<LoadIPListFileVector>                       LoadIPListFileVectorPtr;
                 typedef ppp::vector<boost::asio::ip::address>                       NicDnsServerAddresses;
@@ -280,7 +280,7 @@ namespace ppp {
                 };
                 VEthernetHttpProxySwitcherPtr                                       http_proxy_;
                 VEthernetSocksProxySwitcherPtr                                      socks_proxy_;
-                TimeoutEventHandlerTable                                            timeouts_;
+                std::unique_ptr<SwitcherTimeoutRegistry>                            timeout_registry_;
                 std::unique_ptr<dns::DnsInterceptor>                                dns_interceptor_;
                 RouteInformationTablePtr                                            rib_;
                 ForwardInformationTablePtr                                          fib_;
