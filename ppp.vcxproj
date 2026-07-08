@@ -396,7 +396,7 @@
     <ClCompile Include="ppp\app\client\dns\DnsReachabilityParse.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsRedirectPlan.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
-    <ClCompile Include="ppp\app\client\dns\DnsResponseHandlerSwitcher.cpp" />
+    <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsRouteDispatcher.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsUdpRelay.cpp" />
     <ClCompile Include="ppp\app\client\dns\FakeIpPool.cpp" />
@@ -447,6 +447,7 @@
     <ClCompile Include="ppp\app\client\ClientConnectionOpener.cpp" />
     <ClCompile Include="ppp\app\client\ClientPacketDispatchHandler.cpp" />
     <ClCompile Include="ppp\app\client\PeerPrefixRouteManager.cpp" />
+    <ClCompile Include="ppp\app\client\SwitcherTimeoutRegistry.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager_mobile.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager_win32.cpp" />

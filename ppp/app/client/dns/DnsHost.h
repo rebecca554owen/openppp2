@@ -31,6 +31,9 @@ namespace ppp {
 namespace ppp {
     namespace app {
         namespace client {
+            class VEthernetNetworkSwitcher;
+            class VEthernetExchanger;
+
             namespace dns {
 
                 /** @brief Injectable switcher capabilities for DNS pipeline (no switcher header). */
@@ -65,11 +68,23 @@ namespace ppp {
                         ppp::vector<Byte> response)> handle_resolver_response;
 
                     bool IsValid() const noexcept {
-                        return datagram_output && get_tap && get_configuration &&
-                            get_buffer_allocator && emplace_timeout && delete_timeout &&
-                            handle_resolver_response;
+                        if (!datagram_output || !get_tap || !get_configuration ||
+                            !get_buffer_allocator || !emplace_timeout || !delete_timeout ||
+                            !handle_resolver_response) {
+                            return false;
+                        }
+#if defined(_LINUX)
+                        if (!get_protector_network) {
+                            return false;
+                        }
+#endif
+                        return true;
                     }
                 };
+
+                DnsHostPorts MakeDnsHostPorts(
+                    const std::shared_ptr<VEthernetNetworkSwitcher>& self,
+                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
 
             }
         }

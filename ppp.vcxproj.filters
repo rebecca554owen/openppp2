@@ -462,7 +462,7 @@
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="ppp\app\client\dns\DnsResponseHandlerSwitcher.cpp">
+    <ClCompile Include="ppp\app\client\dns\DnsHost.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\dns\DnsRouteDispatcher.cpp">

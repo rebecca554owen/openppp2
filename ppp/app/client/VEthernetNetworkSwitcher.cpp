@@ -10,6 +10,7 @@
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
 #include <ppp/app/client/PeerPrefixRouteManager.h>
+#include <ppp/app/client/SwitcherTimeoutRegistry.h>
 #include <ppp/app/client/dns/DnsResponseHandler.h>
 #include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/configurations/AppConfiguration.h>
@@ -147,6 +148,7 @@ namespace ppp {
                 , bypass_loader_(std::make_unique<ClientBypassRouteLoader>())
                 , quic_reject_limiter_(std::make_unique<QuicRejectRateLimiter>())
                 , peer_prefix_routes_(std::make_unique<PeerPrefixRouteManager>())
+                , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
                 , icmppackets_aid_(0) {
 
                 route_table_->Bind(this);
@@ -156,6 +158,7 @@ namespace ppp {
                 packet_dispatch_->Bind(this);
                 bypass_loader_->Bind(this);
                 peer_prefix_routes_->Bind(this);
+                timeout_registry_->Bind(this);
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 route_added_     = false;
@@ -291,15 +294,7 @@ namespace ppp {
 
             /** @brief Releases all registered timeout callbacks. */
             void VEthernetNetworkSwitcher::ReleaseAllTimeouts() noexcept {
-                TimeoutEventHandlerTable timeouts; {
-                    // Clear all ICMP packet container.
-                    SynchronizedObjectScope scope(GetSynchronizedObject());
-                    timeouts = std::move(timeouts_);
-                    timeouts_.clear();
-                }
-
-                // Release all timeout callbacks.
-                Timer::ReleaseAllTimeouts(timeouts);
+                timeout_registry_->ReleaseAll();
             }
 
 #if defined(_ANDROID) || defined(_IPHONE)
@@ -817,23 +812,12 @@ namespace ppp {
 
             /** @brief Removes timeout callback associated with a key. */
             bool VEthernetNetworkSwitcher::DeleteTimeout(void* k) noexcept {
-                if (NULLPTR == k) {
-                    return false;
-                }
-
-                SynchronizedObjectScope scope(GetSynchronizedObject());
-                return Dictionary::RemoveValueByKey(timeouts_, k);
+                return timeout_registry_->Delete(k);
             }
 
             /** @brief Registers timeout callback associated with a key. */
             bool VEthernetNetworkSwitcher::EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept {
-                if (NULLPTR == k || NULLPTR == timeout) {
-                    return false;
-                }
-
-                SynchronizedObjectScope scope(GetSynchronizedObject());
-                auto r = timeouts_.emplace(k, timeout);
-                return r.second;
+                return timeout_registry_->Emplace(k, timeout);
             }
 
             /** @brief Loads DNS redirect rules from file or inline content. */
@@ -1029,42 +1013,6 @@ namespace ppp {
                 return fib_add_route_ipv4(remoteIP);
             }
 
-            static dns::DnsHostPorts MakeDnsHostPorts(
-                const std::shared_ptr<VEthernetNetworkSwitcher>& self,
-                const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
-
-                dns::DnsHostPorts ports;
-                ports.datagram_output =
-                    [self](const boost::asio::ip::udp::endpoint& sourceEP,
-                        const boost::asio::ip::udp::endpoint& destinationEP,
-                        void* packet,
-                        int packet_size,
-                        bool caching) noexcept {
-                        return self->DatagramOutput(sourceEP, destinationEP, packet, packet_size, caching);
-                    };
-                ports.get_tap = [self]() noexcept { return self->GetTap(); };
-                ports.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
-                ports.get_buffer_allocator = [self]() noexcept { return self->GetBufferAllocator(); };
-                ports.emplace_timeout =
-                    [self](void* key, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept {
-                        return self->EmplaceTimeout(key, timeout);
-                    };
-                ports.delete_timeout = [self](void* key) noexcept { return self->DeleteTimeout(key); };
-#if defined(_LINUX)
-                ports.get_protector_network = [self]() noexcept { return self->GetProtectorNetwork(); };
-#endif
-                ports.handle_resolver_response =
-                    [self, exchanger](
-                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
-                        const boost::asio::ip::udp::endpoint& sourceEP,
-                        const boost::asio::ip::udp::endpoint& destEP,
-                        ppp::vector<Byte> response) noexcept {
-                        dns::DnsResponseHandler::HandleResolverResponse(
-                            self, exchanger, messages, sourceEP, destEP, std::move(response));
-                    };
-                return ports;
-            }
-
             /** @brief Entry point for DNS redirection decision and async execution. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(
                 const std::shared_ptr<VEthernetExchanger>& exchanger,
@@ -1078,7 +1026,7 @@ namespace ppp {
 
                 const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 return dns_interceptor_->HandleQuery(
-                    MakeDnsHostPorts(self, exchanger),
+                    dns::MakeDnsHostPorts(self, exchanger),
                     exchanger, packet, frame, messages);
             }
 

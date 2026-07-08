@@ -18,9 +18,6 @@ namespace ppp {
     }
     namespace app {
         namespace client {
-            class VEthernetExchanger;
-            class VEthernetNetworkSwitcher;
-
             namespace dns {
 
                 /** @brief Injectable sinks used by HandleResolverResponse (and unit tests). */
@@ -44,14 +41,6 @@ namespace ppp {
                 public:
                     static void HandleWithPorts(
                         const DnsResponseHandlerPorts& ports,
-                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
-                        const boost::asio::ip::udp::endpoint& sourceEP,
-                        const boost::asio::ip::udp::endpoint& destEP,
-                        ppp::vector<Byte> response) noexcept;
-
-                    static void HandleResolverResponse(
-                        const std::shared_ptr<VEthernetNetworkSwitcher>& switcher,
-                        const std::shared_ptr<VEthernetExchanger>& exchanger,
                         const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                         const boost::asio::ip::udp::endpoint& sourceEP,
                         const boost::asio::ip::udp::endpoint& destEP,
