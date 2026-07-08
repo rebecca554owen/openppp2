@@ -49,6 +49,7 @@ using ppp::net::packet::IcmpType;
 using ppp::net::packet::IPFrame;
 using ppp::net::packet::UdpFrame;
 using ppp::telemetry::Level;
+using ppp::threading::Executors;
 
 namespace ppp {
     namespace app {
@@ -150,6 +151,9 @@ namespace ppp {
                     return false;
                 }
 
+#if defined(_ANDROID) || defined(_IPHONE)
+                return false;
+#else
                 const VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions& approved = owner_->information_extensions_;
                 bool valid_mode = approved.AssignedIPv6Mode == VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
                     approved.AssignedIPv6Mode == VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions::IPv6Mode_Gua;
@@ -162,6 +166,7 @@ namespace ppp {
                 }
 
                 return true;
+#endif
             }
 
             /** @brief Routes parsed IP frame to protocol-specific handlers. */

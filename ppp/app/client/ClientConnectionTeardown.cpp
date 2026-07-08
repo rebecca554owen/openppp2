@@ -3,6 +3,8 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
+#include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
+#include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <ppp/transmissions/proxys/IForwarding.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <common/aggligator/aggligator.h>

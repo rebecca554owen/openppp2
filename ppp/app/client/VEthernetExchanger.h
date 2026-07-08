@@ -92,6 +92,7 @@ namespace ppp {
                 friend class                                                            VEthernetDatagramPort;
                 friend class                                                            VEthernetNetworkSwitcher;
                 friend class                                                            ExchangerStaticEchoChannel;
+                friend struct                                                           ExchangerStaticEchoDetail;
                 friend class                                                            ClientPacketDispatchHandler;
 
             public:

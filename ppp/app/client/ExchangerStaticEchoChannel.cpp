@@ -14,35 +14,34 @@
 
 #include <algorithm>
 
-typedef ppp::app::protocol::VirtualEthernetPacket                   VirtualEthernetPacket;
-typedef ppp::net::AddressFamily                                     AddressFamily;
-typedef ppp::net::Socket                                            Socket;
-typedef ppp::net::IPEndPoint                                        IPEndPoint;
-typedef ppp::net::Ipep                                              Ipep;
-typedef ppp::threading::Timer                                       Timer;
-typedef ppp::threading::Executors                                   Executors;
-typedef VEthernetExchanger::ITransmissionPtr                        ITransmissionPtr;
-typedef VEthernetExchanger::AppConfigurationPtr                    AppConfigurationPtr;
-typedef VEthernetExchanger::StaticEchoDatagarmSocket                StaticEchoDatagarmSocket;
-typedef VEthernetExchanger::YieldContext                            YieldContext;
-
 namespace ppp {
     namespace app {
         namespace client {
-            namespace {
 
-                static constexpr int STATIC_ECHO_KEEP_ALIVED_ID = IPEndPoint::NoneAddress - 1;
+            typedef ppp::app::protocol::VirtualEthernetPacket                   VirtualEthernetPacket;
+            typedef ppp::net::AddressFamily                                     AddressFamily;
+            typedef ppp::net::Socket                                            Socket;
+            typedef ppp::net::IPEndPoint                                        IPEndPoint;
+            typedef ppp::net::Ipep                                              Ipep;
+            typedef ppp::threading::Timer                                       Timer;
+            typedef ppp::threading::Executors                                   Executors;
+            typedef VEthernetExchanger::ITransmissionPtr                        ITransmissionPtr;
+            typedef VEthernetExchanger::AppConfigurationPtr                    AppConfigurationPtr;
+            typedef VEthernetExchanger::StaticEchoDatagarmSocket                StaticEchoDatagarmSocket;
+            typedef VEthernetExchanger::YieldContext                            YieldContext;
 
-                bool StaticEchoNextTimeout(VEthernetExchanger& owner) noexcept;
-                bool StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, ppp::coroutines::YieldContext& y) noexcept;
-                bool StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept;
-                boost::asio::ip::udp::endpoint StaticEchoGetRemoteEndPoint(VEthernetExchanger& owner) noexcept;
-                bool StaticEchoPacketToRemoteExchanger(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<Byte>& packet, int packet_length) noexcept;
-                std::shared_ptr<VirtualEthernetPacket> StaticEchoReadPacket(VEthernetExchanger& owner, const void* packet, int packet_length) noexcept;
-                bool StaticEchoPacketInput(VEthernetExchanger& owner, const std::shared_ptr<VirtualEthernetPacket>& packet) noexcept;
-                int StaticEchoYieldReceiveForm(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, Byte* incoming_packet, int incoming_traffic) noexcept;
+            static constexpr int STATIC_ECHO_KEEP_ALIVED_ID = IPEndPoint::NoneAddress - 1;
 
-            }  // namespace
+            struct ExchangerStaticEchoDetail {
+                static bool StaticEchoNextTimeout(VEthernetExchanger& owner) noexcept;
+                static bool StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, ppp::coroutines::YieldContext& y) noexcept;
+                static bool StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept;
+                static boost::asio::ip::udp::endpoint StaticEchoGetRemoteEndPoint(VEthernetExchanger& owner) noexcept;
+                static bool StaticEchoPacketToRemoteExchanger(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<Byte>& packet, int packet_length) noexcept;
+                static std::shared_ptr<VirtualEthernetPacket> StaticEchoReadPacket(VEthernetExchanger& owner, const void* packet, int packet_length) noexcept;
+                static bool StaticEchoPacketInput(VEthernetExchanger& owner, const std::shared_ptr<VirtualEthernetPacket>& packet) noexcept;
+                static int StaticEchoYieldReceiveForm(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, Byte* incoming_packet, int incoming_traffic) noexcept;
+            };
 
             void ExchangerStaticEchoChannel::Bind(VEthernetExchanger* owner) noexcept {
                 owner_ = owner;
@@ -97,7 +96,7 @@ namespace ppp {
                         owner.static_echo_sockets_[1] = NULLPTR;
 
                         owner.static_echo_input_ = false;
-                        if (!StaticEchoNextTimeout(owner)) {
+                        if (!ExchangerStaticEchoDetail::StaticEchoNextTimeout(owner)) {
                             return false;
                         }
 
@@ -148,9 +147,9 @@ namespace ppp {
 
                         return YieldContext::Spawn(allocator.get(), *context,
                             [self, &owner, this, socket, context](YieldContext& y) noexcept {
-                                bool opened = StaticEchoOpenAsynchronousSocket(owner, *this, *socket, y);
+                                bool opened = ExchangerStaticEchoDetail::StaticEchoOpenAsynchronousSocket(owner, *this, *socket, y);
                                 if (opened) {
-                                    StaticEchoLoopbackSocket(owner, *this, socket);
+                                    ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(owner, *this, socket);
                                 }
                             });
                     }
@@ -216,7 +215,7 @@ namespace ppp {
                         continue;
                     }
 
-                    bool opened = StaticEchoOpenAsynchronousSocket(owner, *this, *socket, y) && StaticEchoLoopbackSocket(owner, *this, socket);
+                    bool opened = ExchangerStaticEchoDetail::StaticEchoOpenAsynchronousSocket(owner, *this, *socket, y) && ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(owner, *this, socket);
                     if (!opened) {
                         socket.reset();
                         return false;
@@ -260,7 +259,7 @@ namespace ppp {
                     session_id,
                     packet,
                     message_length);
-                return StaticEchoPacketToRemoteExchanger(owner, *this, messages, message_length);
+                return ExchangerStaticEchoDetail::StaticEchoPacketToRemoteExchanger(owner, *this, messages, message_length);
             }
 
             /** @brief Packs and sends a UDP frame over static-echo transport. */
@@ -304,12 +303,12 @@ namespace ppp {
                     payload_buffers->Buffer.get(),
                     payload_buffers->Length,
                     packet_length);
-                return StaticEchoPacketToRemoteExchanger(owner, *this, packet, packet_length);
+                return ExchangerStaticEchoDetail::StaticEchoPacketToRemoteExchanger(owner, *this, packet, packet_length);
             }
 
             /** @brief Sends a pre-packed static-echo packet to selected remote endpoint. */
             bool ExchangerStaticEchoChannel::StaticEchoPacketToRemoteExchanger(const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
-                return StaticEchoPacketToRemoteExchanger(*owner_, *this, packet, packet_length);
+                return ExchangerStaticEchoDetail::StaticEchoPacketToRemoteExchanger(*owner_, *this, packet, packet_length);
             }
 
             /** @brief Adds static-echo remote endpoint into balance set/list. */
@@ -331,10 +330,8 @@ namespace ppp {
                 return true;
             }
 
-            namespace {
-
-                /** @brief Computes next timeout used for static-echo socket rotation. */
-                bool StaticEchoNextTimeout(VEthernetExchanger& owner) noexcept {
+            /** @brief Computes next timeout used for static-echo socket rotation. */
+            bool ExchangerStaticEchoDetail::StaticEchoNextTimeout(VEthernetExchanger& owner) noexcept {
                     if (owner.disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
@@ -380,7 +377,7 @@ namespace ppp {
                 }
 
                 /** @brief Sends a pre-packed static-echo packet to selected remote endpoint. */
-                bool StaticEchoPacketToRemoteExchanger(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
+                bool ExchangerStaticEchoDetail::StaticEchoPacketToRemoteExchanger(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
                     if (NULLPTR == packet || packet_length < 1) {
                         return false;
                     }
@@ -399,7 +396,7 @@ namespace ppp {
                         return false;
                     }
 
-                    boost::asio::ip::udp::endpoint serverEP = StaticEchoGetRemoteEndPoint(owner);
+                    boost::asio::ip::udp::endpoint serverEP = ExchangerStaticEchoDetail::StaticEchoGetRemoteEndPoint(owner);
                     if (ExchangerStaticEchoChannel::IsValidServerPort(serverEP.port())) {
                         std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = owner.switcher_->GetStatistics();
                         boost::asio::post(socket->get_executor(),
@@ -421,7 +418,7 @@ namespace ppp {
                 }
 
                 /** @brief Decodes and decrypts incoming static-echo packet. */
-                std::shared_ptr<VirtualEthernetPacket> StaticEchoReadPacket(VEthernetExchanger& owner, const void* packet, int packet_length) noexcept {
+                std::shared_ptr<VirtualEthernetPacket> ExchangerStaticEchoDetail::StaticEchoReadPacket(VEthernetExchanger& owner, const void* packet, int packet_length) noexcept {
                     if (NULLPTR == packet || packet_length < 1) {
                         return NULLPTR;
                     }
@@ -445,7 +442,7 @@ namespace ppp {
                 }
 
                 /** @brief Injects decoded static-echo packet into local output path. */
-                bool StaticEchoPacketInput(VEthernetExchanger& owner, const std::shared_ptr<VirtualEthernetPacket>& packet) noexcept {
+                bool ExchangerStaticEchoDetail::StaticEchoPacketInput(VEthernetExchanger& owner, const std::shared_ptr<VirtualEthernetPacket>& packet) noexcept {
                     if (NULLPTR == packet || owner.disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
@@ -508,10 +505,10 @@ namespace ppp {
                 }
 
                 /** @brief Handles one static-echo receive completion and updates statistics. */
-                int StaticEchoYieldReceiveForm(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, Byte* incoming_packet, int incoming_traffic) noexcept {
-                    std::shared_ptr<VirtualEthernetPacket> packet = StaticEchoReadPacket(owner, incoming_packet, incoming_traffic);
+                int ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, Byte* incoming_packet, int incoming_traffic) noexcept {
+                    std::shared_ptr<VirtualEthernetPacket> packet = ExchangerStaticEchoDetail::StaticEchoReadPacket(owner, incoming_packet, incoming_traffic);
                     if (NULLPTR != packet) {
-                        StaticEchoPacketInput(owner, packet);
+                        ExchangerStaticEchoDetail::StaticEchoPacketInput(owner, packet);
                     }
 
                     auto statistics = owner.switcher_->GetStatistics();
@@ -523,7 +520,7 @@ namespace ppp {
                 }
 
                 /** @brief Starts or continues async receive loop for static-echo socket. */
-                bool StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
+                bool ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
                     if (owner.disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
@@ -541,10 +538,10 @@ namespace ppp {
                                     [self, &owner, &channel, qos, socket](const boost::system::error_code& ec, std::size_t sz) noexcept {
                                         int bytes_transferred = std::max<int>(-1, ec ? -1 : (int)sz);
                                         if (bytes_transferred > 0) {
-                                            qos->EndRead(StaticEchoYieldReceiveForm(owner, channel, owner.buffer_.get(), bytes_transferred));
+                                            qos->EndRead(ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(owner, channel, owner.buffer_.get(), bytes_transferred));
                                         }
 
-                                        StaticEchoLoopbackSocket(owner, channel, socket);
+                                        ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(owner, channel, socket);
                                     });
                             });
                     }
@@ -553,17 +550,17 @@ namespace ppp {
                             [self, &owner, &channel, qos, socket](const boost::system::error_code& ec, std::size_t sz) noexcept {
                                 int bytes_transferred = std::max<int>(-1, ec ? -1 : (int)sz);
                                 if (bytes_transferred > 0) {
-                                    StaticEchoYieldReceiveForm(owner, channel, owner.buffer_.get(), bytes_transferred);
+                                    ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(owner, channel, owner.buffer_.get(), bytes_transferred);
                                 }
 
-                                StaticEchoLoopbackSocket(owner, channel, socket);
+                                ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(owner, channel, socket);
                             });
                         return true;
                     }
                 }
 
                 /** @brief Chooses remote endpoint for next static-echo transmission. */
-                boost::asio::ip::udp::endpoint StaticEchoGetRemoteEndPoint(VEthernetExchanger& owner) noexcept {
+                boost::asio::ip::udp::endpoint ExchangerStaticEchoDetail::StaticEchoGetRemoteEndPoint(VEthernetExchanger& owner) noexcept {
                     std::shared_ptr<aggligator::aggligator> aggligator = owner.switcher_->GetAggligator();
                     if (NULLPTR != aggligator) {
 #if !defined(_ANDROID) && !defined(_IPHONE)
@@ -602,7 +599,7 @@ namespace ppp {
                 }
 
                 /** @brief Opens and configures static-echo UDP socket for use. */
-                bool StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
+                bool ExchangerStaticEchoDetail::StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
                     if (owner.disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
@@ -652,7 +649,7 @@ namespace ppp {
                         socket.opened = opened;
 
                         // Set the timeout period for closing and re-opening the socket next-timed.
-                        ok = StaticEchoNextTimeout(owner);
+                        ok = ExchangerStaticEchoDetail::StaticEchoNextTimeout(owner);
                         break;
                     }
 
@@ -663,7 +660,6 @@ namespace ppp {
                     return ok;
                 }
 
-            }  // namespace
         }
     }
 }
