@@ -44,6 +44,7 @@ namespace ppp {
             class ClientBypassRouteLoader;
             class QuicRejectRateLimiter;
             class PeerPrefixRouteManager;
+            class AggregatorLoader;
             class RemoteEndpointLoader;
             class SwitcherTimeoutRegistry;
             class VEthernetNetworkSwitcher;
@@ -81,6 +82,7 @@ namespace ppp {
                 friend class ClientPacketDispatchHandler;
                 friend class ClientBypassRouteLoader;
                 friend class PeerPrefixRouteManager;
+                friend class AggregatorLoader;
                 friend class RemoteEndpointLoader;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
@@ -131,8 +133,8 @@ namespace ppp {
                 VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept;
                 VEthernetNetworkSwitcher(const VEthernetNetworkSwitcher&) = delete;
                 VEthernetNetworkSwitcher& operator=(const VEthernetNetworkSwitcher&) = delete;
-                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) = delete;
-                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) = delete;
+                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept;
+                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) noexcept;
                 virtual ~VEthernetNetworkSwitcher() noexcept;
 
 #if defined(_WIN32)
@@ -345,6 +347,7 @@ namespace ppp {
                 std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
                 std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;
                 std::unique_ptr<PeerPrefixRouteManager>                         peer_prefix_routes_;
+                std::unique_ptr<AggregatorLoader>                               aggregator_loader_;
                 std::unique_ptr<RemoteEndpointLoader>                           remote_endpoint_loader_;
                 std::unique_ptr<dns::DnsHostPorts>                                  dns_host_ports_cache_;
                 /** prdr_-guarded: DnsHostPortsFor / InvalidateDnsHostPorts share teardown's desktop lock. */

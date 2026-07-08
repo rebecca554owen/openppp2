@@ -10,6 +10,7 @@
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
 #include <ppp/app/client/PeerPrefixRouteManager.h>
+#include <ppp/app/client/AggregatorLoader.h>
 #include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
 #include <ppp/app/client/dns/DnsResponseHandler.h>
@@ -85,6 +86,12 @@ static bool AndroidDnsRedirectTraceEnabled() noexcept {
 #endif
 #endif
 
+namespace ppp::app::client {
+
+VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = default;
+VEthernetNetworkSwitcher& VEthernetNetworkSwitcher::operator=(VEthernetNetworkSwitcher&&) noexcept = default;
+
+} // namespace ppp::app::client
 
 /** @brief Validates whether extensions describe an applicable managed IPv6 assignment. */
 static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
@@ -149,6 +156,7 @@ namespace ppp {
                 , bypass_loader_(std::make_unique<ClientBypassRouteLoader>())
                 , quic_reject_limiter_(std::make_unique<QuicRejectRateLimiter>())
                 , peer_prefix_routes_(std::make_unique<PeerPrefixRouteManager>())
+                , aggregator_loader_(std::make_unique<AggregatorLoader>())
                 , remote_endpoint_loader_(std::make_unique<RemoteEndpointLoader>())
                 , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
                 , icmppackets_aid_(0) {
@@ -160,6 +168,7 @@ namespace ppp {
                 packet_dispatch_->Bind(this);
                 bypass_loader_->Bind(this);
                 peer_prefix_routes_->Bind(this);
+                aggregator_loader_->Bind(this);
                 remote_endpoint_loader_->Bind(this);
                 timeout_registry_->Bind(&GetSynchronizedObject());
 
@@ -673,29 +682,7 @@ namespace ppp {
 
             /** @brief Creates and configures static-mode aggligator instance. */
             bool VEthernetNetworkSwitcher::PreparedAggregator() noexcept {
-                std::shared_ptr<boost::asio::io_context> context = ppp::threading::Executors::GetDefault();
-                if (NULLPTR == context) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
-                }
-
-                std::shared_ptr<Byte> buffer = ppp::threading::Executors::GetCachedBuffer(context);
-                if (NULLPTR == buffer) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryBufferNull);
-                }
-
-                std::shared_ptr<aggligator::aggligator> aggligator =
-                    make_shared_object<aggligator::aggligator>(*context, buffer, PPP_BUFFER_SIZE, PPP_AGGLIGATOR_CONGESTIONS);
-                if (NULLPTR == aggligator) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
-                }
-
-                aggligator_ = aggligator;
-#if defined(_LINUX)
-                aggligator->ProtectorNetwork = GetProtectorNetwork();
-#endif
-                aggligator->AppConfiguration = configuration_;
-                aggligator->BufferswapAllocator = configuration_->GetBufferAllocator();
-                return true;
+                return aggregator_loader_->Prepare();
             }
 
             /** @brief Initializes switcher runtime components and opens all services. */

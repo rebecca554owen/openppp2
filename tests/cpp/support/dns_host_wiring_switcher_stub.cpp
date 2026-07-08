@@ -8,6 +8,7 @@
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/app/client/PeerPrefixRouteManager.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
+#include <ppp/app/client/AggregatorLoader.h>
 #include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
@@ -151,9 +152,11 @@ VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(
     const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
     : VEthernet(context, lwip, vnet, mta)
     , configuration_(configuration)
-    , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>()) {
+    , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
+    , aggregator_loader_(std::make_unique<AggregatorLoader>()) {
 
     timeout_registry_->Bind(&GetSynchronizedObject());
+    aggregator_loader_->Bind(this);
     static_mode_ = false;
     block_quic_ = false;
     icmppackets_aid_ = RandomNext();
@@ -345,6 +348,13 @@ bool VEthernetNetworkSwitcher::DatagramOutput(
     g_datagram_output_called = true;
     g_datagram_output_bytes = packet_size;
     return g_inject_ok;
+}
+
+bool VEthernetNetworkSwitcher::PreparedAggregator() noexcept {
+    if (NULLPTR == aggregator_loader_) {
+        return false;
+    }
+    return aggregator_loader_->Prepare();
 }
 
 bool VEthernetNetworkSwitcher::EmplaceTimeout(
