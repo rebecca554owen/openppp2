@@ -2,7 +2,6 @@
 
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
-#include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/dns/DnsReachability.h>
 #include <ppp/app/client/dns/DnsFakeIpResponse.h>
 #include <ppp/app/client/dns/DnsRedirectPlan.h>
@@ -358,11 +357,15 @@ namespace ppp {
                 }
 
                 bool DnsInterceptor::HandleQuery(
-                    const std::shared_ptr<VEthernetNetworkSwitcher>& switcher,
+                    const DnsHostPorts& host,
                     const std::shared_ptr<VEthernetExchanger>& exchanger,
                     const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
                     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept {
+
+                    if (!host.IsValid()) {
+                        return false;
+                    }
 
                     ::dns::Message m;
                     if (m.decode(static_cast<uint8_t*>(messages->Buffer.get()), messages->Length) != ::dns::BufferResult::NoError) {
@@ -383,7 +386,7 @@ namespace ppp {
                             messages->Length);
                         if (!synthesized.empty()) {
                             ppp::telemetry::Count("dns.redirect.aaaa_blocked", 1);
-                            return switcher->DatagramOutput(
+                            return host.datagram_output(
                                 IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source),
                                 boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT),
                                 synthesized.data(), static_cast<int>(synthesized.size()), false);
@@ -399,7 +402,7 @@ namespace ppp {
                         char dns_packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE];
                         if (m.encode(dns_packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE, dns_size) == ::dns::BufferResult::NoError &&
                             dns_size > 0) {
-                            return switcher->DatagramOutput(
+                            return host.datagram_output(
                                 IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source),
                                 boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT),
                                 dns_packet, static_cast<int>(dns_size), false);
@@ -418,7 +421,7 @@ namespace ppp {
                     plan_input.defer_same_destination_to_tunnel = true;
 #endif
 
-                    if (std::shared_ptr<ITap> tap = switcher->GetTap(); NULLPTR != tap) {
+                    if (std::shared_ptr<ITap> tap = host.get_tap(); NULLPTR != tap) {
                         const uint32_t dest = packet->Destination;
                         const uint32_t gw = IPEndPoint::ToEndPoint(
                             IPEndPoint::WrapAddressV4<boost::asio::ip::tcp>(tap->GatewayServer, IPEndPoint::MinPort)).GetAddress();
@@ -467,7 +470,7 @@ namespace ppp {
                                     IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                                 const boost::asio::ip::udp::endpoint destEP(destinationIP, PPP_DNS_SYS_PORT);
                                 ppp::telemetry::Count("dns.fake_ip.allocated", 1);
-                                switcher->DatagramOutput(
+                                host.datagram_output(
                                     sourceEP, destEP,
                                     fake_response.data(), static_cast<int>(fake_response.size()), false);
                                 SpawnFakeIpBackgroundResolve(plan, plan_input.rule, hostname_lower, messages);
@@ -483,22 +486,20 @@ namespace ppp {
                     DnsRouteDispatcherPorts dispatch_ports;
                     dispatch_ports.drop = []() noexcept { return false; };
                     dispatch_ports.defer_to_tunnel = [&]() noexcept {
-                        DnsResponseHandler::HandleResolverResponse(
-                            switcher, exchanger, messages, sourceEP, destEP, ppp::vector<Byte>{});
+                        host.handle_resolver_response(messages, sourceEP, destEP, ppp::vector<Byte>{});
                         return true;
                     };
                     dispatch_ports.udp_relay = [&](const boost::asio::ip::address& relay_target) noexcept {
                         return DnsUdpRelay::Spawn(
-                            switcher, exchanger, packet, frame, messages, relay_target, destinationIP);
+                            host, exchanger, packet, frame, messages, relay_target, destinationIP);
                     };
                     dispatch_ports.resolve_unmatched = [&]() noexcept {
                         std::shared_ptr<ppp::dns::DnsResolver> resolver = dns_resolver_;
                         auto callback =
-                            [resolver, switcher, sourceEP, destEP, exchanger, messages, packet](ppp::vector<Byte> response) noexcept {
+                            [resolver, host, sourceEP, destEP, messages, packet](ppp::vector<Byte> response) noexcept {
                                 (void)resolver;
                                 (void)packet;
-                                DnsResponseHandler::HandleResolverResponse(
-                                    switcher, exchanger, messages, sourceEP, destEP, std::move(response));
+                                host.handle_resolver_response(messages, sourceEP, destEP, std::move(response));
                             };
 
                         ppp::vector<ppp::dns::ServerEntry> foreign_entries =
@@ -536,11 +537,10 @@ namespace ppp {
                             provider_name, domestic,
                             static_cast<const Byte*>(messages->Buffer.get()),
                             messages->Length,
-                            [resolver, switcher, sourceEP, destEP, exchanger, messages, packet](ppp::vector<Byte> response) noexcept {
+                            [resolver, host, sourceEP, destEP, messages, packet](ppp::vector<Byte> response) noexcept {
                                 (void)resolver;
                                 (void)packet;
-                                DnsResponseHandler::HandleResolverResponse(
-                                    switcher, exchanger, messages, sourceEP, destEP, std::move(response));
+                                host.handle_resolver_response(messages, sourceEP, destEP, std::move(response));
                             });
                         return true;
                     };

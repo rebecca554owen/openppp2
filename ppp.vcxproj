@@ -446,6 +446,7 @@
     <ClCompile Include="ppp\app\client\ExchangerStaticEchoChannel.cpp" />
     <ClCompile Include="ppp\app\client\ClientConnectionOpener.cpp" />
     <ClCompile Include="ppp\app\client\ClientPacketDispatchHandler.cpp" />
+    <ClCompile Include="ppp\app\client\PeerPrefixRouteManager.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager_mobile.cpp" />
     <ClCompile Include="ppp\app\client\RouteTableManager_win32.cpp" />

@@ -43,6 +43,7 @@ namespace ppp {
             class ClientPacketDispatchHandler;
             class ClientBypassRouteLoader;
             class QuicRejectRateLimiter;
+            class PeerPrefixRouteManager;
 
             namespace dns {
                 class DnsResponseHandler;
@@ -66,15 +67,13 @@ namespace ppp {
             private:
                 friend class VEthernetExchanger;
                 friend class VEthernetDatagramPort;
-                friend class dns::DnsResponseHandler;
-                friend class dns::DnsUdpRelay;
-                friend class dns::DnsInterceptor;
                 friend class RouteTableManager;
                 friend class AssignedAddressManager;
                 friend class ClientConnectionTeardown;
                 friend class ClientConnectionOpener;
                 friend class ClientPacketDispatchHandler;
                 friend class ClientBypassRouteLoader;
+                friend class PeerPrefixRouteManager;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
 
@@ -126,8 +125,8 @@ namespace ppp {
                 VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept;
                 VEthernetNetworkSwitcher(const VEthernetNetworkSwitcher&) = delete;
                 VEthernetNetworkSwitcher& operator=(const VEthernetNetworkSwitcher&) = delete;
-                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept;
-                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) noexcept;
+                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) = delete;
+                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) = delete;
                 virtual ~VEthernetNetworkSwitcher() noexcept;
 
 #if defined(_WIN32)
@@ -334,6 +333,7 @@ namespace ppp {
                 std::unique_ptr<ClientConnectionOpener>                           connection_opener_;
                 std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
                 std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;
+                std::unique_ptr<PeerPrefixRouteManager>                         peer_prefix_routes_;
             };
         }
     }

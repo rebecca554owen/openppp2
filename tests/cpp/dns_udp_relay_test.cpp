@@ -55,6 +55,7 @@ BOOST_AUTO_TEST_CASE(rejects_wrong_source_port) {
         received, server, query, sizeof(query), response, sizeof(response)));
 }
 
-BOOST_AUTO_TEST_CASE(spawn_rejects_null_switcher_or_exchanger) {
-    BOOST_TEST(!client_dns::DnsUdpRelay::CanSpawn(nullptr, nullptr));
+BOOST_AUTO_TEST_CASE(spawn_rejects_invalid_host_or_exchanger) {
+    client_dns::DnsHostPorts host;
+    BOOST_TEST(!client_dns::DnsUdpRelay::CanSpawn(host, nullptr));
 }

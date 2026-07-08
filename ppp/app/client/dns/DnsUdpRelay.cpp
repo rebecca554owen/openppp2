@@ -2,8 +2,6 @@
 
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
-#include <ppp/app/client/VEthernetNetworkSwitcher.h>
-#include <ppp/app/client/dns/DnsResponseHandler.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
@@ -41,7 +39,7 @@ namespace ppp {
             namespace dns {
 
                 bool DnsUdpRelay::RunCoroutine(
-                    VEthernetNetworkSwitcher& switcher,
+                    const DnsHostPorts& host,
                     ppp::coroutines::YieldContext& y,
                     const std::shared_ptr<boost::asio::ip::udp::socket>& socket,
                     const std::shared_ptr<Byte>& buffer,
@@ -50,17 +48,12 @@ namespace ppp {
                     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                     const std::shared_ptr<boost::asio::io_context>& context,
-                    const boost::asio::ip::address& destinationIP) noexcept {
+                    const boost::asio::ip::udp::endpoint& sourceEP,
+                    const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
 
-                    const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
-                        switcher.shared_from_this());
-                    const boost::asio::ip::udp::endpoint sourceEP =
-                        ppp::net::IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
-                    const boost::asio::ip::udp::endpoint destinationEP(
-                        destinationIP, frame->Destination.Port);
-                    const auto fallback_tunnel = [self, exchanger, messages, sourceEP, destinationEP]() noexcept {
-                        DnsResponseHandler::HandleResolverResponse(
-                            self, exchanger, messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                    (void)exchanger;
+                    const auto fallback_tunnel = [host, messages, sourceEP, destinationEP]() noexcept {
+                        host.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
                     };
 
                     boost::system::error_code ec;
@@ -88,7 +81,7 @@ namespace ppp {
 
 #if defined(_LINUX)
                     if (!serverIP.is_loopback()) {
-                        auto protector_network = switcher.GetProtectorNetwork();
+                        auto protector_network = host.get_protector_network();
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(handle, y)) {
 #if defined(_ANDROID)
@@ -132,7 +125,7 @@ namespace ppp {
 
                     const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
                     const std::shared_ptr<ppp::configurations::AppConfiguration> configuration =
-                        switcher.GetConfiguration();
+                        host.get_configuration();
 
                     const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
                         [socket_weak, handle](Timer*) noexcept {
@@ -153,7 +146,7 @@ namespace ppp {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     }
 
-                    if (!switcher.EmplaceTimeout(socket.get(), cb)) {
+                    if (!host.emplace_timeout(socket.get(), cb)) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                     }
 
@@ -168,9 +161,9 @@ namespace ppp {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     }
 
-                    *receive_again = [self, &switcher, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, exchanger, max_buffer_size, handle, receive_again]() noexcept {
+                    *receive_again = [host, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, max_buffer_size, handle, receive_again]() noexcept {
                         socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,
-                            [self, &switcher, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, exchanger, handle, receive_again](boost::system::error_code ec, size_t sz) noexcept {
+                            [host, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, handle, receive_again](boost::system::error_code ec, size_t sz) noexcept {
                                 if (ec == boost::system::errc::success && sz > 0) {
                                     if (!ShouldAcceptRelayResponse(
                                             *serverEPPtr, serverEP,
@@ -183,7 +176,7 @@ namespace ppp {
                                     ANDROID_DNS_UDP_RELAY_TRACE("dns_redirect recv ok fd=%d bytes=%d",
                                         handle,
                                         (int)sz);
-                                    switcher.DatagramOutput(sourceEP, destinationEP, buffer.get(), static_cast<int>(sz));
+                                    host.datagram_output(sourceEP, destinationEP, buffer.get(), static_cast<int>(sz), false);
                                 }
                                 else {
 #if defined(_ANDROID)
@@ -191,11 +184,10 @@ namespace ppp {
                                         handle,
                                         ec.value());
 #endif
-                                    DnsResponseHandler::HandleResolverResponse(
-                                        self, exchanger, messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                                    host.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
                                 }
 
-                                switcher.DeleteTimeout(socket.get());
+                                host.delete_timeout(socket.get());
                                 *receive_again = std::function<void()>();
                                 ppp::net::Socket::Closesocket(socket);
                                 if (timeout) {
@@ -209,7 +201,7 @@ namespace ppp {
                 }
 
                 bool DnsUdpRelay::Spawn(
-                    const std::shared_ptr<VEthernetNetworkSwitcher>& switcher,
+                    const DnsHostPorts& host,
                     const std::shared_ptr<VEthernetExchanger>& exchanger,
                     const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
                     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
@@ -217,7 +209,7 @@ namespace ppp {
                     const boost::asio::ip::address& serverIP,
                     const boost::asio::ip::address& destinationIP) noexcept {
 
-                    if (!CanSpawn(switcher, exchanger)) {
+                    if (!CanSpawn(host, exchanger)) {
                         return false;
                     }
 
@@ -228,7 +220,7 @@ namespace ppp {
 
                     std::shared_ptr<Byte> buffer = exchanger->GetBuffer();
                     if (NULLPTR == buffer) {
-                        const auto configuration = switcher->GetConfiguration();
+                        const auto configuration = host.get_configuration();
                         const auto allocator = configuration ? configuration->GetBufferAllocator() : nullptr;
                         if (allocator) {
                             buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, PPP_BUFFER_SIZE);
@@ -244,12 +236,16 @@ namespace ppp {
                         return false;
                     }
 
-                    const auto allocator = switcher->GetConfiguration()->GetBufferAllocator();
+                    const boost::asio::ip::udp::endpoint sourceEP =
+                        ppp::net::IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
+                    const boost::asio::ip::udp::endpoint destinationEP(destinationIP, frame->Destination.Port);
+
+                    const auto allocator = host.get_buffer_allocator();
                     return ppp::coroutines::YieldContext::Spawn(allocator.get(), *context,
-                        [switcher, socket, buffer, frame, messages, packet, context, serverIP, destinationIP, exchanger](ppp::coroutines::YieldContext& y) noexcept {
+                        [host, socket, buffer, frame, messages, packet, context, serverIP, sourceEP, destinationEP, exchanger](ppp::coroutines::YieldContext& y) noexcept {
                             (void)packet;
                             return DnsUdpRelay::RunCoroutine(
-                                *switcher, y, socket, buffer, serverIP, exchanger, frame, messages, context, destinationIP);
+                                host, y, socket, buffer, serverIP, exchanger, frame, messages, context, sourceEP, destinationEP);
                         });
                 }
 

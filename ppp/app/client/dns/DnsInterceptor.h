@@ -5,6 +5,7 @@
  * @brief Owns DNS rules, resolver lifecycle, and intercepted query handling.
  */
 
+#include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/app/client/dns/FakeIpPool.h>
 #include <ppp/app/client/dns/DnsRedirectPlan.h>
 #include <ppp/app/client/dns/Rule.h>
@@ -24,7 +25,6 @@ namespace ppp {
     namespace app {
         namespace client {
             class VEthernetExchanger;
-            class VEthernetNetworkSwitcher;
 
             namespace dns {
 
@@ -58,7 +58,7 @@ namespace ppp {
                         const ppp::function<void(uint32_t)>& add_nic_ip) noexcept;
 
                     bool HandleQuery(
-                        const std::shared_ptr<VEthernetNetworkSwitcher>& switcher,
+                        const DnsHostPorts& host,
                         const std::shared_ptr<VEthernetExchanger>& exchanger,
                         const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
                         const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,

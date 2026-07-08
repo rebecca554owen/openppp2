@@ -9,6 +9,9 @@
 #include <ppp/app/client/ClientPacketDispatchHandler.h>
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
+#include <ppp/app/client/PeerPrefixRouteManager.h>
+#include <ppp/app/client/dns/DnsResponseHandler.h>
+#include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -143,6 +146,7 @@ namespace ppp {
                 , packet_dispatch_(std::make_unique<ClientPacketDispatchHandler>())
                 , bypass_loader_(std::make_unique<ClientBypassRouteLoader>())
                 , quic_reject_limiter_(std::make_unique<QuicRejectRateLimiter>())
+                , peer_prefix_routes_(std::make_unique<PeerPrefixRouteManager>())
                 , icmppackets_aid_(0) {
 
                 route_table_->Bind(this);
@@ -151,6 +155,7 @@ namespace ppp {
                 connection_opener_->Bind(this);
                 packet_dispatch_->Bind(this);
                 bypass_loader_->Bind(this);
+                peer_prefix_routes_->Bind(this);
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 route_added_     = false;
@@ -168,8 +173,6 @@ namespace ppp {
                 Finalize();
             }
 
-            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = default;
-            VEthernetNetworkSwitcher& VEthernetNetworkSwitcher::operator=(VEthernetNetworkSwitcher&&) noexcept = default;
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             boost::asio::ip::address VEthernetNetworkSwitcher::LastAssignedIPv6() noexcept {
@@ -439,125 +442,11 @@ namespace ppp {
 #endif
 
             void VEthernetNetworkSwitcher::ClearPeerPrefixRoutes() noexcept {
-#if defined(_WIN32)
-                auto mib = ppp::win32::network::Router::GetIpForwardTable();
-#endif
-                for (const auto& route : applied_peer_prefix_routes_) {
-#if defined(_WIN32)
-                    if (NULLPTR != mib) {
-                        route_table_->DeleteRoute(mib, route.Destination, route.NextHop, route.Prefix);
-                    }
-#elif !defined(_ANDROID) && !defined(_IPHONE)
-                    route_table_->DeleteRoute(route.Destination, route.NextHop, route.Prefix);
-#endif
-                }
-                applied_peer_prefix_routes_.clear();
-                if (NULLPTR != peer_prefix_rib_) {
-                    peer_prefix_rib_->Clear();
-                }
-                if (NULLPTR != peer_prefix_fib_) {
-                    peer_prefix_fib_->Clear();
-                }
-                peer_prefix_rib_ = NULLPTR;
-                peer_prefix_fib_ = NULLPTR;
+                peer_prefix_routes_->Clear();
             }
 
             bool VEthernetNetworkSwitcher::ApplyPeerPrefixRoutes(const VirtualEthernetInformationExtensions& extensions) noexcept {
-                if (proxy_only_) {
-                    return false;
-                }
-
-                std::shared_ptr<ppp::tap::ITap> tap = GetTap();
-                if (NULLPTR == tap) {
-                    return false;
-                }
-
-                ClearPeerPrefixRoutes();
-
-                RouteInformationTablePtr rib = make_shared_object<RouteInformationTable>();
-                if (NULLPTR == rib) {
-                    return false;
-                }
-
-                const auto& dynamic_routes = extensions.PeerRouteTable.HasAny()
-                    ? extensions.PeerRouteTable.routes
-                    : dynamic_peer_routes_;
-
-                auto install_route = [&](const ppp::app::protocol::PeerPrefixRouteEntry& route) -> bool {
-                    if (!route.HasVia()) {
-                        return false;
-                    }
-
-                    if (route.prefix <= 0 || route.prefix > net::native::MAX_PREFIX_VALUE_V4) {
-                        return false;
-                    }
-
-                    uint32_t network = route.NetworkHost();
-                    uint32_t via = route.ViaHost();
-                    if (network == 0 || via == 0) {
-                        return false;
-                    }
-
-                    if (via == tap->IPAddress) {
-                        return false;
-                    }
-
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                    if (!route_table_->AddRoute(network, via, route.prefix)) {
-                        return false;
-                    }
-#endif
-
-                    if (!rib->AddRoute(network, route.prefix, via)) {
-#if defined(_WIN32)
-                        if (auto mib = ppp::win32::network::Router::GetIpForwardTable(); NULLPTR != mib) {
-                            route_table_->DeleteRoute(mib, network, via, route.prefix);
-                        }
-#elif !defined(_ANDROID) && !defined(_IPHONE)
-                        route_table_->DeleteRoute(network, via, route.prefix);
-#endif
-                        return false;
-                    }
-
-                    net::native::RouteEntry entry;
-                    entry.Destination = network;
-                    entry.Prefix = route.prefix;
-                    entry.NextHop = via;
-                    applied_peer_prefix_routes_.emplace_back(entry);
-                    return true;
-                };
-
-                bool any = false;
-                if (NULLPTR != configuration_) {
-                    for (const auto& route : configuration_->client.peer_routes) {
-                        ppp::app::protocol::PeerPrefixRouteEntry entry;
-                        entry.network = route.network;
-                        entry.prefix = route.prefix;
-                        entry.via = route.via;
-                        any |= install_route(entry);
-                    }
-                }
-
-                for (const auto& route : dynamic_routes) {
-                    any |= install_route(route);
-                }
-
-                if (any) {
-                    ForwardInformationTablePtr fib = make_shared_object<ForwardInformationTable>();
-                    if (NULLPTR != fib) {
-                        fib->Fill(*rib);
-                        if (fib->IsAvailable()) {
-                            peer_prefix_rib_ = rib;
-                            peer_prefix_fib_ = fib;
-                        }
-                    }
-
-                    ppp::telemetry::Log(Level::kInfo, "client", "peer prefix routes applied: static+dynamic count=%zu",
-                        applied_peer_prefix_routes_.size());
-                    ppp::telemetry::Count("client.peer_routes.applied", 1);
-                }
-
-                return any;
+                return peer_prefix_routes_->Apply(extensions);
             }
 
             /** @brief Adapts base information callback to extension-aware overload. */
@@ -1140,6 +1029,42 @@ namespace ppp {
                 return fib_add_route_ipv4(remoteIP);
             }
 
+            static dns::DnsHostPorts MakeDnsHostPorts(
+                const std::shared_ptr<VEthernetNetworkSwitcher>& self,
+                const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
+
+                dns::DnsHostPorts ports;
+                ports.datagram_output =
+                    [self](const boost::asio::ip::udp::endpoint& sourceEP,
+                        const boost::asio::ip::udp::endpoint& destinationEP,
+                        void* packet,
+                        int packet_size,
+                        bool caching) noexcept {
+                        return self->DatagramOutput(sourceEP, destinationEP, packet, packet_size, caching);
+                    };
+                ports.get_tap = [self]() noexcept { return self->GetTap(); };
+                ports.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
+                ports.get_buffer_allocator = [self]() noexcept { return self->GetBufferAllocator(); };
+                ports.emplace_timeout =
+                    [self](void* key, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept {
+                        return self->EmplaceTimeout(key, timeout);
+                    };
+                ports.delete_timeout = [self](void* key) noexcept { return self->DeleteTimeout(key); };
+#if defined(_LINUX)
+                ports.get_protector_network = [self]() noexcept { return self->GetProtectorNetwork(); };
+#endif
+                ports.handle_resolver_response =
+                    [self, exchanger](
+                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
+                        const boost::asio::ip::udp::endpoint& sourceEP,
+                        const boost::asio::ip::udp::endpoint& destEP,
+                        ppp::vector<Byte> response) noexcept {
+                        dns::DnsResponseHandler::HandleResolverResponse(
+                            self, exchanger, messages, sourceEP, destEP, std::move(response));
+                    };
+                return ports;
+            }
+
             /** @brief Entry point for DNS redirection decision and async execution. */
             bool VEthernetNetworkSwitcher::RedirectDnsServer(
                 const std::shared_ptr<VEthernetExchanger>& exchanger,
@@ -1151,8 +1076,9 @@ namespace ppp {
                     return false;
                 }
 
+                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 return dns_interceptor_->HandleQuery(
-                    std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this()),
+                    MakeDnsHostPorts(self, exchanger),
                     exchanger, packet, frame, messages);
             }
 
