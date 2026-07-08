@@ -158,7 +158,7 @@ namespace ppp {
                 packet_dispatch_->Bind(this);
                 bypass_loader_->Bind(this);
                 peer_prefix_routes_->Bind(this);
-                timeout_registry_->Bind(this);
+                timeout_registry_->Bind(&GetSynchronizedObject());
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 route_added_     = false;
@@ -1014,6 +1014,29 @@ namespace ppp {
             }
 
             /** @brief Entry point for DNS redirection decision and async execution. */
+            const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
+                const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
+
+                if (std::shared_ptr<VEthernetExchanger> cached = dns_host_ports_exchanger_.lock();
+                    cached == exchanger && NULLPTR != dns_host_ports_cache_ && dns_host_ports_cache_->IsValid()) {
+                    return *dns_host_ports_cache_;
+                }
+
+                if (NULLPTR == dns_host_ports_cache_) {
+                    dns_host_ports_cache_ = std::make_unique<dns::DnsHostPorts>();
+                }
+
+                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
+                *dns_host_ports_cache_ = dns::MakeDnsHostPorts(self, exchanger);
+                dns_host_ports_exchanger_ = exchanger;
+                return *dns_host_ports_cache_;
+            }
+
+            void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {
+                dns_host_ports_cache_.reset();
+                dns_host_ports_exchanger_.reset();
+            }
+
             bool VEthernetNetworkSwitcher::RedirectDnsServer(
                 const std::shared_ptr<VEthernetExchanger>& exchanger,
                 const std::shared_ptr<IPFrame>& packet,
@@ -1024,9 +1047,8 @@ namespace ppp {
                     return false;
                 }
 
-                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 return dns_interceptor_->HandleQuery(
-                    dns::MakeDnsHostPorts(self, exchanger),
+                    DnsHostPortsFor(exchanger),
                     exchanger, packet, frame, messages);
             }
 

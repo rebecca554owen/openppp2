@@ -50,6 +50,7 @@ namespace ppp {
                 class DnsResponseHandler;
                 class DnsUdpRelay;
                 class DnsInterceptor;
+                struct DnsHostPorts;
             }
 
             namespace proxys {
@@ -75,7 +76,6 @@ namespace ppp {
                 friend class ClientPacketDispatchHandler;
                 friend class ClientBypassRouteLoader;
                 friend class PeerPrefixRouteManager;
-                friend class SwitcherTimeoutRegistry;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
 
@@ -228,6 +228,8 @@ namespace ppp {
 #endif
 
                 bool                                                                RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept;
+                const dns::DnsHostPorts&                                            DnsHostPortsFor(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
+                void                                                                InvalidateDnsHostPorts() noexcept;
                 bool                                                                EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept;
                 bool                                                                DeleteTimeout(void* k) noexcept;
 
@@ -334,6 +336,8 @@ namespace ppp {
                 std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
                 std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;
                 std::unique_ptr<PeerPrefixRouteManager>                         peer_prefix_routes_;
+                std::unique_ptr<dns::DnsHostPorts>                                  dns_host_ports_cache_;
+                std::weak_ptr<VEthernetExchanger>                                 dns_host_ports_exchanger_;
             };
         }
     }

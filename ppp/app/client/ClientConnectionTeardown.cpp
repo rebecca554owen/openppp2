@@ -60,6 +60,7 @@ namespace ppp {
                 if (std::shared_ptr<VEthernetExchanger> exchanger = std::move(owner_->exchanger_); NULLPTR != exchanger) {
                     exchanger->Dispose();
                 }
+                owner_->InvalidateDnsHostPorts();
 
                 // Shutdown and release the qos control module.
                 if (std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = std::move(owner_->qos_);  NULLPTR != qos) {
