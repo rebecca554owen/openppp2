@@ -1,7 +1,7 @@
 #include <ppp/app/client/ClientPacketDispatchHandler.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
-#include <ppp/app/client/dns/DnsResponseHandler.h>
+#include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/Error.h>
@@ -275,9 +275,10 @@ ANDROID_DNS_REDIRECT_TRACE(
                             IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                         const boost::asio::ip::udp::endpoint destEP(
                             Ipep::ToAddress(packet->Destination), PPP_DNS_SYS_PORT);
-                        dns::DnsResponseHandler::HandleResolverResponse(
-                            std::static_pointer_cast<VEthernetNetworkSwitcher>(owner_->shared_from_this()),
-                            exchanger, messages, sourceEP, destEP, ppp::vector<Byte>{});
+                        const auto self =
+                            std::static_pointer_cast<VEthernetNetworkSwitcher>(owner_->shared_from_this());
+                        dns::MakeDnsHostPorts(self, exchanger).handle_resolver_response(
+                            messages, sourceEP, destEP, ppp::vector<Byte>{});
                     }
                     return true;
                 }
