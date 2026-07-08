@@ -868,6 +868,7 @@ namespace ppp {
             void VEthernetNetworkSwitcher::PreferredNgw(const boost::asio::ip::address& gw) noexcept {
                 preferred_ngw_ = gw;
             }
+#endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             bool VEthernetNetworkSwitcher::AddLoadIPList(

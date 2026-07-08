@@ -16,7 +16,7 @@ namespace ppp::transmissions {
     namespace proxys { class IForwarding; }
 }
 #if defined(_LINUX)
-namespace ppp::net { class ProtectorNetwork; }
+#include <linux/ppp/net/ProtectorNetwork.h>
 #endif
 
 #include <ppp/net/packet/IPFrame.h>
