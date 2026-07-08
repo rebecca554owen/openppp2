@@ -80,6 +80,9 @@ namespace ppp {
                 friend class RemoteEndpointLoader;
                 friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
+                friend dns::DnsHostPorts dns::MakeDnsHostPorts(
+                    const std::shared_ptr<VEthernetNetworkSwitcher>& self,
+                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
 
             private:
                 typedef struct {
