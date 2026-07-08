@@ -74,6 +74,7 @@ namespace ppp {
                 friend class ClientConnectionOpener;
                 friend class ClientPacketDispatchHandler;
                 friend class ClientBypassRouteLoader;
+                friend struct ExchangerStaticEchoDetail;
                 friend class VEthernetNetworkTcpipStack;
 
             private:

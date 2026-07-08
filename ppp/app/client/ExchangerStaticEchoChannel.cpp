@@ -27,12 +27,12 @@ namespace ppp {
             typedef ppp::threading::Executors                                   Executors;
             typedef VEthernetExchanger::ITransmissionPtr                        ITransmissionPtr;
             typedef VEthernetExchanger::AppConfigurationPtr                    AppConfigurationPtr;
-            typedef VEthernetExchanger::StaticEchoDatagarmSocket                StaticEchoDatagarmSocket;
             typedef VEthernetExchanger::YieldContext                            YieldContext;
 
             static constexpr int STATIC_ECHO_KEEP_ALIVED_ID = IPEndPoint::NoneAddress - 1;
 
             struct ExchangerStaticEchoDetail {
+                typedef VEthernetExchanger::StaticEchoDatagarmSocket            StaticEchoDatagarmSocket;
                 static bool StaticEchoNextTimeout(VEthernetExchanger& owner) noexcept;
                 static bool StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, ppp::coroutines::YieldContext& y) noexcept;
                 static bool StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept;
@@ -51,8 +51,8 @@ namespace ppp {
             void ExchangerStaticEchoChannel::StaticEchoClean() noexcept {
                 VEthernetExchanger& owner = *owner_;
                 for (int i = 0; i < arraysizeof(owner.static_echo_sockets_); i++) {
-                    std::shared_ptr<StaticEchoDatagarmSocket>& r = owner.static_echo_sockets_[i];
-                    std::shared_ptr<StaticEchoDatagarmSocket> socket = std::move(r);
+                    std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket>& r = owner.static_echo_sockets_[i];
+                    std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket> socket = std::move(r);
 
                     Socket::Closesocket(socket);
                 }
@@ -73,7 +73,7 @@ namespace ppp {
                     return false;
                 }
 
-                std::shared_ptr<StaticEchoDatagarmSocket> socket = owner.static_echo_sockets_[0];
+                std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket> socket = owner.static_echo_sockets_[0];
                 if (NULLPTR == socket) {
                     return false;
                 }
@@ -91,7 +91,7 @@ namespace ppp {
                 if (owner.static_echo_timeout_ != UINT64_MAX && owner.switcher_->StaticMode(NULLPTR)) {
                     UInt64 now = ppp::threading::Executors::GetTickCount();
                     if (now >= owner.static_echo_timeout_) {
-                        std::shared_ptr<StaticEchoDatagarmSocket> socket = std::move(owner.static_echo_sockets_[0]);
+                        std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket> socket = std::move(owner.static_echo_sockets_[0]);
                         owner.static_echo_sockets_[0] = std::move(owner.static_echo_sockets_[1]);
                         owner.static_echo_sockets_[1] = NULLPTR;
 
@@ -136,7 +136,7 @@ namespace ppp {
                         }
 
                         // Re-instance and try to open the Datagram Port.
-                        socket = make_shared_object<StaticEchoDatagarmSocket>(*context);
+                        socket = make_shared_object<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket>(*context);
                         if (NULLPTR == socket) {
                             return false;
                         }
@@ -203,9 +203,9 @@ namespace ppp {
                 }
 
                 for (int i = 0; i < arraysizeof(owner.static_echo_sockets_); i++) {
-                    std::shared_ptr<StaticEchoDatagarmSocket>& socket = owner.static_echo_sockets_[i];
+                    std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket>& socket = owner.static_echo_sockets_[i];
                     if (NULLPTR == socket) {
-                        socket = make_shared_object<StaticEchoDatagarmSocket>(*context);
+                        socket = make_shared_object<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket>(*context);
                         if (NULLPTR == socket) {
                             return false;
                         }
@@ -336,7 +336,7 @@ namespace ppp {
                         return false;
                     }
 
-                    std::shared_ptr<StaticEchoDatagarmSocket> socket = owner.static_echo_sockets_[0];
+                    std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket> socket = owner.static_echo_sockets_[0];
                     if (NULLPTR == socket) {
                         return false;
                     }
@@ -386,7 +386,7 @@ namespace ppp {
                         return false;
                     }
 
-                    std::shared_ptr<StaticEchoDatagarmSocket> socket = owner.static_echo_sockets_[0];
+                    std::shared_ptr<ExchangerStaticEchoDetail::StaticEchoDatagarmSocket> socket = owner.static_echo_sockets_[0];
                     if (NULLPTR == socket) {
                         return false;
                     }
@@ -520,7 +520,7 @@ namespace ppp {
                 }
 
                 /** @brief Starts or continues async receive loop for static-echo socket. */
-                bool ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
+            bool ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, const std::shared_ptr<StaticEchoDatagarmSocket>& socket) noexcept {
                     if (owner.disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
@@ -599,7 +599,7 @@ namespace ppp {
                 }
 
                 /** @brief Opens and configures static-echo UDP socket for use. */
-                bool ExchangerStaticEchoDetail::StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
+            bool ExchangerStaticEchoDetail::StaticEchoOpenAsynchronousSocket(VEthernetExchanger& owner, ExchangerStaticEchoChannel& channel, StaticEchoDatagarmSocket& socket, YieldContext& y) noexcept {
                     if (owner.disposed_.load(std::memory_order_acquire)) {
                         return false;
                     }
