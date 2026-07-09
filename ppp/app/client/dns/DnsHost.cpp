@@ -7,10 +7,17 @@ namespace ppp {
             namespace dns {
 
                 DnsHostPorts MakeDnsHostPorts(
+                    const std::shared_ptr<IDnsHost>& host,
+                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
+
+                    return host->BuildDnsHostPorts(exchanger);
+                }
+
+                DnsHostPorts MakeDnsHostPorts(
                     const std::shared_ptr<VEthernetNetworkSwitcher>& self,
                     const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
 
-                    return self->BuildDnsHostPorts(exchanger);
+                    return MakeDnsHostPorts(std::static_pointer_cast<IDnsHost>(self), exchanger);
                 }
 
             }

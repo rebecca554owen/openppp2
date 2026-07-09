@@ -100,6 +100,10 @@ namespace ppp {
                 };
 
                 DnsHostPorts MakeDnsHostPorts(
+                    const std::shared_ptr<IDnsHost>& host,
+                    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
+
+                DnsHostPorts MakeDnsHostPorts(
                     const std::shared_ptr<VEthernetNetworkSwitcher>& self,
                     const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
 

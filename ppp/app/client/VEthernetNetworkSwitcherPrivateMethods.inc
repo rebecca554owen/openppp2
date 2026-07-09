@@ -5,9 +5,6 @@
                 bool                                                                AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept;
 #endif
 
-                bool                                                                RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept;
-                const dns::DnsHostPorts&                                            DnsHostPortsFor(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
-                void                                                                InvalidateDnsHostPorts() noexcept;
                 bool                                                                EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept;
                 bool                                                                DeleteTimeout(void* k) noexcept;
 

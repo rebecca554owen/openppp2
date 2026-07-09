@@ -285,6 +285,24 @@ bool VEthernetNetworkSwitcher::LoadAllDnsRules(const ppp::string&, bool) noexcep
     return false;
 }
 
+const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
+    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
+
+    static dns::DnsHostPorts ports;
+    ports = BuildDnsHostPorts(exchanger);
+    return ports;
+}
+
+void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {}
+
+bool VEthernetNetworkSwitcher::RedirectDnsServer(
+    const std::shared_ptr<VEthernetExchanger>&,
+    const std::shared_ptr<ppp::net::packet::IPFrame>&,
+    const std::shared_ptr<ppp::net::packet::UdpFrame>&,
+    const std::shared_ptr<ppp::net::packet::BufferSegment>&) noexcept {
+    return false;
+}
+
 dns::DnsHostPorts VEthernetNetworkSwitcher::BuildDnsHostPorts(
     const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
 

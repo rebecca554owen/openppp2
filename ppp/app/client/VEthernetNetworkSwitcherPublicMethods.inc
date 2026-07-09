@@ -60,4 +60,7 @@
                 virtual void Dispose() noexcept override;
                 virtual std::shared_ptr<ppp::threading::BufferswapAllocator> GetBufferAllocator() noexcept override;
                 virtual bool BlockQUIC(bool value) noexcept;
-                dns::DnsHostPorts BuildDnsHostPorts(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept;
+                dns::DnsHostPorts BuildDnsHostPorts(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept override;
+                const dns::DnsHostPorts& DnsHostPortsFor(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept override;
+                void InvalidateDnsHostPorts() noexcept override;
+                bool RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept override;
