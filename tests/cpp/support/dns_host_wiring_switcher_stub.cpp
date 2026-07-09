@@ -364,6 +364,29 @@ dns::DnsHostPorts VEthernetNetworkSwitcher::BuildDnsHostPorts(
     return host;
 }
 
+route::RouteHostPorts VEthernetNetworkSwitcher::BuildRouteHostPorts() noexcept {
+    route::RouteHostPorts host;
+    host.get_tap = []() noexcept { return std::shared_ptr<ppp::tap::ITap>(); };
+    host.get_tap_ni = []() noexcept { return std::shared_ptr<ClientNetworkInterface>(); };
+    host.get_underlying_ni = []() noexcept { return std::shared_ptr<ClientNetworkInterface>(); };
+    host.get_rib = []() noexcept { return route::RouteInformationTablePtr(); };
+    host.set_rib = [](route::RouteInformationTablePtr) noexcept {};
+    host.get_fib = []() noexcept { return route::ForwardInformationTablePtr(); };
+    host.set_fib = [](route::ForwardInformationTablePtr) noexcept {};
+    host.get_route_added = []() noexcept { return false; };
+    host.set_route_added = [](bool) noexcept {};
+    host.get_route_apply_ready = []() noexcept { return false; };
+    host.add_dns_server_ip = [](uint32_t, int) noexcept {};
+    host.collect_dns_reachability = []() noexcept {};
+    return host;
+}
+
+#if !defined(_ANDROID) && !defined(_IPHONE)
+void VEthernetNetworkSwitcher::AddRoute() noexcept {}
+
+void VEthernetNetworkSwitcher::DeleteRoute() noexcept {}
+#endif
+
 bool VEthernetNetworkSwitcher::DatagramOutput(
     const boost::asio::ip::udp::endpoint&,
     const boost::asio::ip::udp::endpoint&,
