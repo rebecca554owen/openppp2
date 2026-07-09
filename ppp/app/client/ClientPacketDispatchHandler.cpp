@@ -1,5 +1,6 @@
 #include <ppp/app/client/ClientPacketDispatchHandler.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
@@ -156,7 +157,7 @@ namespace ppp {
 #if defined(_ANDROID) || defined(_IPHONE)
                 return false;
 #else
-                const VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions& approved = owner_->information_extensions_;
+                const VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions& approved = *owner_->information_extensions_;
                 bool valid_mode = approved.AssignedIPv6Mode == VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions::IPv6Mode_Nat66 ||
                     approved.AssignedIPv6Mode == VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions::IPv6Mode_Gua;
                 if (!owner_->address_manager_->Ipv6Applied() || !valid_mode || approved.AssignedIPv6AddressPrefixLength != ppp::ipv6::IPv6_MAX_PREFIX_LENGTH || !approved.AssignedIPv6Address.is_v6()) {

@@ -183,7 +183,7 @@ namespace ppp {
                     return;
                 }
 
-                int prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, (int)owner_->information_extensions_.AssignedIPv6AddressPrefixLength));
+                int prefix = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH + 1, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, (int)owner_->information_extensions_->AssignedIPv6AddressPrefixLength));
                 if (prefix < 1) {
                     prefix = 64;
                 }
@@ -193,9 +193,9 @@ namespace ppp {
                 ipv6_context.InterfaceIndex = tun_ni->Index;
                 ipv6_context.InterfaceName = tun_ni->Name;
 
-                bool nat_mode = owner_->information_extensions_.AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                bool nat_mode = owner_->information_extensions_->AssignedIPv6Mode == VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
                 auto started_at = std::chrono::steady_clock::now();
-                ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, owner_->information_extensions_.AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
+                ppp::ipv6::auxiliary::RestoreClientConfiguration(ipv6_context, owner_->information_extensions_->AssignedIPv6Address, prefix, nat_mode, ipv6_state_);
                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
                 ppp::telemetry::Histogram("client.ipv6.restore.us", elapsed);
 

@@ -2,6 +2,7 @@
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/ClientConnectionTeardown.h>
@@ -153,6 +154,7 @@ namespace ppp {
                 , aggregator_loader_(std::make_unique<AggregatorLoader>())
                 , remote_endpoint_loader_(std::make_unique<RemoteEndpointLoader>())
                 , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
+                , information_extensions_(std::make_unique<VirtualEthernetInformationExtensions>())
                 , icmppackets_aid_(0) {
 
                 route_table_->Bind(this);
@@ -220,7 +222,7 @@ namespace ppp {
             }
 
             VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions VEthernetNetworkSwitcher::GetInformationExtensions() noexcept {
-                return information_extensions_;
+                return *information_extensions_;
             }
 
             VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr VEthernetNetworkSwitcher::GetHttpProxy() noexcept {
@@ -556,13 +558,13 @@ namespace ppp {
 
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                bool previous_assignment = HasManagedIPv6Assignment(information_extensions_);
+                bool previous_assignment = HasManagedIPv6Assignment(*information_extensions_);
                 bool current_assignment = HasManagedIPv6Assignment(extensions);
-                if (address_manager_->Ipv6Applied() && (!previous_assignment || !current_assignment || !SameManagedIPv6Configuration(information_extensions_, extensions))) {
+                if (address_manager_->Ipv6Applied() && (!previous_assignment || !current_assignment || !SameManagedIPv6Configuration(*information_extensions_, extensions))) {
                     RestoreAssignedIPv6();
                 }
 
-                information_extensions_ = extensions;
+                *information_extensions_ = extensions;
 
                 if (NULLPTR != dns_interceptor_) {
                     dns_interceptor_->OnSessionInfo(extensions, HasManagedIPv6Assignment(extensions));
@@ -593,7 +595,7 @@ namespace ppp {
                     }
                 }
 #else
-                information_extensions_ = extensions;
+                *information_extensions_ = extensions;
 
                 if (NULLPTR != dns_interceptor_) {
                     dns_interceptor_->OnSessionInfo(extensions, HasManagedIPv6Assignment(extensions));

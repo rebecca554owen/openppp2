@@ -25,7 +25,7 @@
                 ppp::string                                                         server_ru_;
                 std::shared_ptr<aggligator::aggligator>                             aggligator_;
                 IForwardingPtr                                                      forwarding_;
-                VirtualEthernetInformationExtensions                                information_extensions_;
+                std::unique_ptr<VirtualEthernetInformationExtensions>               information_extensions_;
                 ppp::vector<ppp::app::protocol::PeerPrefixRouteEntry>               dynamic_peer_routes_;
                 ppp::vector<net::native::RouteEntry>                                applied_peer_prefix_routes_;
 

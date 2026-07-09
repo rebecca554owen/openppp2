@@ -13,15 +13,14 @@ namespace ppp
         namespace native
         {
             /// @brief Single route entry with destination prefix and next-hop gateway.
-            typedef struct
-            {
+            struct RouteEntry {
                 /// @brief Destination network address (IPv4).
                 uint32_t                                                Destination;
                 /// @brief Prefix length for the destination route.
                 int                                                     Prefix;
                 /// @brief Next-hop gateway address (IPv4).
                 uint32_t                                                NextHop;
-            }                                                           RouteEntry;
+            };
 
             /// @brief Route entry container for one destination key.
             typedef ppp::vector<RouteEntry>                             RouteEntries;
