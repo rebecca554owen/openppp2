@@ -176,11 +176,101 @@ namespace ppp {
                 icmppackets_aid_ = RandomNext();
             }
 
+            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = default;
+            VEthernetNetworkSwitcher& VEthernetNetworkSwitcher::operator=(VEthernetNetworkSwitcher&&) noexcept = default;
+
             /** @brief Finalizes network switcher on destruction. */
             VEthernetNetworkSwitcher::~VEthernetNetworkSwitcher() noexcept {
                 Finalize();
             }
 
+#if defined(_WIN32)
+            VEthernetNetworkSwitcher::PaperAirplaneControllerPtr VEthernetNetworkSwitcher::GetPaperAirplaneController() noexcept {
+                return paper_airplane_ctrl_;
+            }
+#elif defined(_LINUX)
+            VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::GetProtectorNetwork() noexcept {
+                return protect_network_;
+            }
+#endif
+
+            std::shared_ptr<ppp::configurations::AppConfiguration> VEthernetNetworkSwitcher::GetConfiguration() noexcept {
+                return configuration_;
+            }
+
+            std::shared_ptr<VEthernetExchanger> VEthernetNetworkSwitcher::GetExchanger() noexcept {
+                return exchanger_;
+            }
+
+            void VEthernetNetworkSwitcher::RequestedIPv6(const ppp::string& value) noexcept {
+                requested_ipv6_ = value;
+            }
+
+            ppp::string VEthernetNetworkSwitcher::RequestedIPv6() noexcept {
+                return requested_ipv6_;
+            }
+
+            std::shared_ptr<ppp::transmissions::ITransmissionQoS> VEthernetNetworkSwitcher::GetQoS() noexcept {
+                return qos_;
+            }
+
+            std::shared_ptr<ppp::transmissions::ITransmissionStatistics> VEthernetNetworkSwitcher::GetStatistics() noexcept {
+                return statistics_;
+            }
+
+            VEthernetNetworkSwitcher::VirtualEthernetInformationExtensions VEthernetNetworkSwitcher::GetInformationExtensions() noexcept {
+                return information_extensions_;
+            }
+
+            VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr VEthernetNetworkSwitcher::GetHttpProxy() noexcept {
+                return http_proxy_;
+            }
+
+            VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr VEthernetNetworkSwitcher::GetSocksProxy() noexcept {
+                return socks_proxy_;
+            }
+
+            VEthernetNetworkSwitcher::RouteInformationTablePtr VEthernetNetworkSwitcher::GetRib() noexcept {
+                return rib_;
+            }
+
+            VEthernetNetworkSwitcher::ForwardInformationTablePtr VEthernetNetworkSwitcher::GetFib() noexcept {
+                return fib_;
+            }
+
+            VEthernetNetworkSwitcher::IForwardingPtr VEthernetNetworkSwitcher::GetForwarding() noexcept {
+                return forwarding_;
+            }
+
+            std::shared_ptr<aggligator::aggligator> VEthernetNetworkSwitcher::GetAggligator() noexcept {
+                return aggligator_;
+            }
+
+            VEthernetNetworkSwitcher::RouteIPListTablePtr VEthernetNetworkSwitcher::GetVbgp() noexcept {
+                return vbgp_;
+            }
+
+            bool VEthernetNetworkSwitcher::IsBlockQUIC() noexcept {
+                return block_quic_;
+            }
+
+            bool VEthernetNetworkSwitcher::IsMuxEnabled() noexcept {
+                return mux_ > 0;
+            }
+
+#if !defined(_ANDROID) && !defined(_IPHONE)
+            std::shared_ptr<ClientNetworkInterface> VEthernetNetworkSwitcher::GetTapNetworkInterface() noexcept {
+                return tun_ni_;
+            }
+
+            std::shared_ptr<ClientNetworkInterface> VEthernetNetworkSwitcher::GetUnderlyingNetworkInterface() noexcept {
+                return underlying_ni_;
+            }
+#endif
+
+            bool VEthernetNetworkSwitcher::IPAddressIsGatewayServer(UInt32 ip, UInt32 gw, UInt32 mask) noexcept {
+                return ip == gw ? true : htonl((ntohl(gw) & ntohl(mask)) + 1) == ip;
+            }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             boost::asio::ip::address VEthernetNetworkSwitcher::LastAssignedIPv6() noexcept {

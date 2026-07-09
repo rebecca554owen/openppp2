@@ -166,6 +166,14 @@ VEthernetNetworkSwitcher::~VEthernetNetworkSwitcher() noexcept {
     Finalize();
 }
 
+std::shared_ptr<ppp::configurations::AppConfiguration> VEthernetNetworkSwitcher::GetConfiguration() noexcept {
+    return configuration_;
+}
+
+std::shared_ptr<aggligator::aggligator> VEthernetNetworkSwitcher::GetAggligator() noexcept {
+    return aggligator_;
+}
+
 void VEthernetNetworkSwitcher::Finalize() noexcept {
     if (timeout_registry_) {
         timeout_registry_->ReleaseAll();
