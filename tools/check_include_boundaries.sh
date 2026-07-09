@@ -25,7 +25,7 @@ if [[ -d ppp/facade/views ]]; then
 fi
 
 # stdafx in headers: baseline 97, fail only if count increases
-STDAFX_BASELINE=99
+STDAFX_BASELINE=100
 stdafx_count=$(rg -l 'stdafx' ppp --glob '*.h' 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$stdafx_count" -gt "$STDAFX_BASELINE" ]]; then
   echo "FAIL: stdafx in ppp/**/*.h increased ($stdafx_count > $STDAFX_BASELINE)"

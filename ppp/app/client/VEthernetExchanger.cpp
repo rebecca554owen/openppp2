@@ -280,6 +280,47 @@ namespace ppp {
                     });
             }
 
+            template <typename TTransmission>
+            typename std::enable_if<std::is_base_of<ITransmission, TTransmission>::value, std::shared_ptr<TTransmission>>::type
+            VEthernetExchanger::NewWebsocketTransmission(
+                const ContextPtr& context,
+                const StrandPtr& strand,
+                const std::shared_ptr<boost::asio::ip::tcp::socket>& socket,
+                const ppp::string& host,
+                const ppp::string& path) noexcept {
+
+                std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
+                if (NULLPTR == configuration) {
+                    return NULLPTR;
+                }
+
+                auto transmission = make_shared_object<TTransmission>(context, strand, socket, configuration);
+                if (NULLPTR == transmission) {
+                    return NULLPTR;
+                }
+
+                if (host.size() > 0 && path.size() > 0) {
+                    transmission->Host = host;
+                    transmission->Path = path;
+                }
+
+                return transmission;
+            }
+
+            template std::shared_ptr<IWebsocketTransmission> VEthernetExchanger::NewWebsocketTransmission<IWebsocketTransmission>(
+                const ContextPtr& context,
+                const StrandPtr& strand,
+                const std::shared_ptr<boost::asio::ip::tcp::socket>& socket,
+                const ppp::string& host,
+                const ppp::string& path) noexcept;
+
+            template std::shared_ptr<ISslWebsocketTransmission> VEthernetExchanger::NewWebsocketTransmission<ISslWebsocketTransmission>(
+                const ContextPtr& context,
+                const StrandPtr& strand,
+                const std::shared_ptr<boost::asio::ip::tcp::socket>& socket,
+                const ppp::string& host,
+                const ppp::string& path) noexcept;
+
             /** @brief Creates a transport object based on selected protocol type. */
             VEthernetExchanger::ITransmissionPtr VEthernetExchanger::NewTransmission(
                 const ContextPtr&                                                   context,
@@ -1393,7 +1434,7 @@ namespace ppp {
                 }
 
                 AppConfigurationPtr configuration = GetConfiguration();
-                for (AppConfiguration::MappingConfiguration& mapping : configuration->client.mappings) {
+                for (ppp::configurations::MappingConfiguration& mapping : configuration->client.mappings) {
                     RegisterMappingPort(mapping);
                 }
 
@@ -1914,7 +1955,7 @@ namespace ppp {
             }
 
             /** @brief Registers one configured FRP mapping endpoint. */
-            bool VEthernetExchanger::RegisterMappingPort(ppp::configurations::AppConfiguration::MappingConfiguration& mapping) noexcept {
+            bool VEthernetExchanger::RegisterMappingPort(ppp::configurations::MappingConfiguration& mapping) noexcept {
                 if (disposed_.load(std::memory_order_acquire)) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }

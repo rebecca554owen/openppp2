@@ -37,7 +37,8 @@
 #include <atomic>
 #include <mutex>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
-#include <ppp/configurations/AppConfiguration.h>
+#include <ppp/configurations/AppConfigurationFwd.h>
+#include <ppp/configurations/MappingConfiguration.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/mux/vmux_net.h>
@@ -735,24 +736,7 @@ namespace ppp {
                  */
                 template <typename TTransmission>
                 typename std::enable_if<std::is_base_of<ITransmission, TTransmission>::value, std::shared_ptr<TTransmission>/**/>::type
-                inline                                                                  NewWebsocketTransmission(const ContextPtr& context, const StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const ppp::string& host, const ppp::string& path) noexcept {
-                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
-                    if (NULLPTR == configuration) {
-                        return NULLPTR;
-                    }
-
-                    auto transmission = make_shared_object<TTransmission>(context, strand, socket, configuration);
-                    if (NULLPTR == transmission) {
-                        return NULLPTR;
-                    }
-
-                    if (host.size() > 0 && path.size() > 0) {
-                        transmission->Host = host;
-                        transmission->Path = path;
-                    }
-
-                    return transmission;
-                }
+                NewWebsocketTransmission(const ContextPtr& context, const StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const ppp::string& host, const ppp::string& path) noexcept;
 
             private:
                 /**
@@ -781,7 +765,7 @@ namespace ppp {
                  * @param mapping  Mapping configuration to register.
                  * @return true if registration succeeded; false otherwise.
                  */
-                bool                                                                    RegisterMappingPort(ppp::configurations::AppConfiguration::MappingConfiguration& mapping) noexcept;
+                bool RegisterMappingPort(ppp::configurations::MappingConfiguration& mapping) noexcept;
 
                 /** @brief Unregisters and disposes all active mapping ports. */
                 void                                                                    UnregisterAllMappingPorts() noexcept;
