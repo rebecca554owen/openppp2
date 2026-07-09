@@ -451,6 +451,39 @@ sequenceDiagram
 
 ---
 
+## 客户端 Switcher 解耦（Wave B，PR4–PR7）
+
+2026-07 在 `main` 上完成一轮客户端 switcher 编译边界瘦身，目标是把 **helper 实现** 与 **公共头文件** 拆开，并收窄 DNS / 配置类型的传递依赖。
+
+### 分层结果
+
+| 阶段 | 内容 | 关键产物 |
+|------|------|----------|
+| PR4 | `VEthernetNetworkSwitcher.h` 瘦身至 ≤150 行；helper 用 `unique_ptr`；move-only | `.inc` 片段、`117` 行 shell |
+| PR4b | 去掉 shell 中的重 include | `rib_fwd.h`、`VirtualEthernetInformationFwd.h`、`VEthernet.h` 传递 include 修剪 |
+| PR5 | DNS 窄接口 | `dns::IDnsHost`；`ClientPacketDispatchHandler` 走公开 DNS API |
+| PR7 | `ppp/*.h` 零 `AppConfiguration.h` | `AppConfigurationFwd.h`、`MappingConfiguration.h`；server/client exchanger 头瘦身 |
+
+### 硬边界（路径级，可脚本验证）
+
+- `ppp/app/client/` → `ppp/app/server/` 跨路径 **CALLS = 0**
+- `protocol/` → `server/` includes **= 0**
+- `ppp/**/*.h` 中 **`AppConfiguration.h` include = 0**
+- `check_include_boundaries.sh` **PASS**；ctest **26/26**
+
+### 仍保留在 shell 的 include（有意为之）
+
+- `VEthernet.h`：公有继承基类，必须完整类型
+- `DnsHost.h`：PR5 后 switcher 实现 `IDnsHost`
+- `rib_fwd.h` / `VirtualEthernetInformationFwd.h`：仅前向声明，完整定义在 `.cpp`
+
+### 暂缓
+
+- **PR6 `IRouteBackend`**：路由 helper 仍有约 **164** 处 `owner_->` 私有字段访问；触发条件未满足（见内部 `coupling-baseline.md` / PR6 决策文档）
+- **`ppp/facade/`**：应用引导层尚未抽出
+
+---
+
 ## 相关文档
 
 - [`CLIENT_ARCHITECTURE_CN.md`](CLIENT_ARCHITECTURE_CN.md)
