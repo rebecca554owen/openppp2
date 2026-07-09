@@ -21,6 +21,7 @@ namespace ppp::net::packet { class UdpFrame; class BufferSegment; }
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/ethernet/VEthernet.h>
 #include <ppp/app/client/dns/DnsHost.h>
+#include <ppp/app/client/route/RouteHost.h>
 #include <ppp/app/protocol/VirtualEthernetInformationFwd.h>
 #include <ppp/app/client/ClientNetworkInterface.h>
 #include <ppp/net/native/rib_fwd.h>
@@ -64,7 +65,7 @@ namespace ppp {
             namespace lsp { class PaperAirplaneController; }
 #endif
 
-            class VEthernetNetworkSwitcher : public ppp::ethernet::VEthernet, public dns::IDnsHost {
+            class VEthernetNetworkSwitcher : public ppp::ethernet::VEthernet, public dns::IDnsHost, public route::IRouteBackend {
             private:
                 friend class VEthernetExchanger;
                 friend class VEthernetDatagramPort;

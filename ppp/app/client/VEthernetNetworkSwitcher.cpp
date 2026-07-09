@@ -1040,6 +1040,46 @@ namespace ppp {
                     exchanger, packet, frame, messages);
             }
 
+            route::RouteHostPorts VEthernetNetworkSwitcher::BuildRouteHostPorts() noexcept {
+                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
+
+                route::RouteHostPorts host;
+                host.get_tap = [self]() noexcept { return self->GetTap(); };
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                host.get_tap_ni = [self]() noexcept { return self->GetTapNetworkInterface(); };
+                host.get_underlying_ni = [self]() noexcept { return self->GetUnderlyingNetworkInterface(); };
+#else
+                host.get_tap_ni = []() noexcept { return std::shared_ptr<ClientNetworkInterface>(); };
+                host.get_underlying_ni = []() noexcept { return std::shared_ptr<ClientNetworkInterface>(); };
+#endif
+                host.get_rib = [self]() noexcept { return self->GetRib(); };
+                host.set_rib = [self](route::RouteInformationTablePtr rib) noexcept { self->rib_ = std::move(rib); };
+                host.get_fib = [self]() noexcept { return self->GetFib(); };
+                host.set_fib = [self](route::ForwardInformationTablePtr fib) noexcept { self->fib_ = std::move(fib); };
+                host.get_route_added = [self]() noexcept { return self->route_added_; };
+                host.set_route_added = [self](bool value) noexcept { self->route_added_ = value; };
+                host.get_route_apply_ready = [self]() noexcept { return self->route_apply_ready_; };
+                host.add_dns_server_ip =
+                    [self](uint32_t ip, int bucket) noexcept {
+                        if (bucket >= 0 && bucket < static_cast<int>(std::size(self->dns_serverss_))) {
+                            self->dns_serverss_[bucket].emplace(ip);
+                        }
+                    };
+                host.collect_dns_reachability =
+                    [self]() noexcept {
+                        for (auto& dns_servers : self->dns_serverss_) {
+                            dns_servers.clear();
+                        }
+                    };
+                return host;
+            }
+
+#if !defined(_ANDROID) && !defined(_IPHONE)
+            void VEthernetNetworkSwitcher::AddRoute() noexcept {
+                route_table_->AddRoute();
+            }
+#endif
+
             /** @brief Gets current static mode and optionally updates it. */
             bool VEthernetNetworkSwitcher::StaticMode(bool* static_mode) noexcept {
                 SynchronizedObjectScope scope(GetSynchronizedObject());

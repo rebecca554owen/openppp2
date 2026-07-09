@@ -389,6 +389,7 @@
     <ClCompile Include="ppp\app\ApplicationNetwork.cpp" />
     <ClCompile Include="ppp\app\ConsoleUI.cpp" />
     <ClCompile Include="ppp\app\PppApplication.cpp" />
+    <ClCompile Include="ppp\facade\ApplicationBootstrap.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsFakeIpResponse.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsInterceptor.cpp" />
@@ -397,6 +398,7 @@
     <ClCompile Include="ppp\app\client\dns\DnsRedirectPlan.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteHost.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsRouteDispatcher.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsUdpRelay.cpp" />
     <ClCompile Include="ppp\app\client\dns\FakeIpPool.cpp" />

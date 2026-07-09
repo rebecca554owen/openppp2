@@ -1,8 +1,5 @@
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 bool                                                                FixUnderlyingNgw() noexcept;
-                void                                                                DeleteRoute() noexcept;
-#else
-                bool                                                                AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept;
 #endif
 
                 bool                                                                EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept;
