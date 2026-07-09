@@ -8,6 +8,8 @@
 
 #include <darwin/ppp/tap/TapDarwin.h>
 #include <darwin/ppp/tun/utun.h>
+#include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <ppp/tap/ITap.h>
 #include <ppp/net/native/eth.h>
@@ -68,6 +70,7 @@ namespace ppp
             {
                 if (utunnum < 0 || utunnum > UINT8_MAX)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunOpenInvalidUnitNumber);
                     return -1;
                 }
 
@@ -78,12 +81,14 @@ namespace ppp
                 int fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
                 if (fd == -1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                     return fd;
                 }
 
                 if (ioctl(fd, CTLIOCGINFO, &ctlInfo) < 0)
                 {
                     close(fd);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                     return -1;
                 }
 
@@ -99,6 +104,7 @@ namespace ppp
                 if (connect(fd, (struct sockaddr*)&sc, sizeof(sc)) < 0)
                 {
                     close(fd);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                     return -1;
                 }
 
@@ -116,6 +122,7 @@ namespace ppp
             {
                 if (tun == -1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunSetMtuInvalidHandle);
                     return false;
                 }
                 else
@@ -134,6 +141,10 @@ namespace ppp
                 snprintf(buf, sizeof(buf), "ifconfig %s mtu %d > /dev/null 2>&1", name.data(), mtu);
 
                 int status = system(buf);
+                if (status != 0)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelMtuConfigureFailed);
+                }
                 return status == 0;
             }
 
@@ -142,6 +153,7 @@ namespace ppp
                 ifrName.clear();
                 if (tun == -1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunGetInterfaceNameInvalidHandle);
                     return false;
                 }
 
@@ -150,6 +162,7 @@ namespace ppp
                 socklen_t utunname_len = sizeof(utunname);
                 if (getsockopt(tun, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, utunname, &utunname_len) < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                     return false;
                 }
 
@@ -161,6 +174,7 @@ namespace ppp
             {
                 if (tun == -1 || ip.empty() || mask.empty())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunSetAddressInvalidArguments);
                     return false;
                 }
 
@@ -174,6 +188,10 @@ namespace ppp
                 snprintf(cmd, sizeof(cmd), "ifconfig %s inet %s %s netmask %s up", name.data(), ip.data(), gw.data(), mask.data());
 
                 int status = system(cmd);
+                if (status != 0)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelAddressConfigureFailed);
+                }
                 return status == 0;
             }
 
@@ -189,6 +207,7 @@ namespace ppp
             {
                 if (tun == -1 || mac.empty())
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DarwinUtunSetMacInvalidArguments);
                     return false;
                 }
 
@@ -202,6 +221,10 @@ namespace ppp
                 snprintf(buf, sizeof(buf), "ifconfig %s ether %s > /dev/null 2>&1", name.data(), mac.data());
 
                 int status = system(buf);
+                if (status != 0)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
+                }
                 return status == 0;
             }
 
@@ -210,12 +233,14 @@ namespace ppp
             {
                 if (ip == gw)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                     return -1;
                 }
 
                 uint32_t first = gw & mask;
                 if ((ip & mask) != first)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);
                     return -1;
                 }
 
@@ -227,6 +252,7 @@ namespace ppp
                         address == IPEndPoint::AnyAddress ||
                         address == IPEndPoint::NoneAddress || IPEndPoint::IsInvalid(i))
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                         return -1;
                     }
                 }
@@ -234,6 +260,7 @@ namespace ppp
                 int fd = utun_open(utunnum);
                 if (fd == -1)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
                     return -1;
                 }
 
@@ -250,7 +277,7 @@ namespace ppp
                     return -1;
                 }
 
-                std::string strings[] = { addresses[0].to_string(), addresses[1].to_string(), Ipep::ToAddress(ip).to_string() };
+                std::string strings[] = { addresses[0].to_string(), addresses[1].to_string(), Ipep::ToAddress(mask).to_string() };
                 if (!utun_set_if_ip_gw_and_mask(fd,
                     strings[0].data(),  // ip
                     strings[1].data(),  // gw
@@ -294,6 +321,7 @@ namespace ppp
                 int route_fd = socket(AF_ROUTE, SOCK_RAW, 0);
                 if (route_fd < 0) 
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                     return false;
                 }
 
@@ -303,7 +331,22 @@ namespace ppp
             #endif
 
                 int err = send(route_fd, &packet, sizeof(packet), message_flags);
+                int route_errno = err == -1 ? errno : 0;
                 close(route_fd);
+
+                if (err == -1)
+                {
+                    bool add_existing = action == RTM_ADD && route_errno == EEXIST;
+                    bool delete_missing = action == RTM_DELETE && (route_errno == ESRCH || route_errno == ENOENT);
+                    if (add_existing || delete_missing)
+                    {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tap", "darwin route idempotent action=%d errno=%d dst=%u mask=%u gw=%u", action, route_errno, dst, mask, nexthop);
+                        return true;
+                    }
+
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tap", "darwin route failed action=%d errno=%d dst=%u mask=%u gw=%u", action, route_errno, dst, mask, nexthop);
+                    ppp::diagnostics::SetLastErrorCode(action == RTM_ADD ? ppp::diagnostics::ErrorCode::RouteAddFailed : ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+                }
 
                 return err != -1;
             }

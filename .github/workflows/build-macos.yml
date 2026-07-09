@@ -1,0 +1,108 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – macOS builds (arm64 & x86_64).
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: Build · macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"}]}' || '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"},{"arch":"x86_64","third_repo":"liulilittle/openppp2-macos-amd64-environment"}]}') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone third-party environment
+        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+
+      - name: Build openppp2
+        run: |
+          TP="${{ runner.temp }}/3rd"
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+          make -j$(sysctl -n hw.physicalcpu)
+
+      - name: Package artifact
+        run: |
+          ARTIFACT=openppp2-darwin-${{ matrix.arch }}.zip
+          echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
+          cd bin && zip -r "$ARTIFACT" ppp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: bin/${{ env.ARTIFACT }}
+          if-no-files-found: error
+
+  # ── AddressSanitizer diagnostic build (macOS) ──────────────────────
+  # Diagnostic only (NOT for production). Builds with -DENABLE_ASAN=ON which
+  # disables jemalloc so ASan's allocator interceptors are in effect, to
+  # capture the exact double-free / use-after-free stack of the vmux
+  # multi-link teardown crash on macOS (issue #5). Run the produced binary
+  # to reproduce; ASan prints the offending alloc/free/access stacks.
+  build-asan:
+    name: macOS ${{ matrix.arch }} ASan
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            third_repo: Liz-Nozomi/openppp2-macos-arm64-environment
+          - arch: x86_64
+            third_repo: liulilittle/openppp2-macos-amd64-environment
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone third-party environment
+        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+
+      - name: Build openppp2 (ASan)
+        run: |
+          TP="${{ runner.temp }}/3rd"
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DENABLE_ASAN=ON \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+          make -j$(sysctl -n hw.physicalcpu)
+
+      - name: Package artifact
+        run: |
+          ARTIFACT=openppp2-darwin-${{ matrix.arch }}-asan.zip
+          echo "ARTIFACT_ASAN=$ARTIFACT" >> $GITHUB_ENV
+          cd bin && zip -r "$ARTIFACT" ppp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openppp2-darwin-${{ matrix.arch }}-asan
+          path: bin/openppp2-darwin-${{ matrix.arch }}-asan.zip
+          if-no-files-found: error

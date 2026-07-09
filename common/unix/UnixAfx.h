@@ -22,6 +22,7 @@ namespace ppp
             static bool                                                         SetDnsAddresses(const ppp::vector<uint32_t>& addresses) noexcept;
             static bool                                                         SetDnsAddresses(const ppp::vector<ppp::string>& addresses) noexcept;
             static bool                                                         SetDnsAddresses(const ppp::vector<boost::asio::ip::address>& addresses) noexcept;
+            static bool                                                         MergeDnsAddresses(const ppp::vector<boost::asio::ip::address>& preferred, const ppp::vector<boost::asio::ip::address>& append) noexcept;
 
         public:
             static ppp::string                                                  GetInterfaceName(const ppp::net::IPEndPoint& address) noexcept;
@@ -35,6 +36,11 @@ namespace ppp
         public:
             static bool                                                         AddShutdownApplicationEventHandler(ShutdownApplicationEventHandler e) noexcept;
             static bool                                                         set_fd_cloexec(int fd) noexcept;                                    
+
+        public:
+            static bool                                                         ExecuteShellCommand(const ppp::string& command, const ppp::function<bool(ppp::string&)>& predicate) noexcept;
+            static ppp::vector<ppp::string>                                     ExecuteShellCommandLines(const ppp::string& command, const ppp::function<bool(const ppp::string&)>& predicate = NULLPTR) noexcept;
+            static ppp::string                                                  ExecuteShellCommand(const ppp::string& command) noexcept;
 
         public:
             static bool                                                         CloseHandle(const void* handle) noexcept;

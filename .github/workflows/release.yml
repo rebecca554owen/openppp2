@@ -1,0 +1,81 @@
+# Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
+# Description: PPP PRIVATE NETWORK(TM) 2 – Create GitHub Release with all build artifacts.
+# Author     : OpenCode.
+# Date-Time  : 2026/05/03
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+      title:
+        description: 'Release title'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts from latest build runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          
+          # Get latest successful build run IDs
+          workflows=(
+            "build-android.yml"
+            "build-linux-amd64.yml"
+            "build-linux-cross.yml"
+            "build-macos.yml"
+            "build-windows-x64.yml"
+            "build-windows-arm64.yml"
+            "build-go-guardian.yml"
+          )
+          
+          for workflow in "${workflows[@]}"; do
+            echo "Downloading artifacts from $workflow..."
+            run_id=$(gh run list --workflow="$workflow" --branch=main --status=success --limit 1 --json databaseId --jq '.[0].databaseId')
+            
+            if [ -n "$run_id" ]; then
+              gh run download "$run_id" --dir artifacts 2>/dev/null || echo "No artifacts for $workflow"
+            fi
+          done
+
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          if [ -d artifacts ]; then
+            ls -R artifacts
+          else
+            echo "No artifacts found"
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.title }}
+          prerelease: ${{ inputs.prerelease }}
+          files: artifacts/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,10 +2,12 @@
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/win32/Win32Variant.h>
 
+#include <ppp/diagnostics/Error.h>
+
 #include <Windows.h>
-#include <atlbase.h>
 #include <netfw.h>
 #include <comutil.h>
+#include <wrl/client.h>
 
 #pragma comment(lib, "ole32.lib")          /* netfw32.lib */
 #pragma comment(lib, "comsuppw.lib")
@@ -20,67 +22,67 @@ namespace ppp
             {
                 if (!name || !executablePath)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 if (GetFileAttributes(executablePath) == INVALID_FILE_ATTRIBUTES)
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                CComPtr<INetFwMgr> pNetFwMgr;
-                HRESULT hr = CoCreateInstance(__uuidof(NetFwMgr), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwMgr), (void**)&pNetFwMgr);
+                Microsoft::WRL::ComPtr<INetFwMgr> pNetFwMgr;
+                HRESULT hr = CoCreateInstance(__uuidof(NetFwMgr), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwMgr), reinterpret_cast<void**>(pNetFwMgr.GetAddressOf()));
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                CComPtr<INetFwPolicy> pNetFwPolicy;
-                hr = pNetFwMgr->get_LocalPolicy(&pNetFwPolicy);
+                Microsoft::WRL::ComPtr<INetFwPolicy> pNetFwPolicy;
+                hr = pNetFwMgr->get_LocalPolicy(pNetFwPolicy.GetAddressOf());
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                CComPtr<INetFwAuthorizedApplication> pApp;
-                hr = CoCreateInstance(__uuidof(NetFwAuthorizedApplication), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwAuthorizedApplication), (void**)&pApp);
+                Microsoft::WRL::ComPtr<INetFwAuthorizedApplication> pApp;
+                hr = CoCreateInstance(__uuidof(NetFwAuthorizedApplication), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwAuthorizedApplication), reinterpret_cast<void**>(pApp.GetAddressOf()));
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                // �������б��������ʾ������
+                // 设置应用程序名称，供界面显示和识别。
                 BSTR bstrName = SysAllocString(name);
                 pApp->put_Name(bstrName);
                 SysFreeString(bstrName);
 
-                // �����·�����ļ���
+                // 设置应用程序可执行文件路径。
                 BSTR bstrExecutablePath = SysAllocString(executablePath);
                 pApp->put_ProcessImageFileName(bstrExecutablePath);
                 SysFreeString(bstrExecutablePath);
 
-                // �Ƿ����øù���
+                // 启用该规则。
                 pApp->put_Enabled(VARIANT_TRUE);
 
-                // ���뵽����ǽ�Ĺ�������
-                CComPtr<INetFwProfile> pNetFwProfile;
-                hr = pNetFwPolicy->GetProfileByType(netFwType, &pNetFwProfile);
+                // 获取对应配置文件下的防火墙规则集合。
+                Microsoft::WRL::ComPtr<INetFwProfile> pNetFwProfile;
+                hr = pNetFwPolicy->GetProfileByType(netFwType, pNetFwProfile.GetAddressOf());
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                CComPtr<INetFwAuthorizedApplications> pApps;
-                hr = pNetFwProfile->get_AuthorizedApplications(&pApps);
+                Microsoft::WRL::ComPtr<INetFwAuthorizedApplications> pApps;
+                hr = pNetFwProfile->get_AuthorizedApplications(pApps.GetAddressOf());
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                hr = pApps->Add(pApp);
+                hr = pApps->Add(pApp.Get());
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
                 return true;
             }
@@ -89,34 +91,34 @@ namespace ppp
             {
                 HRESULT hr = S_OK;
 
-                // ����NetFwPolicy2����
+                // 创建 NetFwPolicy2 对象。
                 INetFwPolicy2* pPolicy = NULLPTR;
                 hr = CoCreateInstance(__uuidof(NetFwPolicy2), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwPolicy2), (void**)&pPolicy);
                 if (FAILED(hr))
                 {
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                // ��ȡINetFwRules����
+                // 获取 INetFwRules 集合。
                 INetFwRules* pRules = NULLPTR;
                 hr = pPolicy->get_Rules(&pRules);
                 if (FAILED(hr))
                 {
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                // �����������
+                // 创建防火墙规则对象。
                 INetFwRule* pRule = NULLPTR;
                 hr = CoCreateInstance(__uuidof(NetFwRule), NULLPTR, CLSCTX_INPROC_SERVER, __uuidof(INetFwRule), (void**)&pRule);
                 if (FAILED(hr))
                 {
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                // ���ù�������
+                // 设置规则属性。
                 _bstr_t bstrName(name);
                 _bstr_t bstrExecutablePath(executablePath);
 
@@ -126,7 +128,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Description(bstrName);
@@ -135,7 +137,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_ApplicationName(bstrExecutablePath);
@@ -144,7 +146,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Direction(NET_FW_RULE_DIR_IN);
@@ -153,7 +155,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Action(NET_FW_ACTION_ALLOW);
@@ -162,7 +164,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 hr = pRule->put_Enabled(VARIANT_TRUE);
@@ -171,10 +173,10 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
-                // ����Ƿ��Ѵ���ͬ������
+                // 检查是否已经存在同名且同路径的规则。
                 VARIANT_BOOL bFound = VARIANT_FALSE;
                 IUnknown* pEnumeratorUnk = NULLPTR;
                 hr = pRules->get__NewEnum(&pEnumeratorUnk);
@@ -183,7 +185,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 IEnumVARIANT* pEnumerator = NULLPTR;
@@ -194,7 +196,7 @@ namespace ppp
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FirewallCreateFailed);
                 }
 
                 VARIANT var;
@@ -232,7 +234,7 @@ namespace ppp
                     VariantClear(&var);
                 }
 
-                // ����Ѵ���ͬ���������ͷ���Դ������
+                // 如果已存在相同规则，则释放资源后直接返回。
                 pEnumerator->Release();
                 if (bFound)
                 {
@@ -242,17 +244,17 @@ namespace ppp
                     return true;
                 }
 
-                // ���ӹ���
+                // 添加规则。
                 hr = pRules->Add(pRule);
                 if (FAILED(hr))
                 {
                     pRule->Release();
                     pRules->Release();
                     pPolicy->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkFirewallBlocked);
                 }
 
-                // �ͷ���Դ
+                // 释放资源。
                 pRule->Release();
                 pRules->Release();
                 pPolicy->Release();
@@ -293,12 +295,12 @@ namespace ppp
 
             bool Fw::NetFirewallAddApplication(const char* name, const char* executablePath, NetFirewallType netFwType) noexcept
             {
-                NET_FW_PROFILE_TYPE netFwProfileType = NET_FW_PROFILE_DOMAIN; // ��������
-                if (netFwType == NetFirewallType_PrivateNetwork)   // ר������
+                NET_FW_PROFILE_TYPE netFwProfileType = NET_FW_PROFILE_DOMAIN; // 域网络
+                if (netFwType == NetFirewallType_PrivateNetwork)   // 专用网络
                 {
                     netFwProfileType = NET_FW_PROFILE_STANDARD;
                 }
-                elif(netFwType == NetFirewallType_PublicNetwork) // ��������
+                elif(netFwType == NetFirewallType_PublicNetwork) // 公用网络
                 {
                     netFwProfileType = NET_FW_PROFILE_CURRENT;
                 }

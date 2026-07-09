@@ -18,6 +18,36 @@
     <ClCompile Include="main.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationClientBootstrap.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationConfig.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationServerBootstrap.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationMode.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationHelp.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationInitialize.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationMainLoop.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ApplicationNetwork.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\ConsoleUI.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\PppApplication.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\stdafx.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -34,6 +64,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\tap\ITap.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\tap\TapStub.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\threading\Thread.cpp">
@@ -309,6 +342,9 @@
     <ClCompile Include="ppp\app\server\VirtualEthernetSwitcher.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\server\IPv4LeasePool.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\server\VirtualEthernetExchanger.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -327,7 +363,13 @@
     <ClCompile Include="ppp\app\client\VEthernetDatagramPort.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\client\RemoteEndpointLoader.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\client\VEthernetNetworkSwitcher.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\protocol\VirtualEthernetTcpipConnection.cpp">
@@ -369,6 +411,9 @@
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="windows\ppp\win32\Win32PerformanceCounter.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -393,7 +438,52 @@
     <ClCompile Include="ppp\diagnostics\PreventReturn.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\diagnostics\Error.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\diagnostics\ErrorHandler.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\client\dns\Rule.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsFakeIpResponse.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsInterceptor.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsReachability.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsReachabilityParse.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsRedirectPlan.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsHost.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsRouteDispatcher.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\DnsUdpRelay.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\dns\FakeIpPool.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\dns\DnsResolver.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\dns\DnsProviderCatalog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\GeoRuleGenerator.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\net\asio\websocket\websocket_accept_sslv_websocket.cpp">
@@ -454,6 +544,24 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\transmissions\proxys\IForwarding.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PChannel.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PConfigHelper.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PCrypto.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PStunClient.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp">
@@ -1160,6 +1268,42 @@
     <ClInclude Include="ppp\configurations\AppConfiguration.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PDefs.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PPacketHeader.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PReplayWindow.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PBufferPool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PCrypto.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PSocketProtector.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PStunClient.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PChannel.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PNatClassifier.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PConfigHelper.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PZeroRTTCache.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\ipv6\IPv6Auxiliary.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\Int128.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1173,6 +1317,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\net\proxies\HttpProxy.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\win32\Win32RegistryKey.h">
@@ -1244,6 +1391,15 @@
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\PppApplication.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\PppApplicationInternal.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\ConsoleUI.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\transmissions\ITransmissionStatistics.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1313,6 +1469,9 @@
     <ClInclude Include="ppp\app\server\VirtualEthernetSwitcher.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\server\IPv4LeasePool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\app\server\VirtualEthernetExchanger.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1331,7 +1490,13 @@
     <ClInclude Include="ppp\app\client\VEthernetDatagramPort.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\client\RemoteEndpointLoader.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\app\client\VEthernetNetworkSwitcher.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\ClientNetworkInterface.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\protocol\VirtualEthernetTcpipConnection.h">
@@ -1406,7 +1571,52 @@
     <ClInclude Include="ppp\diagnostics\PreventReturn.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\diagnostics\Error.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\diagnostics\ErrorHandler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\app\client\dns\Rule.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsFakeIpResponse.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsInterceptor.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsReachability.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsReachabilityParse.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsRedirectPlan.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsResponseHandler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsRouteDispatcher.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\DnsUdpRelay.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\FakeIpPool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\dns\DnsResolver.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\dns\DnsProviderCatalog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\dns\DnsWireValidation.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\GeoRuleGenerator.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\net\asio\websocket\websocket_accept_sslv_websocket.h">

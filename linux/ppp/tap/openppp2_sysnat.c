@@ -1,5 +1,5 @@
 /*
- * Implementation of OpenPPP2 system NAT (eBPF TC based NAT).
+ * Implementation of OPENPPP2 system NAT (eBPF TC based NAT).
  *
  * Provides functions to attach/detach an eBPF program to the TC egress hook
  * of a network interface, and to manage NAT rules stored in a pinned BPF map.
@@ -109,8 +109,7 @@ static int ensure_dir(const char* path) {
  * Returns:
  *   0 always, indicating that no output was generated.
  */
-static int openppp2_sysnat_print(enum libbpf_print_level level, const char *format, va_list args) {
-    (void)level; (void)format; (void)args;  /* suppress unused parameter warnings */
+static int openppp2_sysnat_print(enum libbpf_print_level level __attribute__((unused)), const char *format __attribute__((unused)), va_list args __attribute__((unused))) {
     return 0;
 }
 

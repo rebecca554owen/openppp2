@@ -959,7 +959,8 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
 #endif /* CHECKSUM_GEN_IP_INLINE */
 
     IPH_VHL_SET(iphdr, 4, ip_hlen / 4);
-    IPH_TOS_SET(iphdr, lwip_netstack_ip_tos(tos));
+    tos = lwip_netstack_ip_tos(tos);
+    IPH_TOS_SET(iphdr, tos);
 
 #if CHECKSUM_GEN_IP_INLINE
     chk_sum += PP_NTOHS(tos | (iphdr->_v_hl << 8));

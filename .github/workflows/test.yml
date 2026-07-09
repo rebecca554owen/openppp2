@@ -1,0 +1,131 @@
+name: Test · Unit
+
+on:
+  push:
+    branches: [feat/unit-tests, main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: test-unit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cpp-linux:
+    name: C++ unit tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang llvm libboost-all-dev libssl-dev ripgrep
+
+      - name: Include boundary checks
+        run: bash tools/check_include_boundaries.sh
+
+      - name: MSVC project source parity
+        run: bash tools/check_vcxproj_sources.sh
+
+      - name: Configure
+        run: |
+          cmake -S tests/cpp -B build/test \
+            -G Ninja \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DENABLE_COVERAGE=ON
+
+      - name: Build
+        run: cmake --build build/test
+
+      - name: Run tests
+        run: |
+          mkdir -p build/coverage
+          LLVM_PROFILE_FILE="$PWD/build/coverage/%p-%m.profraw" \
+            ctest --test-dir build/test --output-on-failure
+
+      - name: Coverage report
+        run: |
+          shopt -s nullglob
+          profraw=(build/coverage/*.profraw)
+          if [ ${#profraw[@]} -eq 0 ]; then
+            echo "No profraw files found"
+            exit 1
+          fi
+          llvm-profdata merge -sparse build/coverage/*.profraw -o build/coverage/merged.profdata
+          bins="build/test/p2p_replay_window_test build/test/dns_buffer_test build/test/dns_message_test build/test/dns_server_validation_test build/test/dns_wire_validation_test build/test/base64_test build/test/sysctl_validation_test"
+          llvm-cov report $bins \
+            -instr-profile=build/coverage/merged.profdata \
+            tests/cpp common/dnslib common/base64 ppp/p2p \
+            | tee build/coverage/summary.txt
+
+      - name: Upload coverage summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-cpp-summary
+          path: build/coverage/summary.txt
+          retention-days: 7
+
+  go:
+    name: Go unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go/guardian
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Test
+        run: |
+          mkdir -p build/coverage
+          go test ./... -coverprofile=build/coverage/go.out -covermode=atomic
+          go tool cover -func=build/coverage/go.out | tee build/coverage/go-summary.txt
+      - name: Upload Go coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-go
+          path: go/build/coverage/go-summary.txt
+          retention-days: 7
+
+  flutter:
+    name: Flutter unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Test
+        run: |
+          flutter pub get
+          flutter test --coverage
+          echo "Flutter tests completed" | tee coverage/flutter-summary.txt
+      - name: Upload Flutter coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-flutter
+          path: android/coverage/flutter-summary.txt
+          retention-days: 7
+
+  ios-simulator:
+    name: iOS unit tests (simulator)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ios/App
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run XCTest
+        run: |
+          chmod +x run-tests.sh
+          ./run-tests.sh

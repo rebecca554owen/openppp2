@@ -1,9 +1,16 @@
+#include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
+#include <ppp/app/client/VEthernetNetworkTcpipForwarding.inl>
+#include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
+#include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/TelemetryFwd.h>
+
+#include <vector>
 
 #include <ppp/net/Socket.h>
 #include <ppp/net/Ipep.h>
@@ -17,23 +24,36 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 
+/**
+ * @file VEthernetNetworkTcpipConnection.cpp
+ * @brief Implements TCP/IP forwarding selection for virtual Ethernet sessions.
+ * @license GPL-3.0
+ */
+
 namespace ppp {
     namespace app {
         namespace client {
+            /** @brief Initializes session state and marks it active. */
             VEthernetNetworkTcpipConnection::VEthernetNetworkTcpipConnection(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand) noexcept
                 : TapTcpClient(context, strand)
                 , exchanger_(exchanger) {
                 Update();
             }
 
+            /** @brief Finalizes owned forwarding channels. */
             VEthernetNetworkTcpipConnection::~VEthernetNetworkTcpipConnection() noexcept {
                 Finalize();
             }
 
+            /** @brief Disposes any active VPN/rinetd/vmux connection objects. */
             void VEthernetNetworkTcpipConnection::Finalize() noexcept {
-                std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_); 
-                std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_); 
+                std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_);
+                std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_);
                 std::shared_ptr<vmux::vmux_skt> connection_mux = std::move(connection_mux_);
+
+#if defined(_IPHONE) || defined(IPHONE)
+                ReleaseIosChildTransmissionSlot();
+#endif
 
                 if (NULLPTR != connection) {
                     connection->Dispose();
@@ -48,12 +68,19 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Schedules cleanup on the proper executor and disposes the base client.
+             */
             void VEthernetNetworkTcpipConnection::Dispose() noexcept {
+                if (IsDisposed()) {
+                    return;
+                }
+
                 auto self = shared_from_this();
-                auto socket = GetSocket(); 
+                auto socket = GetSocket();
 
                 if (NULLPTR != socket) {
-                    boost::asio::post(socket->get_executor(), 
+                    boost::asio::post(socket->get_executor(),
                         [self, this, socket]() noexcept {
                             Finalize();
                         });
@@ -62,7 +89,7 @@ namespace ppp {
                     ppp::threading::Executors::ContextPtr context = GetContext();
                     ppp::threading::Executors::StrandPtr strand = GetStrand();
 
-                    ppp::threading::Executors::Post(context, strand, 
+                    ppp::threading::Executors::Post(context, strand,
                         [self, this, context, strand]() noexcept {
                             Finalize();
                         });
@@ -71,14 +98,34 @@ namespace ppp {
                 TapTcpClient::Dispose();
             }
 
+#if defined(_IPHONE) || defined(IPHONE)
+            void VEthernetNetworkTcpipConnection::ReleaseIosChildTransmissionSlot() noexcept {
+                if (!ios_child_transmission_slot_held_) {
+                    return;
+                }
+
+                ios_child_transmission_slot_held_ = false;
+                uint64_t slot_generation = ios_child_transmission_slot_generation_;
+                ios_child_transmission_slot_generation_ = 0;
+                if (std::shared_ptr<VEthernetExchanger> exchanger = exchanger_) {
+                    exchanger->ReleaseIosChildTransmissionSlot(slot_generation);
+                }
+            }
+#endif
+
+            /**
+             * @brief Runs whichever forwarding path is currently active.
+             * @return true when forwarding loop runs successfully.
+             */
             bool VEthernetNetworkTcpipConnection::Loopback(ppp::coroutines::YieldContext& y) noexcept {
-                // If the connection is interrupted while the coroutine is working, 
+                // If the connection is interrupted while the coroutine is working,
                 // Or closed during other asynchronous processes or coroutines, do not perform meaningless processing.
                 if (IsDisposed()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
-                // If rinetd local loopback link forwarding is not used, failure will be returned, 
+                // If rinetd local loopback link forwarding is not used, failure will be returned,
                 // Otherwise the link to the peer will be processed successfully.
                 if (std::shared_ptr<RinetdConnection> connection_rinetd = connection_rinetd_; NULLPTR != connection_rinetd) {
                     return connection_rinetd->Run();
@@ -86,45 +133,66 @@ namespace ppp {
 
                 // If the link is relayed through the VPN remote switcher, then run the VPN link relay subroutine.
                 if (std::shared_ptr<VirtualEthernetTcpipConnection> connection = connection_; NULLPTR != connection) {
+#if defined(_IPHONE)
+                    // iOS ctcp: AckAccept() already starts StartNativeTapRelay() on the child
+                    // transmission for download; upload uses native_upload_queue_. Run() would
+                    // also read that transmission (EVP 3-byte header first) and race.
+                    while (!IsDisposed() && connection->IsLinked()) {
+                        connection->Update();
+                        ppp::coroutines::asio::async_sleep(y, 100);
+                    }
+                    return !IsDisposed();
+#else
                     bool ok = connection->Run(y);
                     IDisposable::DisposeReferences(connection);
                     return ok;
+#endif
                 }
 
                 if (std::shared_ptr<vmux::vmux_skt> connection_mux = connection_mux_; NULLPTR != connection_mux) {
                     return connection_mux->run();
                 }
 
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 return false;
             }
 
+            /**
+             * @brief Builds forwarding to the peer using rinetd, vmux, or VPN transport.
+             * @return true when one forwarding path is prepared successfully.
+             */
             bool VEthernetNetworkTcpipConnection::ConnectToPeer(ppp::coroutines::YieldContext& y) noexcept {
                 using VEthernetTcpipConnection = ppp::app::protocol::templates::TVEthernetTcpipConnection<TapTcpClient>;
 
-                // Create a link and correctly establish a link between remote peers, 
+                // Create a link and correctly establish a link between remote peers,
                 // Indicating whether to use VPN link or Rinetd local loopback forwarding.
                 do {
                     std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                     if (NULLPTR == exchanger) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                         return false;
                     }
 
                     if (IsDisposed()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                         return false;
                     }
 
                     std::shared_ptr<boost::asio::io_context> context = GetContext();
                     if (NULLPTR == context) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                         return false;
                     }
 
                     std::shared_ptr<AppConfiguration> configuration = exchanger->GetConfiguration();
                     if (NULLPTR == configuration) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                         return false;
                     }
 
                     std::shared_ptr<boost::asio::ip::tcp::socket> socket = GetSocket();
                     if (NULLPTR == socket) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
                         return false;
                     }
 
@@ -132,18 +200,48 @@ namespace ppp {
                     auto strand = GetStrand();
                     boost::asio::ip::tcp::endpoint remoteEP = GetRemoteEndPoint();
 
+#if defined(_IPHONE)
+                    int rinetd_status = 1;
+#else
                     int rinetd_status = Rinetd(self, exchanger, context, strand, configuration, socket, remoteEP, connection_rinetd_, y);
-                    if (rinetd_status < 1) {
-                        return rinetd_status == 0;
+                    if (rinetd_status == 0) {
+                        break;
                     }
+
+                    if (rinetd_status < 0) {
+                        ppp::telemetry::Count("tcpip.peer_connect.fail.rinetd", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=rinetd remote=%s:%u error=%d fallback=vpn", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
+                        connection_rinetd_.reset();
+                    }
+#endif
 
                     int mux_status = Mux(self, exchanger, remoteEP, socket, connection_mux_, y);
                     if (mux_status < 1) {
+                        if (mux_status < 0) {
+                            ppp::telemetry::Count("tcpip.peer_connect.fail.mux", 1);
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=mux remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
+                            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
+                            }
+                        }
                         return mux_status == 0;
                     }
 
-                    std::shared_ptr<ppp::transmissions::ITransmission> transmission = exchanger->ConnectTransmission(context, strand, y);
+#if defined(_IPHONE)
+                    uint64_t ios_child_slot_generation = 0;
+                    std::shared_ptr<ppp::transmissions::ITransmission> transmission =
+                        exchanger->ConnectTransmission(context, strand, y, &ios_child_slot_generation);
+#else
+                    std::shared_ptr<ppp::transmissions::ITransmission> transmission =
+                        exchanger->ConnectTransmission(context, strand, y);
+#endif
                     if (NULLPTR == transmission) {
+                        ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCode();
+                        ppp::telemetry::Count("tcpip.peer_connect.fail.transport", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=transport remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)code);
+                        if (code == ppp::diagnostics::ErrorCode::Success) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                        }
                         return false;
                     }
 
@@ -151,11 +249,15 @@ namespace ppp {
                         make_shared_object<VEthernetTcpipConnection>(self, configuration, context, strand, exchanger->GetId(), socket);
                     if (NULLPTR == connection) {
                         IDisposable::DisposeReferences(transmission);
+#if defined(_IPHONE)
+                        exchanger->ReleaseIosChildTransmissionSlot(ios_child_slot_generation);
+#endif
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return false;
                     }
 
 #if defined(_LINUX)
-                    auto switcher = exchanger->GetSwitcher(); 
+                    auto switcher = exchanger->GetSwitcher();
                     if (NULLPTR != switcher) {
                         connection->ProtectorNetwork = switcher->GetProtectorNetwork();
                     }
@@ -163,10 +265,23 @@ namespace ppp {
 
                     bool ok = connection->Connect(y, transmission, ppp::net::Ipep::ToAddressString<ppp::string>(remoteEP), remoteEP.port());
                     if (!ok) {
+                        ppp::telemetry::Count("tcpip.peer_connect.fail.vpn", 1);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=vpn remote=%s:%u error=%d", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
                         IDisposable::DisposeReferences(connection, transmission);
+#if defined(_IPHONE)
+                        exchanger->ReleaseIosChildTransmissionSlot(ios_child_slot_generation);
+#endif
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                         return false;
                     }
 
+                    ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tcpip", "peer connect ok remote=%s:%u", remoteEP.address().to_string().c_str(), remoteEP.port());
+#if defined(_IPHONE)
+                    if (ios_child_slot_generation != 0) {
+                        ios_child_transmission_slot_held_ = true;
+                        ios_child_transmission_slot_generation_ = ios_child_slot_generation;
+                    }
+#endif
                     connection_ = std::move(connection);
                 } while (false);
                 return true;
@@ -176,13 +291,13 @@ namespace ppp {
 #pragma optimize("", off)
 #pragma optimize("gsyb2", on) /* /O1 = /Og /Os /Oy /Ob2 /GF /Gy */
 #else
-// TRANSMISSIONO1 compiler macros are defined to perform O1 optimizations, 
-// Otherwise gcc compiler version If <= 7.5.X, 
-// The O1 optimization will also be applied, 
-// And the other cases will not be optimized, 
-// Because this will cause the program to crash, 
-// Which is a fatal BUG caused by the gcc compiler optimization. 
-// Higher-version compilers should not optimize the code for gcc compiling this section.
+/**
+ * @brief Applies conservative compiler optimization for coroutine-sensitive code paths.
+ *
+ * For older GCC versions (<= 7.5.x), O1 is used to avoid known optimizer-induced
+ * crashes in this section. For newer versions, optimization is disabled here to
+ * keep runtime behavior stable across toolchains.
+ */
 #if defined(__clang__)
 #pragma clang optimize off
 #else
@@ -194,6 +309,7 @@ namespace ppp {
 #endif
 #endif
 #endif
+            /** @brief Starts established-stage forwarding coroutine execution. */
             bool VEthernetNetworkTcpipConnection::Establish() noexcept {
                 return Spawn(
                     [this](ppp::coroutines::YieldContext& y) noexcept {
@@ -201,50 +317,71 @@ namespace ppp {
                     });
             }
 
+            /** @brief Starts peer setup coroutine before accept acknowledgement. */
             bool VEthernetNetworkTcpipConnection::BeginAccept() noexcept {
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tcpip", "begin accept coroutine post remote=%s:%u", GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port());
+                // mux=0: let ConnectTransmission queue for an iOS child slot instead of
+                // rejecting SYN here (speed tests open 16+ parallel flows to CDN edges).
                 return Spawn(
                     [this](ppp::coroutines::YieldContext& y) noexcept {
-                        return ConnectToPeer(y) && AckAccept();
+                        bool connected = ConnectToPeer(y);
+                        ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCode();
+                        ppp::telemetry::Log(connected ? ppp::telemetry::Level::kDebug : ppp::telemetry::Level::kInfo, "tcpip", "connect peer result=%d remote=%s:%u error=%d", connected ? 1 : 0, GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port(), connected ? 0 : (int)code);
+                        if (!connected) {
+                            return false;
+                        }
+                        bool acked = AckAccept();
+                        ppp::telemetry::Log(acked ? ppp::telemetry::Level::kDebug : ppp::telemetry::Level::kInfo, "tcpip", "ack accept result=%d remote=%s:%u", acked ? 1 : 0, GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port());
+                        return acked;
                     });
             }
 
+            /**
+             * @brief Posts a coroutine launcher to the session strand.
+             * @return true when posting succeeds.
+             */
             bool VEthernetNetworkTcpipConnection::Spawn(const ppp::function<bool(ppp::coroutines::YieldContext&)>& coroutine) noexcept {
                 if (IsDisposed()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
                     return false;
                 }
 
                 if (NULLPTR == coroutine) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VEthernetNetworkTcpipConnectionSpawnNullCoroutine);
                     return false;
                 }
 
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = exchanger->GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     return false;
                 }
 
                 ppp::threading::Executors::ContextPtr context = GetContext();
                 if (NULLPTR == context) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeIoContextMissing);
                     return false;
                 }
 
                 auto self = shared_from_this();
                 ppp::threading::Executors::StrandPtr strand = GetStrand();
 
-                auto post_work = 
+                auto post_work =
                     [self, this, context, strand, coroutine, configuration]() noexcept {
-                        auto spawn_work = 
+                        auto spawn_work =
                             [self, this, context, strand, coroutine](ppp::coroutines::YieldContext& y) noexcept {
                                bool ok = coroutine(y);
                                if (!ok) {
                                    Dispose();
                                }
                            };
-                        
+
                         auto allocator = configuration->GetBufferAllocator();
                         bool spawned = ppp::coroutines::YieldContext::Spawn(allocator.get(), *context, strand.get(), spawn_work);
                         if (!spawned) {
@@ -252,7 +389,13 @@ namespace ppp {
                         }
                     };
 
-                return ppp::threading::Executors::Post(context, strand, post_work);
+                bool posted = ppp::threading::Executors::Post(context, strand, post_work);
+                if (!posted) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                    return false;
+                }
+
+                return true;
             }
 #if defined(_WIN32)
 #pragma optimize("", on)
@@ -264,26 +407,204 @@ namespace ppp {
 #endif
 #endif
 
+            /**
+             * @brief Tunes accepted socket options and delegates to base accept end.
+             */
             bool VEthernetNetworkTcpipConnection::EndAccept(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, const boost::asio::ip::tcp::endpoint& natEP) noexcept {
                 if (NULLPTR == socket) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
+                    return false;
+                }
+
+                if (!socket->is_open()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketNotOpen);
                     return false;
                 }
 
                 std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     return false;
                 }
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> configuration = exchanger->GetConfiguration();
                 if (NULLPTR == configuration) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
                     return false;
                 }
-                
+
                 ppp::net::Socket::AdjustDefaultSocketOptional(*socket, configuration->tcp.turbo);
                 ppp::net::Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration->tcp.cwnd, configuration->tcp.rwnd);
 
                 return TapTcpClient::EndAccept(socket, natEP);
             }
+
+#if defined(_IPHONE) || defined(IPHONE)
+            bool VEthernetNetworkTcpipConnection::StartNativeRelay() noexcept {
+                std::weak_ptr<ppp::ethernet::VNetstack::TapTcpClient> weak_self = shared_from_this();
+                auto relay_callback =
+                    [weak_self](const void* data, size_t len) noexcept {
+                        std::shared_ptr<ppp::ethernet::VNetstack::TapTcpClient> self = weak_self.lock();
+                        if (NULLPTR != self && len > 0) {
+                            self->EmitNativeToClient(data, (int)len);
+                        }
+                    };
+
+                std::shared_ptr<RinetdConnection> rinetd = connection_rinetd_;
+                if (NULLPTR != rinetd) {
+                    std::shared_ptr<boost::asio::ip::tcp::socket> remote = rinetd->GetRemoteSocket();
+                    if (NULLPTR != remote && remote->is_open() && NULLPTR != owner_.lock()) {
+                        rinetd->StartRemoteToTapRelay(relay_callback);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tcpip", "native inject ready mode=rinetd remote=%s:%u",
+                            GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port());
+                        return true;
+                    }
+                }
+
+                std::shared_ptr<VirtualEthernetTcpipConnection> vpn = connection_;
+                if (NULLPTR != vpn && vpn->IsLinked() && NULLPTR != owner_.lock()) {
+                    std::shared_ptr<VEthernetNetworkTcpipConnection> self =
+                        std::static_pointer_cast<VEthernetNetworkTcpipConnection>(shared_from_this());
+                    std::weak_ptr<VEthernetNetworkTcpipConnection> weak_self = self;
+                    auto shutdown_callback =
+                        [weak_self]() noexcept {
+                            std::shared_ptr<VEthernetNetworkTcpipConnection> self = weak_self.lock();
+                            if (NULLPTR != self) {
+                                bool fin_ok = self->EmitNativeToClient(NULLPTR, 0,
+                                    ppp::ethernet::VNetstack::tcp_hdr::TCP_FIN |
+                                    ppp::ethernet::VNetstack::tcp_hdr::TCP_ACK);
+                                ppp::telemetry::Log(fin_ok ? ppp::telemetry::Level::kDebug : ppp::telemetry::Level::kInfo,
+                                    "tcpip",
+                                    "native inject remote fin emitted ok=%d remote=%s:%u",
+                                    fin_ok ? 1 : 0,
+                                    self->GetRemoteEndPoint().address().to_string().c_str(),
+                                    self->GetRemoteEndPoint().port());
+
+                                self->ReleaseIosChildTransmissionSlot();
+                                std::shared_ptr<VirtualEthernetTcpipConnection> vpn = self->connection_;
+                                if (NULLPTR != vpn) {
+                                    vpn->DisposeNativeTransportOnly();
+                                }
+                            }
+                        };
+
+                    if (vpn->StartNativeTapRelay(relay_callback, shutdown_callback)) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tcpip", "native inject ready mode=vpn remote=%s:%u",
+                            GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port());
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            bool VEthernetNetworkTcpipConnection::DeliverNativePayload(ppp::ethernet::VNetstack::tcp_hdr* tcp, int tcp_len) noexcept {
+                if (NULLPTR == tcp || tcp_len < 1) {
+                    return false;
+                }
+
+                const uint32_t hdrlen_bytes = ppp::ethernet::VNetstack::tcp_hdr::TCPH_HDRLEN_BYTES(tcp);
+                if (tcp_len < (int)hdrlen_bytes) {
+                    return false;
+                }
+
+                const int payload_len = tcp_len - (int)hdrlen_bytes;
+                const uint8_t* payload = (const uint8_t*)tcp + hdrlen_bytes;
+                const uint8_t tcp_flags = ppp::ethernet::VNetstack::tcp_hdr::TCPH_FLAGS(tcp);
+
+                if (payload_len < 1) {
+                    if (!UpdateNativeClientAck(tcp, tcp_len)) {
+                        return false;
+                    }
+
+                    if (tcp_flags & ppp::ethernet::VNetstack::tcp_hdr::TCP_RST) {
+                        std::shared_ptr<VirtualEthernetTcpipConnection> vpn = connection_;
+                        if (NULLPTR != vpn) {
+                            vpn->DisposeNativeTransportOnly();
+                        }
+                        ReleaseIosChildTransmissionSlot();
+                        Dispose();
+                        return true;
+                    }
+
+                    if (tcp_flags & ppp::ethernet::VNetstack::tcp_hdr::TCP_FIN) {
+                        EmitNativeToClient(NULLPTR, 0);
+                        std::shared_ptr<VirtualEthernetTcpipConnection> vpn = connection_;
+                        if (NULLPTR != vpn) {
+                            vpn->DisposeNativeTransportOnly();
+                        }
+                        ReleaseIosChildTransmissionSlot();
+                        Dispose();
+                        return true;
+                    }
+                    return true;
+                }
+
+                std::shared_ptr<std::vector<Byte>> payload_copy = std::make_shared<std::vector<Byte>>((size_t)payload_len);
+                if (NULLPTR == payload_copy) {
+                    return false;
+                }
+                memcpy(payload_copy->data(), payload, (size_t)payload_len);
+
+                if (std::shared_ptr<RinetdConnection> rinetd = connection_rinetd_; NULLPTR != rinetd) {
+                    ppp::threading::Executors::ContextPtr context = GetContext();
+                    ppp::threading::Executors::StrandPtr strand = GetStrand();
+                    if (NULLPTR == context) {
+                        return false;
+                    }
+
+                    std::shared_ptr<RinetdConnection> relay = rinetd;
+                    auto post_work =
+                        [relay, payload_copy]() noexcept {
+                            relay->WriteRemote(payload_copy->data(), payload_copy->size());
+                        };
+
+                    if (NULLPTR != strand) {
+                        bool posted = ppp::threading::Executors::Post(context, strand, post_work);
+                        if (posted) {
+                            if (!UpdateNativeClientAck(tcp, tcp_len)) {
+                                return false;
+                            }
+                            EmitNativeToClient(nullptr, 0);
+                        }
+                        return posted;
+                    }
+
+                    boost::asio::post(*context, post_work);
+                    if (!UpdateNativeClientAck(tcp, tcp_len)) {
+                        return false;
+                    }
+                    EmitNativeToClient(nullptr, 0);
+                    return true;
+                }
+
+                std::shared_ptr<VirtualEthernetTcpipConnection> vpn = connection_;
+                if (NULLPTR == vpn) {
+                    return false;
+                }
+
+                if (!vpn->IsLinked()) {
+                    if (!UpdateNativeClientAck(tcp, tcp_len)) {
+                        return false;
+                    }
+
+                    EmitNativeToClient(nullptr, 0);
+                    ppp::telemetry::Count("tcpip.native_payload.after_remote_fin", 1);
+                    return true;
+                }
+
+                bool queued = vpn->SendBufferToPeerAsync(payload_copy);
+                if (queued) {
+                    if (!UpdateNativeClientAck(tcp, tcp_len)) {
+                        return false;
+                    }
+                    // ACK upload segments only after enqueue succeeds; otherwise iOS will
+                    // retransmit and naturally slow down instead of us silently dropping data.
+                    EmitNativeToClient(nullptr, 0);
+                }
+                return queued;
+            }
+#endif
         }
     }
 }

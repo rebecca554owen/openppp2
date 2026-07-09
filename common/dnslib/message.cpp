@@ -25,6 +25,12 @@ using namespace dns;
 #endif
 
 static void decodeResourceRecords(Buffer &buffer, size_t count, std::vector<ResourceRecord> &list) {
+    static constexpr size_t kMinResourceRecordSize = 11;
+    if (count > (buffer.size() - buffer.pos()) / kMinResourceRecordSize) {
+        buffer.markBroken(BufferResult::BufferOverflow);
+        return;
+    }
+
     list.resize(count);
     for (auto &rr : list) {
         rr.decode(buffer);

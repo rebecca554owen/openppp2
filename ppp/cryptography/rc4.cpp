@@ -1,5 +1,10 @@
+/**
+ * @file rc4.cpp
+ * @brief Custom RC4 variant implementation used by cryptography helpers.
+ */
 #include "rc4.h"
 #include "digest.h"
+#include <ppp/diagnostics/Error.h>
 
 // ============================================================================
 // Standard RC4 Implementation (for reference)
@@ -63,23 +68,30 @@ void standard_rc4_crypt(unsigned char* key, int keylen, unsigned char* data, int
 // This changes all modulo operations (which become modulo 255) and thus the key stream.
 // The deviation is deliberate, aimed at increasing obfuscation for VPN digest generation.
 #ifndef RC4_MAXBIT
+/** @brief Custom S-box size constant (255 entries). */
 #define RC4_MAXBIT 0xff
 #endif
 
 namespace ppp {
     namespace cryptography {
-        // Standard RC4 Key Scheduling Algorithm (KSA):
-        //   1. Initialize S[0..255] with values 0..255 in ascending order.
-        //   2. for i from 0 to 255:
-        //        j = (j + S[i] + key[i mod keylen]) mod 256
-        //        swap S[i] and S[j]
-        // This function implements a generic version that can also fill the S‑box
-        // in descending order, a non‑standard variant.
+        /**
+         * @brief Builds and scrambles the RC4 S-box state.
+         * @param sbox Target S-box buffer.
+         * @param sboxlen S-box size.
+         * @param key Key bytes.
+         * @param keylen Key length.
+         * @param ascending True for ascending initialization, false for descending.
+         * @return True on success.
+         */
         bool rc4_sbox_impl(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen, bool ascending) noexcept {
             if (NULLPTR == sbox || NULLPTR == key || keylen < 1 || sboxlen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4SboxInitInvalidArguments);
                 return false;
             }
 
+            /**
+             * @brief Initializes the S-box in configured order before key scheduling.
+             */
             // Fill the S‑box: standard RC4 uses ascending order.
             // Here we also allow descending order as an extra twist.
             for (int i = 0; i < sboxlen; i++) {
@@ -91,6 +103,9 @@ namespace ppp {
                 }
             }
 
+            /**
+             * @brief Executes the KSA permutation phase.
+             */
             // KSA – identical to standard RC4 except that sboxlen is 255 instead of 256.
             for (int i = 0, j = 0; i < sboxlen; i++) {
                 j = (j + sbox[i] + key[i % keylen]) % sboxlen;
@@ -103,39 +118,44 @@ namespace ppp {
             return true;
         }
 
-        // Standard ascending S‑box initialization (mirrors standard RC4, but with sboxlen=255).
+        /**
+         * @brief Initializes an S-box using ascending seed order.
+         * @return True on success.
+         */
         bool rc4_sbox(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen) noexcept {
             return rc4_sbox_impl(sbox, sboxlen, key, keylen, true);
         }
 
-        // Descending S‑box initialization – a custom variant not found in standard RC4.
+        /**
+         * @brief Initializes an S-box using descending seed order.
+         * @return True on success.
+         */
         bool rc4_sbox_descending(unsigned char* sbox, int sboxlen, unsigned char* key, int keylen) noexcept {
             return rc4_sbox_impl(sbox, sboxlen, key, keylen, false);
         }
 
-        // Standard RC4 Pseudo‑Random Generation Algorithm (PRGA):
-        //   i = (i + 1) mod 256
-        //   j = (j + S[i]) mod 256
-        //   swap S[i] and S[j]
-        //   t = (S[i] + S[j]) mod 256
-        //   output S[t]
-        // This function applies a heavily modified PRGA.
-        // Notable modifications:
-        //   - low is updated as "low = low % sboxlen", which (since low starts at 0) keeps low = 0 forever.
-        //     In standard RC4, the first index increments by 1 each step. Here it is stuck at 0.
-        //   - high is updated as "high = (high + sbox[i % sboxlen]) % sboxlen", which replaces the
-        //     standard S[i] with S[i mod sboxlen]; note that i is the loop counter over data,
-        //     not the PRGA index. This mixes data position into the state update.
-        //   - After swapping, the output index mid = (sbox[low] + sbox[high]) % sboxlen is used
-        //     (same formula as standard, but low and high have different meanings).
-        //   - An extra additive constant x (derived from subtract and E) is applied after/before XOR.
-        // These changes are intentional to create a unique key stream for VPN digest generation.
+        /**
+         * @brief Encrypts/decrypts in place using the custom PRGA variant.
+         * @param key Key bytes.
+         * @param keylen Key length.
+         * @param sbox Mutable S-box state.
+         * @param sboxlen S-box size.
+         * @param data Data buffer processed in place.
+         * @param datalen Number of bytes to process.
+         * @param subtract Extra additive offset input.
+         * @param E Non-zero for encrypt branch.
+         * @return True on success.
+         */
         bool rc4_crypt_sbox(unsigned char* key, int keylen, unsigned char* sbox, int sboxlen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1 || NULLPTR == sbox || sboxlen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxInvalidArguments);
                 return false;
             }
 
             unsigned char x = (unsigned char)(E ? subtract : -subtract); // Extra additive constant for confusion
+            /**
+             * @brief Core PRGA loop with custom index progression and post-XOR offset.
+             */
             for (int i = 0, low = 0, high = 0, mid; i < datalen; i++) {
                 // In standard RC4, the first index (usually i) would be incremented by 1 modulo 256.
                 // Here we intentionally keep low fixed at 0: low = low % sboxlen = 0.
@@ -160,17 +180,28 @@ namespace ppp {
             return true;
         }
 
-        // Another modified PRGA variant.
-        // Here 'low' is updated as (low + keylen) % sboxlen, replacing the standard +1 increment
-        // with a step equal to the key length. This ties the state evolution to the key size,
-        // an extra twist not present in standard RC4.
-        // The rest of the logic is similar to rc4_crypt_sbox.
+        /**
+         * @brief Encrypts/decrypts in place using alternate low-index stepping.
+         * @param key Key bytes.
+         * @param keylen Key length.
+         * @param sbox Mutable S-box state.
+         * @param sboxlen S-box size.
+         * @param data Data buffer processed in place.
+         * @param datalen Number of bytes to process.
+         * @param subtract Extra additive offset input.
+         * @param E Non-zero for encrypt branch.
+         * @return True on success.
+         */
         bool rc4_crypt_sbox_c(unsigned char* key, int keylen, unsigned char* sbox, int sboxlen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1 || NULLPTR == sbox || sboxlen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCInvalidArguments);
                 return false;
             }
 
             unsigned char x = (unsigned char)(E ? subtract : -subtract);
+            /**
+             * @brief Core PRGA loop where low advances by key length.
+             */
             for (int i = 0, low = 0, high = 0, mid; i < datalen; i++) {
                 // Modified update: step size = keylen (instead of 1)
                 low = (low + keylen) % sboxlen;
@@ -192,9 +223,13 @@ namespace ppp {
             return true;
         }
 
-        // Simplified RC4 entry point: creates a temporary S‑box and calls rc4_crypt_sbox.
+        /**
+         * @brief Convenience RC4 entry that allocates and initializes a temporary S-box.
+         * @return True on success.
+         */
         bool rc4_crypt(unsigned char* key, int keylen, unsigned char* data, int datalen, int subtract, int E) noexcept {
             if (NULLPTR == key || keylen < 1 || NULLPTR == data || datalen < 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptInvalidArguments);
                 return false;
             }
 
@@ -205,8 +240,15 @@ namespace ppp {
             return rc4_crypt_sbox(key, keylen, sbox, sizeof(sbox), data, datalen, subtract, E);
         }
 
-        // Constructor of RC4 class: derives a key via HMAC, then initializes the S‑box
-        // using either ascending or descending order as specified.
+        /**
+         * @brief Constructs a stateful RC4 instance from method and password.
+         * @param method RC4 method name.
+         * @param password Password used for digest-based key derivation.
+         * @param algorithm Digest algorithm identifier.
+         * @param ascending Non-zero for ascending S-box initialization.
+         * @param subtract Extra additive offset input.
+         * @param E Non-zero for encrypt branch behavior.
+         */
         RC4::RC4(const ppp::string& method, const ppp::string& password, int algorithm, int ascending, int subtract, int E) noexcept
             : _E(E)
             , _subtract(subtract)
@@ -227,10 +269,18 @@ namespace ppp {
             }
         }
 
-        // Encrypt data using the rc4_crypt_sbox_c variant (low update with keylen step).
+        /**
+         * @brief Encrypts input data into an allocated output buffer.
+         * @param allocator Buffer allocator.
+         * @param data Input data pointer.
+         * @param datalen Input size.
+         * @param outlen Output size.
+         * @return Encrypted data buffer, or null on failure.
+         */
         std::shared_ptr<Byte> RC4::Encrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             outlen = -1;
             if ((datalen < 0) || (NULLPTR == data && datalen != 0)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4EncryptInvalidArguments);
                 return NULLPTR;
             }
 
@@ -239,8 +289,19 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            if (_password.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4EncryptPasswordEmpty);
+                return NULLPTR;
+            }
+
+            if (NULLPTR == _sbox) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                return NULLPTR;
+            }
+
             std::shared_ptr<Byte> plaintext = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, datalen);
             if (NULLPTR == plaintext) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
@@ -249,6 +310,9 @@ namespace ppp {
             // Uses the variant with (low + keylen) % sboxlen – another intentional modification.
             if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
                 (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
+                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCFailedWithoutSpecificError);
+                }
                 return NULLPTR;
             }
 
@@ -256,13 +320,19 @@ namespace ppp {
             return plaintext;
         }
 
-        // Decryption is symmetric to encryption (RC4 is symmetric, but the added x constant
-        // is handled correctly by the E parameter).
+        /**
+         * @brief Decrypts input data.
+         * @details Uses the same routine as encryption because this stream operation is symmetric.
+         */
         std::shared_ptr<Byte> RC4::Decrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             return Encrypt(allocator, data, datalen, outlen);
         }
 
-        // Check if a given method name is supported (all are RC4 variants with different HMAC algorithms).
+        /**
+         * @brief Checks whether an RC4 method string is supported.
+         * @param method Method name.
+         * @return True when supported.
+         */
         bool RC4::Support(const ppp::string& method) noexcept {
             if (method.empty()) {
                 return false;
@@ -280,9 +350,15 @@ namespace ppp {
             return false;
         }
 
-        // Factory method to create a specific RC4 variant based on method name.
+        /**
+         * @brief Creates an RC4 implementation instance by method name.
+         * @param method Method name.
+         * @param password Password/key material.
+         * @return RC4 instance, or null when method is unsupported.
+         */
         std::shared_ptr<RC4> RC4::Create(const ppp::string& method, const ppp::string& password) noexcept {
             if (method.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CreateMethodEmpty);
                 return NULLPTR;
             }
 
@@ -310,7 +386,9 @@ namespace ppp {
                 return make_shared_object<RC4SHA512>(method, password);
             }
 
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
             return NULLPTR;
         }
     }
 }
+

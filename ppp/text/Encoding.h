@@ -1,10 +1,20 @@
 ﻿#pragma once
 
+/**
+ * @file Encoding.h
+ * @brief Declares text encoding conversion helpers.
+ */
+
 #include <ppp/stdafx.h>
 
 namespace ppp {
     namespace text {
-        /*
+        /**
+         * @brief Reference list of common text encodings.
+         * @details
+         * This catalog documents encoding families that may be relevant when
+         * interoperating with platform or legacy text sources.
+         *
             European languages
                 ASCII, ISO−8859−{1,2,3,4,5,7,9,10,13,14,15,16}, KOI8−R, KOI8−U, KOI8−RU, CP{1250,1251,1252,1253,1254,1257}, CP{850,866,1131}, Mac{Roman,CentralEurope,Iceland,Croatian,Romania}, Mac{Cyrillic,Ukraine,Greek,Turkish}, Macintosh
             Semitic languages
@@ -58,7 +68,10 @@ namespace ppp {
                 TDS565
             Platform specifics
             ATARIST, RISCOS−LATIN1
-        */
+         */
+        /**
+         * @brief Utility class for UTF-8/ASCII and wide-string conversions.
+         */
         class Encoding final {
         public:
             static constexpr int                            ASCII            = 0;
@@ -67,10 +80,35 @@ namespace ppp {
             static constexpr int                            BigEndianUnicode = 3;
 
         public:
+            /**
+             * @brief Converts a UTF-8 string to wide characters.
+             * @param s Input UTF-8 text.
+             * @return Wide string conversion result.
+             */
             static std::wstring                             utf8_to_wstring(const std::string& s) noexcept;
+            /**
+             * @brief Converts wide text into UTF-8.
+             * @param s Input wide string.
+             * @return UTF-8 encoded string.
+             */
             static std::string                              wstring_to_utf8(const std::wstring& s) noexcept;
+            /**
+             * @brief Converts ASCII text to wide characters.
+             * @param s Input ASCII text.
+             * @return Wide string conversion result.
+             */
             static std::wstring                             ascii_to_wstring(const std::string& s) noexcept;
+            /**
+             * @brief Converts locale-dependent multibyte text to wide characters.
+             * @param s Input text.
+             * @return Wide string conversion result.
+             */
             static std::wstring                             ascii_to_wstring2(const std::string& s) noexcept;
+            /**
+             * @brief Converts wide characters to locale-dependent multibyte text.
+             * @param s Input wide string.
+             * @return Converted narrow string.
+             */
             static std::string                              wstring_to_ascii(const std::wstring& s) noexcept;
         };
     }

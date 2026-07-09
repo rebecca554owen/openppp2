@@ -1205,7 +1205,7 @@ StreamWriter* StreamWriterBuilder::newStreamWriter() const {
 }
 
 bool StreamWriterBuilder::validate(Json::Value* invalid) const {
-  static const auto& valid_keys = *new std::set<String>{
+  static const std::set<String> valid_keys{
       "indentation",
       "commentStyle",
       "enableYAMLCompatibility",

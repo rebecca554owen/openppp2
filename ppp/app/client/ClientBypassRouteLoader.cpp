@@ -1,0 +1,190 @@
+#include <ppp/app/client/ClientBypassRouteLoader.h>
+#include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/TelemetryFwd.h>
+#include <ppp/io/File.h>
+#include <ppp/net/IPEndPoint.h>
+#include <ppp/net/Socket.h>
+#include <ppp/net/http/HttpClient.h>
+
+#include <algorithm>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <iphlpapi.h>
+#endif
+
+using ppp::net::IPEndPoint;
+using ppp::telemetry::Level;
+
+namespace ppp {
+    namespace app {
+        namespace client {
+
+            void ClientBypassRouteLoader::Bind(VEthernetNetworkSwitcher* owner) noexcept {
+                owner_ = owner;
+            }
+
+#if defined(_ANDROID) || defined(_IPHONE)
+            void ClientBypassRouteLoader::SetBypassIpList(ppp::string&& bypass_ip_list) noexcept {
+                owner_->bypass_ip_list_ = std::move(bypass_ip_list);
+            }
+#endif
+
+#if !defined(_ANDROID) && !defined(_IPHONE)
+            bool ClientBypassRouteLoader::AddLoadIPList(
+                const ppp::string& path,
+#if defined(_LINUX)
+                const ppp::string& nic,
+#endif
+                const boost::asio::ip::address& gw,
+                const ppp::string& url) noexcept {
+
+                using File = ppp::io::File;
+
+                if (IsRouteListPathEmpty(path)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
+                }
+
+                ppp::string fullpath = File::RewritePath(path.data());
+                if (fullpath.empty()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
+                }
+
+                fullpath = File::GetFullPath(path.data());
+                if (fullpath.empty()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FilePathInvalid);
+                }
+
+                bool vbgp_url = ppp::net::http::HttpClient::VerifyUri(url, NULLPTR, NULLPTR, NULLPTR, NULLPTR);
+                if (!vbgp_url && !File::Exists(fullpath.data())) {
+                    if (ppp::diagnostics::ErrorCode::FileNotFound == ppp::diagnostics::GetLastErrorCode()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteListFileNotFound);
+                    }
+
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                    }
+
+                    return false;
+                }
+
+                uint32_t ngw = IPEndPoint::AnyAddress;
+                if (
+#if defined(_LINUX)
+                    !nic.empty() &&
+#endif
+                    gw.is_v4() && !IPEndPoint::IsInvalid(gw)) {
+                    ngw = htonl(gw.to_v4().to_uint());
+                }
+
+                auto ribs = owner_->ribs_;
+                if (NULLPTR == ribs) {
+                    ribs = make_shared_object<VEthernetNetworkSwitcher::LoadIPListFileVector>();
+                    owner_->ribs_ = ribs;
+                }
+
+                if (NULLPTR == ribs) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                }
+
+                auto tail = std::find_if(ribs->begin(), ribs->end(),
+                    [&fullpath](const std::pair<ppp::string, uint32_t>& i) noexcept {
+                        return i.first == fullpath;
+                    });
+                if (tail != ribs->end()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteListRegistrationDuplicate);
+                }
+
+                if (vbgp_url) {
+                    auto vbgp = owner_->vbgp_;
+                    if (NULLPTR == vbgp) {
+                        vbgp = make_shared_object<VEthernetNetworkSwitcher::RouteIPListTable>();
+                        if (NULLPTR == vbgp) {
+                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VbgpRouteTableAllocFailed);
+                        }
+
+                        owner_->vbgp_ = vbgp;
+                    }
+
+                    vbgp->emplace(std::make_pair(fullpath, url));
+                }
+
+#if defined(_LINUX)
+                if (ngw != IPEndPoint::AnyAddress) {
+                    owner_->nics_.emplace(std::make_pair(ngw, nic));
+                }
+#endif
+
+                ribs->emplace_back(std::make_pair(fullpath, ngw));
+                return true;
+            }
+
+            bool ClientBypassRouteLoader::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {
+                owner_->rib_ = NULLPTR;
+                owner_->fib_ = NULLPTR;
+
+                bool any = false;
+                if (gw.is_v4()) {
+                    boost::asio::ip::address_v4 in = gw.to_v4();
+                    if (uint32_t next_hop = htonl(in.to_uint()); !IPEndPoint::IsInvalid(in)) {
+                        if (auto ribs = std::move(owner_->ribs_); NULLPTR != ribs) {
+                            auto rib = make_shared_object<VEthernetNetworkSwitcher::RouteInformationTable>();
+                            if (NULLPTR != rib) {
+                                for (auto&& kv : *ribs) {
+                                    const ppp::string& path = kv.first;
+                                    const uint32_t ngw = kv.second != IPEndPoint::AnyAddress ? kv.second : next_hop;
+                                    any |= rib->AddAllRoutesByIPList(path, ngw);
+                                }
+
+                                if (any) {
+                                    owner_->rib_ = rib;
+                                    ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                owner_->ribs_.reset();
+                return any;
+            }
+#endif
+
+            bool ClientBypassRouteLoader::IsBypassIpAddress(const boost::asio::ip::address& ip) noexcept {
+                if (RejectsBypassBeforeTapLookup(ip)) {
+                    return false;
+                }
+
+                if (IPEndPoint::IsInvalid(ip)) {
+                    return false;
+                }
+
+                auto tap = owner_->GetTap();
+                if (NULLPTR == tap) {
+                    return false;
+                }
+
+                uint32_t nip = htonl(ip.to_v4().to_uint());
+#if defined(_ANDROID) || defined(_IPHONE)
+                if (auto fib = owner_->fib_; NULLPTR != fib) {
+                    uint32_t ngw = fib->GetNextHop(nip);
+                    return ngw != tap->GatewayServer;
+                }
+
+                return false;
+#elif defined(_WIN32)
+                DWORD dwInterfaceIndex;
+                if (!::GetBestInterface((IPAddr)nip, &dwInterfaceIndex)) {
+                    return false;
+                }
+
+                return dwInterfaceIndex != (DWORD)tap->GetInterfaceIndex();
+#else
+                return ppp::net::Socket::GetBestInterfaceIP(nip) != tap->IPAddress;
+#endif
+            }
+
+        }
+    }
+}

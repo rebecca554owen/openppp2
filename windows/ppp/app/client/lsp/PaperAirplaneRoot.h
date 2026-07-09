@@ -6,8 +6,7 @@
 #include <utility>
 #include <memory>
 #include <functional>
-
-#include <boost/asio.hpp>
+#include <boost/asio/ip/tcp.hpp>
 
 #if !defined(NULL)
 #define NULL 0

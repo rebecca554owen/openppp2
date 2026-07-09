@@ -1901,7 +1901,7 @@ CharReader* CharReaderBuilder::newCharReader() const {
 }
 
 bool CharReaderBuilder::validate(Json::Value* invalid) const {
-  static const auto& valid_keys = *new std::set<String>{
+  static const std::set<String> valid_keys{
       "collectComments",
       "allowComments",
       "allowTrailingCommas",

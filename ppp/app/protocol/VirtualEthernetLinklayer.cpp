@@ -1,4 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+/**
+ * @file VirtualEthernetLinklayer.cpp
+ * @brief Implementation of virtual Ethernet link-layer packet encoding/decoding.
+ */
+
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
+#include <ppp/configurations/AppConfiguration.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/io/Stream.h>
 #include <ppp/io/BinaryReader.h>
@@ -10,13 +18,16 @@
 #include <ppp/net/native/checksum.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/asio/asio.h>
+#include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/Telemetry.h>
 
 #include <cstring>       // for std::memcpy
 
 namespace ppp {
     namespace app {
-        namespace protocol {
-            // Type aliases for convenience
+            namespace protocol {
+                using ppp::telemetry::Level;
+                // Type aliases for convenience
             typedef ppp::io::Stream                                     Stream;
             typedef ppp::io::BinaryReader                               BinaryReader;
             typedef ppp::io::MemoryStream                               MemoryStream;
@@ -30,13 +41,68 @@ namespace ppp {
 
             namespace checksum = ppp::net::native;
             namespace global {
+                /** @brief Sets a diagnostic error code and returns false. */
+                static bool PACKET_Fail(ppp::diagnostics::ErrorCode code) noexcept {
+                    ppp::diagnostics::SetLastErrorCode(code);
+                    return false;
+                }
+
+                /** @brief Applies a fallback diagnostic code when operation failed without one. */
+                static bool PACKET_Result(bool ok, ppp::diagnostics::ErrorCode code) noexcept {
+                    if (!ok && ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(code);
+                    }
+                    return ok;
+                }
+
+                /** @brief Returns whether packet action is a defined protocol opcode. */
+                static bool PACKET_IsKnownAction(PacketAction packet_action) noexcept {
+                    switch (packet_action) {
+                        case VirtualEthernetLinklayer::PacketAction_INFO:
+                        case VirtualEthernetLinklayer::PacketAction_KEEPALIVED:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_ENTRY:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_CONNECT:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_CONNECTOK:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_PUSH:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_DISCONNECT:
+                        case VirtualEthernetLinklayer::PacketAction_FRP_SENDTO:
+                        case VirtualEthernetLinklayer::PacketAction_LAN:
+                        case VirtualEthernetLinklayer::PacketAction_NAT:
+                        case VirtualEthernetLinklayer::PacketAction_SYN:
+                        case VirtualEthernetLinklayer::PacketAction_SYNOK:
+                        case VirtualEthernetLinklayer::PacketAction_PSH:
+                        case VirtualEthernetLinklayer::PacketAction_FIN:
+                        case VirtualEthernetLinklayer::PacketAction_SENDTO:
+                        case VirtualEthernetLinklayer::PacketAction_ECHO:
+                        case VirtualEthernetLinklayer::PacketAction_ECHOACK:
+                        case VirtualEthernetLinklayer::PacketAction_STATIC:
+                        case VirtualEthernetLinklayer::PacketAction_STATICACK:
+                        case VirtualEthernetLinklayer::PacketAction_MUX:
+                        case VirtualEthernetLinklayer::PacketAction_MUXON:
+                            return true;
+                        default:
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                            return false;
+                    }
+                }
+
+                /**
+                 * @brief Parses endpoint fields from packet stream and resolves hostnames.
+                 * @tparam TProtocol `boost::asio::ip::tcp` or `boost::asio::ip::udp`.
+                 * @param firewall Optional firewall for segment/domain/port filtering.
+                 * @param stream Input cursor advanced on success.
+                 * @param packet_length Remaining packet bytes, updated after parsing.
+                 * @param y Coroutine context used for async DNS resolve.
+                 * @param hostname Output host text read from packet.
+                 * @return Parsed endpoint or endpoint with port `0` on failure.
+                 */
                 // -----------------------------------------------------------------
                 // Template: parse an endpoint (TCP/UDP) from a raw packet buffer.
                 // Supports both IP addresses and domain names (with async DNS).
                 // Returns an empty endpoint (port 0) on any failure.
                 // -----------------------------------------------------------------
                 template <class TProtocol>
-                static boost::asio::ip::basic_endpoint<TProtocol>       PACKET_IPEndPoint(const std::shared_ptr<ppp::net::Firewall>& firewall, Byte*& stream, int& packet_length, YieldContext& y, ppp::string& hostname) noexcept 
+                static boost::asio::ip::basic_endpoint<TProtocol>       PACKET_IPEndPoint(const std::shared_ptr<ppp::net::Firewall>& firewall, Byte*& stream, int& packet_length, YieldContext& y, ppp::string& hostname) noexcept
                 {
                     /* Packet wire format:
                        ACTION(1) ADDR_LEN(1) HOSTNAME(ADDR_LEN) PORT_LEN(1) PORT_STRING(PORT_LEN) */
@@ -60,7 +126,7 @@ namespace ppp {
                     stream += address_length;                               // move past hostname
                     packet_length -= address_length;                        // subtract hostname length
 
-                    if (packet_length < 0) {                                // safety check
+                    if (packet_length < 1) {                                // safety check
                         return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                     }
 
@@ -80,7 +146,17 @@ namespace ppp {
 
                     // invalid port -> treat as zero / invalid
                     if (!port_str.empty()) {
-                        port = atoi(ppp::string(port_str).c_str());
+                        /**
+                         * @brief Validate port number using strtol.
+                         * @note Port must be in valid range [1, 65535].
+                         */
+                        ppp::string port_std_str(port_str);
+                        char* endptr = NULLPTR;
+                        long parsed_port = strtol(port_std_str.c_str(), &endptr, 10);
+                        if (NULLPTR != endptr && endptr != port_std_str.c_str() && *endptr == '\x0' && parsed_port > IPEndPoint::MinPort && parsed_port <= IPEndPoint::MaxPort) {
+                            port = static_cast<int>(parsed_port);
+                        }
+
                         if (port < IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
                             port = IPEndPoint::MinPort;
                         }
@@ -109,16 +185,24 @@ namespace ppp {
                         // async DNS resolution (only if coroutine context is available)
                         if (y) {
                             try {
-                                return ppp::coroutines::asio::GetAddressByHostName<TProtocol>(hostname.data(), port, y);
+                                const boost::asio::ip::basic_endpoint<TProtocol> endpoint =
+                                    ppp::coroutines::asio::GetAddressByHostName<TProtocol>(hostname.data(), port, y);
+                                // DNS-resolved hosts must obey the same segment rules as IP literals.
+                                if (NULLPTR != firewall && firewall->IsDropNetworkSegment(endpoint.address())) {
+                                    return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
+                                }
+
+                                return endpoint;
                             } catch (...) {
-                                // DNS failed -> return empty endpoint
+                                // DNS resolution failed; record error and return empty endpoint.
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
                                 return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                             }
                         } else {
                             return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
                         }
                     } else {
-                        // it's a valid IP address – apply network segment filter
+                        // it's a valid IP address �?apply network segment filter
                         if (NULLPTR != firewall) {
                             if (firewall->IsDropNetworkSegment(address)) {
                                 return boost::asio::ip::basic_endpoint<TProtocol>(boost::asio::ip::address_v4::any(), 0);
@@ -133,6 +217,7 @@ namespace ppp {
                 // Read a 4‑byte DWORD (big‑endian) from the stream, advance pointer.
                 // Returns 0 if not enough bytes.
                 // -----------------------------------------------------------------
+                /** @brief Reads a big-endian 32-bit integer from packet stream. */
                 static int PACKET_Dword(Byte*& stream, int& packet_length) noexcept {
                     int remainder_length = packet_length - 4;
                     if (remainder_length < 0) {
@@ -149,6 +234,7 @@ namespace ppp {
                 // -----------------------------------------------------------------
                 // Write a 4‑byte DWORD (big‑endian) to a stream.
                 // -----------------------------------------------------------------
+                /** @brief Writes a big-endian 32-bit integer to stream. */
                 static bool PACKET_Dword(Stream& stream, int value) noexcept {
                     Byte buf[4] = {
                         static_cast<Byte>(value >> 24),
@@ -162,6 +248,7 @@ namespace ppp {
                 // -----------------------------------------------------------------
                 // Read a 2‑byte WORD (big‑endian) from the stream, advance pointer.
                 // -----------------------------------------------------------------
+                /** @brief Reads a big-endian 16-bit integer from packet stream. */
                 static int PACKET_Word(Byte*& stream, int& packet_length) noexcept {
                     int remainder_length = packet_length - 2;
                     if (remainder_length < 0) {
@@ -177,6 +264,7 @@ namespace ppp {
                 // -----------------------------------------------------------------
                 // Write a 2‑byte WORD (big‑endian) to a stream.
                 // -----------------------------------------------------------------
+                /** @brief Writes a big-endian 16-bit integer to stream. */
                 static bool PACKET_Word(Stream& stream, int value) noexcept {
                     Byte buf[2] = {
                         static_cast<Byte>(value >> 8),
@@ -186,8 +274,9 @@ namespace ppp {
                 }
 
                 // -----------------------------------------------------------------
-                // Read a 3‑byte connection ID (big‑endian) – used in SYN/PSH/FIN.
+                // Read a 3‑byte connection ID (big‑endian) �?used in SYN/PSH/FIN.
                 // -----------------------------------------------------------------
+                /** @brief Reads a 3-byte connection identifier from packet stream. */
                 static int PACKET_ConnectId(Byte*& stream, int& packet_length) noexcept {
                     /* wire: ACTION(1) CONNECT_ID(3) */
                     int remainder_length = packet_length - 3;
@@ -204,11 +293,12 @@ namespace ppp {
                 // -----------------------------------------------------------------
                 // Write a packet header (action + 3‑byte connection ID) followed by payload.
                 // -----------------------------------------------------------------
-                static bool PACKET_ConnectId(Stream& stream, PacketAction packet_action, 
-                                             int connection_id, Byte* packet, int packet_length) noexcept 
+                /** @brief Writes action + 3-byte connection ID header with payload. */
+                static bool PACKET_ConnectId(Stream& stream, PacketAction packet_action,
+                                             int connection_id, Byte* packet, int packet_length) noexcept
                 {
                     if (packet_length < 0 || (NULLPTR == packet && packet_length != 0)) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     }
 
                     Byte packet_header[4] = {
@@ -223,33 +313,35 @@ namespace ppp {
                         ok = stream.Write(packet, 0, packet_length);
                     }
 
-                    return ok;
+                    return PACKET_Result(ok, ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                 }
 
                 // -----------------------------------------------------------------
                 // Send a packet with a given action and connection ID.
                 // -----------------------------------------------------------------
+                /** @brief Sends connection-bound packet through transport. */
                 static bool PACKET_Push(PacketAction packet_action, const ITransmissionPtr& transmission,
-                                        int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept 
+                                        int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept
                 {
                     if (NULLPTR == transmission) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     MemoryStream ms;
                     if (!PACKET_ConnectId(ms, packet_action, connection_id, packet, packet_length)) {
-                        return false;
+                        return PACKET_Result(false, ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     }
 
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return transmission->Write(y, buffer.get(), ms.GetPosition());
+                    return PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::SocketWriteFailed);
                 }
 
                 // -----------------------------------------------------------------
-                // Validate an endpoint – port range, address type, no multicast/broadcast.
+                // Validate an endpoint �?port range, address type, no multicast/broadcast.
                 // -----------------------------------------------------------------
                 template <class TProtocol>
-                static bool PACKET_IPEndPoint(const boost::asio::ip::basic_endpoint<TProtocol>& destinationEP) noexcept 
+                /** @brief Validates protocol endpoint for protocol-level constraints. */
+                static bool PACKET_IPEndPoint(const boost::asio::ip::basic_endpoint<TProtocol>& destinationEP) noexcept
                 {
                     int destinationPort = destinationEP.port();
                     if (destinationPort <= IPEndPoint::MinPort || destinationPort > IPEndPoint::MaxPort) {
@@ -284,7 +376,8 @@ namespace ppp {
                 // port string length, port string).
                 // -----------------------------------------------------------------
                 template <class TString>
-                static bool PACKET_IPEndPoint(Stream& stream, const TString& address_string, int address_port) noexcept 
+                /** @brief Writes endpoint host/port string tuple to packet stream. */
+                static bool PACKET_IPEndPoint(Stream& stream, const TString& address_string, int address_port) noexcept
                 {
                     if (address_port <= IPEndPoint::MinPort || address_port > IPEndPoint::MaxPort) {
                         return false;
@@ -297,13 +390,13 @@ namespace ppp {
                     if (stream.WriteByte(static_cast<Byte>(address_string.size()))) {
                         if (stream.Write(address_string.data(), 0, static_cast<int>(address_string.size()))) {
                             char address_port_string[16];
-                            int address_port_string_size = snprintf(address_port_string, sizeof(address_port_string), 
+                            int address_port_string_size = snprintf(address_port_string, sizeof(address_port_string),
                                                                      "%d", address_port);
                             if (address_port_string_size < 1 || address_port_string_size >= static_cast<int>(sizeof(address_port_string))) {
                                 return false;   // truncation or error
                             }
 
-                            // port length must fit into a single Byte (0‑255)
+                            // port length must fit into a single Byte (0�?55)
                             if (address_port_string_size > 255) {
                                 return false;
                             }
@@ -321,7 +414,8 @@ namespace ppp {
                 // Write an endpoint from a boost::asio endpoint.
                 // -----------------------------------------------------------------
                 template <class TProtocol>
-                static bool PACKET_IPEndPoint(Stream& stream, const boost::asio::ip::basic_endpoint<TProtocol>& destinationEP) noexcept 
+                /** @brief Writes a validated endpoint to packet stream. */
+                static bool PACKET_IPEndPoint(Stream& stream, const boost::asio::ip::basic_endpoint<TProtocol>& destinationEP) noexcept
                 {
                     if (!PACKET_IPEndPoint<TProtocol>(destinationEP)) {
                         return false;
@@ -333,59 +427,66 @@ namespace ppp {
                 // -----------------------------------------------------------------
                 // Send a TCP SYN (connect) packet.
                 // -----------------------------------------------------------------
-                static bool PACKET_DoConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint* destinationEP, const ppp::string& hostname, int port, YieldContext& y) noexcept 
+                /** @brief Builds and sends TCP connect request packet. */
+                static bool PACKET_DoConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint* destinationEP, const ppp::string& hostname, int port, YieldContext& y) noexcept
                 {
                     typedef VirtualEthernetLinklayer PacketAction;   // bring enum into scope
-                    if (NULLPTR == transmission || connection_id == 0) {
-                        return false;
+                    if (NULLPTR == transmission) {
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    }
+
+                    if (connection_id == 0) {
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                     }
 
                     MemoryStream ms;
                     if (NULLPTR != destinationEP) {
                         if (!PACKET_IPEndPoint(ms, *destinationEP)) {
-                            return false;
+                            return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         }
                     } else {
                         if (!PACKET_IPEndPoint(ms, hostname, port)) {
-                            return false;
+                            return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                         }
                     }
 
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return PACKET_Push(PacketAction::PacketAction_SYN, transmission, connection_id, 
+                    return PACKET_Push(PacketAction::PacketAction_SYN, transmission, connection_id,
                                        buffer.get(), ms.GetPosition(), y);
                 }
 
                 // -----------------------------------------------------------------
                 // Send a simple action packet with raw payload (no connection ID).
                 // -----------------------------------------------------------------
-                static bool PACKET_Push(PacketAction packet_action, const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept 
+                /** @brief Sends action packet with raw payload and no connection ID. */
+                static bool PACKET_Push(PacketAction packet_action, const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept
                 {
                     if (NULLPTR == packet || packet_length < 1) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                     }
 
                     if (NULLPTR == transmission) {
-                        return false;
+                        return PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                     }
 
                     MemoryStream ms;
                     if (ms.WriteByte(static_cast<Byte>(packet_action))) {
                         if (ms.Write(packet, 0, packet_length)) {
                             std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                            return transmission->Write(y, buffer.get(), ms.GetPosition());
+                            return PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::SocketWriteFailed);
                         }
                     }
 
-                    return false;
+                    return PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                 }
             } // namespace global
 
             // ---------------------------------------------------------------------
             // Constructor: initialises the link layer with configuration, context, and ID.
             // ---------------------------------------------------------------------
+            /** @brief Constructs the link-layer runtime object. */
             VirtualEthernetLinklayer::VirtualEthernetLinklayer(
-                const AppConfigurationPtr&  configuration, 
+                const AppConfigurationPtr&  configuration,
                 const ContextPtr&           context,
                 const Int128&               id) noexcept
                 : context_(context)
@@ -399,6 +500,7 @@ namespace ppp {
             // Generate a new unique 24‑bit connection ID using a lock‑free atomic.
             // Fixed: unsigned type, modulo always yields [1 .. max_aid], no overflow UB.
             // ---------------------------------------------------------------------
+            /** @brief Generates a non-zero 24-bit connection ID. */
             int VirtualEthernetLinklayer::NewId() noexcept {
                 static std::atomic<unsigned int> aid = static_cast<unsigned int>(RandomNext()); // random base, non‑negative
                 static constexpr unsigned int max_aid = (1U << 24) - 1U;   // 0xFFFFFF = 16,777,215
@@ -412,6 +514,7 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Returns the firewall instance (default null; override in derived class).
             // ---------------------------------------------------------------------
+            /** @brief Returns firewall instance used by inbound parser. */
             std::shared_ptr<ppp::net::Firewall> VirtualEthernetLinklayer::GetFirewall() noexcept {
                 return NULLPTR;
             }
@@ -420,49 +523,63 @@ namespace ppp {
             // Main run loop: reads packets from the transmission and processes them.
             // Returns true if at least one packet was successfully processed.
             // ---------------------------------------------------------------------
+            /** @brief Runs receive loop and dispatches inbound packets. */
             bool VirtualEthernetLinklayer::Run(const ITransmissionPtr& transmission, YieldContext& y) noexcept {
                 if (NULLPTR == transmission) {
-                    return false;
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
                 }
 
                 bool ok = false;
                 last_ = Executors::GetTickCount();          // reset activity timer
                 next_ka_ = 0;                               // reset keep‑alive scheduler
 
+                ppp::telemetry::Log(Level::kInfo, "protocol", "session established");
+                ppp::telemetry::Count("protocol.session.established", 1);
+
                 for (;;) {
                     int packet_length = 0;
                     std::shared_ptr<Byte> packet = transmission->Read(y, packet_length);
                     if (NULLPTR == packet || packet_length < 1) {
+                        ppp::telemetry::Log(Level::kInfo, "protocol", "session read_end error=%d",
+                            (int)ppp::diagnostics::GetLastErrorCode());
                         break;                              // no more data or read error
                     }
 
                     if (!PacketInput(transmission, packet.get(), packet_length, y)) {
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                        }
                         break;                              // packet processing failed -> exit
                     } else {
                         ok = true;
                         last_ = Executors::GetTickCount();  // update last activity on success
                     }
                 }
+                ppp::telemetry::Log(Level::kInfo, "protocol", "session disposed ok=%d error=%d",
+                    ok ? 1 : 0,
+                    (int)ppp::diagnostics::GetLastErrorCode());
+                ppp::telemetry::Count("protocol.session.disposed", 1);
                 return ok;
             }
 
 #pragma pack(push, 1)   // ensure packed structures for wire compatibility
             // MUX request structure (includes action byte)
-            typedef struct 
+            typedef struct
 #if defined(__GNUC__) || defined(__clang__)
-                __attribute__((packed)) 
+                __attribute__((packed))
 #endif
             {
                 Byte        il;                 // action byte (PacketAction_MUX)
                 uint16_t    vlan;               // VLAN ID (network order)
                 uint16_t    max_connections;    // max concurrent connections (network order)
                 Byte        acceleration;       // acceleration flag (0/1)
+                Byte        ordering_caps;       // receiver ordering capability bits (bit0 = FLOW_V2); optional trailing byte
             } VirtualEthernetLinklayer_MUX_IL;
 
             // MUXON acknowledgment structure (includes action byte)
-            typedef struct 
+            typedef struct
 #if defined(__GNUC__) || defined(__clang__)
-                __attribute__((packed)) 
+                __attribute__((packed))
 #endif
             {
                 Byte        il;                 // action byte (PacketAction_MUXON)
@@ -476,8 +593,17 @@ namespace ppp {
             // Process a single incoming packet from the transmission.
             // Dispatches based on the action byte.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept 
+            /**
+             * @brief Decodes and dispatches one inbound protocol packet.
+             * @details The first byte selects action; remaining payload is parsed by
+             * action-specific wire-format readers before calling `On*` handlers.
+             */
+            bool VirtualEthernetLinklayer::PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept
             {
+                if (NULLPTR == p || packet_length < 1) {
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                }
+
                 // extract action byte and advance
                 PacketAction packet_action = static_cast<PacketAction>(*p);
                 ++p;
@@ -490,22 +616,22 @@ namespace ppp {
                         return OnPush(transmission, connection_id, p, packet_length, y);
                     }
                 }
-                else if (packet_action == PacketAction_NAT) {           // NAT data
+                elif (packet_action == PacketAction_NAT) {           // NAT data
                     if (packet_length > 0) {
                         return OnNat(transmission, p, packet_length, y);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_SENDTO) {        // UDP send‑to
+                elif (packet_action == PacketAction_SENDTO) {        // UDP send‑to
                     ppp::string destinationHost;
-                    boost::asio::ip::udp::endpoint destinationEP = 
+                    boost::asio::ip::udp::endpoint destinationEP =
                         global::PACKET_IPEndPoint<boost::asio::ip::udp>(GetFirewall(), p, packet_length, y, destinationHost);
 
                     int destinationPort = destinationEP.port();
                     if (destinationPort > IPEndPoint::MinPort && destinationPort <= IPEndPoint::MaxPort) {
                         ppp::string sourceHost;
-                        boost::asio::ip::udp::endpoint sourceEP = 
+                        boost::asio::ip::udp::endpoint sourceEP =
                             global::PACKET_IPEndPoint<boost::asio::ip::udp>(GetFirewall(), p, packet_length, y, sourceHost);
                         if (sourceEP.port() != 0 && packet_length >= 0) {
                             // call preparation hook and then the actual send handler
@@ -516,7 +642,7 @@ namespace ppp {
                     }
                     // fall through -> failure
                 }
-                else if (packet_action == PacketAction_FRP_PUSH) {      // FRP data push
+                elif (packet_action == PacketAction_FRP_PUSH) {      // FRP data push
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -533,9 +659,9 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_SENDTO) {    // FRP UDP send‑to
+                elif (packet_action == PacketAction_FRP_SENDTO) {    // FRP UDP send‑to
                     ppp::string destinationHost;
-                    boost::asio::ip::udp::endpoint destinationEP = 
+                    boost::asio::ip::udp::endpoint destinationEP =
                         global::PACKET_IPEndPoint<boost::asio::ip::udp>(GetFirewall(), p, packet_length, y, destinationHost);
                     if (destinationEP.port() != 0 && packet_length > 0) {
                         bool in = (*p != 0);
@@ -548,26 +674,30 @@ namespace ppp {
                         }
                     }
                 }
-                else if (packet_action == PacketAction_ECHO) {          // echo request
+                elif (packet_action == PacketAction_ECHO) {          // echo request
                     if (packet_length > 0) {
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "ECHO received");
+                        ppp::telemetry::Count("protocol.echo.received", 1);
                         return OnEcho(transmission, p, packet_length, y);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_ECHOACK) {       // echo reply
+                elif (packet_action == PacketAction_ECHOACK) {       // echo reply
                     if (packet_length >= 3) {
                         int ack_id = global::PACKET_ConnectId(p, packet_length);
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "ECHOACK received ack_id=%d", ack_id);
+                        ppp::telemetry::Count("protocol.echoack.received", 1);
                         return OnEcho(transmission, ack_id, y);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_SYN) {           // TCP connection request
+                elif (packet_action == PacketAction_SYN) {           // TCP connection request
                     int connection_id = global::PACKET_ConnectId(p, packet_length);
                     if (connection_id != 0) {
                         ppp::string destinationHost;
-                        boost::asio::ip::tcp::endpoint destinationEP = 
+                        boost::asio::ip::tcp::endpoint destinationEP =
                             global::PACKET_IPEndPoint<boost::asio::ip::tcp>(GetFirewall(), p, packet_length, y, destinationHost);
                         if (destinationEP.port() != 0) {
                             if (OnPreparedConnect(transmission, connection_id, destinationHost, destinationEP, y)) {
@@ -576,7 +706,7 @@ namespace ppp {
                         }
                     }
                 }
-                else if (packet_action == PacketAction_SYNOK) {         // TCP connection acknowledgment
+                elif (packet_action == PacketAction_SYNOK) {         // TCP connection acknowledgment
                     int connection_id = global::PACKET_ConnectId(p, packet_length);
                     if (connection_id != 0 && packet_length > 0) {
                         Byte error_code = *p;
@@ -584,13 +714,13 @@ namespace ppp {
                         return OnConnectOK(transmission, connection_id, error_code, y);
                     }
                 }
-                else if (packet_action == PacketAction_FIN) {           // TCP disconnection
+                elif (packet_action == PacketAction_FIN) {           // TCP disconnection
                     int connection_id = global::PACKET_ConnectId(p, packet_length);
                     if (connection_id != 0) {
                         return OnDisconnect(transmission, connection_id, y);
                     }
                 }
-                else if (packet_action == PacketAction_LAN) {           // LAN advertisement
+                elif (packet_action == PacketAction_LAN) {           // LAN advertisement
                     if (packet_length >= static_cast<int>(sizeof(uint32_t) * 2)) {
                         uint32_t* addresses = reinterpret_cast<uint32_t*>(p);
                         return OnLan(transmission, addresses[0], addresses[1], y);
@@ -598,7 +728,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_DISCONNECT) { // FRP disconnection
+                elif (packet_action == PacketAction_FRP_DISCONNECT) { // FRP disconnection
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -615,7 +745,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_CONNECT) {    // FRP connection request
+                elif (packet_action == PacketAction_FRP_CONNECT) {    // FRP connection request
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -634,7 +764,7 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_CONNECTOK) {  // FRP connection acknowledgment
+                elif (packet_action == PacketAction_FRP_CONNECTOK) {  // FRP connection acknowledgment
                     if (packet_length > 0) {
                         int connection_id = global::PACKET_Dword(p, packet_length);
                         if (connection_id != 0 && packet_length > 0) {
@@ -654,21 +784,40 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
+                elif (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
                     if (packet_length >= static_cast<int>(sizeof(VirtualEthernetInformation))) {
-                        VirtualEthernetInformation info = *reinterpret_cast<VirtualEthernetInformation*>(p);
+                        ppp::string session_guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(id_);
+                        ppp::telemetry::SpanScope span("protocol.auth", session_guid.c_str());
+
+                        InformationEnvelope info;
+                        info.Base = *reinterpret_cast<VirtualEthernetInformation*>(p);
 
                         // convert from network byte order to host byte order
-                        info.BandwidthQoS   = ppp::net::Ipep::NetworkToHostOrder(info.BandwidthQoS);
-                        info.ExpiredTime    = ntohl(info.ExpiredTime);
-                        info.IncomingTraffic= ppp::net::Ipep::NetworkToHostOrder(info.IncomingTraffic);
-                        info.OutgoingTraffic= ppp::net::Ipep::NetworkToHostOrder(info.OutgoingTraffic);
-                        return OnInformation(transmission, info, y);
+                        info.Base.BandwidthQoS    = ppp::net::Ipep::NetworkToHostOrder(info.Base.BandwidthQoS);
+                        info.Base.ExpiredTime     = ntohl(info.Base.ExpiredTime);
+                        info.Base.IncomingTraffic = ppp::net::Ipep::NetworkToHostOrder(info.Base.IncomingTraffic);
+                        info.Base.OutgoingTraffic = ppp::net::Ipep::NetworkToHostOrder(info.Base.OutgoingTraffic);
+
+                        p += sizeof(VirtualEthernetInformation);
+                        packet_length -= sizeof(VirtualEthernetInformation);
+                        if (packet_length > 0) {
+                            info.ExtendedJson.assign(reinterpret_cast<char*>(p), packet_length);
+                            VirtualEthernetInformationExtensions::FromJson(info.Extensions, info.ExtendedJson);
+                        }
+
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "INFO received bandwidth_qos=%lld incoming=%llu outgoing=%llu",
+                                            static_cast<long long>(info.Base.BandwidthQoS),
+                                            static_cast<unsigned long long>(info.Base.IncomingTraffic),
+                                            static_cast<unsigned long long>(info.Base.OutgoingTraffic));
+                        ppp::telemetry::Count("protocol.info.received", 1);
+                        ppp::telemetry::Count("protocol.auth.success", 1);
+                        ppp::telemetry::Count("protocol.bandwidth.received", 1);
+                        return OnInformation(transmission, static_cast<const InformationEnvelope&>(info), y);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_FRP_ENTRY) {      // FRP entry registration
+                elif (packet_action == PacketAction_FRP_ENTRY) {      // FRP entry registration
                     if (packet_length > 0) {
                         bool tcp = (*p != 0);
                         ++p;
@@ -688,10 +837,12 @@ namespace ppp {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_STATIC) {         // static route request
+                elif (packet_action == PacketAction_STATIC) {         // static route request
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "STATIC received");
+                    ppp::telemetry::Count("protocol.static.received", 1);
                     return OnStatic(transmission, y);
                 }
-                else if (packet_action == PacketAction_STATICACK) {      // static route acknowledgment (single entry)
+                elif (packet_action == PacketAction_STATICACK) {      // static route acknowledgment (single entry)
                     int session_id = global::PACKET_Dword(p, packet_length);
                     if (packet_length >= (2 + 16)) {    // need remote_port (2) + fsid (16)
                         int remote_port = global::PACKET_Word(p, packet_length);
@@ -701,44 +852,73 @@ namespace ppp {
                             std::memcpy(&uuid_buf, p, sizeof(uuid_buf));
 
                             Int128 fsid = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(uuid_buf);
+                            ppp::telemetry::Log(Level::kDebug, "protocol", "STATICACK received session_id=%d remote_port=%d", session_id, remote_port);
+                            ppp::telemetry::Count("protocol.staticack.received", 1);
                             return OnStatic(transmission, fsid, session_id, remote_port, y);
                         }
                     }
                     return false;
                 }
-                else if (packet_action == PacketAction_MUX) {            // MUX setup request
-                    static constexpr int MUX_IL_REFT = sizeof(VirtualEthernetLinklayer_MUX_IL) - 1;
+                elif (packet_action == PacketAction_MUX) {            // MUX setup request
+                    // Required length covers every field except the action byte `il`
+                    // AND except the optional trailing ordering_caps byte, so that
+                    // older peers (which never send ordering_caps) still parse.
+                    static constexpr int MUX_IL_REFT = sizeof(VirtualEthernetLinklayer_MUX_IL) - 1 - (int)sizeof(Byte);
 
                     if (packet_length >= MUX_IL_REFT) {
                         VirtualEthernetLinklayer_MUX_IL* pil = reinterpret_cast<VirtualEthernetLinklayer_MUX_IL*>(p - 1);
-                        return OnMux(transmission, ntohs(pil->vlan), ntohs(pil->max_connections), 
-                                     pil->acceleration != 0, y);
+
+                        // ordering_caps is an optional trailing byte; absent (older peer) => 0 (=COMPAT).
+                        // packet_length excludes the leading action byte, so the full struct on the
+                        // wire is present only when packet_length >= sizeof(struct) - 1.
+                        Byte ordering_caps = 0;
+                        if (packet_length >= (int)(sizeof(VirtualEthernetLinklayer_MUX_IL) - 1)) {
+                            ordering_caps = pil->ordering_caps;
+                        }
+
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "MUX received vlan=%u max_connections=%u caps=%u",
+                                            static_cast<unsigned int>(ntohs(pil->vlan)),
+                                            static_cast<unsigned int>(ntohs(pil->max_connections)),
+                                            static_cast<unsigned int>(ordering_caps));
+                        ppp::telemetry::Count("protocol.mux.received", 1);
+                        return global::PACKET_Result(OnMux(transmission, ntohs(pil->vlan), ntohs(pil->max_connections),
+                                     pil->acceleration != 0, ordering_caps, y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_MUXON) {          // MUXON acknowledgment
+                elif (packet_action == PacketAction_MUXON) {          // MUXON acknowledgment
                     static constexpr int MUXON_IL_REF = sizeof(VirtualEthernetLinklayer_MUXON_IL) - 1;
 
                     if (packet_length >= MUXON_IL_REF) {
                         VirtualEthernetLinklayer_MUXON_IL* pil = reinterpret_cast<VirtualEthernetLinklayer_MUXON_IL*>(p - 1);
-                        return OnMuxON(transmission, ntohs(pil->vlan), ntohl(pil->seq), ntohl(pil->ack), y);
+                        ppp::telemetry::Log(Level::kDebug, "protocol", "MUXON received vlan=%u seq=%u ack=%u",
+                                            static_cast<unsigned int>(ntohs(pil->vlan)),
+                                            static_cast<unsigned int>(ntohl(pil->seq)),
+                                            static_cast<unsigned int>(ntohl(pil->ack)));
+                        ppp::telemetry::Count("protocol.muxon.received", 1);
+                        return global::PACKET_Result(OnMuxON(transmission, ntohs(pil->vlan), ntohl(pil->seq), ntohl(pil->ack), y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
                         return packet_length == 0;
                     }
                 }
-                else if (packet_action == PacketAction_KEEPALIVED) {     // keep‑alive heartbeat
+                elif (packet_action == PacketAction_KEEPALIVED) {     // keep‑alive heartbeat
                     last_ = Executors::GetTickCount();   // update last activity time
                     return true;
                 }
 
-                return false;   // unknown action or malformed packet
+                if (global::PACKET_IsKnownAction(packet_action)) {
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                }
+
+                return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
             }
 
             // ---------------------------------------------------------------------
             // Send a keep‑alive packet if the idle timeout has been reached.
             // Returns false only when the connection should be considered dead.
             // ---------------------------------------------------------------------
+            /** @brief Schedules and sends keep-alive packets based on idle timing. */
             bool VirtualEthernetLinklayer::DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept {
                 static constexpr int MAX_RANDOM_BUFFER_SIZE = ppp::tap::ITap::Mtu;
                 static constexpr int MILLISECONDS_TO_SECONDS = 1000;
@@ -757,6 +937,7 @@ namespace ppp {
 
                 uint64_t deadline = last_ + static_cast<uint64_t>(max_timeout_ms + EXTRA_FAULT_TOLERANT_TIME);
                 if (now >= deadline) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
                     return false;   // idle timeout exceeded -> dead connection
                 }
 
@@ -780,8 +961,11 @@ namespace ppp {
                 }
 
                 YieldContext& y_null = nullof<YieldContext>();   // dummy yield context for synchronous send
-                if (!global::PACKET_Push(PacketAction_KEEPALIVED, transmission, packet, packet_size, 
+                if (!global::PACKET_Push(PacketAction_KEEPALIVED, transmission, packet, packet_size,
                                          y_null /* no coroutine context */)) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
+                    }
                     return false;   // failed to send keep‑alive
                 }
 
@@ -794,54 +978,89 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send a LAN advertisement packet (IP + netmask).
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept 
+            /** @brief Sends LAN advertisement payload. */
+            bool VirtualEthernetLinklayer::DoLan(const ITransmissionPtr& transmission, uint32_t ip, uint32_t mask, YieldContext& y) noexcept
             {
                 uint32_t addresses[] = { ip, mask };
-                return global::PACKET_Push(PacketAction_LAN, transmission, 
+                return global::PACKET_Push(PacketAction_LAN, transmission,
                                            reinterpret_cast<Byte*>(addresses), sizeof(addresses), y);
             }
 
             // ---------------------------------------------------------------------
             // Send a NAT data packet.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept 
+            /** @brief Sends NAT packet payload. */
+            bool VirtualEthernetLinklayer::DoNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept
             {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
                 }
-                
+
                 return global::PACKET_Push(PacketAction_NAT, transmission, packet, packet_length, y);
             }
 
             // ---------------------------------------------------------------------
             // Send virtual Ethernet information structure (converted to network byte order).
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept 
-            {
-                VirtualEthernetInformation info;
+            /** @brief Sends base information payload. */
+            bool VirtualEthernetLinklayer::DoInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
+                InformationEnvelope envelope;
+                envelope.Base = information;
+                return DoInformation(transmission, envelope, y);
+            }
+
+            /** @brief Sends extended information envelope. */
+            bool VirtualEthernetLinklayer::DoInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept {
+                VirtualEthernetInformation info = information.Base;
 
                 // convert host byte order to network byte order for transmission
-                info.BandwidthQoS    = ppp::net::Ipep::HostToNetworkOrder(information.BandwidthQoS);
-                info.ExpiredTime     = htonl(information.ExpiredTime);
-                info.IncomingTraffic = ppp::net::Ipep::HostToNetworkOrder(information.IncomingTraffic);
-                info.OutgoingTraffic = ppp::net::Ipep::HostToNetworkOrder(information.OutgoingTraffic);
-                return global::PACKET_Push(PacketAction_INFO, transmission, 
-                                           reinterpret_cast<Byte*>(&info), sizeof(info), y);
+                info.BandwidthQoS    = ppp::net::Ipep::HostToNetworkOrder(info.BandwidthQoS);
+                info.ExpiredTime     = htonl(info.ExpiredTime);
+                info.IncomingTraffic = ppp::net::Ipep::HostToNetworkOrder(info.IncomingTraffic);
+                info.OutgoingTraffic = ppp::net::Ipep::HostToNetworkOrder(info.OutgoingTraffic);
+
+                MemoryStream ms;
+                if (!ms.Write(&info, 0, sizeof(info))) {
+                    return false;
+                }
+
+                ppp::string extended = information.ExtendedJson;
+                if (extended.empty() && information.Extensions.HasAny()) {
+                    extended = information.Extensions.ToJson();
+                }
+
+                if (!extended.empty()) {
+                    if (!ms.Write(extended.data(), 0, static_cast<int>(extended.size()))) {
+                        return false;
+                    }
+                }
+
+                ppp::telemetry::Log(Level::kDebug, "protocol", "INFO sent bandwidth_qos=%lld incoming=%llu outgoing=%llu",
+                                    static_cast<long long>(info.BandwidthQoS),
+                                    static_cast<unsigned long long>(info.IncomingTraffic),
+                                    static_cast<unsigned long long>(info.OutgoingTraffic));
+                ppp::telemetry::Count("protocol.info.sent", 1);
+                ppp::telemetry::Count("protocol.bandwidth.sent", 1);
+
+                std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                return global::PACKET_Push(PacketAction_INFO, transmission, buffer.get(), ms.GetPosition(), y);
             }
 
             // ---------------------------------------------------------------------
             // Send a TCP connection request using an endpoint.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept 
+            /** @brief Sends connect request using destination endpoint. */
+            bool VirtualEthernetLinklayer::DoConnect(const ITransmissionPtr& transmission, int connection_id, const boost::asio::ip::tcp::endpoint& destinationEP, YieldContext& y) noexcept
             {
-                return global::PACKET_DoConnect(transmission, connection_id, &destinationEP, 
+                return global::PACKET_DoConnect(transmission, connection_id, &destinationEP,
                                                 ppp::string(), IPEndPoint::MinPort, y);
             }
 
             // ---------------------------------------------------------------------
             // Send a TCP connection request using hostname and port.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoConnect(const ITransmissionPtr& transmission, int connection_id, const ppp::string& hostname, int port, YieldContext& y) noexcept 
+            /** @brief Sends connect request using host text and port. */
+            bool VirtualEthernetLinklayer::DoConnect(const ITransmissionPtr& transmission, int connection_id, const ppp::string& hostname, int port, YieldContext& y) noexcept
             {
                 return global::PACKET_DoConnect(transmission, connection_id, NULLPTR, hostname, port, y);
             }
@@ -849,37 +1068,52 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send a TCP connection acknowledgment with error code.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept 
+            /** @brief Sends connect acknowledgment with error code. */
+            bool VirtualEthernetLinklayer::DoConnectOK(const ITransmissionPtr& transmission, int connection_id, Byte error_code, YieldContext& y) noexcept
             {
-                return global::PACKET_Push(PacketAction_SYNOK, transmission, connection_id, 
+                return global::PACKET_Push(PacketAction_SYNOK, transmission, connection_id,
                                            &error_code, sizeof(error_code), y);
             }
 
             // ---------------------------------------------------------------------
             // Send TCP data push on a connection.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept 
+            /** @brief Sends stream payload on established connection. */
+            bool VirtualEthernetLinklayer::DoPush(const ITransmissionPtr& transmission, int connection_id, Byte* packet, int packet_length, YieldContext& y) noexcept
             {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
                 }
 
-                return global::PACKET_Push(PacketAction_PSH, transmission, connection_id, 
+                return global::PACKET_Push(PacketAction_PSH, transmission, connection_id,
                                            packet, packet_length, y);
             }
 
             // ---------------------------------------------------------------------
             // Send TCP disconnection notification (FIN).
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept 
+            /** @brief Sends connection close notification. */
+            bool VirtualEthernetLinklayer::DoDisconnect(const ITransmissionPtr& transmission, int connection_id, YieldContext& y) noexcept
             {
                 return global::PACKET_Push(PacketAction_FIN, transmission, connection_id, NULLPTR, 0, y);
             }
 
+            // Maximum binary frame size that is safe to emit when key.plaintext is enabled.
+            //
+            // In plaintext mode every transmission frame is wrapped in a base94 envelope
+            // (see ITransmissionBridge::Encrypt).  ssea::base94_encode can expand the binary
+            // payload by up to 2x in the worst case, so the binary frame must stay at or below
+            // PPP_BUFFER_SIZE/2 (minus the small frame header) to guarantee the encoded frame
+            // does not exceed PPP_BUFFER_SIZE on the receiver.  TCP and vmux read paths cap
+            // their socket reads to the same bound; UDP datagrams cannot be split without
+            // breaking datagram boundaries, so an oversized datagram is dropped instead.
+            static constexpr int kPlaintextBase94MaxBinaryFrame = (PPP_BUFFER_SIZE / 2) - 3;
+
             // ---------------------------------------------------------------------
             // Send a UDP datagram with source and destination endpoints.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept 
+            /** @brief Sends UDP payload with source and destination endpoint metadata. */
+            bool VirtualEthernetLinklayer::DoSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept
             {
                 if (NULLPTR == packet && packet_length != 0) {
                     return false;
@@ -895,7 +1129,28 @@ namespace ppp {
                         if (global::PACKET_IPEndPoint(ms, sourceEP)) {
                             if (ms.Write(packet, 0, packet_length)) {
                                 std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                                return transmission->Write(y, buffer.get(), ms.GetPosition());
+                                int frame_length = ms.GetPosition();
+
+                                // In plaintext mode the frame is base94-wrapped before transport.
+                                // A frame that would expand past PPP_BUFFER_SIZE on the receiver is
+                                // rejected there with ProtocolFrameInvalid, which tears down the whole
+                                // transmission (Read returns null -> Dispose).  UDP has no MTU contract
+                                // here and cannot be split, so silently drop the oversized datagram and
+                                // report success: a single lost datagram is normal UDP behaviour and far
+                                // less harmful than collapsing the tunnel.
+                                if (frame_length > kPlaintextBase94MaxBinaryFrame) {
+                                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
+                                    if (NULLPTR != configuration && configuration->key.plaintext) {
+                                        ppp::telemetry::Log(Level::kInfo,
+                                            "linklayer",
+                                            "drop oversized plaintext UDP datagram frame_length=%d max=%d",
+                                            frame_length,
+                                            kPlaintextBase94MaxBinaryFrame);
+                                        return true;
+                                    }
+                                }
+
+                                return transmission->Write(y, buffer.get(), frame_length);
                             }
                         }
                     }
@@ -907,27 +1162,53 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send an echo reply (acknowledgment).
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept 
+            /** @brief Sends echo acknowledgment by connection-style ID field. */
+            bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, int ack_id, YieldContext& y) noexcept
             {
+                ppp::telemetry::Log(Level::kDebug, "protocol", "ECHOACK sent ack_id=%d", ack_id);
+                ppp::telemetry::Count("protocol.echoack.sent", 1);
                 return global::PACKET_Push(PacketAction_ECHOACK, transmission, ack_id, NULLPTR, 0, y);
             }
 
             // ---------------------------------------------------------------------
             // Send an echo request with payload.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept 
+            /** @brief Sends echo payload packet. */
+            bool VirtualEthernetLinklayer::DoEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept
             {
+                // In plaintext mode the frame is base94-wrapped before transport and may expand
+                // by up to 2x.  An ICMP echo payload large enough to exceed PPP_BUFFER_SIZE after
+                // encoding would be rejected by the peer and collapse the whole transmission.
+                // Echo is a datagram-style message, so drop the oversized one (report success)
+                // rather than tearing down the tunnel.  See DoSendTo for the same rationale.
+                if (NULLPTR != packet && packet_length > kPlaintextBase94MaxBinaryFrame) {
+                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration = GetConfiguration();
+                    if (NULLPTR != configuration && configuration->key.plaintext) {
+                        ppp::telemetry::Log(Level::kInfo,
+                            "protocol",
+                            "drop oversized plaintext ECHO packet packet_length=%d max=%d",
+                            packet_length,
+                            kPlaintextBase94MaxBinaryFrame);
+                        return true;
+                    }
+                }
+
+                ppp::telemetry::Log(Level::kDebug, "protocol", "ECHO sent");
+                ppp::telemetry::Count("protocol.echo.sent", 1);
                 return global::PACKET_Push(PacketAction_ECHO, transmission, packet, packet_length, y);
             }
 
             // ---------------------------------------------------------------------
             // Request static route information.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept 
+            /** @brief Sends static-route request packet. */
+            bool VirtualEthernetLinklayer::DoStatic(const ITransmissionPtr& transmission, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_STATIC))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "STATIC sent");
+                    ppp::telemetry::Count("protocol.static.sent", 1);
                     return transmission->Write(y, buffer.get(), ms.GetPosition());
                 }
 
@@ -938,7 +1219,8 @@ namespace ppp {
             // Respond with static route information for a specific session.
             // Fixed: use memcpy for alignment‑safe UUID conversion.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept 
+            /** @brief Sends static-route acknowledgment payload. */
+            bool VirtualEthernetLinklayer::DoStatic(const ITransmissionPtr& transmission, Int128 fsid, int session_id, int remote_port, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_STATICACK))) {
@@ -947,10 +1229,12 @@ namespace ppp {
                             // safely copy Int128 into a uuid buffer (avoids alignment UB)
                             boost::uuids::uuid uuid_buf;
                             std::memcpy(&uuid_buf, &fsid, sizeof(uuid_buf));
-                            
+
                             Int128 fsid_netbuf = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(uuid_buf);
                             if (ms.Write(&fsid_netbuf, 0, sizeof(fsid_netbuf))) {
                                 std::shared_ptr<Byte> buffer = ms.GetBuffer();
+                                ppp::telemetry::Log(Level::kDebug, "protocol", "STATICACK sent session_id=%d remote_port=%d", session_id, remote_port);
+                                ppp::telemetry::Count("protocol.staticack.sent", 1);
                                 return transmission->Write(y, buffer.get(), ms.GetPosition());
                             }
                         }
@@ -963,7 +1247,8 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send MUX setup request.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, YieldContext& y) noexcept 
+            /** @brief Sends MUX setup request packet. */
+            bool VirtualEthernetLinklayer::DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 VirtualEthernetLinklayer_MUX_IL data;
@@ -971,19 +1256,25 @@ namespace ppp {
                 data.vlan             = htons(vlan);
                 data.max_connections  = htons(max_connections);
                 data.acceleration     = acceleration ? 1 : 0;
+                data.ordering_caps    = ordering_caps;
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return transmission->Write(y, buffer.get(), ms.GetPosition());
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "MUX sent vlan=%u max_connections=%u caps=%u",
+                                        static_cast<unsigned int>(vlan), static_cast<unsigned int>(max_connections),
+                                        static_cast<unsigned int>(ordering_caps));
+                    ppp::telemetry::Count("protocol.mux.sent", 1);
+                    return global::PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 
-                return false;
+                return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
             }
 
             // ---------------------------------------------------------------------
             // Send MUXON acknowledgment.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept 
+            /** @brief Sends MUX setup acknowledgment packet. */
+            bool VirtualEthernetLinklayer::DoMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 VirtualEthernetLinklayer_MUXON_IL data;
@@ -994,16 +1285,20 @@ namespace ppp {
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
-                    return transmission->Write(y, buffer.get(), ms.GetPosition());
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "MUXON sent vlan=%u seq=%u ack=%u",
+                                        static_cast<unsigned int>(vlan), static_cast<unsigned int>(seq), static_cast<unsigned int>(ack));
+                    ppp::telemetry::Count("protocol.muxon.sent", 1);
+                    return global::PACKET_Result(transmission->Write(y, buffer.get(), ms.GetPosition()), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 }
 
-                return false;
+                return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
             }
 
             // ---------------------------------------------------------------------
             // Send FRP entry registration.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept 
+            /** @brief Sends FRP entry registration packet. */
+            bool VirtualEthernetLinklayer::DoFrpEntry(const ITransmissionPtr& transmission, bool tcp, bool in, int remote_port, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_FRP_ENTRY))) {
@@ -1025,7 +1320,8 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send FRP UDP datagram.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept 
+            /** @brief Sends FRP UDP payload packet. */
+            bool VirtualEthernetLinklayer::DoFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept
             {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;
@@ -1052,7 +1348,8 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send FRP connection request.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept 
+            /** @brief Sends FRP connect request packet. */
+            bool VirtualEthernetLinklayer::DoFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_FRP_CONNECT))) {
@@ -1073,7 +1370,8 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send FRP connection acknowledgment.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept 
+            /** @brief Sends FRP connect acknowledgment packet. */
+            bool VirtualEthernetLinklayer::DoFrpConnectOK(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, Byte error_code, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_FRP_CONNECTOK))) {
@@ -1096,7 +1394,8 @@ namespace ppp {
             // ---------------------------------------------------------------------
             // Send FRP disconnection notification.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept 
+            /** @brief Sends FRP disconnect packet. */
+            bool VirtualEthernetLinklayer::DoFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 if (ms.WriteByte(static_cast<Byte>(PacketAction_FRP_DISCONNECT))) {
@@ -1110,14 +1409,15 @@ namespace ppp {
                         }
                     }
                 }
-                
+
                 return false;
             }
 
             // ---------------------------------------------------------------------
             // Send FRP data push.
             // ---------------------------------------------------------------------
-            bool VirtualEthernetLinklayer::DoFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet,  int packet_length, YieldContext& y) noexcept 
+            /** @brief Sends FRP stream data packet. */
+            bool VirtualEthernetLinklayer::DoFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet,  int packet_length, YieldContext& y) noexcept
             {
                 if (NULLPTR == packet || packet_length < 1) {
                     return false;

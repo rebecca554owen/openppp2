@@ -1,10 +1,15 @@
 #include <windows/ppp/win32/Win32Native.h>
 #include <windows/ppp/win32/Win32Variant.h>
 #include <windows/ppp/win32/Win32RegistryKey.h>
+#include <windows/ppp/net/proxies/HttpProxy.h>
 #include <ppp/io/File.h>
 #include <ppp/text/Encoding.h>
 #include <ppp/threading/Executors.h>
+#include <ppp/diagnostics/Error.h>
 #include <common/chnroutes2/chnroutes2.h>
+
+#include <memory>
+#include <new>
 
 #include <Windows.h>
 #include <process.h>
@@ -16,8 +21,6 @@
 
 #include <intrin.h>
 #include <initguid.h>
-#include <atlbase.h>
-#include <atlcom.h>
 #include <io.h>
 #include <fcntl.h>
 #include <propkey.h>
@@ -29,6 +32,7 @@
 #include <comdef.h>
 #include <comutil.h>
 #include <Wbemidl.h>
+#include <wrl/client.h>
 #include <crtdbg.h>
 #include <dbghelp.h>
 
@@ -92,6 +96,13 @@ namespace ppp
                 MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile, MiniDumpWithFullMemory, &exceptionParam, NULLPTR, NULLPTR);
                 CloseHandle(hFile);
             }
+
+            // Best-effort restore of the Windows system proxy before we bail out.
+            // Without this, a crash leaves HKCU ProxyEnable=1 pointing at 127.0.0.1:<port>,
+            // so the user loses all connectivity until they manually clear it or reboot.
+            // EmergencyRestoreSystemProxy() is allocation-free and a no-op unless this
+            // process actually engaged the system proxy.
+            ppp::net::proxies::HttpProxy::EmergencyRestoreSystemProxy();
 
             // The handler either took care of the invalid parameter problem itself,
             // or passed it on to another handler.  "Swallow" it by exiting, paralleling
@@ -167,9 +178,9 @@ namespace ppp
             return Seh_UnhandledExceptionFilter(&exception_ptrs);
         }
 
-        static int __CRTDECL Crt_NewHandler(size_t) noexcept
+        static void __CRTDECL Crt_NewHandler()
         {
-            return Seh_NoncontinuableException();
+            Seh_NoncontinuableException();
         }
 
         static void __CRTDECL Crt_HandlePureVirtualCall() noexcept
@@ -227,9 +238,9 @@ namespace ppp
             ::_set_abort_behavior(_CALL_REPORTFAULT, _CALL_REPORTFAULT);
 
             ::_set_purecall_handler(Crt_HandlePureVirtualCall);
-            ::_set_new_handler(Crt_NewHandler); /* std::set_new_handler(...) */
+            std::set_new_handler(Crt_NewHandler);
 
-#if _MSC_VER >= 1400 
+#if _MSC_VER >= 1400
             ::_set_invalid_parameter_handler(Crt_InvalidParameterHandler);
 #endif
 
@@ -271,12 +282,14 @@ namespace ppp
                 hModule = LoadLibraryA(moduleName);
                 if (NULLPTR == hModule)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeLoadLibraryFailed);
                     return NULLPTR;
                 }
             }
 
             if (NULLPTR == functionName || *functionName == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeGetProcAddressFunctionNameEmpty);
                 return NULLPTR;
             }
 
@@ -289,6 +302,7 @@ namespace ppp
             DWORD size = sizeof(username);
             if (!GetUserNameA(username, &size))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppContextUnavailable);
                 return "";
             }
             else
@@ -317,10 +331,17 @@ namespace ppp
             static DnsFlushResolverCacheProc WINAPI_DnsFlushResolverCache = (DnsFlushResolverCacheProc)GetProcAddress("Dnsapi.dll", "DnsFlushResolverCache");
             if (NULLPTR == WINAPI_DnsFlushResolverCache)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
                 return false;
             }
 
-            return WINAPI_DnsFlushResolverCache();
+            if (!WINAPI_DnsFlushResolverCache())
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
+                return false;
+            }
+
+            return true;
         }
 
         bool Win32Native::IsUserAnAdministrator() noexcept
@@ -334,6 +355,7 @@ namespace ppp
             HANDLE hToken = NULLPTR;
             if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
                 return false;
             }
 
@@ -356,6 +378,7 @@ namespace ppp
         {
             if (handle == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCloseHandleInvalidHandleValue);
                 return false;
             }
 
@@ -366,6 +389,7 @@ namespace ppp
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
         }
@@ -374,6 +398,7 @@ namespace ppp
         {
             if (NULLPTR == handle)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCloseWsaEventNullHandle);
                 return false;
             }
 
@@ -384,6 +409,7 @@ namespace ppp
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
         }
@@ -392,6 +418,7 @@ namespace ppp
         {
             if (NULLPTR == filePath || *filePath == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return false;
             }
 
@@ -417,6 +444,7 @@ namespace ppp
 
             if (!ShellExecuteExA(&sei))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeShellExecuteFailed);
                 return false;
             }
 
@@ -437,17 +465,30 @@ namespace ppp
         {
             if (NULLPTR == commandText || *commandText == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeExecuteCommandTextEmpty);
                 return false;
             }
 
             if (runas)
             {
-                return ShellExecuteA(NULLPTR, "runas", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL);
+                INT_PTR ret = reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "runas", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL));
+                if (ret <= 32)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeShellExecuteFailed);
+                    return false;
+                }
             }
             else
             {
-                return ShellExecuteA(NULLPTR, "open", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL);
+                INT_PTR ret = reinterpret_cast<INT_PTR>(ShellExecuteA(NULLPTR, "open", commandText, NULLPTR, NULLPTR, SW_SHOWNORMAL));
+                if (ret <= 32)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeShellExecuteFailed);
+                    return false;
+                }
             }
+
+            return true;
         }
 
         bool Win32Native::EnableDebugPrivilege() noexcept
@@ -455,6 +496,7 @@ namespace ppp
             HANDLE hToken = NULLPTR;
             if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32PrivilegeQueryFailed);
                 return false;
             }
 
@@ -463,6 +505,7 @@ namespace ppp
 
             if (!LookupPrivilegeValue(NULLPTR, SE_DEBUG_NAME, &tkp.Privileges[0].Luid))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32DebugPrivilegeAdjustFailed);
                 CloseHandle(hToken);
                 return false;
             }
@@ -478,7 +521,15 @@ namespace ppp
                 if (lastError != ERROR_SUCCESS)
                 {
                     ok = lastError != ERROR_NOT_ALL_ASSIGNED;
+                    if (!ok)
+                    {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32DebugPrivilegeNotAssigned);
+                    }
                 }
+            }
+            else
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32DebugPrivilegeAdjustFailed);
             }
 
             CloseHandle(hToken);
@@ -500,6 +551,7 @@ namespace ppp
         {
             if (NULLPTR == tap || tap == INVALID_HANDLE_VALUE)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 return false;
             }
 
@@ -510,28 +562,46 @@ namespace ppp
 
             BOOL bOK = false;
             HANDLE hEvent = ::CreateEvent(NULLPTR, false, false, NULLPTR);
-            do
+            if (NULLPTR == hEvent)
             {
-                OVERLAPPED overlapped{};
-                overlapped.hEvent = hEvent;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+                return false;
+            }
 
-                DWORD dw = 0;
-                if (NULLPTR == contents)
-                {
-                    bOK = ::DeviceIoControl((LPVOID)tap, commands,
-                        (LPVOID)contents, 0, (LPVOID)contents, 0, &dw, &overlapped);
-                }
-                else
-                {
-                    bOK = ::DeviceIoControl((LPVOID)tap, commands,
-                        (LPVOID)contents, content_size, (LPVOID)contents, content_size, &dw, &overlapped);
-                }
-            } while (false);
+            OVERLAPPED overlapped{};
+            overlapped.hEvent = hEvent;
+
+            DWORD dw = 0;
+            if (NULLPTR == contents)
+            {
+                bOK = ::DeviceIoControl((LPVOID)tap, commands,
+                    (LPVOID)contents, 0, (LPVOID)contents, 0, &dw, &overlapped);
+            }
+            else
+            {
+                bOK = ::DeviceIoControl((LPVOID)tap, commands,
+                    (LPVOID)contents, content_size, (LPVOID)contents, content_size, &dw, &overlapped);
+            }
+
+            // The TAP handle is opened with FILE_FLAG_OVERLAPPED, so the call may complete
+            // asynchronously (returns FALSE + ERROR_IO_PENDING). Wait for completion before
+            // touching the event handle; closing it while the kernel still references the
+            // OVERLAPPED would corrupt the stack object and the event.
+            if (!bOK && ::GetLastError() == ERROR_IO_PENDING)
+            {
+                bOK = ::GetOverlappedResult((LPVOID)tap, &overlapped, &dw, TRUE);
+            }
 
             if (NULLPTR != hEvent)
             {
                 ::CloseHandle(hEvent);
             }
+
+            if (!bOK)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
+            }
+
             return bOK;
         }
 
@@ -539,18 +609,21 @@ namespace ppp
         {
             if (NULLPTR == path || *path == '\x0')
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return "";
             }
 
             DWORD fullpath_size = GetFullPathNameA(path, 0, NULLPTR, NULLPTR);
             if (fullpath_size == 0 || fullpath_size == MAXDWORD)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return "";
             }
 
             LPSTR fullpath_string = (LPSTR)Malloc(fullpath_size + 1);
             if (NULLPTR == fullpath_string)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return "";
             }
 
@@ -559,6 +632,10 @@ namespace ppp
             if (dw != 0)
             {
                 fullpath = ppp::string(fullpath_string, dw);
+            }
+            else
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
             }
 
             Mfree(fullpath_string);
@@ -750,12 +827,6 @@ namespace ppp
             {
                 PHANDLER_ROUTINE f = [](_In_ DWORD fdwCtrlType) -> BOOL
                 {
-                    const ShutdownApplicationEventHandler e = SHUTDOWN_APPLICATION_EVENT;
-                    if (NULLPTR == e)
-                    {
-                        return FALSE;
-                    }
-
                     const DWORD fdw_shutdown_ctrl_types[] =
                     {
                         CTRL_C_EVENT,
@@ -770,10 +841,15 @@ namespace ppp
                     {
                         if (*tmp_fdw_shutdown_ctrl_types++ == fdwCtrlType)
                         {
-                            return e() ? TRUE : FALSE;
+                            const ShutdownApplicationEventHandler e = SHUTDOWN_APPLICATION_EVENT;
+                            if (NULLPTR != e)
+                            {
+                                e();
+                            }
+                            return TRUE;
                         }
                     }
-                    return FALSE;
+                    return TRUE;
                 };
                 bOK = SetConsoleCtrlHandler(f, TRUE);
             }
@@ -785,42 +861,47 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
         }
 
+        struct CoTaskMemFreeDeleter
+        {
+            void operator()(WCHAR* value) const noexcept
+            {
+                CoTaskMemFree(value);
+            }
+        };
+
         // Wrapper for SHCreateItemFromParsingName(), IShellItem2::GetString()
         // Throws std::system_error in case of any error.
-        static std::wstring GetShellPropStringFromPath(CComPtr<IShellItem2>& pItem, CComHeapPtr<WCHAR>& pValue, LPCWSTR pPath, PROPERTYKEY const& key)
+        static std::wstring GetShellPropStringFromPath(LPCWSTR pPath, PROPERTYKEY const& key)
         {
-            // Use CComPtr to automatically release the IShellItem2 interface when the function returns
-            // or an exception is thrown.
-            HRESULT hr = SHCreateItemFromParsingName(pPath, nullptr, IID_PPV_ARGS(&pItem));
+            Microsoft::WRL::ComPtr<IShellItem2> pItem;
+            HRESULT hr = SHCreateItemFromParsingName(pPath, NULLPTR, IID_PPV_ARGS(pItem.GetAddressOf()));
             if (FAILED(hr))
             {
                 throw std::system_error(hr, std::system_category(), "SHCreateItemFromParsingName() failed");
             }
 
-            // Use CComHeapPtr to automatically release the string allocated by the shell when the function returns
-            // or an exception is thrown (calls CoTaskMemFree).
-            hr = pItem->GetString(key, &pValue);
+            WCHAR* rawValue = NULLPTR;
+            hr = pItem->GetString(key, &rawValue);
             if (FAILED(hr))
             {
                 throw std::system_error(hr, std::system_category(), "IShellItem2::GetString() failed");
             }
+            std::unique_ptr<WCHAR, CoTaskMemFreeDeleter> pValue(rawValue);
 
             // Copy to wstring for convenience
-            return std::wstring(pValue);
+            return std::wstring(pValue.get());
         }
 
         static bool GetShellPropStringFromPath(LPCWSTR pPath, PROPERTYKEY const& key, std::wstring& out) noexcept
         {
-            CComPtr<IShellItem2> pItem;
-            CComHeapPtr<WCHAR> pValue;
-
             try
             {
-                out = GetShellPropStringFromPath(pItem, pValue, pPath, key);
+                out = GetShellPropStringFromPath(pPath, key);
                 return true;
             }
             catch (const std::exception&)
@@ -881,10 +962,16 @@ namespace ppp
             HANDLE hProcess = ::GetCurrentProcess();
             if (NULLPTR == hProcess) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
                 return false;
             }
 
             BOOL ok = ::SetProcessWorkingSetSize(hProcess, INFINITE, INFINITE);
+            if (!ok)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32WorkingSetTrimFailed);
+            }
+
             return ok != FALSE;
         }
 
@@ -902,6 +989,7 @@ namespace ppp
             }
             else
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FilePathInvalid);
                 return ppp::string();
             }
         }
@@ -938,6 +1026,7 @@ namespace ppp
             HANDLE hStdin, hStdout;
             if (!CreatePipe(&hStdin, &hStdout, &sa, 0))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return "";
             }
 
@@ -956,6 +1045,7 @@ namespace ppp
             bool ok = CreateProcessA(NULLPTR, (LPSTR)command.data(), NULLPTR, NULLPTR, TRUE, 0, NULLPTR, NULLPTR, &si, &pi);
             if (!ok)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeCreateProcessFailed);
                 CloseHandle(hStdin);
                 CloseHandle(hStdout);
                 return "";
@@ -1024,7 +1114,11 @@ namespace ppp
         {
             int s1, s2, s3, s4;
 
-#if _WIN64
+#if defined(_M_ARM64)
+            // ARM64 Windows: CPUID not available, return fixed values
+            // Could use IsProcessorFeaturePresent() for feature detection
+            s1 = s2 = s3 = s4 = 0;
+#elif _WIN64
             int sn[4];
             __cpuid(sn, 0);
             s1 = sn[0];
@@ -1072,6 +1166,7 @@ namespace ppp
                 &ftKernel,
                 &ftUser))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return 0;
             }
 
@@ -1107,18 +1202,21 @@ namespace ppp
             int dw = GetLogicalDriveStringsA(0, NULLPTR);
             if (dw < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                 return "";
             }
 
             auto sb = make_shared_alloc<Byte>(dw);
             if (NULLPTR == sb)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return "";
             }
             
             dw = GetLogicalDriveStringsA(dw, (LPSTR)sb.get());
             if (dw == 0)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                 return "";
             }
             
@@ -1126,6 +1224,7 @@ namespace ppp
             DWORD maxcomp;
             if (!GetVolumeInformationA((LPSTR)sb.get(), NULLPTR, 0, &serials, &maxcomp, 0, NULLPTR, 0))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileStatFailed);
                 return "";
             }
 
@@ -1240,12 +1339,14 @@ namespace ppp
             std::wstring name_wstr = ppp::text::Encoding::ascii_to_wstring(name);
             if (name_wstr.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32NativeSetThreadDescriptionNameConvertFailed);
                 return false;
             }
 
             HRESULT hr = __SetThreadDescription__(GetCurrentThread(), name_wstr.data());
             if (FAILED(hr))
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
                 return false;
             }
 
@@ -1274,16 +1375,15 @@ namespace ppp
         {
             if (NULLPTR != handle)
             {
-                boost::system::error_code ec;
                 try
                 {
-                    handle->cancel(ec);
+                    handle->cancel();
                 }
                 catch (const std::exception&) {}
 
                 try
                 {
-                    handle->close(ec);
+                    handle->close();
                 }
                 catch (const std::exception&) {}
             }

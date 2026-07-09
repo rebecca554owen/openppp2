@@ -1,13 +1,30 @@
 #pragma once
 
+/**
+ * @file fmt.h
+ * @brief Lightweight placeholder-based string formatting utilities.
+ */
+
 #include <ppp/stdafx.h>
 
 namespace ppp
 {
+    /**
+     * @brief Simple formatter that replaces `{}` tokens in sequence.
+     * @tparam TString Target string type used for formatting and output.
+     */
     template <class TString = string>
     class fmt
     {
     public:
+        /**
+         * @brief Formats a string by replacing each `{}` placeholder with a value.
+         * @tparam S Input format string type.
+         * @tparam T Argument pack type.
+         * @param fmt Format text containing `{}` placeholders.
+         * @param args Values consumed left-to-right.
+         * @return Formatted string in `TString`.
+         */
         template <typename S, typename ...T>
         static TString                  format(const S& fmt, T ... args) noexcept
         {
@@ -37,6 +54,14 @@ namespace ppp
             return str;
         }
 
+        /**
+         * @brief Formats text and writes result characters to an output iterator.
+         * @tparam OutputIt Output iterator type.
+         * @tparam T Argument pack type.
+         * @param out Destination iterator.
+         * @param fmt Format text containing `{}` placeholders.
+         * @param args Values consumed left-to-right.
+         */
         template <typename OutputIt, typename ...T>
         static void                     format_to(OutputIt&& out, const TString& fmt, T ... args) noexcept
         {
@@ -48,6 +73,12 @@ namespace ppp
         }
 
     private:
+        /**
+         * @brief Converts a value to `TString` for placeholder replacement.
+         * @tparam T Input value type.
+         * @param value Source value.
+         * @return String representation compatible with `TString`.
+         */
         template <typename T>
         static TString                  to_string(const T& value) noexcept
         {
@@ -98,12 +129,24 @@ namespace ppp
             }
         }
 
+        /**
+         * @brief Converts shared pointer content address/value to string.
+         * @tparam T Pointee type.
+         * @param value Shared pointer.
+         * @return String representation of pointer target address semantics.
+         */
         template <typename T>
         static TString                  to_string(const std::shared_ptr<T>& value) noexcept
         {
             return fmt::to_string(value.get());
         }
 
+        /**
+         * @brief Replaces the next `{}` placeholder with one value.
+         * @tparam T Input value type.
+         * @param out In/out formatted buffer.
+         * @param value Value to substitute.
+         */
         template <typename T>
         static void                     format_string(TString& out, const T& value) noexcept
         {
@@ -111,6 +154,13 @@ namespace ppp
         }
 
     public:
+        /**
+         * @brief Replaces the first occurrence of a substring.
+         * @param str In/out source string.
+         * @param old_string Substring to find.
+         * @param new_string Replacement text.
+         * @return `true` if one occurrence was replaced; otherwise `false`.
+         */
         static bool                     replace_string(TString& str, const std::string_view& old_string, const std::string_view& new_string) noexcept
         {
             size_t pos = str.find(old_string);

@@ -1,53 +1,74 @@
+/**
+ * @file md5.cpp
+ * @brief MD5 hash implementation.
+ */
 #include "md5.h"
 
-/* Constants for MD5Transform routine. */
+/** @brief Left-rotation shift for round 1, step group 1. */
 #define S11 7
+/** @brief Left-rotation shift for round 1, step group 2. */
 #define S12 12
+/** @brief Left-rotation shift for round 1, step group 3. */
 #define S13 17
+/** @brief Left-rotation shift for round 1, step group 4. */
 #define S14 22
+/** @brief Left-rotation shift for round 2, step group 1. */
 #define S21 5
+/** @brief Left-rotation shift for round 2, step group 2. */
 #define S22 9
+/** @brief Left-rotation shift for round 2, step group 3. */
 #define S23 14
+/** @brief Left-rotation shift for round 2, step group 4. */
 #define S24 20
+/** @brief Left-rotation shift for round 3, step group 1. */
 #define S31 4
+/** @brief Left-rotation shift for round 3, step group 2. */
 #define S32 11
+/** @brief Left-rotation shift for round 3, step group 3. */
 #define S33 16
+/** @brief Left-rotation shift for round 3, step group 4. */
 #define S34 23
+/** @brief Left-rotation shift for round 4, step group 1. */
 #define S41 6
+/** @brief Left-rotation shift for round 4, step group 2. */
 #define S42 10
+/** @brief Left-rotation shift for round 4, step group 3. */
 #define S43 15
+/** @brief Left-rotation shift for round 4, step group 4. */
 #define S44 21
 
 
-/* F, G, H and I are basic MD5 functions.
-*/
+/** @brief MD5 auxiliary boolean function F. */
 #define F(x, y, z) (((x) & (y)) | ((~x) & (z)))
+/** @brief MD5 auxiliary boolean function G. */
 #define G(x, y, z) (((x) & (z)) | ((y) & (~z)))
+/** @brief MD5 auxiliary boolean function H. */
 #define H(x, y, z) ((x) ^ (y) ^ (z))
+/** @brief MD5 auxiliary boolean function I. */
 #define I(x, y, z) ((y) ^ ((x) | (~z)))
 
-/* ROTATE_LEFT rotates x left n bits.
-*/
+/** @brief Performs 32-bit circular left rotation. */
 #define ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (32-(n))))
 
-/* FF, GG, HH, and II transformations for rounds 1, 2, 3, and 4.
-Rotation is separate from addition to prevent recomputation.
-*/
+/** @brief Round 1 transformation step macro. */
 #define FF(a, b, c, d, x, s, ac) { \
     (a) += F ((b), (c), (d)) + (x) + ac; \
     (a) = ROTATE_LEFT ((a), (s)); \
     (a) += (b); \
 }
+/** @brief Round 2 transformation step macro. */
 #define GG(a, b, c, d, x, s, ac) { \
     (a) += G ((b), (c), (d)) + (x) + ac; \
     (a) = ROTATE_LEFT ((a), (s)); \
     (a) += (b); \
 }
+/** @brief Round 3 transformation step macro. */
 #define HH(a, b, c, d, x, s, ac) { \
     (a) += H ((b), (c), (d)) + (x) + ac; \
     (a) = ROTATE_LEFT ((a), (s)); \
     (a) += (b); \
 }
+/** @brief Round 4 transformation step macro. */
 #define II(a, b, c, d, x, s, ac) { \
     (a) += I ((b), (c), (d)) + (x) + ac; \
     (a) = ROTATE_LEFT ((a), (s)); \
@@ -65,30 +86,30 @@ namespace ppp {
             'c', 'd', 'e', 'f'
         };
 
-        /* Default construct. */
+        /** @brief Constructs an empty MD5 context. */
         MD5::MD5() {
             reset();
         }
 
-        /* Construct a MD5 object with a input buffer. */
+        /** @brief Constructs a context and hashes an initial memory block. */
         MD5::MD5(const void* input, size_t length) {
             reset();
             update(input, length);
         }
 
-        /* Construct a MD5 object with a string. */
+        /** @brief Constructs a context and hashes an initial string. */
         MD5::MD5(const string& str) {
             reset();
             update(str);
         }
 
-        /* Construct a MD5 object with a file. */
+        /** @brief Constructs a context and hashes from a stream. */
         MD5::MD5(ifstream& in) {
             reset();
             update(in);
         }
 
-        /* Return the message-digest */
+        /** @brief Finalizes if needed and returns digest bytes. */
         const byte* MD5::digest() {
 
             if (!_finished) {
@@ -98,30 +119,30 @@ namespace ppp {
             return _digest;
         }
 
-        /* Reset the calculate state */
+        /** @brief Resets the hash state to MD5 initial constants. */
         void MD5::reset() {
 
             _finished = false;
-            /* reset number of bits. */
+            /** @brief Reset bit counters. */
             _count[0] = _count[1] = 0;
-            /* Load magic initialization constants. */
+            /** @brief Load MD5 initialization vectors. */
             _state[0] = 0x67452301;
             _state[1] = 0xefcdab89;
             _state[2] = 0x98badcfe;
             _state[3] = 0x10325476;
         }
 
-        /* Updating the context with a input buffer. */
+        /** @brief Appends bytes from a raw buffer. */
         void MD5::update(const void* input, size_t length) {
             update((const byte*)input, length);
         }
 
-        /* Updating the context with a string. */
+        /** @brief Appends bytes from a string. */
         void MD5::update(const string& str) {
             update((const byte*)str.c_str(), str.length());
         }
 
-        /* Updating the context with a file. */
+        /** @brief Appends bytes from an input stream in chunks. */
         void MD5::update(ifstream& in) {
 
             if (!in) {
@@ -140,20 +161,20 @@ namespace ppp {
             in.close();
         }
 
-        /* MD5 block update operation. Continues an MD5 message-digest
-        operation, processing another message block, and updating the
-        context.
-        */
+        /**
+         * @brief Core block update routine for raw MD5 input bytes.
+         * @details Updates bit counters, transforms complete blocks, and buffers remaining bytes.
+         */
         void MD5::update(const byte* input, size_t length) {
 
             uint32 i, index, partLen;
 
             _finished = false;
 
-            /* Compute number of bytes mod 64 */
+            /** @brief Compute current buffer offset modulo 64 bytes. */
             index = (uint32)((_count[0] >> 3) & 0x3f);
 
-            /* update number of bits */
+            /** @brief Update total processed bit counters. */
             if ((_count[0] += ((uint32)length << 3)) < ((uint32)length << 3)) {
                 ++_count[1];
             }
@@ -161,7 +182,7 @@ namespace ppp {
 
             partLen = 64 - index;
 
-            /* transform as many times as possible. */
+            /** @brief Transform as many complete 64-byte blocks as available. */
             if (length >= partLen) {
 
                 memcpy(&_buffer[index], input, partLen);
@@ -177,13 +198,14 @@ namespace ppp {
                 i = 0;
             }
 
-            /* Buffer remaining input */
+            /** @brief Buffer remaining bytes for the next update/final call. */
             memcpy(&_buffer[index], &input[i], length - i);
         }
 
-        /* MD5 finalization. Ends an MD5 message-_digest operation, writing the
-        the message _digest and zeroizing the context.
-        */
+        /**
+         * @brief Finalizes the MD5 computation and writes the digest.
+         * @details Adds MD5 padding, appends original bit length, then stores result.
+         */
         void MD5::final() {
 
             byte bits[8];
@@ -191,37 +213,40 @@ namespace ppp {
             uint32 oldCount[2];
             uint32 index, padLen;
 
-            /* Save current state and count. */
+            /** @brief Snapshot current state and bit counters. */
             memcpy(oldState, _state, 16);
             memcpy(oldCount, _count, 8);
 
-            /* Save number of bits */
+            /** @brief Encode current bit length before padding. */
             encode(_count, bits, 8);
 
-            /* Pad out to 56 mod 64. */
+            /** @brief Pad message to 56 bytes modulo 64. */
             index = (uint32)((_count[0] >> 3) & 0x3f);
             padLen = (index < 56) ? (56 - index) : (120 - index);
             update(PADDING, padLen);
 
-            /* Append length (before padding) */
+            /** @brief Append original message length (in bits). */
             update(bits, 8);
 
-            /* Store state in digest */
+            /** @brief Encode final state words into 16-byte digest. */
             encode(_state, _digest, 16);
 
-            /* Restore current state and count. */
+            /** @brief Restore state so object can continue to be reused safely. */
             memcpy(_state, oldState, 16);
             memcpy(_count, oldCount, 8);
         }
 
-        /* MD5 basic transformation. Transforms _state based on block. */
+        /**
+         * @brief Applies one MD5 compression transformation on a 64-byte block.
+         * @param block Input block.
+         */
         void MD5::transform(const byte block[64]) {
 
             uint32 a = _state[0], b = _state[1], c = _state[2], d = _state[3], x[16];
 
             decode(block, x, 64);
 
-            /* Round 1 */
+            /** @brief Round 1. */
             FF(a, b, c, d, x[0], S11, 0xd76aa478); /* 1 */
             FF(d, a, b, c, x[1], S12, 0xe8c7b756); /* 2 */
             FF(c, d, a, b, x[2], S13, 0x242070db); /* 3 */
@@ -239,7 +264,7 @@ namespace ppp {
             FF(c, d, a, b, x[14], S13, 0xa679438e); /* 15 */
             FF(b, c, d, a, x[15], S14, 0x49b40821); /* 16 */
 
-            /* Round 2 */
+            /** @brief Round 2. */
             GG(a, b, c, d, x[1], S21, 0xf61e2562); /* 17 */
             GG(d, a, b, c, x[6], S22, 0xc040b340); /* 18 */
             GG(c, d, a, b, x[11], S23, 0x265e5a51); /* 19 */
@@ -257,7 +282,7 @@ namespace ppp {
             GG(c, d, a, b, x[7], S23, 0x676f02d9); /* 31 */
             GG(b, c, d, a, x[12], S24, 0x8d2a4c8a); /* 32 */
 
-            /* Round 3 */
+            /** @brief Round 3. */
             HH(a, b, c, d, x[5], S31, 0xfffa3942); /* 33 */
             HH(d, a, b, c, x[8], S32, 0x8771f681); /* 34 */
             HH(c, d, a, b, x[11], S33, 0x6d9d6122); /* 35 */
@@ -275,7 +300,7 @@ namespace ppp {
             HH(c, d, a, b, x[15], S33, 0x1fa27cf8); /* 47 */
             HH(b, c, d, a, x[2], S34, 0xc4ac5665); /* 48 */
 
-            /* Round 4 */
+            /** @brief Round 4. */
             II(a, b, c, d, x[0], S41, 0xf4292244); /* 49 */
             II(d, a, b, c, x[7], S42, 0x432aff97); /* 50 */
             II(c, d, a, b, x[14], S43, 0xab9423a7); /* 51 */
@@ -299,9 +324,12 @@ namespace ppp {
             _state[3] += d;
         }
 
-        /* Encodes input (ulong) into output (byte). Assumes length is
-        a multiple of 4.
-        */
+        /**
+         * @brief Encodes 32-bit words to little-endian bytes.
+         * @param input Input word array.
+         * @param output Output byte array.
+         * @param length Output byte length (multiple of 4).
+         */
         void MD5::encode(const uint32* input, byte* output, size_t length) {
 
             for (size_t i = 0, j = 0; j < length; ++i, j += 4) {
@@ -312,9 +340,12 @@ namespace ppp {
             }
         }
 
-        /* Decodes input (byte) into output (ulong). Assumes length is
-        a multiple of 4.
-        */
+        /**
+         * @brief Decodes little-endian bytes into 32-bit words.
+         * @param input Input byte array.
+         * @param output Output word array.
+         * @param length Input byte length (multiple of 4).
+         */
         void MD5::decode(const byte* input, uint32* output, size_t length) {
 
             for (size_t i = 0, j = 0; j < length; ++i, j += 4) {
@@ -323,7 +354,13 @@ namespace ppp {
             }
         }
 
-        /* Convert byte array to hex string. */
+        /**
+         * @brief Converts a byte array to hexadecimal text.
+         * @param input Input bytes.
+         * @param length Number of bytes to convert.
+         * @param toupper True for uppercase hex output.
+         * @return Hexadecimal string.
+         */
         string MD5::bytesToHexString(const byte* input, size_t length, bool toupper) {
 
             string str;
@@ -344,7 +381,11 @@ namespace ppp {
             return str;
         }
 
-        /* Convert digest to string value */
+        /**
+         * @brief Returns digest as hexadecimal text.
+         * @param toupper True for uppercase hex output.
+         * @return Hexadecimal digest string.
+         */
         string MD5::toString(bool toupper) {
             return bytesToHexString(digest(), 16, toupper);
         }

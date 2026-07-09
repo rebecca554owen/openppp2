@@ -117,31 +117,31 @@ namespace ppp
             {
                 return PlayState::Stopped;
             }
-            else if (mode == "paused")
+            elif (mode == "paused")
             {
                 return PlayState::Paused;
             }
-            else if (mode == "playing")
+            elif (mode == "playing")
             {
                 return PlayState::Playing;
             }
-            else if (mode == "not ready")
+            elif (mode == "not ready")
             {
                 return PlayState::NotReady;
             }
-            else if (mode == "open")
+            elif (mode == "open")
             {
                 return PlayState::Open;
             }
-            else if (mode == "recording")
+            elif (mode == "recording")
             {
                 return PlayState::Recording;
             }
-            else if (mode == "parked")
+            elif (mode == "parked")
             {
                 return PlayState::Parked;
             }
-            else if (mode == "seeking")
+            elif (mode == "seeking")
             {
                 return PlayState::Seeking;
             }

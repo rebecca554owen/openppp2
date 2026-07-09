@@ -5,6 +5,7 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
 #include <ppp/collections/Dictionary.h>
+#include <ppp/diagnostics/Error.h>
 
 typedef ppp::net::Socket                        Socket;
 typedef ppp::net::native::ip_hdr                ip_hdr;
@@ -22,6 +23,12 @@ typedef ppp::collections::Dictionary            Dictionary;
 namespace ppp {
     namespace net {
         namespace asio {
+            /**
+             * @file InternetControlMessageProtocol.cpp
+             * @brief Implements asynchronous ICMP echo handling and response translation.
+             */
+
+            /** @brief Constructs protocol helper and initializes shared receive buffer. */
             InternetControlMessageProtocol::InternetControlMessageProtocol(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<boost::asio::io_context>& context) noexcept
                 : BufferAllocator(allocator)
                 , disposed_(false)
@@ -30,10 +37,17 @@ namespace ppp {
 
             }
 
+            /** @brief Releases protocol resources and active timeout handlers. */
             InternetControlMessageProtocol::~InternetControlMessageProtocol() noexcept {
                 Finalize();
             }
 
+            /**
+             * @brief Global state for ICMP request identification allocation.
+             *
+             * Provides synchronized allocation/deallocation and time-based sweeping of
+             * stale identifiers to avoid collisions across concurrent echo requests.
+             */
             class InternetControlMessageProtocol_Global final {
                 typedef std::mutex                                      SynchronizedObject;
                 typedef std::lock_guard<SynchronizedObject>             SynchronizedObjectScope;
@@ -45,13 +59,27 @@ namespace ppp {
                 static constexpr UInt32 MIN_ALLOCATED_IDENTIFICATION   = 10000;
 
             public:
+                /** @brief Initializes allocator seed for ICMP identification values. */
                 InternetControlMessageProtocol_Global() noexcept
                     : aid_(RandomNext(MIN_ALLOCATED_IDENTIFICATION, INT32_MAX)) {
-                    
+
                 }
 
             public:
+                /**
+                 * @brief Allocates a unique identification token for an echo request.
+                 *
+                 * @note LOCK DURATION FIX (MEDIUM-3): GetTickCount() was previously called
+                 *       inside the syncobj_ critical section, extending lock hold time for
+                 *       a potentially slow system call.  It is now computed once BEFORE
+                 *       acquiring the lock and reused for every probe iteration.
+                 */
                 bool                                                    Allocated(UInt32& identification) noexcept {
+                    // Compute timestamp once before entering the critical section to keep
+                    // lock hold time as short as possible.
+                    UInt64 now         = ppp::threading::Executors::GetTickCount();
+                    UInt64 now_seconds = now / 1000;
+
                     SynchronizedObjectScope scope(syncobj_);
                     for (int i = 0; i <= MAX_PROBES_COUNT; i++) {
                         UInt32 n = ++aid_;
@@ -60,8 +88,6 @@ namespace ppp {
                             continue;
                         }
 
-                        UInt64 now = ppp::threading::Executors::GetTickCount();
-                        UInt64 now_seconds = now / 1000;
 
                         auto r = allocateds_.emplace(std::make_pair(n, now_seconds));
                         if (r.second) {
@@ -71,8 +97,10 @@ namespace ppp {
                         }
                     }
 
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ResourceExhaustedSockets);
                     return false;
                 }
+                /** @brief Releases a previously allocated identification token. */
                 bool                                                    Deallocated(UInt32 identification) noexcept {
                     UInt64 seconds;
                     SynchronizedObjectScope scope(syncobj_);
@@ -112,17 +140,18 @@ namespace ppp {
 
                     return true;
                 }
+                /** @brief Sweeps expired identification allocations by timeout. */
                 bool                                                    DoEvents() noexcept {
                     SynchronizedObjectScope scope(syncobj_);
                     auto tail = allocateds_map_.begin();
                     auto endl = allocateds_map_.end();
                     if (tail == endl) {
-                        return false;
+                        return true;
                     }
 
                     UInt64 now = ppp::threading::Executors::GetTickCount();
                     do {
-                        UInt64 timeout = (static_cast<UInt64>(tail->first) * 1000ULL) + 
+                        UInt64 timeout = (static_cast<UInt64>(tail->first) * 1000ULL) +
                             static_cast<UInt64>(InternetControlMessageProtocol::MAX_ICMP_TIMEOUT);
                         if (now < timeout) {
                             break;
@@ -141,6 +170,7 @@ namespace ppp {
 
                     return true;
                 }
+                /** @brief Returns process-wide default identification allocator. */
                 static InternetControlMessageProtocol_Global&           GetDefault() noexcept {
                     static InternetControlMessageProtocol_Global default_;
                     return default_;
@@ -153,11 +183,18 @@ namespace ppp {
                 AllocatedIdSMap                                         allocateds_map_;
             };
 
+            /** @brief Triggers timeout-based sweeping of global ICMP identifications. */
             void InternetControlMessageProtocol_DoEvents() noexcept {
                 InternetControlMessageProtocol_Global& g = InternetControlMessageProtocol_Global::GetDefault();
                 g.DoEvents();
             }
 
+            /**
+             * @brief Per-request asynchronous ICMP echo context.
+             *
+             * Owns socket, timeout token, request metadata, and response matching logic for
+             * a single outstanding ICMP echo transaction.
+             */
             class InternetControlMessageProtocol_EchoAsynchronousContext final : public std::enable_shared_from_this<InternetControlMessageProtocol_EchoAsynchronousContext> {
             public:
                 std::shared_ptr<boost::asio::ip::udp::socket>           socket_;
@@ -172,17 +209,26 @@ namespace ppp {
                 }                                                       request_;
 
             public:
+                /** @brief Constructs asynchronous context with unique request identifier. */
                 InternetControlMessageProtocol_EchoAsynchronousContext(UInt32 id) noexcept
                     : identification_(id) {
 
                 }
+                /** @brief Ensures socket, timer, and registration entries are released. */
                 ~InternetControlMessageProtocol_EchoAsynchronousContext() noexcept { Release(); }
 
             public:
+                /** @brief Starts one asynchronous receive operation for reply matching. */
                 void                                                    RunOnce() noexcept {
                     socket_->async_receive_from(boost::asio::buffer(owner_->buffer_.get(), PPP_BUFFER_SIZE), owner_->ep_,
                         std::bind(&InternetControlMessageProtocol_EchoAsynchronousContext::Process, shared_from_this(), std::placeholders::_1, std::placeholders::_2));
                 }
+                /**
+                 * @brief Processes one receive completion and validates ICMP correlation.
+                 *
+                 * The method parses inbound IP/ICMP frames and matches request identity for
+                 * both echo-reply and time-exceeded responses.
+                 */
                 int                                                     Process(const boost::system::error_code& ec, size_t bytes_transferred) noexcept {
                     if (ec == boost::system::errc::success || ec == boost::system::errc::resource_unavailable_try_again) {
                         while (bytes_transferred > 0) {
@@ -231,8 +277,14 @@ namespace ppp {
                     }
 
                     Release();
+                    if (boost::asio::error::operation_aborted == ec || boost::asio::error::eof == ec) {
+                        return 0;
+                    }
+
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                     return -1;
                 }
+                /** @brief Creates translated response packet and outputs to destination. */
                 void                                                    Replay(UInt32 source_ip, int ttl, IcmpType icmp_type) noexcept {
                     std::shared_ptr<IPFrame> response;
                     if (icmp_type == IcmpType::ICMP_ER) {
@@ -250,6 +302,11 @@ namespace ppp {
 
                     Release();
                 }
+                /**
+                 * @brief Releases timeout, socket, timeout table entry, and identifier.
+                 *
+                 * This method is idempotent through moved/reset handles.
+                 */
                 void                                                    Release() noexcept {
                     std::shared_ptr<Timer> timeout = std::move(timeout_);
                     if (NULLPTR != timeout) {
@@ -265,28 +322,38 @@ namespace ppp {
                 }
             };
 
+            /** @brief Marks instance disposed and removes all pending timeout callbacks. */
             void InternetControlMessageProtocol::Finalize() noexcept {
                 disposed_ = true;
                 Timer::ReleaseAllTimeouts(timeouts_);
             }
 
+            /** @brief Returns a shared reference to this protocol object. */
             std::shared_ptr<InternetControlMessageProtocol> InternetControlMessageProtocol::GetReference() noexcept {
                 return shared_from_this();
             }
 
+            /** @brief Returns the IO context associated with this protocol helper. */
             std::shared_ptr<boost::asio::io_context> InternetControlMessageProtocol::GetContext() noexcept {
                 return executor_;
             }
 
+            /** @brief Posts protocol finalization onto the bound executor. */
             void InternetControlMessageProtocol::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
-                boost::asio::post(*context, 
+                boost::asio::post(*context,
                     [self, this, context]() noexcept {
                         Finalize();
                     });
             }
 
+            /**
+             * @brief Sends an ICMP echo request and asynchronously awaits response.
+             *
+             * The outgoing request is NAT-tagged with a unique identifier, then a timeout
+             * protected receive loop parses and correlates inbound ICMP packets.
+             */
             bool InternetControlMessageProtocol::Echo(
                 const std::shared_ptr<IPFrame>&         packet,
                 const std::shared_ptr<IcmpFrame>&       frame,
@@ -294,28 +361,31 @@ namespace ppp {
 
                 using EchoAsynchronousContext = InternetControlMessageProtocol_EchoAsynchronousContext;
 
-                if (disposed_) {
+                if (true == disposed_) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolEchoDisposed);
                     return false;
                 }
 
-                if (!packet || !frame) {
+                if (NULLPTR == packet || NULLPTR == frame) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return false;
                 }
 
                 const std::shared_ptr<BufferSegment> messages = packet->Payload;
-                if (!messages || !messages->Buffer || messages->Length < 1) {
+                if (NULLPTR == messages || NULLPTR == messages->Buffer || 1 > messages->Length) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
                     return false;
                 }
 
                 const int sockfd = ::socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
                 if (sockfd == -1) {
-                    return false; /* ::socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP); */
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketCreateFailed, false); /* ::socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP); */
                 }
                 else {
                     const int TTL = packet->Ttl;
                     if (::setsockopt(sockfd, IPPROTO_IP, IP_TTL, (char*)&TTL, sizeof(TTL))) { // SOL_SOCKET, SO_SNDTIMEO, SO_RCVTIMEO
                         Socket::Closesocket(sockfd);
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOptionSetFailed, false);
                     }
                 }
 
@@ -323,7 +393,7 @@ namespace ppp {
                 const std::shared_ptr<boost::asio::ip::udp::socket> socket = make_shared_object<boost::asio::ip::udp::socket>(*executor_);
                 if (!socket) {
                     Socket::Closesocket(sockfd);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketCreateFailed, false);
                 }
 
                 ppp::net::Socket::AdjustDefaultSocketOptional(sockfd, packet->AddressesFamily == AddressFamily::InterNetwork);
@@ -334,19 +404,19 @@ namespace ppp {
                 socket->assign(boost::asio::ip::udp::v4(), sockfd, ec);
                 if (ec) {
                     Socket::Closesocket(sockfd);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketOpenFailed, false);
                 }
 
                 UInt32 identification_nat = 0;
                 if (!InternetControlMessageProtocol_Global::GetDefault().Allocated(identification_nat)) {
                     Socket::Closesocket(socket);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ResourceExhaustedSockets, false);
                 }
 
                 const std::shared_ptr<EchoAsynchronousContext> context = make_shared_object<EchoAsynchronousContext>(identification_nat);
                 if (!context) {
                     Socket::Closesocket(socket);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IcmpProtocolEchoContextAllocFailed, false);
                 }
                 else {
                     const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = this->BufferAllocator;
@@ -364,7 +434,7 @@ namespace ppp {
                         boost::asio::socket_base::message_end_of_record, ec);
                     if (ec) {
                         Socket::Closesocket(socket);
-                        return false;
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketWriteFailed, false);
                     }
                 }
 
@@ -378,7 +448,7 @@ namespace ppp {
                     });
                 if (!timeout_cb) {
                     Socket::Closesocket(socket);
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IcmpProtocolEchoTimeoutCallbackAllocFailed, false);
                 }
 
                 context->timeout_ = Timer::Timeout(executor_, MAX_ICMP_TIMEOUT, *timeout_cb);
@@ -395,13 +465,15 @@ namespace ppp {
                 }
                 else {
                     context->Release();
-                    return false;
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::IcmpProtocolEchoTimeoutEntryConflict, false);
                 }
             }
 
+            /** @brief Builds an ICMP echo-reply packet using request metadata. */
             std::shared_ptr<IPFrame> InternetControlMessageProtocol::ER(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, int ttl, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IcmpFrame> e = make_shared_object<IcmpFrame>();
                 if (NULLPTR == e) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolEchoReplyFrameAllocFailed);
                     return NULLPTR;
                 }
 
@@ -418,9 +490,11 @@ namespace ppp {
                 return e->ToIp(allocator);
             }
 
+            /** @brief Builds an ICMP time-exceeded packet embedding original request data. */
             std::shared_ptr<IPFrame> InternetControlMessageProtocol::TE(const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<IcmpFrame>& frame, UInt32 source, const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator) noexcept {
                 std::shared_ptr<IcmpFrame> e = make_shared_object<IcmpFrame>();
                 if (NULLPTR == e) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IcmpProtocolTimeExceededFrameAllocFailed);
                     return NULLPTR;
                 }
 

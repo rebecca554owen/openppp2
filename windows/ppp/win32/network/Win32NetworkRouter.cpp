@@ -1,4 +1,5 @@
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/diagnostics/Error.h>
 #include <windows/ppp/win32/network/Router.h>
 
 typedef ppp::net::IPEndPoint IPEndPoint;
@@ -14,6 +15,7 @@ namespace ppp
             {
                 if (NULLPTR == table)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteTableUnavailable);
                     return -1;
                 }
 
@@ -50,6 +52,7 @@ namespace ppp
                 int err = ::GetBestInterface(ip, &dwBestIfIndex);
                 if (err != NO_ERROR)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteQueryFailed);
                     return -1;
                 }
 
@@ -117,6 +120,7 @@ namespace ppp
                     pRouteTable = (PMIB_IPFORWARDTABLE)Malloc(dwSize);
                     if (NULLPTR == pRouteTable)
                     {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         return NULLPTR;
                     }
 
@@ -130,6 +134,7 @@ namespace ppp
                     });
                 if (dwErr != ERROR_SUCCESS)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteQueryFailed);
                     pRouteTablePtr.reset();
                 }
 
@@ -151,6 +156,7 @@ namespace ppp
             {
                 if (interface_index < 0)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteInterfaceInvalid);
                     return false;
                 }
 
@@ -184,6 +190,7 @@ namespace ppp
                 int err = ::GetIpInterfaceEntry(&mib);
                 if (err != NO_ERROR)
                 {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteQueryFailed);
                     return false;
                 }
                 elif((int64_t)metric < (int64_t)mib.Metric)

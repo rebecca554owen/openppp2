@@ -1,0 +1,22 @@
+# Classic vcpkg dependencies for openppp2 Windows CI.
+# One package per line.  Add new ports here, then hashFiles() in the workflow
+# cache key will pick up the change automatically.
+#
+# Keep sorted alphabetically (within boost-* / non-boost groups) for stable diffs.
+
+boost-asio
+boost-beast
+boost-context
+boost-coroutine
+boost-date-time
+boost-filesystem
+boost-interprocess
+boost-lexical-cast
+boost-lockfree
+boost-regex
+boost-stacktrace
+boost-system
+boost-thread
+boost-uuid
+jemalloc
+openssl

@@ -1,41 +1,70 @@
+/**
+ * @file StringAuxiliary.cpp
+ * @brief Implementation of string, GUID, and key-value helper routines.
+ */
 #include <ppp/auxiliary/StringAuxiliary.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 
 namespace ppp 
 {
     namespace auxiliary 
     {
+        /**
+         * @brief Parse a GUID string and convert it to Int128.
+         */
         Int128 StringAuxiliary::GuidStringToInt128(const ppp::string& guid_string) noexcept 
         {
             if (guid_string.empty()) 
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::StringAuxiliaryGuidStringEmpty);
                 return 0;
             }
 
-            boost::uuids::uuid guid = StringToGuid(guid_string);
-            return StringAuxiliary::GuidStringToInt128(guid);
+            boost::uuids::string_generator generator;
+            try
+            {
+                return StringAuxiliary::GuidStringToInt128(generator(guid_string));
+            }
+            catch (const std::exception&)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::StringAuxiliaryGuidStringParseFailed);
+                return 0;
+            }
         }
 
+        /**
+         * @brief Convert UUID bytes into Int128 using network byte order mapping.
+         */
         Int128 StringAuxiliary::GuidStringToInt128(const boost::uuids::uuid& guid) noexcept
         {
+            Int128 network_guid = 0;
 #if BOOST_VERSION >= 108600
-            return ppp::net::Ipep::NetworkToHostOrder(*(Int128*)&guid);
+            std::memcpy(&network_guid, &guid, sizeof(network_guid));
 #else
-            return ppp::net::Ipep::NetworkToHostOrder(*(Int128*)guid.data);
+            std::memcpy(&network_guid, guid.data, sizeof(network_guid));
 #endif
+            return ppp::net::Ipep::NetworkToHostOrder(network_guid);
         }
 
+        /**
+         * @brief Convert Int128 to GUID string using network byte order mapping.
+         */
         ppp::string StringAuxiliary::Int128ToGuidString(const Int128& guid) noexcept 
         {
             boost::uuids::uuid uuid;
+            Int128 network_guid = ppp::net::Ipep::HostToNetworkOrder(guid);
 #if BOOST_VERSION >= 108600
-            *(Int128*)&uuid = ppp::net::Ipep::HostToNetworkOrder(guid);
+            std::memcpy(&uuid, &network_guid, sizeof(network_guid));
 #else
-            *(Int128*)uuid.data = ppp::net::Ipep::HostToNetworkOrder(guid);
+            std::memcpy(uuid.data, &network_guid, sizeof(network_guid));
 #endif
             return GuidToString(uuid);
         }
 
+        /**
+         * @brief Validate whether a string represents an integer literal.
+         */
         bool StringAuxiliary::WhoisIntegerValueString(const ppp::string& integer_string) noexcept
         {
             int integer_size = integer_string.size();
@@ -65,6 +94,9 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Normalize configured separator characters into commas.
+         */
         ppp::string StringAuxiliary::Lstrings(const ppp::string& in, bool colon) noexcept
         {
             static constexpr char keys[] = "; |+*^&#@!'\?%[]{}\\/-_=`~\r\n\t\a\b\v\f";
@@ -89,6 +121,9 @@ namespace ppp
             return result;
         }
 
+        /**
+         * @brief Render dictionary entries into "key: value" text lines.
+         */
         ppp::string StringAuxiliary::ToString(const ppp::unordered_map<ppp::string, ppp::string>& s) noexcept
         {
             ppp::string result;
@@ -107,6 +142,9 @@ namespace ppp
             return result;
         }
 
+        /**
+         * @brief Parse line-based key-value pairs separated by ": ".
+         */
         bool StringAuxiliary::ToDictionary(const ppp::vector<ppp::string>& lines, ppp::unordered_map<ppp::string, ppp::string>& s) noexcept 
         {
             for (size_t i = 0, l = lines.size(); i < l; ++i)
@@ -118,6 +156,9 @@ namespace ppp
                     continue;
                 }
 
+                /**
+                 * @brief Require both key and value portions before insertion.
+                 */
                 size_t n = j + 2;
                 if (n >= str.size())
                 {
@@ -138,6 +179,9 @@ namespace ppp
             return true;
         }
 
+        /**
+         * @brief Split multi-line text and parse key-value dictionary entries.
+         */
         bool StringAuxiliary::ToDictionary(const ppp::string& lines, ppp::unordered_map<ppp::string, ppp::string>& s) noexcept
         {
             ppp::vector<ppp::string> lists;

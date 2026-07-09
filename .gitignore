@@ -54,6 +54,20 @@
 bin/
 build/
 android/build/
+ios/App/build/
+**/xcuserdata/
+**/*.xcuserstate
+/build-static/
+/build-system-check/
+/build-vendor-check/
+/build-vendor-release/
+
+/final/
+/forkform/
+/test-config/
+
+debug.md
+**/debug.md
 
 .vscode/*
 !.vscode/settings.json
@@ -67,7 +81,53 @@ android/build/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+nul
 ppp.log
+
 /ppp/x64
 /ppp/Debug
 /ppp/Release
+
+build-*/
+build_*/
+builds/cmake-check/
+AGENTS.md
+CLAUDE.md
+.claude/
+.gitnexusignore
+dist/
+stash-backups/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+*.iml
+.idea/
+android/.gradle/
+android/local.properties
+android/app/debug
+android/app/profile
+android/app/release
+android/.metadata
+android/**/jniLibs/**/*.so
+
+# Android release signing material (provide via local files or CI secrets)
+android/android/keystore/*.p12
+android/android/keystore/*.jks
+android/android/keystore/*.keystore
+android/android/keystore/*.properties
+/third-party
+.DS_Store
+
+# Local OTEL/Grafana deploy configs (not for version control)
+scripts/deploy/
+build/coverage/
+ios/App/.build/
+
+# Superpowers planning docs (local agent workflow only)
+docs/superpowers/

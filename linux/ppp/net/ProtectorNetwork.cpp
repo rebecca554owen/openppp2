@@ -8,6 +8,7 @@
 #include <string>
 #include <iostream>
 #include <assert.h>
+#include <ppp/diagnostics/Error.h>
 
 #include <sys/types.h>
 
@@ -27,7 +28,7 @@
 #include <sys/time.h>
 #include <netinet/tcp.h>
 
-#if defined(__MUSL__)
+#if defined(__MUSL__) || defined(__BIONIC__) || defined(_ANDROID)
 #include <err.h>
 #include <poll.h>
 #else
@@ -48,12 +49,17 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/threading/Executors.h>
 
 #include "ProtectorNetwork.h"
 #include "ancillary/ancillary.h"
 
 #include <common/unix/UnixAfx.h>
+
+#if defined(_ANDROID)
+#include <android/OpenPPP2VpnProtectBridge.h>
+#endif
 
 using ppp::net::Socket;
 
@@ -75,18 +81,22 @@ namespace ppp
             fd = -1;
             if (NULLPTR == unix_path)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkRecvfdNullUnixPath);
                 return -1011;
             }
 
             int sock = socket(AF_UNIX, SOCK_STREAM, 0);
             if (sock == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                 return -1012;
             }
 
             int flags = fcntl(sock, F_GETFL, 0);
             if (flags == -1)
             {
+                Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                 return -1013;
             }
 
@@ -94,6 +104,8 @@ namespace ppp
             {
                 if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0)
                 {
+                    Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return -1014;
                 }
             }
@@ -109,12 +121,14 @@ namespace ppp
             if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                 return -1015;
             }
 
             if (listen(sock, PPP_LISTEN_BACKLOG) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketListenFailed);
                 return -1016;
             }
 
@@ -125,6 +139,7 @@ namespace ppp
                     if (!Socket::Poll(sock, milliSecondsTimeout * 1000, Socket::SelectMode_SelectRead))
                     {
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
                         return -1017;
                     }
                 }
@@ -137,6 +152,7 @@ namespace ppp
                 if (connection == -1)
                 {
                     Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                     return -1018;
                 }
 
@@ -144,6 +160,7 @@ namespace ppp
                 {
                     Socket::Closesocket(connection);
                     Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                     return -1019;
                 }
 
@@ -155,6 +172,7 @@ namespace ppp
                     {
                         Socket::Closesocket(connection);
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionGetFailed);
                         return -1021;
                     }
 
@@ -162,6 +180,7 @@ namespace ppp
                     {
                         Socket::Closesocket(connection);
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                         return -1022;
                     }
 
@@ -170,6 +189,7 @@ namespace ppp
                     {
                         Socket::Closesocket(connection);
                         Socket::Closesocket(sock);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                         return -1023;
                     }
                 }
@@ -199,12 +219,14 @@ namespace ppp
             r = 0;
             if (NULLPTR == unix_path || milliSecondsTimeout < 1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkSendfdInvalidArguments);
                 return -1001;
             }
 
             int sock = socket(AF_UNIX, SOCK_STREAM, 0);
             if (sock == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketCreateFailed);
                 return -1002;
             }
 
@@ -224,6 +246,7 @@ namespace ppp
             if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketConnectFailed);
                 return -1003;
             }
 
@@ -231,6 +254,7 @@ namespace ppp
             if (ancil_send_fd(sock, fd))
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketWriteFailed);
                 return -1004;
             }
 
@@ -238,6 +262,7 @@ namespace ppp
             if (recv(sock, &err, 1, MSG_NOSIGNAL) < 0)
             {
                 Socket::Closesocket(sock);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                 return -1005;
             }
 
@@ -253,6 +278,7 @@ namespace ppp
                 if (recv(sock, &err, 1, MSG_NOSIGNAL) < 0)
                 {
                     Socket::Closesocket(sock);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);
                     return -1006;
                 }
             }
@@ -265,48 +291,21 @@ namespace ppp
 #if defined(_ANDROID)
         bool ProtectorNetwork::ProtectJNI(JNIEnv* env, jint fd) noexcept
         {
-            // Java class function signature, you can see the header file of this function, 
-            // There are specific Java code examples and descriptions, 
-            // The signature is roughly: public static boolean protect(int sockfd) { return false; }
+            (void)env;
             if (fd == -1) /* https://blog.csdn.net/u010126792/article/details/82348438 */
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+                ppp::telemetry::Count("protect.android.fail.invalid_fd", 1);
                 return false;
             }
 
-            if (NULLPTR == env)
-            {
-                return false;
+            const bool result = ppp::android::ProtectSocketFd(static_cast<int>(fd));
+            if (!result) {
+                ppp::telemetry::Count("protect.android.fail.false", 1);
             }
-
-            jclass clazz = env->FindClass(LIBOPENPPP2_CLASSNAME);
-            if (NULLPTR != env->ExceptionOccurred())
-            {
-                env->ExceptionClear();
+            else {
+                ppp::telemetry::Count("protect.android.success", 1);
             }
-
-            if (NULLPTR == clazz)
-            {
-                return false;
-            }
-
-            jboolean result = false;
-            jmethodID method = env->GetStaticMethodID(clazz, "protect", "(I)Z");
-            if (NULLPTR != env->ExceptionOccurred())
-            {
-                env->ExceptionClear();
-            }
-            else if (NULLPTR != method)
-            {
-                result = env->CallStaticBooleanMethod(clazz, method, fd);
-                if (env->ExceptionCheck())
-                {
-                    env->ExceptionDescribe();
-                    env->ExceptionClear();
-                    result = false;
-                }
-            }
-
-            env->DeleteLocalRef(clazz);
             return result;
         }
 
@@ -314,6 +313,8 @@ namespace ppp
         {
             if (NULLPTR == context || NULLPTR == env)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEnvironmentInvalid);
+                ppp::telemetry::Count("protect.android.join.fail", 1);
                 return false;
             }
             
@@ -365,18 +366,16 @@ namespace ppp
                 {
                     // Reverse-calling the Java class member static function protects the socket without passing through VPNService / Android-Ko.
                     std::shared_ptr<boost::asio::io_context> jni;
+                    JNIEnv* env = NULLPTR;
                     {
                         SynchronizedObjectScope scope(syncobj_);
                         jni = jni_;
+                        env = env_;
+                    }
 
-                        if (NULLPTR != jni)
-                        {
-                            JNIEnv* env = env_;
-                            if (NULLPTR != env)
-                            {
-                                ok = ProtectorNetwork::ProtectJNI(env, sockfd);
-                            }
-                        }
+                    if (NULLPTR != jni && NULLPTR != env)
+                    {
+                        ok = ProtectorNetwork::ProtectJNI(env, sockfd);
                     }
 
                     // Wake up the coroutine waiting for this protect network socket service to prevent coroutines from getting stuck.
@@ -392,6 +391,7 @@ namespace ppp
         {
             if (sockfd == -1)
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
                 return false;
             }
 
@@ -402,9 +402,14 @@ namespace ppp
             }
 
 #if defined(_ANDROID)
-            // If JNIEnv is set, it means that PPP PRIVATE NETWORK™ 2 is embedded in the Android application as a DLL/SO, 
+            // If JNIEnv is set, it means that PPP PRIVATE NETWORK™ 2 is embedded in the Android application as a DLL/SO,
             // In the form of a JNI reverse call to the JAVA class member static function protect, otherwise it is a sendfd/recvfd structures.
-            std::shared_ptr<boost::asio::io_context> context = jni_;
+            // jni_ may be reassigned by JoinJNI/DetachJNI, so snapshot it while holding syncobj_.
+            std::shared_ptr<boost::asio::io_context> context;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                context = jni_;
+            }
             if (NULLPTR != context)
             {
                 return ProtectJNI(context, sockfd, y);
@@ -413,13 +418,55 @@ namespace ppp
 
             if (dev_.empty())
             {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
                 return false;
             }
 
 #if defined(_ANDROID)
             return ProtectorNetwork::Sendfd(dev_.data(), sockfd);
 #else
-            return ::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1;
+            if (::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1)
+            {
+                return true;
+            }
+
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
+#endif
+        }
+
+        bool ProtectorNetwork::ProtectSync(int sockfd) noexcept
+        {
+            if (sockfd == -1)
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+                return false;
+            }
+
+            ProtectEventHandler e = ProtectEvent;
+            if (NULLPTR != e)
+            {
+                return e(sockfd);
+            }
+
+#if defined(_ANDROID)
+            // On Android without ProtectEvent, we cannot protect synchronously
+            // without a JNI environment or YieldContext.  Return false so the
+            // caller can fall back to route-based protection.
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtectorNetworkProtectInvalidSocket);
+            return false;
+#else
+            if (dev_.empty())
+            {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceUnavailable);
+                return false;
+            }
+            if (::setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, dev_.data(), dev_.size()) > -1)
+            {
+                return true;
+            }
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
+            return false;
 #endif
         }
     }

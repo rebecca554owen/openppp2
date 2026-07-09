@@ -58,6 +58,30 @@ namespace ppp {
             return SetDnsAddresses(dns_servers);
         }
 
+        bool UnixAfx::MergeDnsAddresses(const ppp::vector<boost::asio::ip::address>& preferred, const ppp::vector<boost::asio::ip::address>& append) noexcept {
+            ppp::vector<boost::asio::ip::address> merged;
+            auto append_unique = [&merged](const boost::asio::ip::address& address) noexcept {
+                if (IPEndPoint::IsInvalid(address) || address.is_multicast()) {
+                    return;
+                }
+                for (const auto& current : merged) {
+                    if (current == address) {
+                        return;
+                    }
+                }
+                merged.emplace_back(address);
+            };
+
+            for (const auto& address : preferred) {
+                append_unique(address);
+            }
+            for (const auto& address : append) {
+                append_unique(address);
+            }
+
+            return SetDnsAddresses(merged);
+        }
+
         bool UnixAfx::SetDnsAddresses(const ppp::vector<ppp::string>& addresses) noexcept {
             ppp::string content;
             for (size_t i = 0, l = addresses.size(); i < l; i++) {
@@ -347,7 +371,7 @@ namespace ppp {
             if (fd == -1) {
                 return false;
             }
-            
+
             int flags = fcntl(fd, F_GETFD, 0);
             if (flags == -1) {
                 return false;
@@ -363,23 +387,94 @@ namespace ppp {
 
         bool UnixAfx::AddShutdownApplicationEventHandler(ShutdownApplicationEventHandler e) noexcept {
             static ShutdownApplicationEventHandler eeh = NULLPTR;
+            static std::atomic<bool> shutdown_requested = false;
 
-            auto SIG_EEH = 
+            auto SIG_EEH =
                 [](int signo) noexcept {
                     static std::atomic<bool> processed = false;
 
+                    /*
+                     * Determine whether this signal indicates an unrecoverable
+                     * synchronous fault (SIGSEGV / SIGBUS / SIGFPE / SIGILL /
+                     * SIGABRT / SIGTRAP / SIGSTKFLT / SIGSYS).  For such signals
+                     * the kernel re-executes the faulting instruction after the
+                     * handler returns; if we do not restore the default
+                     * disposition and re-raise (or _exit) the process spins
+                     * forever at 100 % CPU on the same fault, ignoring even
+                     * SIGTERM/SIGKILL from the user (since those are also
+                     * intercepted by this same handler before the fatal signal
+                     * is processed).  This was the root cause of the observed
+                     * "ppp 卡死 100 % CPU" behaviour where strace showed an
+                     * unbroken stream of SIGSEGV / rt_sigreturn pairs.
+                     */
+                    bool is_fatal_fault = false;
+                    switch (signo) {
+#ifdef SIGSEGV
+                        case SIGSEGV:   is_fatal_fault = true; break;
+#endif
+#ifdef SIGBUS
+                        case SIGBUS:    is_fatal_fault = true; break;
+#endif
+#ifdef SIGFPE
+                        case SIGFPE:    is_fatal_fault = true; break;
+#endif
+#ifdef SIGILL
+                        case SIGILL:    is_fatal_fault = true; break;
+#endif
+#ifdef SIGABRT
+                        case SIGABRT:   is_fatal_fault = true; break;
+#endif
+#ifdef SIGTRAP
+                        case SIGTRAP:   is_fatal_fault = true; break;
+#endif
+#ifdef SIGSTKFLT
+                        case SIGSTKFLT: is_fatal_fault = true; break;
+#endif
+#ifdef SIGSYS
+                        case SIGSYS:    is_fatal_fault = true; break;
+#endif
+                        default:        break;
+                    }
+
                     if (processed.exchange(true)) {
+                        /*
+                         * Re-entrant or recurring delivery.  For fatal faults
+                         * we must terminate the process here; simply returning
+                         * would let the kernel re-execute the broken
+                         * instruction and we would loop forever.
+                         */
+                        if (is_fatal_fault) {
+                            signal(signo, SIG_DFL);
+                            raise(signo);
+                            _exit(128 + signo);
+                        }
                         return;
                     }
 
-                    ShutdownApplicationEventHandler e = std::move(eeh);
-                    if (NULLPTR != e) {
+                    shutdown_requested.store(true, std::memory_order_release);
+
+                    ShutdownApplicationEventHandler handler = eeh;
+                    if (NULLPTR != handler) {
                         eeh = NULLPTR;
-                        e();
+                        handler();
                     }
                     else {
                         signal(signo, SIG_DFL);
                         raise(signo);
+                    }
+
+                    /*
+                     * For fatal synchronous faults the handler() above only
+                     * schedules an asynchronous graceful shutdown — control
+                     * still returns to the broken instruction.  Restore the
+                     * default disposition and re-raise so the kernel delivers
+                     * the killing blow; _exit() is the belt-and-suspenders
+                     * fallback in case raise() is somehow swallowed.
+                     */
+                    if (is_fatal_fault) {
+                        signal(signo, SIG_DFL);
+                        raise(signo);
+                        _exit(128 + signo);
                     }
                 };
 
@@ -511,6 +606,150 @@ namespace ppp {
 #endif
             return lseek(fd, offset, whence);
 #endif
+        }
+
+        namespace {
+            struct LineHandler {
+                ppp::function<bool(const ppp::string&)> predicate;
+                ppp::string* str_output = NULLPTR;
+                ppp::vector<ppp::string>* lines_output = NULLPTR;
+                bool* bool_output = NULLPTR;
+
+                bool process_line(ppp::string&& line) noexcept {
+                    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+                        line.pop_back();
+                    }
+
+                    if (line.empty()) {
+                        return true;
+                    }
+
+                    bool accept = !predicate || predicate(line);
+                    if (!accept) {
+                        return true;
+                    }
+
+                    if (str_output) {
+                        *str_output += line;
+                        *str_output += '\n';
+                        return true;
+                    }
+
+                    if (lines_output) {
+                        lines_output->emplace_back(std::move(line));
+                        return true;
+                    }
+
+                    if (bool_output) {
+                        *bool_output = true;
+                        return true;
+                    }
+                    return true;
+                }
+            };
+
+            void ExecuteShellCommandCore(FILE* pipe, LineHandler& handler) noexcept {
+                char buffer[1024];
+                ppp::string accumulated;
+
+                while (fgets(buffer, sizeof(buffer), pipe) != NULLPTR) {
+                    int len = static_cast<int>(strlen(buffer));
+                    bool line_complete = false;
+                    if (len > 0) {
+                        char& ch = buffer[len - 1];
+                        if (ch == '\n' || ch == '\r') {
+                            line_complete = true;
+                            ch = '\x0';
+                        }
+                    }
+
+                    if (!accumulated.empty()) {
+                        accumulated += buffer;
+                        if (line_complete) {
+                            ppp::string line;
+                            line.swap(accumulated);
+
+                            accumulated.clear();
+                            handler.process_line(std::move(line));
+                        }
+                        continue;
+                    }
+
+                    if (!line_complete) {
+                        accumulated += buffer;
+                        continue;
+                    }
+
+                    handler.process_line(ppp::string(buffer));
+                }
+
+                pclose(pipe);
+            }
+        }
+
+        bool UnixAfx::ExecuteShellCommand(const ppp::string& command, const ppp::function<bool(ppp::string&)>& predicate) noexcept {
+            if (command.empty()) {
+                return false;
+            }
+
+            FILE* pipe = popen(command.data(), "r");
+            if (NULLPTR == pipe) {
+                return false;
+            }
+
+            bool result = false;
+            LineHandler handler;
+            handler.predicate = [&predicate](const ppp::string& line) noexcept -> bool {
+                ppp::string modifiable = line;
+                return predicate ? predicate(modifiable) : true;
+            };
+            handler.bool_output = &result;
+
+            ExecuteShellCommandCore(pipe, handler);
+            return result;
+        }
+
+        ppp::string UnixAfx::ExecuteShellCommand(const ppp::string& command) noexcept {
+            if (command.empty()) {
+                return ppp::string();
+            }
+
+            FILE* pipe = popen(command.data(), "r");
+            if (NULLPTR == pipe) {
+                return ppp::string();
+            }
+
+            ppp::string output;
+            LineHandler handler;
+            handler.str_output = &output;
+
+            ExecuteShellCommandCore(pipe, handler);
+
+            if (!output.empty() && output.back() == '\n') {
+                output.pop_back();
+            }
+
+            return output;
+        }
+
+        ppp::vector<ppp::string> UnixAfx::ExecuteShellCommandLines(const ppp::string& command, const ppp::function<bool(const ppp::string&)>& predicate) noexcept {
+            if (command.empty()) {
+                return ppp::vector<ppp::string>();
+            }
+
+            FILE* pipe = popen(command.data(), "r");
+            if (NULLPTR == pipe) {
+                return ppp::vector<ppp::string>();
+            }
+
+            ppp::vector<ppp::string> lines;
+
+            LineHandler handler;
+            handler.predicate = predicate;
+            handler.lines_output = &lines;
+
+            ExecuteShellCommandCore(pipe, handler);
+            return lines;
         }
     }
 }

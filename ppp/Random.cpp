@@ -2,12 +2,24 @@
 #include <ppp/Random.h>
 #include <ppp/threading/Executors.h>
 
+/**
+ * @file Random.cpp
+ * @brief Implements deterministic pseudo-random number generation routines.
+ */
+
 namespace ppp {
+    /**
+     * @brief Constructs a random generator using tick count as seed.
+     */
     Random::Random() noexcept
         : Random(GetTickCount()) {
 
     }
     
+    /**
+     * @brief Constructs a random generator with an explicit seed.
+     * @param seed Initial seed value.
+     */
     Random::Random(int seed) noexcept
         : Seed(seed)
         , inext(0)
@@ -15,20 +27,39 @@ namespace ppp {
         memset(SeedArray, 0, sizeof(SeedArray));
     }
 
+    /**
+     * @brief Gets mutable access to the current seed value.
+     * @return Reference to internal seed state.
+     */
     int& Random::GetSeed() noexcept {
         return Seed;
     }
 
+    /**
+     * @brief Replaces the current seed value.
+     * @param seed New seed state.
+     */
     void Random::SetSeed(int seed) noexcept {
         Seed = seed;
     }
 
+    /**
+     * @brief Retrieves a tick count used for default random seeding.
+     * @return Current tick count value.
+     */
     uint64_t Random::GetTickCount() noexcept {
         return ppp::threading::Executors::GetTickCount();
     }
 
+    /**
+     * @brief Generates the next pseudo-random integer and advances internal state.
+     * @return Next generated pseudo-random integer.
+     */
     int Random::Next() noexcept {
         do {
+            /**
+             * @brief Initializes the state table using seed-diffusion procedure.
+             */
             int num = (Seed == INT_MIN) ? INT_MAX : abs(Seed);
             int num2 = 161803398 - num;
             SeedArray[55] = num2;
@@ -61,6 +92,9 @@ namespace ppp {
         } while (false);
 
         do {
+            /**
+             * @brief Produces one value from the rolling subtractive generator state.
+             */
             int num = inext;
             int num2 = inextp;
             if (++num >= 56) {
@@ -88,6 +122,10 @@ namespace ppp {
         return Seed;
     }
 
+    /**
+     * @brief Generates a pseudo-random double using two integer samples.
+     * @return Pseudo-random floating-point value in an algorithm-defined interval.
+     */
     double Random::NextDouble() noexcept {
         int num = Next();
         if ((Next() % 2 == 0) ? true : false) {
@@ -99,6 +137,12 @@ namespace ppp {
         return num2 / 4294967293.0;
     }
 
+    /**
+     * @brief Generates a pseudo-random integer in the range [minValue, maxValue).
+     * @param minValue Inclusive lower bound.
+     * @param maxValue Exclusive upper bound.
+     * @return Generated pseudo-random integer clamped to input semantics.
+     */
     int Random::Next(int minValue, int maxValue) noexcept { /* MSDN: https://learn.microsoft.com/en-us/dotnet/api/system.random.next?view=net-7.0 */
         if (minValue == maxValue) { /* The Next(Int32) overload returns random integers that range from 0 to maxValue - 1.  However, if maxValue is 0, the method returns 0. */
             return minValue;

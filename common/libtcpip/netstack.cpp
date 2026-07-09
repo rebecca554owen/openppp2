@@ -96,7 +96,7 @@ namespace lwip {
     int                                                 netstack::Localhost   = 0;
     std::shared_ptr<boost::asio::io_context>            netstack::Executor;
 
-    static std::shared_ptr<boost::asio::deadline_timer> timeout_;
+    static std::shared_ptr<boost::asio::steady_timer> timeout_;
     static struct netif*                                netif_              = NULLPTR;
     static struct tcp_pcb*                              pcb_                = NULLPTR;
     static Ptr2Socket                                   p2ss_;
@@ -133,14 +133,18 @@ namespace lwip {
                     ppp::SetThreadPriorityToMaxLevel();
                 }
 
-                boost::system::error_code ec_;
                 ppp::SetThreadName("vnet");
 
-                boost::asio::io_context::work work_(context);
+                auto work_ = boost::asio::make_work_guard(context);
                 context.restart();
-                context.run(ec_);
+                try {
+                    context.run();
+                }
+                catch (const std::exception&) {}
             };
 
+        // The executor thread is intentionally detached because the netstack owns the context lifetime.
+        // The captured executor is the only shared resource needed to keep the loop valid until shutdown.
         std::thread executor(thread_start);
         executor.detach();
     }
@@ -793,9 +797,9 @@ namespace lwip {
     }
 
     static void netstack_check_timeouts() noexcept {
-        std::shared_ptr<boost::asio::deadline_timer> timeout = timeout_;
+        std::shared_ptr<boost::asio::steady_timer> timeout = timeout_;
         if (timeout) {
-            timeout->expires_from_now(boost::posix_time::milliseconds(TCP_TMR_INTERVAL));
+            timeout->expires_after(std::chrono::milliseconds(TCP_TMR_INTERVAL));
             timeout->async_wait(
                 [](const boost::system::error_code& ec) noexcept {
                     sys_check_timeouts();
@@ -854,7 +858,7 @@ namespace lwip {
             return false;
         }
 
-        timeout_ = ppp::make_shared_object<boost::asio::deadline_timer>(context);
+        timeout_ = ppp::make_shared_object<boost::asio::steady_timer>(context);
         if (!timeout_) {
             return false;
         }
@@ -901,7 +905,7 @@ namespace lwip {
                 netif_ = NULLPTR;
 
                 boost::system::error_code ec;
-                std::shared_ptr<boost::asio::deadline_timer> timeout = std::move(timeout_);
+                std::shared_ptr<boost::asio::steady_timer> timeout = std::move(timeout_);
                 if (timeout) {
                     ppp::net::Socket::Cancel(*timeout);
                 }
