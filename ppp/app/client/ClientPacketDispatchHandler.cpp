@@ -259,6 +259,7 @@ namespace ppp {
                 // Check whether dns resolution packets need to be redirected.
                 int destinationPort = frame->Destination.Port;
                 if (destinationPort == PPP_DNS_SYS_PORT) {
+                    dns::IDnsHost& dns_host = *static_cast<dns::IDnsHost*>(owner_);
 #if defined(_ANDROID)
 ANDROID_DNS_REDIRECT_TRACE(
                         "dns_redirect udp53 input src_port=%d dst_port=%d payload=%d dst=%s",
@@ -267,7 +268,7 @@ ANDROID_DNS_REDIRECT_TRACE(
                         NULLPTR != messages ? (int)messages->Length : -1,
                         Ipep::ToAddress(packet->Destination).to_string().c_str());
 #endif
-                    if (owner_->RedirectDnsServer(exchanger, packet, frame, messages)) {
+                    if (dns_host.RedirectDnsServer(exchanger, packet, frame, messages)) {
 #if defined(_ANDROID)
     ANDROID_DNS_REDIRECT_TRACE( "dns_redirect udp53 handled");
 #endif
@@ -278,7 +279,7 @@ ANDROID_DNS_REDIRECT_TRACE(
                             IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                         const boost::asio::ip::udp::endpoint destEP(
                             Ipep::ToAddress(packet->Destination), PPP_DNS_SYS_PORT);
-                        const dns::DnsHostPorts dns_ports = owner_->DnsHostPortsFor(exchanger);
+                        const dns::DnsHostPorts dns_ports = dns_host.DnsHostPortsFor(exchanger);
                         dns_ports.handle_resolver_response(
                             messages, sourceEP, destEP, ppp::vector<Byte>{});
                     }
