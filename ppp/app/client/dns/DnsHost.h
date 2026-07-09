@@ -20,6 +20,8 @@ namespace ppp {
     }
     namespace net {
         namespace packet {
+            class IPFrame;
+            class UdpFrame;
             class BufferSegment;
         }
 #if defined(_LINUX)
@@ -80,6 +82,21 @@ namespace ppp {
 #endif
                         return true;
                     }
+                };
+
+                class IDnsHost {
+                public:
+                    virtual ~IDnsHost() noexcept = default;
+                    virtual DnsHostPorts BuildDnsHostPorts(
+                        const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept = 0;
+                    virtual const DnsHostPorts& DnsHostPortsFor(
+                        const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept = 0;
+                    virtual void InvalidateDnsHostPorts() noexcept = 0;
+                    virtual bool RedirectDnsServer(
+                        const std::shared_ptr<VEthernetExchanger>& exchanger,
+                        const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
+                        const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
+                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept = 0;
                 };
 
                 DnsHostPorts MakeDnsHostPorts(
