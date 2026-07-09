@@ -462,7 +462,9 @@ sequenceDiagram
 | PR4 | `VEthernetNetworkSwitcher.h` 瘦身至 ≤150 行；helper 用 `unique_ptr`；move-only | `.inc` 片段、`117` 行 shell |
 | PR4b | 去掉 shell 中的重 include | `rib_fwd.h`、`VirtualEthernetInformationFwd.h`、`VEthernet.h` 传递 include 修剪 |
 | PR5 | DNS 窄接口 | `dns::IDnsHost`；`ClientPacketDispatchHandler` 走公开 DNS API |
+| PR6a | 路由窄接口脚手架 | `route::RouteHostPorts` + `IRouteBackend`；switcher 实现；route helper 尚未迁移 |
 | PR7 | `ppp/*.h` 零 `AppConfiguration.h` | `AppConfigurationFwd.h`、`MappingConfiguration.h`；server/client exchanger 头瘦身 |
+| Facade | 应用引导层 | `ppp/facade/ApplicationBootstrap.h`；`main.cpp` 仅 include facade |
 
 ### 硬边界（路径级，可脚本验证）
 
@@ -479,8 +481,8 @@ sequenceDiagram
 
 ### 暂缓
 
-- **PR6 `IRouteBackend`**：路由 helper 仍有约 **164** 处 `owner_->` 私有字段访问；触发条件未满足（见内部 `coupling-baseline.md` / PR6 决策文档）
-- **`ppp/facade/`**：应用引导层尚未抽出
+- **PR6b+ `IRouteBackend` 迁移**：`RouteTableManager_*` 仍有约 **164** 处 `owner_->`；PR6a 已提供 `RouteHostPorts` 注入面，平台 TU 迁移待 PR6b
+- **`ppp/facade/` 扩展**：`ApplicationBootstrap` 已抽出；更深层的配置/模式解析仍留在 `PppApplication`
 
 ---
 
