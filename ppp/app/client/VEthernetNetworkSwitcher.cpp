@@ -919,7 +919,9 @@ namespace ppp {
             const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
                 const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
 
-                SynchronizedObjectScope scope(prdr_);
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                std::lock_guard<SynchronizedObject> scope{prdr_};
+#endif
 
                 if (std::shared_ptr<VEthernetExchanger> cached = dns_host_ports_exchanger_.lock();
                     cached == exchanger && NULLPTR != dns_host_ports_cache_ && dns_host_ports_cache_->IsValid()) {
@@ -938,7 +940,9 @@ namespace ppp {
             }
 
             void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {
-                SynchronizedObjectScope scope(prdr_);
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                std::lock_guard<SynchronizedObject> scope{prdr_};
+#endif
                 ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache invalidate");
                 dns_host_ports_cache_.reset();
                 dns_host_ports_exchanger_.reset();
