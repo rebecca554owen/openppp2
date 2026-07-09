@@ -21,6 +21,12 @@ route_client::RouteHostPorts MakeFilledHost() noexcept {
     host.get_route_apply_ready = []() noexcept { return false; };
     host.add_dns_server_ip = [](uint32_t, int) noexcept {};
     host.collect_dns_reachability = []() noexcept {};
+    host.get_default_routes = []() noexcept { return route_client::RouteInformationTablePtr(); };
+    host.set_default_routes = [](route_client::RouteInformationTablePtr) noexcept {};
+    host.get_nics = []() noexcept -> ppp::unordered_map<uint32_t, ppp::string>* {
+        static ppp::unordered_map<uint32_t, ppp::string> nics;
+        return &nics;
+    };
     return host;
 }
 

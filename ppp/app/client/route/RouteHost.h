@@ -51,10 +51,17 @@ namespace ppp {
 
                     ppp::function<void()> collect_dns_reachability;
 
+                    ppp::function<RouteInformationTablePtr()> get_default_routes;
+
+                    ppp::function<void(RouteInformationTablePtr)> set_default_routes;
+
+                    ppp::function<ppp::unordered_map<uint32_t, ppp::string>*()> get_nics;
+
                     bool IsValid() const noexcept {
                         return get_tap && get_tap_ni && get_underlying_ni && get_rib && set_rib && get_fib &&
                             set_fib && get_route_added && set_route_added && get_route_apply_ready &&
-                            add_dns_server_ip && collect_dns_reachability;
+                            add_dns_server_ip && collect_dns_reachability && get_default_routes &&
+                            set_default_routes && get_nics;
                     }
                 };
 

@@ -1,6 +1,7 @@
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/client/route/RouteHost.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
@@ -59,22 +60,30 @@ namespace ppp {
                     }
                 } route_apply_histogram;
 
+                route::RouteHostPorts ports = owner_->BuildRouteHostPorts();
+
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
-                if (auto underlying_ni = owner_->GetUnderlyingNetworkInterface(); NULLPTR != underlying_ni) {
-                    if (auto tap_ni = owner_->GetTapNetworkInterface(); NULLPTR != tap_ni) {
-                        if (auto tap = owner_->GetTap(); NULLPTR != tap) {
+                if (auto underlying_ni = ports.get_underlying_ni(); NULLPTR != underlying_ni) {
+                    if (auto tap_ni = ports.get_tap_ni(); NULLPTR != tap_ni) {
+                        if (auto tap = ports.get_tap(); NULLPTR != tap) {
+                            ppp::unordered_map<uint32_t, ppp::string>* nics = ports.get_nics();
                             ppp::tap::TapLinux* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                            if (NULLPTR != linux_tap && !linux_tap->IsPromisc()) {
-                                VEthernetNetworkSwitcher::RouteInformationTablePtr default_routes = ppp::tap::TapLinux::FindAllDefaultGatewayRoutes({ tap->GatewayServer });
-                                owner_->default_routes_ = default_routes;
+                            if (NULLPTR != linux_tap && !linux_tap->IsPromisc() && NULLPTR != nics) {
+                                VEthernetNetworkSwitcher::RouteInformationTablePtr default_routes =
+                                    ppp::tap::TapLinux::FindAllDefaultGatewayRoutes({ tap->GatewayServer });
+                                ports.set_default_routes(default_routes);
 
                                 if (NULLPTR != default_routes) {
-                                    ppp::tap::TapLinux::DeleteAllRoutes(Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, owner_->nics_), default_routes);
+                                    ppp::tap::TapLinux::DeleteAllRoutes(
+                                        Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, *nics), default_routes);
                                 }
                             }
 
-                            ppp::tap::TapLinux::AddAllRoutes(Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, owner_->nics_), owner_->rib_);
+                            if (NULLPTR != nics) {
+                                ppp::tap::TapLinux::AddAllRoutes(
+                                    Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, *nics), ports.get_rib());
+                            }
                         }
                     }
                 }
@@ -98,13 +107,22 @@ namespace ppp {
             void RouteTableManager::DeleteRoute() noexcept {
                 ppp::telemetry::Log(Level::kDebug, "client", "route delete");
                 ppp::telemetry::Count("client.route.delete", 1);
-                if (auto underlying_ni = owner_->GetUnderlyingNetworkInterface(); NULLPTR != underlying_ni) {
-                    if (auto tap_ni = owner_->GetTapNetworkInterface(); NULLPTR != tap_ni) {
-                        if (auto tap = owner_->GetTap(); NULLPTR != tap) {
-                            ppp::tap::TapLinux::DeleteAllRoutes(Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, owner_->nics_), owner_->rib_);
 
-                            if (auto default_routes = owner_->default_routes_; NULLPTR != default_routes) {
-                                ppp::tap::TapLinux::AddAllRoutes(Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, owner_->nics_), default_routes);
+                route::RouteHostPorts ports = owner_->BuildRouteHostPorts();
+                if (auto underlying_ni = ports.get_underlying_ni(); NULLPTR != underlying_ni) {
+                    if (auto tap_ni = ports.get_tap_ni(); NULLPTR != tap_ni) {
+                        if (auto tap = ports.get_tap(); NULLPTR != tap) {
+                            ppp::unordered_map<uint32_t, ppp::string>* nics = ports.get_nics();
+                            if (NULLPTR == nics) {
+                                return;
+                            }
+
+                            ppp::tap::TapLinux::DeleteAllRoutes(
+                                Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, *nics), ports.get_rib());
+
+                            if (auto default_routes = ports.get_default_routes(); NULLPTR != default_routes) {
+                                ppp::tap::TapLinux::AddAllRoutes(
+                                    Linux_GetNetworkInterfaceName(tap, tap_ni, underlying_ni, *nics), default_routes);
                             }
                         }
                     }

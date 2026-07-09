@@ -481,7 +481,7 @@ sequenceDiagram
 
 ### 暂缓
 
-- **PR6b+ `IRouteBackend` 迁移**：`RouteTableManager_*` 仍有约 **164** 处 `owner_->`；PR6a 已提供 `RouteHostPorts` 注入面，平台 TU 迁移待 PR6b
+- **PR6b+ `IRouteBackend` 迁移**：linux `AddRoute`/`DeleteRoute` 已走 `RouteHostPorts`；其余 route TU 仍有 `owner_->`
 - **`ppp/facade/` 扩展**：`ApplicationBootstrap` 已抽出；更深层的配置/模式解析仍留在 `PppApplication`
 
 ---

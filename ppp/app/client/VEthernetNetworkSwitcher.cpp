@@ -1071,6 +1071,10 @@ namespace ppp {
                             dns_servers.clear();
                         }
                     };
+                host.get_default_routes = [self]() noexcept { return self->default_routes_; };
+                host.set_default_routes =
+                    [self](route::RouteInformationTablePtr routes) noexcept { self->default_routes_ = std::move(routes); };
+                host.get_nics = [self]() noexcept { return &self->nics_; };
                 return host;
             }
 
