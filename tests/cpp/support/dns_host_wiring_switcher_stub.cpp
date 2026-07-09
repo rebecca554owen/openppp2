@@ -377,7 +377,18 @@ route::RouteHostPorts VEthernetNetworkSwitcher::BuildRouteHostPorts() noexcept {
     host.set_route_added = [](bool) noexcept {};
     host.get_route_apply_ready = []() noexcept { return false; };
     host.add_dns_server_ip = [](uint32_t, int) noexcept {};
+    host.clear_dns_servers = []() noexcept {};
+    host.get_dns_server_bucket = [](int bucket) noexcept -> ppp::unordered_set<uint32_t>* {
+        static ppp::unordered_set<uint32_t> buckets[3];
+        if (bucket < 0 || bucket >= 3) {
+            return nullptr;
+        }
+        return &buckets[bucket];
+    };
+    host.dedupe_dns_servers = []() noexcept {};
     host.collect_dns_reachability = []() noexcept {};
+    host.get_dns_interceptor = []() noexcept { return std::shared_ptr<dns::DnsInterceptor>(); };
+    host.get_configuration = []() noexcept { return std::shared_ptr<ppp::configurations::AppConfiguration>(); };
     host.get_default_routes = []() noexcept { return route::RouteInformationTablePtr(); };
     host.set_default_routes = [](route::RouteInformationTablePtr) noexcept {};
     host.get_nics = []() noexcept -> ppp::unordered_map<uint32_t, ppp::string>* {

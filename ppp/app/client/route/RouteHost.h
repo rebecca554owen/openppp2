@@ -9,6 +9,9 @@
 #include <ppp/net/native/rib_fwd.h>
 
 namespace ppp {
+    namespace configurations {
+        class AppConfiguration;
+    }
     namespace tap {
         class ITap;
     }
@@ -17,6 +20,9 @@ namespace ppp {
 namespace ppp {
     namespace app {
         namespace client {
+            namespace dns {
+                class DnsInterceptor;
+            }
             class VEthernetNetworkSwitcher;
             class ClientNetworkInterface;
 
@@ -49,7 +55,17 @@ namespace ppp {
 
                     ppp::function<void(uint32_t ip, int bucket)> add_dns_server_ip;
 
+                    ppp::function<void()> clear_dns_servers;
+
+                    ppp::function<ppp::unordered_set<uint32_t>*(int bucket)> get_dns_server_bucket;
+
+                    ppp::function<void()> dedupe_dns_servers;
+
                     ppp::function<void()> collect_dns_reachability;
+
+                    ppp::function<std::shared_ptr<dns::DnsInterceptor>()> get_dns_interceptor;
+
+                    ppp::function<std::shared_ptr<ppp::configurations::AppConfiguration>()> get_configuration;
 
                     ppp::function<RouteInformationTablePtr()> get_default_routes;
 
@@ -60,8 +76,9 @@ namespace ppp {
                     bool IsValid() const noexcept {
                         return get_tap && get_tap_ni && get_underlying_ni && get_rib && set_rib && get_fib &&
                             set_fib && get_route_added && set_route_added && get_route_apply_ready &&
-                            add_dns_server_ip && collect_dns_reachability && get_default_routes &&
-                            set_default_routes && get_nics;
+                            add_dns_server_ip && clear_dns_servers && get_dns_server_bucket &&
+                            dedupe_dns_servers && collect_dns_reachability && get_dns_interceptor &&
+                            get_configuration && get_default_routes && set_default_routes && get_nics;
                     }
                 };
 

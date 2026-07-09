@@ -481,7 +481,7 @@ sequenceDiagram
 
 ### 暂缓
 
-- **PR6b+ `IRouteBackend` 迁移**：linux `AddRoute`/`DeleteRoute` 已走 `RouteHostPorts`；其余 route TU 仍有 `owner_->`
+- **PR6b+ `IRouteBackend` 迁移**：linux route TU 仅剩 `BuildRouteHostPorts` 注入与 `ProtectDefaultRoute` 异步线程的 `shared_from_this`
 - **`ppp/facade/` 扩展**：`ApplicationBootstrap` 已抽出；更深层的配置/模式解析仍留在 `PppApplication`
 
 ---

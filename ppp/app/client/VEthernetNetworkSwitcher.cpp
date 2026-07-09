@@ -1065,12 +1065,37 @@ namespace ppp {
                             self->dns_serverss_[bucket].emplace(ip);
                         }
                     };
-                host.collect_dns_reachability =
+                host.clear_dns_servers =
                     [self]() noexcept {
                         for (auto& dns_servers : self->dns_serverss_) {
                             dns_servers.clear();
                         }
                     };
+                host.get_dns_server_bucket =
+                    [self](int bucket) noexcept -> ppp::unordered_set<uint32_t>* {
+                        if (bucket < 0 || bucket >= static_cast<int>(std::size(self->dns_serverss_))) {
+                            return nullptr;
+                        }
+                        return &self->dns_serverss_[bucket];
+                    };
+                host.dedupe_dns_servers =
+                    [self]() noexcept {
+                        ppp::collections::Dictionary::DeduplicationList(self->dns_serverss_[1], self->dns_serverss_[0]);
+                    };
+                host.collect_dns_reachability =
+                    [self]() noexcept {
+                        if (NULLPTR == self->dns_interceptor_ || NULLPTR == self->configuration_) {
+                            return;
+                        }
+
+                        self->dns_interceptor_->CollectReachabilityIps(
+                            self->configuration_,
+                            self->configuration_->dns.intercept_unmatched,
+                            [self](uint32_t ip) noexcept { self->dns_serverss_[0].emplace(ip); },
+                            [self](uint32_t ip) noexcept { self->dns_serverss_[1].emplace(ip); });
+                    };
+                host.get_dns_interceptor = [self]() noexcept { return self->dns_interceptor_; };
+                host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
                 host.get_default_routes = [self]() noexcept { return self->default_routes_; };
                 host.set_default_routes =
                     [self](route::RouteInformationTablePtr routes) noexcept { self->default_routes_ = std::move(routes); };
