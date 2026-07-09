@@ -86,13 +86,6 @@ static bool AndroidDnsRedirectTraceEnabled() noexcept {
 #endif
 #endif
 
-namespace ppp::app::client {
-
-VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = default;
-VEthernetNetworkSwitcher& VEthernetNetworkSwitcher::operator=(VEthernetNetworkSwitcher&&) noexcept = default;
-
-} // namespace ppp::app::client
-
 /** @brief Validates whether extensions describe an applicable managed IPv6 assignment. */
 static bool HasManagedIPv6Assignment(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
     bool status_ok = extensions.IPv6StatusCode == ppp::app::protocol::VirtualEthernetInformationExtensions::IPv6Status_Applied ||
@@ -370,7 +363,7 @@ namespace ppp {
                     return addr;
                 }
 
-                const dns::FakeIpPool* pool = dns_interceptor_->GetFakeIpPool();
+                std::shared_ptr<const dns::FakeIpPool> pool = dns_interceptor_->GetFakeIpPool();
                 if (NULLPTR == pool || !pool->IsEnabled()) {
                     return addr;
                 }

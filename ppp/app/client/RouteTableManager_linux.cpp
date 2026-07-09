@@ -247,10 +247,12 @@ namespace ppp {
                             owner_->dns_serverss_[1].emplace(ip);
                         });
 
-                    const dns::FakeIpPool* fake_ip_pool = owner_->dns_interceptor_->GetFakeIpPool();
-                    if (NULLPTR != fake_ip_pool && fake_ip_pool->IsEnabled()) {
+                    std::shared_ptr<const dns::FakeIpPool> fake_ip_pool = owner_->dns_interceptor_->GetFakeIpPool();
+                    uint32_t fake_ip_route_network = 0;
+                    int fake_ip_route_prefix = 0;
+                    if (NULLPTR != fake_ip_pool && fake_ip_pool->GetRoute(fake_ip_route_network, fake_ip_route_prefix)) {
                         if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
-                            AddRoute(fake_ip_pool->RouteNetwork(), tap->GatewayServer, fake_ip_pool->RoutePrefix());
+                            AddRoute(fake_ip_route_network, tap->GatewayServer, fake_ip_route_prefix);
                         }
                     }
                 }

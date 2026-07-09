@@ -195,17 +195,31 @@ namespace ppp {
                     }
 
                     if (configuration->dns.fake_ip.enabled) {
-                        fake_ip_pool_.Configure(configuration->dns.fake_ip.range);
+                        std::shared_ptr<FakeIpPool> fake_ip_pool = std::atomic_load(&fake_ip_pool_);
+                        if (NULLPTR == fake_ip_pool) {
+                            fake_ip_pool = make_shared_object<FakeIpPool>();
+                            std::atomic_store(&fake_ip_pool_, fake_ip_pool);
+                        }
+                        if (NULLPTR != fake_ip_pool) {
+                            fake_ip_pool->Configure(configuration->dns.fake_ip.range);
+                        }
                     }
                     else {
-                        fake_ip_pool_.Clear();
+                        std::shared_ptr<FakeIpPool> fake_ip_pool = std::atomic_load(&fake_ip_pool_);
+                        if (NULLPTR != fake_ip_pool) {
+                            fake_ip_pool->Clear();
+                        }
                     }
 
                     return true;
                 }
 
                 void DnsInterceptor::Close() noexcept {
-                    fake_ip_pool_.Clear();
+                    std::shared_ptr<FakeIpPool> fake_ip_pool =
+                        std::atomic_exchange(&fake_ip_pool_, std::shared_ptr<FakeIpPool>());
+                    if (NULLPTR != fake_ip_pool) {
+                        fake_ip_pool->Clear();
+                    }
                     dns_resolver_.reset();
                     for (auto& table : dns_ruless_) {
                         table.clear();
@@ -281,7 +295,10 @@ namespace ppp {
                         return;
                     }
 
-                    FakeIpPool* pool = &fake_ip_pool_;
+                    std::shared_ptr<FakeIpPool> pool = std::atomic_load(&fake_ip_pool_);
+                    if (NULLPTR == pool) {
+                        return;
+                    }
                     const auto callback =
                         [pool, hostname](ppp::vector<Byte> response) noexcept {
                             ApplyFakeIpBackgroundResponse(*pool, hostname, response);
@@ -453,13 +470,15 @@ namespace ppp {
                         !plan_input.is_gateway_query &&
                         !plan_input.intercept_unmatched;
 
+                    std::shared_ptr<FakeIpPool> fake_ip_pool = std::atomic_load(&fake_ip_pool_);
                     if (!passthrough &&
                         plan.action != DnsRouteAction::kDrop &&
                         qs.mType == ::dns::RecordType::kA &&
-                        fake_ip_pool_.IsEnabled() &&
+                        NULLPTR != fake_ip_pool &&
+                        fake_ip_pool->IsEnabled() &&
                         DnsFakeIpResponse::ShouldUseFakeIp(hostname_lower)) {
 
-                        const uint32_t fake_ip_host = fake_ip_pool_.Allocate(hostname_lower);
+                        const uint32_t fake_ip_host = fake_ip_pool->Allocate(hostname_lower);
                         if (fake_ip_host != 0) {
                             ppp::vector<Byte> fake_response = DnsFakeIpResponse::BuildARecordResponse(
                                 static_cast<const Byte*>(messages->Buffer.get()),

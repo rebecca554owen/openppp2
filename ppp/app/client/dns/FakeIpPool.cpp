@@ -50,15 +50,17 @@ namespace ppp {
                 }
 
                 bool FakeIpPool::Configure(const ppp::string& cidr) noexcept {
-                    Clear();
-
                     uint32_t network_host = 0;
                     uint32_t mask_host = 0;
                     int prefix = 0;
                     if (!ParseCidr(cidr, network_host, mask_host, prefix)) {
+                        Clear();
                         return false;
                     }
 
+                    std::lock_guard<std::mutex> lock(sync_);
+                    by_fake_ip_.clear();
+                    by_hostname_.clear();
                     enabled_ = true;
                     pool_network_host_ = network_host;
                     pool_mask_host_ = mask_host;
@@ -74,6 +76,7 @@ namespace ppp {
                 }
 
                 void FakeIpPool::Clear() noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
                     enabled_ = false;
                     pool_network_host_ = 0;
                     pool_mask_host_ = 0;
@@ -86,7 +89,13 @@ namespace ppp {
                     by_hostname_.clear();
                 }
 
+                bool FakeIpPool::IsEnabled() const noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
+                    return enabled_;
+                }
+
                 bool FakeIpPool::ContainsHostOrder(uint32_t ip_host) const noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
                     if (!enabled_) {
                         return false;
                     }
@@ -94,6 +103,7 @@ namespace ppp {
                 }
 
                 uint32_t FakeIpPool::Allocate(const ppp::string& hostname) noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
                     if (!enabled_ || hostname.empty()) {
                         return 0;
                     }
@@ -128,6 +138,7 @@ namespace ppp {
                 }
 
                 void FakeIpPool::SetRealIp(const ppp::string& hostname, uint32_t real_ip_network) noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
                     if (!enabled_ || hostname.empty() || real_ip_network == 0) {
                         return;
                     }
@@ -141,6 +152,7 @@ namespace ppp {
                 }
 
                 uint32_t FakeIpPool::LookupRealIpHostOrder(uint32_t fake_ip_host) const noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
                     auto found = by_fake_ip_.find(fake_ip_host);
                     if (found == by_fake_ip_.end()) {
                         return 0;
@@ -149,11 +161,25 @@ namespace ppp {
                 }
 
                 ppp::string FakeIpPool::LookupHostname(uint32_t fake_ip_host) const noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
                     auto found = by_fake_ip_.find(fake_ip_host);
                     if (found == by_fake_ip_.end()) {
                         return {};
                     }
                     return found->second.hostname;
+                }
+
+                bool FakeIpPool::GetRoute(uint32_t& route_network, int& route_prefix) const noexcept {
+                    std::lock_guard<std::mutex> lock(sync_);
+                    if (!enabled_) {
+                        route_network = 0;
+                        route_prefix = 0;
+                        return false;
+                    }
+
+                    route_network = route_network_;
+                    route_prefix = route_prefix_;
+                    return true;
                 }
 
             }

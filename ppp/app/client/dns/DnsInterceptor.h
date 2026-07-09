@@ -68,7 +68,7 @@ namespace ppp {
 
                     const RuleMap* RuleTables() const noexcept { return dns_ruless_; }
 
-                    const FakeIpPool* GetFakeIpPool() const noexcept { return &fake_ip_pool_; }
+                    std::shared_ptr<const FakeIpPool> GetFakeIpPool() const noexcept { return std::atomic_load(&fake_ip_pool_); }
 
                 private:
                     void SpawnFakeIpBackgroundResolve(
@@ -79,7 +79,7 @@ namespace ppp {
 
                     std::shared_ptr<ppp::configurations::AppConfiguration> configuration_;
                     std::shared_ptr<ppp::dns::DnsResolver> dns_resolver_;
-                    FakeIpPool fake_ip_pool_;
+                    std::shared_ptr<FakeIpPool> fake_ip_pool_ = make_shared_object<FakeIpPool>();
                     RuleMap dns_ruless_[3];
                 };
 

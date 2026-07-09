@@ -15,7 +15,7 @@ if [[ ! -x "${PPP_BIN}" ]]; then
 fi
 
 if [[ -z "${CONFIG}" ]]; then
-    CONFIG="$(mktemp /tmp/openppp2-proxy-smoke.XXXXXX.json)"
+    CONFIG="$(mktemp "${TMPDIR:-/tmp}/openppp2-proxy-smoke.XXXXXX")"
     trap 'rm -f "${CONFIG}"' EXIT
     cat >"${CONFIG}" <<'EOF'
 {

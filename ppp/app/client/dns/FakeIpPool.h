@@ -6,6 +6,7 @@
  */
 
 #include <ppp/stdafx.h>
+#include <mutex>
 
 namespace ppp {
     namespace app {
@@ -21,7 +22,7 @@ namespace ppp {
 
                     void Clear() noexcept;
 
-                    bool IsEnabled() const noexcept { return enabled_; }
+                    bool IsEnabled() const noexcept;
 
                     /** @brief Returns true when @p ip_host is inside the configured pool. */
                     bool ContainsHostOrder(uint32_t ip_host) const noexcept;
@@ -37,10 +38,7 @@ namespace ppp {
 
                     ppp::string LookupHostname(uint32_t fake_ip_host) const noexcept;
 
-                    /** @brief Route prefix for OS routing (network byte order). */
-                    uint32_t RouteNetwork() const noexcept { return route_network_; }
-
-                    int RoutePrefix() const noexcept { return route_prefix_; }
+                    bool GetRoute(uint32_t& route_network, int& route_prefix) const noexcept;
 
                 private:
                     struct Entry {
@@ -49,6 +47,7 @@ namespace ppp {
                         uint32_t real_ip_host = 0;
                     };
 
+                    mutable std::mutex sync_;
                     bool enabled_ = false;
                     uint32_t pool_network_host_ = 0;
                     uint32_t pool_mask_host_ = 0;

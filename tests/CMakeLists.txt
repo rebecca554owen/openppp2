@@ -39,6 +39,15 @@ if(PLATFORM_SYSTEM_WINDOWS)
             ${OPENSSL_CRYPTO_LIBRARY}
             ${JEMALLOC_LIBRARY}
     )
+elseif(APPLE)
+    target_link_libraries(openppp2_dns_cache_ttl_tests
+        PRIVATE
+            libssl.a
+            libcrypto.a
+            libjemalloc.a
+            m
+            pthread
+    )
 elseif(NOT MSVC)
     target_link_libraries(openppp2_dns_cache_ttl_tests
         PRIVATE
