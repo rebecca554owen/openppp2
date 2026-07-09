@@ -93,6 +93,10 @@ build-*/
 build_*/
 builds/cmake-check/
 AGENTS.md
+CLAUDE.md
+.claude/
+.gitnexusignore
+dist/
 stash-backups/
 
 # Flutter / Dart
