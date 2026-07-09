@@ -3,6 +3,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/configurations/DnsServerEntry.h>
+#include <ppp/configurations/MappingConfiguration.h>
 
 namespace Json {
     class Value;
@@ -22,20 +23,7 @@ namespace ppp {
         public:
             using DnsServerEntry = configurations::DnsServerEntry;
 
-            /**
-             * @brief Port mapping rule configuration.
-             *
-             * Describes one static port-forwarding entry that maps a local
-             * service port to a remote port exposed through the virtual Ethernet
-             * tunnel.  Both TCP and UDP mappings are supported.
-             */
-            struct MappingConfiguration final {
-                bool                                                        protocol_tcp_or_udp; ///< True selects TCP mapping; false selects UDP mapping.
-                ppp::string                                                 local_ip;            ///< Local bind address for the forwarded service (empty = any).
-                int                                                         local_port;          ///< Local port of the service being forwarded.
-                ppp::string                                                 remote_ip;           ///< Remote peer address to reach through the tunnel (may be empty).
-                int                                                         remote_port;         ///< Remote port exposed on the tunnel peer side.
-            };
+            using MappingConfiguration = ::ppp::configurations::MappingConfiguration;
 
             /**
              * @brief Route source configuration for client route imports.

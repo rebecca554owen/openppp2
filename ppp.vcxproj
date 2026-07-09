@@ -824,7 +824,9 @@
     <ClInclude Include="ppp\transmissions\ITransmissionStatistics.h" />
     <ClInclude Include="ppp\collections\Dictionary.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetLinklayer.h" />
+    <ClInclude Include="ppp\configurations\AppConfigurationFwd.h" />
     <ClInclude Include="ppp\configurations\AppConfiguration.h" />
+    <ClInclude Include="ppp\configurations\MappingConfiguration.h" />
     <ClInclude Include="ppp\p2p\P2PDefs.h" />
     <ClInclude Include="ppp\p2p\P2PPacketHeader.h" />
     <ClInclude Include="ppp\p2p\P2PReplayWindow.h" />
