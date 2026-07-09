@@ -30,7 +30,6 @@
  */
 
 #include <ppp/stdafx.h>
-#include <ppp/configurations/AppConfiguration.h>
 #include <ppp/Int128.h>
 #include <ppp/net/Firewall.h>
 #include <ppp/net/native/rib.h>
@@ -248,7 +247,7 @@ namespace ppp {
 
             public:
                 /** @brief Gets the configured logical node identifier from configuration. */
-                int                                                     GetNode() noexcept               { return configuration_->server.node; }
+                int                                                     GetNode() noexcept;
                 /** @brief Gets a shared self-reference via `shared_from_this()`. */
                 std::shared_ptr<VirtualEthernetSwitcher>                GetReference() noexcept          { return shared_from_this(); }
                 /** @brief Gets the firewall instance used to filter inbound sessions. */

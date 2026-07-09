@@ -238,6 +238,10 @@ namespace ppp {
                 Finalize();
             }
 
+            int VirtualEthernetSwitcher::GetNode() noexcept {
+                return configuration_->server.node;
+            }
+
             /**
              * @brief Builds information payload plus IPv6 extension fields.
              * @param session_id Session identifier.
