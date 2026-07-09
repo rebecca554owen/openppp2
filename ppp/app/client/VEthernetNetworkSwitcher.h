@@ -22,7 +22,7 @@ namespace ppp::net::packet { class UdpFrame; class BufferSegment; }
 #include <ppp/ethernet/VEthernet.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/client/ClientNetworkInterface.h>
-#include <ppp/net/native/rib.h>
+#include <ppp/net/native/rib_fwd.h>
 #include <memory>
 
 #if defined(_WIN32)

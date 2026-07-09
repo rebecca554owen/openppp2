@@ -38,6 +38,7 @@
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/net/native/ip.h>
+#include <ppp/net/native/rib.h>
 
 #include <ppp/net/asio/vdns.h>
 #include <ppp/net/Ipep.h>
