@@ -348,7 +348,7 @@ namespace ppp {
                 std::unique_ptr<AggregatorLoader>                               aggregator_loader_;
                 std::unique_ptr<RemoteEndpointLoader>                           remote_endpoint_loader_;
                 std::unique_ptr<dns::DnsHostPorts>                                  dns_host_ports_cache_;
-                /** prdr_-guarded: DnsHostPortsFor / InvalidateDnsHostPorts share teardown's desktop lock. */
+                /** Desktop: prdr_-guarded; mobile: VEthernet syncobj_. */
                 std::weak_ptr<VEthernetExchanger>                                 dns_host_ports_exchanger_;
             };
         }
