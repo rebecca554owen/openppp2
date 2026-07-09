@@ -5,18 +5,27 @@
  * @brief Declares the virtual Ethernet endpoint abstraction and packet flow hooks.
  */
 
-#include <ppp/threading/Timer.h>
-#include <ppp/threading/BufferswapAllocator.h>
-#include <ppp/tap/ITap.h>
 #include <ppp/ethernet/VNetstack.h>
-#include <ppp/net/native/ip.h>
-#include <ppp/net/native/tcp.h>
-#include <ppp/net/packet/IPFragment.h>
-#include <ppp/net/packet/IPFrame.h>
-#include <ppp/net/packet/UdpFrame.h>
-#include <ppp/net/packet/IcmpFrame.h>
 
 struct pbuf;
+
+namespace ppp {
+    namespace threading {
+        class Timer;
+        class BufferswapAllocator;
+    }
+    namespace net {
+        namespace native {
+            struct ip_hdr;
+        }
+        namespace packet {
+            class IPFragment;
+            class IPFrame;
+            class UdpFrame;
+            class IcmpFrame;
+        }
+    }
+}
 
 namespace ppp
 {

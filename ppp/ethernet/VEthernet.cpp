@@ -7,6 +7,9 @@
  */
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/net/native/ip.h>
+#include <ppp/net/native/tcp.h>
+#include <ppp/net/packet/IPFragment.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/Executors.h>
 
