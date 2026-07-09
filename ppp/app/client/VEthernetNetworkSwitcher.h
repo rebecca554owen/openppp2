@@ -98,8 +98,8 @@ namespace ppp {
                 VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept;
                 VEthernetNetworkSwitcher(const VEthernetNetworkSwitcher&) = delete;
                 VEthernetNetworkSwitcher& operator=(const VEthernetNetworkSwitcher&) = delete;
-                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept;
-                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) noexcept;
+                VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = delete;
+                VEthernetNetworkSwitcher& operator=(VEthernetNetworkSwitcher&&) noexcept = delete;
                 virtual ~VEthernetNetworkSwitcher() noexcept;
 
 #include <ppp/app/client/VEthernetNetworkSwitcherPublicMethods.inc>

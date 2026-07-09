@@ -1,6 +1,7 @@
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxyConnection.h>
 #include <ppp/app/client/VEthernetExchanger.h>
+#include <ppp/configurations/AppConfiguration.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Timer.h>

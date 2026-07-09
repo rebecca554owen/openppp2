@@ -2,6 +2,7 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/protocol/PeerPrefixRoute.h>
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h>
