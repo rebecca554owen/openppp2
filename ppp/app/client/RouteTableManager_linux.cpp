@@ -265,7 +265,7 @@ namespace ppp {
 
                 ports.collect_dns_reachability();
 
-                if (std::shared_ptr<dns::DnsInterceptor> interceptor = ports.get_dns_interceptor(); NULLPTR != interceptor) {
+                if (dns::DnsInterceptor* interceptor = ports.get_dns_interceptor(); NULLPTR != interceptor) {
                     std::shared_ptr<const dns::FakeIpPool> fake_ip_pool = interceptor->GetFakeIpPool();
                     uint32_t fake_ip_route_network = 0;
                     int fake_ip_route_prefix = 0;

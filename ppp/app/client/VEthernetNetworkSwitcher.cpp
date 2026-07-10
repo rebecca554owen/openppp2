@@ -1102,22 +1102,35 @@ namespace ppp {
                 host.dedupe_dns_servers = []() noexcept {};
                 host.collect_dns_reachability = []() noexcept {};
 #endif
-                // ponytail: non-owning shared_ptr view; DnsInterceptor is owned by dns_interceptor_.
-                // Upgrade path: store shared_ptr if callers need ownership past switcher teardown.
+                // ponytail: non-owning raw pointer view; DnsInterceptor is owned by dns_interceptor_.
                 host.get_dns_interceptor =
-                    [self]() noexcept -> std::shared_ptr<dns::DnsInterceptor> {
-                        if (NULLPTR == self->dns_interceptor_) {
-                            return NULLPTR;
-                        }
-                        return std::shared_ptr<dns::DnsInterceptor>(
-                            self->dns_interceptor_.get(),
-                            [](dns::DnsInterceptor*) noexcept {});
+                    [self]() noexcept -> dns::DnsInterceptor* {
+                        return self->dns_interceptor_.get();
                     };
                 host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
 #if defined(_LINUX)
                 host.get_default_routes = [self]() noexcept { return self->default_routes_; };
                 host.set_default_routes =
                     [self](route::RouteInformationTablePtr routes) noexcept { self->default_routes_ = std::move(routes); };
+#else
+                host.get_default_routes = []() noexcept { return route::RouteInformationTablePtr(); };
+                host.set_default_routes = [](route::RouteInformationTablePtr) noexcept {};
+#endif
+#else
+                host.get_route_added = []() noexcept { return false; };
+                host.set_route_added = [](bool) noexcept {};
+                host.get_route_apply_ready = []() noexcept { return false; };
+                host.add_dns_server_ip = [](uint32_t, int) noexcept {};
+                host.clear_dns_servers = []() noexcept {};
+                host.get_dns_server_bucket = [](int) noexcept -> ppp::unordered_set<uint32_t>* { return nullptr; };
+                host.dedupe_dns_servers = []() noexcept {};
+                host.collect_dns_reachability = []() noexcept {};
+                host.get_dns_interceptor = []() noexcept -> dns::DnsInterceptor* { return nullptr; };
+                host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
+                host.get_default_routes = []() noexcept { return route::RouteInformationTablePtr(); };
+                host.set_default_routes = [](route::RouteInformationTablePtr) noexcept {};
+#endif
+#if !defined(_ANDROID) && !defined(_IPHONE) && defined(_LINUX)
                 host.get_nics = [self]() noexcept { return &self->nics_; };
 #else
                 // default_routes_/nics_ back only the linux route backend; other platforms keep
@@ -1129,7 +1142,6 @@ namespace ppp {
                     return &empty_nics;
                 };
 #endif // _LINUX vs other desktops
-#endif // !_ANDROID && !_IPHONE: mobile uses RouteTableManager_mobile, no route-ports consumer
                 return host;
             }
 

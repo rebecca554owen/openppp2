@@ -63,7 +63,7 @@ namespace ppp {
 
                     ppp::function<void()> collect_dns_reachability;
 
-                    ppp::function<std::shared_ptr<dns::DnsInterceptor>()> get_dns_interceptor;
+                    ppp::function<dns::DnsInterceptor*()> get_dns_interceptor;
 
                     ppp::function<std::shared_ptr<ppp::configurations::AppConfiguration>()> get_configuration;
 

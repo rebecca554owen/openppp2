@@ -397,7 +397,7 @@ route::RouteHostPorts VEthernetNetworkSwitcher::BuildRouteHostPorts() noexcept {
     };
     host.dedupe_dns_servers = []() noexcept {};
     host.collect_dns_reachability = []() noexcept {};
-    host.get_dns_interceptor = []() noexcept { return std::shared_ptr<dns::DnsInterceptor>(); };
+    host.get_dns_interceptor = []() noexcept -> dns::DnsInterceptor* { return nullptr; };
     host.get_configuration = []() noexcept { return std::shared_ptr<ppp::configurations::AppConfiguration>(); };
     host.get_default_routes = []() noexcept { return route::RouteInformationTablePtr(); };
     host.set_default_routes = [](route::RouteInformationTablePtr) noexcept {};
