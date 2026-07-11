@@ -1038,9 +1038,9 @@ namespace ppp {
             }
 
             route::RouteHostPorts VEthernetNetworkSwitcher::BuildRouteHostPorts() noexcept {
-                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
-
                 route::RouteHostPorts host;
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 host.get_tap = [self]() noexcept { return self->GetTap(); };
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 host.get_tap_ni = [self]() noexcept { return self->GetTapNetworkInterface(); };
@@ -1107,7 +1107,8 @@ namespace ppp {
                     static ppp::unordered_map<uint32_t, ppp::string> empty_nics;
                     return &empty_nics;
                 };
-#endif
+#endif // _LINUX vs other desktops
+#endif // !_ANDROID && !_IPHONE: mobile uses RouteTableManager_mobile, no route-ports consumer
                 return host;
             }
 
