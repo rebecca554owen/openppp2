@@ -38,12 +38,14 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++
 
-      - name: Build focused tests
-        run: |
-          cmake --build build/runtime-diag --target \
-            runtime_snapshot_test \
-            runtime_stop_coordinator_test \
-            p2p_replay_window_test
+      - name: Build runtime snapshot test
+        run: cmake --build build/runtime-diag --target runtime_snapshot_test
+
+      - name: Build stop coordinator test
+        run: cmake --build build/runtime-diag --target runtime_stop_coordinator_test
+
+      - name: Build P2P replay test
+        run: cmake --build build/runtime-diag --target p2p_replay_window_test
 
       - name: Run focused tests
         run: |
