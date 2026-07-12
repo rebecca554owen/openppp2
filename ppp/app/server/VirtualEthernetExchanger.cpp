@@ -1,11 +1,14 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/server/VirtualEthernetExchanger.h>
+#include <ppp/app/server/udp/ServerDatagramPortManager.h>
+#include <ppp/app/server/udp/StaticDatagramPortManager.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetDatagramPort.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/server/VirtualInternetControlMessageProtocol.h>
 #include <ppp/app/server/VirtualInternetControlMessageProtocolStatic.h>
 #include <ppp/app/server/VirtualEthernetDatagramPortStatic.h>
+#include <ppp/app/server/VirtualEthernetNamespaceCache.h>
 #include <ppp/app/protocol/VirtualEthernetIPv6.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/collections/Dictionary.h>
@@ -211,6 +214,8 @@ namespace ppp {
                 buffer_ = Executors::GetCachedBuffer(context);
                 firewall_ = switcher->GetFirewall();
                 managed_server_ = switcher->GetManagedServer();
+                datagram_manager_ = std::make_unique<udp::ServerDatagramPortManager>(BuildServerUdpRelayHostPorts());
+                static_datagram_manager_ = std::make_unique<udp::StaticDatagramPortManager>(BuildStaticUdpRelayHostPorts());
 
                 for (;;) {
                     ITransmissionPtr transmission = transmission_;
@@ -230,6 +235,78 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kInfo, "exchanger", "constructed");
                 ppp::telemetry::Count("exchanger.create", 1);
+            }
+
+            udp::ServerUdpRelayHostPorts VirtualEthernetExchanger::BuildServerUdpRelayHostPorts() noexcept {
+                // The manager is a member owned by this exchanger, so its callbacks may capture the
+                // raw exchanger pointer: they never outlive the exchanger, and this is invoked from the
+                // constructor where shared_from_this() is not yet available.
+                VirtualEthernetExchanger* self = this;
+
+                udp::ServerUdpRelayHostPorts host;
+                host.create_port =
+                    [self](const udp::ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& source) noexcept {
+                        return self->NewDatagramPort(transmission, source);
+                    };
+                // Keep the switcher logger / debug telemetry on the exchanger side so the manager stays
+                // pure mechanism; fired once when a fresh port's socket opens (was inline in SendPacketToDestination).
+                host.on_port_opened =
+                    [self](const udp::ITransmissionPtr& transmission, const udp::VirtualEthernetDatagramPortPtr& port) noexcept {
+                        VirtualEthernetLoggerPtr logger = self->switcher_->GetLogger();
+                        if (NULLPTR != logger) {
+                            logger->Port(self->GetId(), transmission, port->GetSourceEndPoint(), port->GetLocalEndPoint());
+                        }
+
+                        ppp::telemetry::Log(Level::kDebug, "exchanger", "datagram port opened");
+                    };
+                host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
+                // do_send_to mirrors the link-layer SENDTO; the port supplies its own transmission and
+                // coroutine yield context. release_port lets a port deregister itself on finalize.
+                host.do_send_to =
+                    [self](const udp::ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& source,
+                           const boost::asio::ip::udp::endpoint& destination, ppp::Byte* packet, int packet_length,
+                           ppp::coroutines::YieldContext& y) noexcept {
+                        return self->DoSendTo(transmission, source, destination, packet, packet_length, y);
+                    };
+                host.release_port =
+                    [self](const boost::asio::ip::udp::endpoint& source) noexcept { self->ReleaseDatagramPort(source); };
+                host.get_interface_ip = [self]() noexcept { return self->switcher_->GetInterfaceIP(); };
+                host.namespace_query =
+                    [self](const void* packet, int packet_length) noexcept { return NamespaceQueryCache(self->switcher_, packet, packet_length); };
+                return host;
+            }
+
+            udp::StaticUdpRelayHostPorts VirtualEthernetExchanger::BuildStaticUdpRelayHostPorts() noexcept {
+                VirtualEthernetExchanger* self = this;
+
+                udp::StaticUdpRelayHostPorts host;
+                // create_port binds the current io_context and owning exchanger to a fresh static port,
+                // exactly as the inline StaticEchoSendToDestination slow-path did (context null -> no port).
+                host.create_port =
+                    [self](uint32_t source_ip, int source_port) noexcept -> udp::VirtualEthernetDatagramPortStaticPtr {
+                        std::shared_ptr<boost::asio::io_context> context = self->GetContext();
+                        if (NULLPTR == context) {
+                            return NULLPTR;
+                        }
+
+                        auto my = self->shared_from_this();
+                        auto exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(my);
+                        if (NULLPTR == exchanger) {
+                            return NULLPTR;
+                        }
+
+                        return make_shared_object<VirtualEthernetDatagramPortStatic>(exchanger, context, source_ip, source_port);
+                    };
+                host.on_port_opened =
+                    [self](const udp::VirtualEthernetDatagramPortStaticPtr& port) noexcept {
+                        VirtualEthernetLoggerPtr logger = self->switcher_->GetLogger();
+                        if (NULLPTR != logger) {
+                            logger->Port(self->GetId(), self->transmission_, port->GetSourceEndPoint(), port->GetLocalEndPoint());
+                        }
+
+                        ppp::telemetry::Log(Level::kDebug, "exchanger", "static_echo datagram port opened");
+                    };
+                return host;
             }
 
             /** @brief Releases exchanger resources. */
@@ -275,8 +352,7 @@ namespace ppp {
 
                 static_echo_source_ep_ = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0);
                 for (;;) {
-                    Dictionary::ReleaseAllObjects(datagrams_);
-                    datagrams_.clear();
+                    datagram_manager_->Release();
 
                     Dictionary::ReleaseAllObjects(mappings_);
                     mappings_.clear();
@@ -308,16 +384,8 @@ namespace ppp {
                     break;
                 }
 
-                VirtualEthernetDatagramPortStaticTable static_echo_datagram_ports;
-                for (;;) {
-                    SynchronizedObjectScope scope(static_echo_syncobj_);
-                    static_echo_datagram_ports = std::move(static_echo_datagram_ports_);
-                    static_echo_datagram_ports_.clear();
-                    break;
-                }
-
                 UploadTrafficToManagedServer();
-                Dictionary::ReleaseAllObjects(static_echo_datagram_ports);
+                static_datagram_manager_->Release();
 
                 static_allocated_context_.reset();
 
@@ -821,6 +889,94 @@ namespace ppp {
             }
 
             /** @brief Forwards one UDP payload to destination through cached/new datagram port. */
+            bool VirtualEthernetExchanger::NamespaceQueryCache(
+                const std::shared_ptr<VirtualEthernetSwitcher>&     switcher,
+                const void*                                         packet,
+                int                                                 packet_length) noexcept {
+
+                auto cache = switcher->GetNamespaceCache();
+                if (NULLPTR == cache) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsCacheFailed);
+                    return false;
+                }
+
+                uint16_t queries_type = 0;
+                uint16_t queries_clazz = 0;
+                ppp::string domain = ppp::net::native::dns::ExtractHostY((Byte*)packet, packet_length,
+                    [&queries_type, &queries_clazz](ppp::net::native::dns::dns_hdr* h, ppp::string& domain, uint16_t type, uint16_t clazz) noexcept -> bool {
+                        queries_type = type;
+                        queries_clazz = clazz;
+                        return true;
+                    });
+
+                if (domain.empty()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsPacketInvalid);
+                    return false;
+                }
+
+                std::shared_ptr<Byte> response = make_shared_alloc<Byte>(packet_length);
+                if (NULLPTR == response) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    return false;
+                }
+
+                ppp::string queries_key = VirtualEthernetNamespaceCache::QueriesKey(queries_type, queries_clazz, domain);
+                memcpy(response.get(), packet, packet_length);
+
+                return cache->Add(queries_key, response, packet_length);
+            }
+
+            int VirtualEthernetExchanger::NamespaceQueryReply(
+                const boost::asio::ip::udp::endpoint&               sourceEP,
+                const boost::asio::ip::udp::endpoint&               destinationEP,
+                const ppp::string&                                  domain,
+                const void*                                         packet,
+                int                                                 packet_length,
+                uint16_t                                            queries_type,
+                uint16_t                                            queries_clazz,
+                bool                                                static_transit) noexcept {
+
+                using dns_hdr = ppp::net::native::dns::dns_hdr;
+
+                if (NULLPTR != packet && packet_length >= sizeof(dns_hdr)) {
+                    if (domain.size() > 0) {
+                        auto cache = switcher_->GetNamespaceCache();
+                        if (NULLPTR != cache) {
+                            std::shared_ptr<Byte> response;
+                            int response_length;
+
+                            ppp::string queries_key = VirtualEthernetNamespaceCache::QueriesKey(queries_type, queries_clazz, domain);
+                            if (cache->Get(queries_key, response, response_length, ((dns_hdr*)packet)->usTransID)) {
+                                ITransmissionPtr transmission = GetTransmission();
+                                if (NULLPTR != transmission) {
+                                    boost::asio::ip::udp::endpoint remoteEP = Ipep::V6ToV4(destinationEP);
+                                    if (static_transit) {
+                                        bool outputed = VirtualEthernetDatagramPortStatic::Output(switcher_.get(),
+                                            this, response.get(), response_length, sourceEP, remoteEP);
+                                        if (outputed) {
+                                            return 1;
+                                        }
+                                        else {
+                                            return -1;
+                                        }
+                                    }
+                                    elif(DoSendTo(transmission, sourceEP, remoteEP, response.get(), response_length, nullof<YieldContext>())) {
+                                        return 1;
+                                    }
+                                    else {
+                                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpRelayFailed);
+                                        transmission->Dispose();
+                                        return -1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return 0;
+            }
+
             bool VirtualEthernetExchanger::SendPacketToDestination(const ITransmissionPtr& transmission,
                 const boost::asio::ip::udp::endpoint&   sourceEP,
                 const boost::asio::ip::udp::endpoint&   destinationEP,
@@ -888,7 +1044,7 @@ namespace ppp {
                         ppp::telemetry::Log(Level::kDebug, "exchanger", "dns query host empty error=%d length=%d", static_cast<int>(dns_error), packet_length);
                     }
 
-                    int status = VirtualEthernetDatagramPort::NamespaceQuery(switcher_, this, sourceEP, destinationEP, hostDomain,
+                    int status = NamespaceQueryReply(sourceEP, destinationEP, hostDomain,
                         packet, packet_length, queries_type, queries_clazz, false);
                     if (status < 0) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::DnsResolveFailed);
@@ -904,45 +1060,7 @@ namespace ppp {
                     }
                 }
 
-                VirtualEthernetDatagramPortPtr datagram = GetDatagramPort(sourceEP);
-                if (NULLPTR != datagram) {
-                    if (fin) {
-                        datagram->MarkFinalize();
-                        datagram->Dispose();
-                        return true;
-                    }
-                    else {
-                        return datagram->SendTo(packet, packet_length, destinationEP);
-                    }
-                }
-                elif(fin) {
-                    return false;
-                }
-                else {
-                    datagram = NewDatagramPort(transmission, sourceEP);
-                    if (NULLPTR != datagram) {
-                        bool ok = false;
-                        if (auto r = datagrams_.emplace(sourceEP, datagram); r.second) {
-                            ok = datagram->Open();
-                            if (!ok) {
-                                datagrams_.erase(r.first);
-                            }
-                        }
-
-                        if (ok) {
-                            if (NULLPTR != logger) {
-                                logger->Port(GetId(), transmission, datagram->GetSourceEndPoint(), datagram->GetLocalEndPoint());
-                            }
-
-                            ppp::telemetry::Log(Level::kDebug, "exchanger", "datagram port opened");
-                            return datagram->SendTo(packet, packet_length, destinationEP);
-                        }
-                        else {
-                            datagram->Dispose();
-                        }
-                    }
-                    return false;
-                }
+                return datagram_manager_->SendToDestination(transmission, sourceEP, destinationEP, packet, packet_length, fin);
             }
 
             /**
@@ -1089,7 +1207,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
                                 AppConfigurationPtr configuration = GetConfiguration();
                                 if (NULLPTR != configuration && configuration->udp.dns.cache) {
-                                    VirtualEthernetDatagramPort::NamespaceQuery(switcher_, recv_buffer.get(), bytes_transferred);
+                                    NamespaceQueryCache(switcher_, recv_buffer.get(), bytes_transferred);
                                 }
                             }
                         }
@@ -1225,45 +1343,14 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     [self, this, now]() noexcept {
                         int session_id = static_echo_session_id_.load();
                         if (session_id != 0) {
-                            // D1-4: Do NOT call UpdateAllObjects (which invokes Dispose() on expired
-                            // ports) while static_echo_syncobj_ is held.  Disposing a UDP datagram
-                            // port may trigger OS socket-close syscalls and re-entrant callbacks,
-                            // both of which must not run under the lock.
-                            //
-                            // Instead, collect all stale ports into a local vector under the lock,
-                            // erase them from the map, release the lock, and then dispose them
-                            // outside the lock.  This is the standard snapshot-and-release pattern.
-                            ppp::vector<VirtualEthernetDatagramPortStaticPtr> stale_ports;
-
-                            {
-                                SynchronizedObjectScope scope(static_echo_syncobj_);
-                                for (auto tail = static_echo_datagram_ports_.begin(); tail != static_echo_datagram_ports_.end();) {
-                                    const VirtualEthernetDatagramPortStaticPtr& port = tail->second;
-                                    if (NULLPTR == port || port->IsPortAging(now)) {
-                                        if (NULLPTR != port) {
-                                            stale_ports.emplace_back(port);
-                                        }
-
-                                        tail = static_echo_datagram_ports_.erase(tail);
-                                    }
-                                    else {
-                                        ++tail;
-                                    }
-                                }
-                            }
-
-                            // Dispose expired ports outside the lock to avoid holding
-                            // static_echo_syncobj_ across socket-close syscalls.
-                            for (auto& port : stale_ports) {
-                                IDisposable::Dispose(*port);
-                            }
+                            static_datagram_manager_->Tick(now);
                         }
 
                         UploadTrafficToManagedServer();
                         DoMuxEvents();
                         DoKeepAlived(GetTransmission(), now);
 
-                        Dictionary::UpdateAllObjects(datagrams_, now);
+                        datagram_manager_->Tick(now);
                         Dictionary::UpdateAllObjects2(mappings_, now);
                     });
                 return true;
@@ -1401,17 +1488,17 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
                 auto my = shared_from_this();
                 auto self = std::dynamic_pointer_cast<VirtualEthernetExchanger>(my);
-                return make_shared_object<VirtualEthernetDatagramPort>(self, transmission, sourceEP);
+                return make_shared_object<VirtualEthernetDatagramPort>(self, BuildServerUdpRelayHostPorts(), transmission, sourceEP);
             }
 
             /** @brief Finds a cached datagram port by source endpoint key. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                return Dictionary::FindObjectByKey(datagrams_, sourceEP);
+                return datagram_manager_->GetDatagramPort(sourceEP);
             }
 
             /** @brief Removes and returns cached datagram port by source endpoint key. */
             VirtualEthernetExchanger::VirtualEthernetDatagramPortPtr VirtualEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                return Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
+                return datagram_manager_->ReleaseDatagramPort(sourceEP);
             }
 
             /** @brief Parses and forwards ICMP packet to echo subsystem after firewall checks. */
@@ -1768,23 +1855,16 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
             /** @brief Releases static-echo datagram port by source address and port. */
             bool VirtualEthernetExchanger::StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept {
-                std::shared_ptr<VirtualEthernetDatagramPortStatic> datagram_port;
                 if (source_port <= IPEndPoint::MinPort || source_port > IPEndPoint::MaxPort) {
                     return false;
                 }
 
                 uint64_t key = MAKE_QWORD(source_ip, source_port);
-                if (key) {
-                    SynchronizedObjectScope scope(static_echo_syncobj_);
-                    Dictionary::TryRemove(static_echo_datagram_ports_, key, datagram_port);
-                }
-
-                if (NULLPTR == datagram_port) {
+                if (!key) {
                     return false;
                 }
 
-                datagram_port->Dispose();
-                return true;
+                return NULLPTR != static_datagram_manager_->ReleaseDatagramPort(key);
             }
 
             /** @brief Forwards static-echo UDP packet to destination through cached/static port. */
@@ -1794,12 +1874,6 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 }
 
                 if (NULLPTR == packet) {
-                    return false;
-                }
-
-                auto my = shared_from_this();
-                std::shared_ptr<VirtualEthernetExchanger> exchanger = std::dynamic_pointer_cast<VirtualEthernetExchanger>(my);
-                if (NULLPTR == exchanger) {
                     return false;
                 }
 
@@ -1858,7 +1932,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     boost::asio::ip::udp::endpoint sourceEP =
                         IPEndPoint::ToEndPoint<boost::asio::ip::udp>(IPEndPoint(source_ip, source_port));
 
-                    int status = VirtualEthernetDatagramPort::NamespaceQuery(switcher_, this, sourceEP, destinationEP, hostDomain,
+                    int status = NamespaceQueryReply(sourceEP, destinationEP, hostDomain,
                         messages.get(), packet->Length, queries_type, queries_clazz, true);
                     if (status < 0) {
                         return false;
@@ -1873,80 +1947,8 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     }
                 }
 
-                for (;;) {
-                    uint64_t key = MAKE_QWORD(source_ip, source_port);
-                    std::shared_ptr<boost::asio::io_context> context = GetContext();
-                    if (NULLPTR == context) {
-                        break;
-                    }
-
-                    /**
-                     * @brief Fast path: check whether a port already exists without opening a socket.
-                     *
-                     * The map lookup runs under the lock; if a port is found, we avoid
-                     * allocating a new socket entirely.
-                     */
-                    bool already_exists = false;
-                    {
-                        SynchronizedObjectScope scope(static_echo_syncobj_);
-                        already_exists = ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port);
-                    }
-
-                    if (already_exists) {
-                        break;
-                    }
-
-                    /**
-                     * @brief Slow path: create and open the socket BEFORE acquiring the lock.
-                     *
-                     * Performing the UDP socket allocation and Open() syscall outside the lock
-                     * prevents static_echo_syncobj_ from being held during potentially blocking
-                     * OS operations.  A concurrent thread may race to insert the same key;
-                     * the second check inside the lock below resolves such races.
-                     */
-                    std::shared_ptr<VirtualEthernetDatagramPortStatic> new_port =
-                        make_shared_object<VirtualEthernetDatagramPortStatic>(exchanger, context, source_ip, source_port);
-                    if (NULLPTR == new_port) {
-                        return false;
-                    }
-
-                    if (!new_port->Open()) {
-                        new_port->Dispose();
-                        return false;
-                    }
-
-                    /**
-                     * @brief Under the lock: attempt to insert the newly opened port.
-                     *
-                     * If another thread already inserted a port for the same key during the
-                     * Open() window, TryAdd returns false; we discard our port and use theirs.
-                     */
-                    bool inserted = false;
-                    {
-                        SynchronizedObjectScope scope(static_echo_syncobj_);
-                        if (!ppp::collections::Dictionary::TryGetValue(static_echo_datagram_ports_, key, datagram_port)) {
-                            inserted = ppp::collections::Dictionary::TryAdd(static_echo_datagram_ports_, key, new_port);
-                            if (inserted) {
-                                datagram_port = new_port;
-                            }
-                        }
-                        /** @brief datagram_port now holds whichever entry won the insertion race. */
-                    }
-
-                    if (inserted) {
-                        if (NULLPTR != logger) {
-                            logger->Port(GetId(), transmission, datagram_port->GetSourceEndPoint(), datagram_port->GetLocalEndPoint());
-                        }
-
-                        ppp::telemetry::Log(Level::kDebug, "exchanger", "static_echo datagram port opened");
-                    }
-                    else {
-                        /** @brief Lost the insertion race; dispose our redundant port. */
-                        new_port->Dispose();
-                    }
-
-                    break;
-                }
+                uint64_t key = MAKE_QWORD(source_ip, source_port);
+                datagram_port = static_datagram_manager_->GetOrAddDatagramPort(key, source_ip, source_port);
 
                 if (NULLPTR == datagram_port) {
                     return false;

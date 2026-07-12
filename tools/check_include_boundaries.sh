@@ -24,8 +24,10 @@ if [[ -d ppp/facade/views ]]; then
   fi
 fi
 
-# stdafx in headers: baseline 97, fail only if count increases
-STDAFX_BASELINE=101
+# stdafx in headers: baseline grows only with new headers, fail only if count increases
+# 103 -> 105: P2-e adds ServerUdpRelayHost.h + ServerDatagramPortManager.h, mirroring the client udp headers.
+# 105 -> 107: P2-f adds StaticUdpRelayHost.h + StaticDatagramPortManager.h for the static-echo table.
+STDAFX_BASELINE=107
 stdafx_count=$(rg -l 'stdafx' ppp --glob '*.h' 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$stdafx_count" -gt "$STDAFX_BASELINE" ]]; then
   echo "FAIL: stdafx in ppp/**/*.h increased ($stdafx_count > $STDAFX_BASELINE)"

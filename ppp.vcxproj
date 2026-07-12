@@ -399,6 +399,12 @@
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteHost.cpp" />
+    <ClCompile Include="ppp\app\client\udp\ClientDatagramPortManager.cpp" />
+    <ClCompile Include="ppp\app\client\udp\UdpRelayHost.cpp" />
+    <ClCompile Include="ppp\app\server\udp\ServerDatagramPortManager.cpp" />
+    <ClCompile Include="ppp\app\server\udp\ServerUdpRelayHost.cpp" />
+    <ClCompile Include="ppp\app\server\udp\StaticDatagramPortManager.cpp" />
+    <ClCompile Include="ppp\app\server\udp\StaticUdpRelayHost.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsRouteDispatcher.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsUdpRelay.cpp" />
     <ClCompile Include="ppp\app\client\dns\FakeIpPool.cpp" />
@@ -493,6 +499,7 @@
     <ClCompile Include="ppp\net\asio\websocket.cpp" />
     <ClCompile Include="ppp\net\Firewall.cpp" />
     <ClCompile Include="ppp\net\native\checksum.cpp" />
+    <ClCompile Include="ppp\net\native\rib.cpp" />
     <ClCompile Include="ppp\net\packet\IcmpFrame.cpp" />
     <ClCompile Include="ppp\net\packet\IPFragment.cpp" />
     <ClCompile Include="ppp\net\packet\IPFrame.cpp" />

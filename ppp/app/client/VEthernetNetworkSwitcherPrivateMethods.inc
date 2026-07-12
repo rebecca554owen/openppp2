@@ -26,6 +26,12 @@
                 bool                                                                AddRemoteEndPointToIPList(const boost::asio::ip::address& gw) noexcept;
                 bool                                                                StaticEchoAddRemoteEndPoint(boost::asio::ip::udp::endpoint& remoteEP) noexcept;
 
+                /** Caller must already hold the platform-appropriate DNS cache mutex. */
+                void                                                                InvalidateDnsHostPortsLocked() noexcept {
+                    dns_host_ports_cache_.reset();
+                    dns_host_ports_exchanger_.reset();
+                }
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 bool                                                                ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept;
                 void                                                                RestoreAssignedIPv6() noexcept;

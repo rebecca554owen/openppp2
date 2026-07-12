@@ -37,6 +37,7 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
+#include <ppp/app/client/udp/UdpRelayHost.h>
 
 #if defined(_ANDROID)
 #include <linux/ppp/net/ProtectorNetwork.h>
@@ -48,7 +49,6 @@ namespace ppp {
     namespace app {
         namespace client {
             class VEthernetExchanger;
-            class VEthernetNetworkSwitcher;
 
             /**
              * @brief UDP datagram relay port bound to a single local source endpoint.
@@ -68,9 +68,6 @@ namespace ppp {
              * UDP traffic can bypass the VPN route protection without infinite recursion.
              */
             class VEthernetDatagramPort : public std::enable_shared_from_this<VEthernetDatagramPort> {
-                friend class                                            VEthernetExchanger;
-                friend class                                            VEthernetNetworkSwitcher;
-
             public:
                 /** @brief Application configuration type alias. */
                 typedef ppp::configurations::AppConfiguration           AppConfiguration;
@@ -90,8 +87,6 @@ namespace ppp {
                 typedef std::lock_guard<SynchronizedObject>             SynchronizedObjectScope;
                 /** @brief Shared pointer alias for owning exchanger. */
                 typedef std::shared_ptr<VEthernetExchanger>             VEthernetExchangerPtr;
-                /** @brief Shared pointer alias for owning network switcher. */
-                typedef std::shared_ptr<VEthernetNetworkSwitcher>       VEthernetNetworkSwitcherPtr;
 
 #if defined(_ANDROID)
             public:
@@ -133,7 +128,7 @@ namespace ppp {
                  * @param transmission Active transport channel used for outbound forwarding.
                  * @param sourceEP     Local TAP-side UDP source endpoint this port represents.
                  */
-                VEthernetDatagramPort(const VEthernetExchangerPtr& exchanger, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
+                VEthernetDatagramPort(const VEthernetExchangerPtr& exchanger, udp::UdpRelayHostPorts ports, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
 
                 /**
                  * @brief Releases all resources owned by the port.
@@ -148,12 +143,6 @@ namespace ppp {
                  * @return shared_ptr to this instance.
                  */
                 std::shared_ptr<VEthernetDatagramPort>                  GetReference()     noexcept { return shared_from_this(); }
-
-                /**
-                 * @brief Returns the owning exchanger.
-                 * @return Shared VEthernetExchanger pointer.
-                 */
-                VEthernetExchangerPtr                                   GetExchanger()     noexcept { return exchanger_; }
 
                 /**
                  * @brief Returns the io_context used for async operations.
@@ -222,7 +211,7 @@ namespace ppp {
                 bool                                                    Loopback() noexcept;
 #endif
 
-            protected:
+            public: // P2-c: manager routes inbound datagrams without exchanger friendship
                 /**
                  * @brief Handles a datagram received from the remote server for this source endpoint.
                  *
@@ -261,7 +250,10 @@ namespace ppp {
                  * @brief Marks this port as finalized by an external caller (e.g. exchanger GC sweep).
                  * @note After this call the port will not re-enter the exchanger tables.
                  */
+            public: // P2-c: manager needs the finalize signal without exchanger friendship
                 void                                                    MarkFinalize() noexcept { finalize_ = true; }
+
+            private:
 
             private:
                 struct {
@@ -275,9 +267,10 @@ namespace ppp {
                 SynchronizedObject                                      syncobj_;
                 /** @brief IO context for all async operations. */
                 ContextPtr                                              context_;
-                /** @brief Owning network switcher providing DatagramOutput path. */
-                VEthernetNetworkSwitcherPtr                             switcher_;
-                /** @brief Owning exchanger for deregistration on disposal. */
+                /** @brief Injected exchanger/switcher capabilities (no back-pointer coupling). */
+                udp::UdpRelayHostPorts                                  ports_;
+                /** @brief Lifecycle anchor only: keeps the owning exchanger alive across async
+                 *         finalize; never dereferenced, all capabilities go through ports_. */
                 VEthernetExchangerPtr                                   exchanger_;
                 /** @brief Active transport channel for outbound forwarding. */
                 ITransmissionPtr                                        transmission_;

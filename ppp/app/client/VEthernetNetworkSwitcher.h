@@ -68,7 +68,6 @@ namespace ppp {
             class VEthernetNetworkSwitcher : public ppp::ethernet::VEthernet, public dns::IDnsHost, public route::IRouteBackend {
             private:
                 friend class VEthernetExchanger;
-                friend class VEthernetDatagramPort;
                 friend class RouteTableManager;
                 friend class AssignedAddressManager;
                 friend class ClientConnectionTeardown;

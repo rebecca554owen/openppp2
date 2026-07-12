@@ -176,6 +176,7 @@ namespace ppp {
                 bool                                                        plaintext;      ///< Transmit data in plaintext (no encryption) when true; for debugging only.
                 bool                                                        delta_encode;   ///< Apply delta encoding to payload bytes before encryption.
                 bool                                                        shuffle_data;   ///< Randomly reorder payload blocks within each packet when true.
+                bool                                                        simd_auto;      ///< Transparently run aes-*-cfb via AES-NI when the CPU supports it (default true).
             }                                                               key;            ///< Cryptographic key and cipher configuration.
             struct {
                 int64_t                                                     size;           ///< Virtual memory file size in bytes; 0 disables vmem backing.

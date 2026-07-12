@@ -3,6 +3,7 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetDatagramPort.h>
+#include <ppp/app/client/udp/ClientDatagramPortManager.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
@@ -123,6 +124,49 @@ namespace ppp {
                 server_url_.port          = 0;
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
                 static_echo_.Bind(this);
+                datagram_manager_ = std::make_unique<udp::ClientDatagramPortManager>(BuildUdpRelayHostPorts());
+            }
+
+            udp::UdpRelayHostPorts VEthernetExchanger::BuildUdpRelayHostPorts() noexcept {
+                // The manager is a member owned by this exchanger, so its callbacks may capture the
+                // raw exchanger pointer: they never outlive the exchanger, and this is invoked from the
+                // constructor where shared_from_this() is not yet available.
+                VEthernetExchanger* self = this;
+
+                udp::UdpRelayHostPorts host;
+                host.datagram_output =
+                    [self](const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
+                           void* packet, int packet_size, bool caching) noexcept {
+                        return self->switcher_->DatagramOutput(source, destination, packet, packet_size, caching);
+                    };
+                host.get_transmission = [self]() noexcept { return self->transmission_; };
+                host.create_port =
+                    [self](const udp::ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& source) noexcept {
+                        return self->NewDatagramPort(transmission, source);
+                    };
+                host.is_disposed = [self]() noexcept { return self->disposed_.load(std::memory_order_acquire); };
+                host.get_tap = [self]() noexcept { return self->switcher_->GetTap(); };
+                host.get_configuration = [self]() noexcept { return self->switcher_->GetConfiguration(); };
+                host.rewrite_fakeip =
+                    [self](const boost::asio::ip::address& address) noexcept { return self->switcher_->RewriteFakeIpAddress(address); };
+                // do_send_to mirrors the link-layer SENDTO; the port supplies its own transmission and
+                // coroutine yield context. release_port lets a port deregister itself on finalize (P2-d).
+                host.do_send_to =
+                    [self](const udp::ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& source,
+                           const boost::asio::ip::udp::endpoint& destination, ppp::Byte* packet, int packet_length,
+                           ppp::coroutines::YieldContext& y) noexcept {
+                        return self->DoSendTo(transmission, source, destination, packet, packet_length, y);
+                    };
+                host.release_port =
+                    [self](const boost::asio::ip::udp::endpoint& source) noexcept { self->ReleaseDatagramPort(source); };
+                host.emplace_timeout = [](int64_t, ppp::function<void()>) noexcept {};
+#if defined(_ANDROID)
+                host.is_bypass_ip =
+                    [self](const boost::asio::ip::address& address) noexcept { return self->switcher_->IsBypassIpAddress(address); };
+                host.get_protector_network =
+                    [self]() noexcept { return self->switcher_->GetProtectorNetwork(); };
+#endif
+                return host;
             }
 
             /** @brief Finalizes exchanger on destruction. */
@@ -227,7 +271,6 @@ namespace ppp {
                 }
 
                 VirtualEthernetMappingPortTable mappings;
-                VEthernetDatagramPortTable datagrams;
                 ITransmissionPtr transmission;
                 DeadlineTimerTable deadline_timers;
                 std::shared_ptr<vmux::vmux_net> mux;
@@ -238,9 +281,6 @@ namespace ppp {
 
                     mappings = std::move(mappings_);
                     mappings_.clear();
-
-                    datagrams = std::move(datagrams_);
-                    datagrams_.clear();
 
                     deadline_timers = std::move(deadline_timers_);
                     deadline_timers_.clear();
@@ -261,7 +301,7 @@ namespace ppp {
                 }
 
                 Dictionary::ReleaseAllObjects(mappings);
-                Dictionary::ReleaseAllObjects(datagrams);
+                datagram_manager_->Release();
 
                 ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger finalized");
 
@@ -593,32 +633,23 @@ namespace ppp {
                         DoMuxEvents();
                         DoKeepAlived(GetTransmission(), now);
 
-                        ppp::vector<std::pair<boost::asio::ip::udp::endpoint, VEthernetDatagramPortPtr>> datagram_candidates;
+                        // UDP datagram ports: the manager owns the session table and its own two-phase GC.
+                        datagram_manager_->Tick(now);
+
+                        // FRP mapping ports keep their in-place two-phase sweep (snapshot/erase under lock,
+                        // dispose outside) here on the exchanger.
                         ppp::vector<std::pair<uint32_t, VirtualEthernetMappingPortPtr>> mapping_candidates;
-                        ppp::vector<std::pair<boost::asio::ip::udp::endpoint, VEthernetDatagramPortPtr>> stale_datagram_candidates;
                         ppp::vector<std::pair<uint32_t, VirtualEthernetMappingPortPtr>> stale_mapping_candidates;
-                        ppp::vector<VEthernetDatagramPortPtr> stale_datagrams;
                         ppp::vector<VirtualEthernetMappingPortPtr> stale_mappings;
 
                         for (;;) {
                             SynchronizedObjectScope scope(syncobj_);
-
-                            for (auto&& kv : datagrams_) {
-                                datagram_candidates.emplace_back(kv.first, kv.second);
-                            }
 
                             for (auto&& kv : mappings_) {
                                 mapping_candidates.emplace_back(kv.first, kv.second);
                             }
 
                             break;
-                        }
-
-                        for (auto&& kv : datagram_candidates) {
-                            VEthernetDatagramPortPtr& datagram = kv.second;
-                            if (NULLPTR == datagram || datagram->IsPortAging(now)) {
-                                stale_datagram_candidates.emplace_back(kv.first, datagram);
-                            }
                         }
 
                         for (auto&& kv : mapping_candidates) {
@@ -630,21 +661,6 @@ namespace ppp {
 
                         for (;;) {
                             SynchronizedObjectScope scope(syncobj_);
-
-                            for (auto&& stale_datagram_candidate : stale_datagram_candidates) {
-                                auto&& object_key = stale_datagram_candidate.first;
-                                auto tail = datagrams_.find(object_key);
-                                auto endl = datagrams_.end();
-                                if (tail == endl || tail->second != stale_datagram_candidate.second) {
-                                    continue;
-                                }
-
-                                VEthernetDatagramPortPtr datagram = std::move(tail->second);
-                                datagrams_.erase(tail);
-                                if (NULLPTR != datagram) {
-                                    stale_datagrams.emplace_back(std::move(datagram));
-                                }
-                            }
 
                             for (auto&& stale_mapping_candidate : stale_mapping_candidates) {
                                 auto&& object_key = stale_mapping_candidate.first;
@@ -662,10 +678,6 @@ namespace ppp {
                             }
 
                             break;
-                        }
-
-                        for (auto&& datagram : stale_datagrams) {
-                            IDisposable::Dispose(*datagram);
                         }
 
                         for (auto&& mapping : stale_mappings) {
@@ -1619,37 +1631,12 @@ namespace ppp {
 
             /** @brief Handles UDP callback packet delivered by remote exchanger. */
             bool VEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                ReceiveFromDestination(sourceEP, destinationEP, packet, packet_length);
-                return true;
+                return datagram_manager_->OnSendTo(transmission, sourceEP, destinationEP, packet, packet_length, y);
             }
 
             /** @brief Routes inbound UDP payload to matching datagram port or switcher. */
             bool VEthernetExchanger::ReceiveFromDestination(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length) noexcept {
-                if (disposed_.load(std::memory_order_acquire)) {
-                    return false;
-                }
-
-                if (NULLPTR != packet && packet_length > 0) {
-                    if (TryHandleDatagram(sourceEP, destinationEP, packet, packet_length)) {
-                        return true;
-                    }
-                }
-
-                VEthernetDatagramPortPtr datagram = GetDatagramPort(sourceEP);
-                if (NULLPTR != datagram) {
-                    if (NULLPTR != packet && packet_length > 0) {
-                        datagram->OnMessage(packet, packet_length, destinationEP);
-                    }
-                    else {
-                        datagram->MarkFinalize();
-                        datagram->Dispose();
-                    }
-                }
-                elif(NULLPTR != packet && packet_length > 0) {
-                    switcher_->DatagramOutput(sourceEP, destinationEP, packet, packet_length);
-                }
-
-                return true;
+                return datagram_manager_->ReceiveFromDestination(sourceEP, destinationEP, packet, packet_length);
             }
 
             /** @brief Sends UDP packet using source-bound datagram relay port. */
@@ -1662,33 +1649,7 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
-                ITransmissionPtr transmission = transmission_;
-                if (NULLPTR == transmission) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing);
-                }
-
-                VEthernetDatagramPortPtr datagram = AddNewDatagramPort(transmission, sourceEP);
-                if (NULLPTR == datagram) {
-                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "UDP mapping failed source=%s:%u destination=%s:%u",
-                        sourceEP.address().to_string().c_str(),
-                        sourceEP.port(),
-                        destinationEP.address().to_string().c_str(),
-                        destinationEP.port());
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed);
-                }
-
-                bool ok = datagram->SendTo(packet, packet_size, destinationEP);
-                if (destinationEP.port() == PPP_DNS_SYS_PORT || !ok) {
-                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "UDP datagram send source=%s:%u destination=%s:%u bytes=%d ok=%d error=%d",
-                        sourceEP.address().to_string().c_str(),
-                        sourceEP.port(),
-                        destinationEP.address().to_string().c_str(),
-                        destinationEP.port(),
-                        packet_size,
-                        ok ? 1 : 0,
-                        (int)ppp::diagnostics::GetLastErrorCode());
-                }
-                return ok;
+                return datagram_manager_->SendTo(sourceEP, destinationEP, packet, packet_size);
             }
 
             /** @brief Registers a local datagram reply handler for a specific source endpoint. */
@@ -1697,49 +1658,17 @@ namespace ppp {
                     return false;
                 }
 
-                if (disposed_.load(std::memory_order_acquire)) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
-                }
-
-                SynchronizedObjectScope scope(syncobj_);
-                datagram_handlers_[sourceEP] = handler;
-                return true;
+                return datagram_manager_->RegisterDatagramHandler(sourceEP, handler);
             }
 
             /** @brief Removes a local datagram reply handler. */
             bool VEthernetExchanger::ReleaseDatagramHandler(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                bool removed = false;
-                VEthernetDatagramPortPtr datagram;
-                {
-                    SynchronizedObjectScope scope(syncobj_);
-                    removed = datagram_handlers_.erase(sourceEP) > 0;
-                    datagram = Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
-                }
-
-                if (NULLPTR != datagram) {
-                    datagram->MarkFinalize();
-                    datagram->Dispose();
-                }
-
-                return removed;
+                return datagram_manager_->ReleaseDatagramHandler(sourceEP);
             }
 
             /** @brief Dispatches a datagram reply to a registered local handler before TAP injection. */
             bool VEthernetExchanger::TryHandleDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size) noexcept {
-                DatagramPacketHandler handler;
-                {
-                    SynchronizedObjectScope scope(syncobj_);
-                    auto tail = datagram_handlers_.find(sourceEP);
-                    if (tail != datagram_handlers_.end()) {
-                        handler = tail->second;
-                    }
-                }
-
-                if (!handler) {
-                    return false;
-                }
-
-                return handler(sourceEP, destinationEP, packet, packet_size);
+                return datagram_manager_->TryHandleDatagram(sourceEP, destinationEP, packet, packet_size);
             }
 
             /** @brief Sends ACK-based keepalive/echo packet through active transport. */
@@ -1838,42 +1767,7 @@ namespace ppp {
 
             /** @brief Creates and registers datagram relay port for source endpoint. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::AddNewDatagramPort(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                if (NULLPTR == transmission) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionTransportMissing, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
-                }
-
-                VEthernetDatagramPortPtr datagram = GetDatagramPort(sourceEP);
-                if (NULLPTR != datagram) {
-                    return datagram;
-                }
-
-                if (disposed_.load(std::memory_order_acquire)) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
-                }
-
-                bool ok = true;
-                datagram = NewDatagramPort(transmission, sourceEP);
-
-                if (NULLPTR == datagram) {
-                    ppp::diagnostics::ErrorCode code = ppp::diagnostics::GetLastErrorCode();
-                    if (ppp::diagnostics::ErrorCode::Success == code) {
-                        code = ppp::diagnostics::ErrorCode::MemoryAllocationFailed;
-                    }
-
-                    return ppp::diagnostics::SetLastError(code, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
-                }
-                else {
-                    SynchronizedObjectScope scope(syncobj_);
-                    auto r = datagrams_.emplace(sourceEP, datagram);
-                    ok = r.second;
-                }
-
-                if (!ok) {
-                    datagram->Dispose();
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict, VEthernetExchanger::VEthernetDatagramPortPtr(NULLPTR));
-                }
-
-                return datagram;
+                return datagram_manager_->AddNewDatagramPort(transmission, sourceEP);
             }
 
             /** @brief Allocates a new datagram relay port object. */
@@ -1886,19 +1780,17 @@ namespace ppp {
                 std::shared_ptr<VEthernetExchanger> exchanger
                     = std::dynamic_pointer_cast<VEthernetExchanger>(my);
 
-                return make_shared_object<VEthernetDatagramPort>(exchanger, transmission, sourceEP);
+                return make_shared_object<VEthernetDatagramPort>(exchanger, BuildUdpRelayHostPorts(), transmission, sourceEP);
             }
 
             /** @brief Returns datagram relay port by source endpoint key. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::GetDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                return Dictionary::FindObjectByKey(datagrams_, sourceEP);
+                return datagram_manager_->GetDatagramPort(sourceEP);
             }
 
             /** @brief Removes and returns datagram relay port by source endpoint key. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                return Dictionary::ReleaseObjectByKey(datagrams_, sourceEP);
+                return datagram_manager_->ReleaseDatagramPort(sourceEP);
             }
 
             /** @brief Sends scheduled keepalive echo and handles stale-link timeout. */
