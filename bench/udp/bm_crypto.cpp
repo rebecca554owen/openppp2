@@ -1,10 +1,9 @@
 // BM1a —— 底层密码器微基准 / H4 验证台。
-// 同一个 Ciphertext 门面，对比 OpenSSL EVP 路径 (aes-*-cfb) 与 AES-NI 路径 (simd-aes-*-cfb)：
-// 前者每包取锁 + 重置 CTX，后者无锁。差值即"切 simd-aes-* 能省多少每包成本"。
-// 每包成本 = ns/op(benchmark) + pps(items/s) + cycles/packet(外部 perf stat 采)。
+// 对比真实 OpenSSL EVP 路径 (aes-*-cfb) 与 AES-NI 路径 (simd-aes-*-cfb)。
 #include <benchmark/benchmark.h>
 
 #include <ppp/cryptography/Ciphertext.h>
+#include <ppp/cryptography/EVP.h>
 
 #include <memory>
 #include <vector>
@@ -12,8 +11,8 @@
 
 using ppp::Byte;
 using ppp::cryptography::Ciphertext;
+using ppp::cryptography::EVP;
 
-// 确定性负载（避免 Math.random 依赖，按下标生成）。
 static std::vector<Byte> make_payload(int n) {
     std::vector<Byte> v((size_t)n);
     for (int i = 0; i < n; ++i) {
@@ -22,9 +21,16 @@ static std::vector<Byte> make_payload(int n) {
     return v;
 }
 
-// self-check：加密后能解密还原（CFB 为流密码，密文长 == 明文长）。
+static std::shared_ptr<Ciphertext> make_benchmark_cipher(const char* method) {
+    // method 本身决定后端。普通 aes-* 必须保持 OpenSSL，显式 simd-aes-* 走 AES-NI。
+    EVP::SetSimdAuto(false);
+    auto cipher = std::make_shared<Ciphertext>(ppp::string(method), ppp::string("bench-pw"));
+    EVP::SetSimdAuto(true);
+    return cipher;
+}
+
 static bool roundtrip_ok(const char* method) {
-    auto c = std::make_shared<Ciphertext>(ppp::string(method), ppp::string("bench-pw"));
+    auto c = make_benchmark_cipher(method);
     std::vector<Byte> data = make_payload(256);
 
     int enclen = 0;
@@ -51,7 +57,7 @@ static void BM_Encrypt(benchmark::State& state, const char* method) {
         return;
     }
 
-    auto c = std::make_shared<Ciphertext>(ppp::string(method), ppp::string("bench-pw"));
+    auto c = make_benchmark_cipher(method);
     const int datalen = (int)state.range(0);
     std::vector<Byte> data = make_payload(datalen);
 
@@ -59,18 +65,19 @@ static void BM_Encrypt(benchmark::State& state, const char* method) {
         int outlen = 0;
         std::shared_ptr<Byte> out = c->Encrypt(nullptr, data.data(), datalen, outlen);
         benchmark::DoNotOptimize(out.get());
+        benchmark::DoNotOptimize(outlen);
         benchmark::ClobberMemory();
     }
-    state.SetItemsProcessed(state.iterations());                       // → items_per_second = pps
-    state.SetBytesProcessed((int64_t)state.iterations() * datalen);    // → bytes_per_second
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed((int64_t)state.iterations() * datalen);
     state.counters["payload_B"] = datalen;
 }
 
-// 三档包长；15 次重复取聚合。aes-128/256 各自 OpenSSL vs SIMD 四路对照。
+// 保留每次 repetition 原始样本，供 compare.py 做 bootstrap CI。
 #define REGISTER(name, method)                                            \
     BENCHMARK_CAPTURE(BM_Encrypt, name, method)                           \
         ->Arg(64)->Arg(512)->Arg(1400)                                    \
-        ->Repetitions(15)->DisplayAggregatesOnly(true)->UseRealTime()
+        ->Repetitions(15)->UseRealTime()
 
 REGISTER(aes128cfb_openssl, "aes-128-cfb");
 REGISTER(aes128cfb_simd,    "simd-aes-128-cfb");

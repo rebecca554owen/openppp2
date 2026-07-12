@@ -58,14 +58,13 @@ namespace ppp {
          * @param method Cipher method name.
          * @param password Password used to derive key and IV.
          */
-        // H4: 全局开关，控制 aes-*-cfb 是否在支持 AES-NI 时透明走无锁 aesni 路径（默认开）。
         static std::atomic<bool> g_evp_simd_auto{true};
 
         void EVP::SetSimdAuto(bool enabled) noexcept {
             g_evp_simd_auto.store(enabled, std::memory_order_relaxed);
         }
 
-        bool EVP::IsHardwareAccelerated() const noexcept {
+        bool EVP::IsHardwareAccelerated() const noexcept {
             return _aes.IsAttached();
         }
 
@@ -74,28 +73,60 @@ namespace ppp {
             , _method(method)
             , _password(password) {
 
-            ppp::string __aes_rname;
-            bool __i128m = false;
-            bool __bgctr = false;
+            ppp::string aes_real_name;
+            bool aes128 = false;
+            bool aes_gcm = false;
 
-            // H4: 非 simd 的 aes-*-cfb 在开关开启且 CPU 支持 AES-NI 时，透明改走无锁 aesni 路径。
-            // 密文与 OpenSSL 位对位相同（见 bench/udp/compat_check），对协议/互操作零影响。
-            ppp::string __probe = method;
-            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !aesni::AES::Support(method)) {
-                ppp::string __simd_variant = ppp::string("simd-") + method;
-                if (aesni::AES::Support(__simd_variant)) {
-                    __probe = __simd_variant;
+            ppp::string probe_method = method;
+            const bool explicit_simd = method.compare(0, 5, "simd-") == 0;
+
+            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !explicit_simd) {
+                ppp::string simd_variant = ppp::string("simd-") + method;
+                if (aesni::AES::Support(simd_variant)) {
+                    probe_method = simd_variant;
                 }
             }
 
-            if (aesni::AES::Support(__probe, &__i128m, &__bgctr, &__aes_rname)) {
-                if (initKey(__aes_rname, password)) {
-                    _aes.TryAttach(_key.get(), _iv.get(), __i128m, __bgctr);
+            const bool auto_promoted = probe_method != method;
+            if (aesni::AES::Support(probe_method, &aes128, &aes_gcm, &aes_real_name)) {
+                if (!initKey(aes_real_name, password)) {
+                    return;
+                }
+
+                if (_aes.TryAttach(_key.get(), _iv.get(), aes128, aes_gcm)) {
+                    return;
+                }
+
+                // TryAttach may fail after initKey succeeds (for example, round-key allocation failure).
+                // Clear the partially initialized OpenSSL state before deciding whether fallback is legal.
+                _cipher = NULLPTR;
+                _key.reset();
+                _iv.reset();
+
+                // Explicit simd-* requests must fail rather than silently changing implementation semantics.
+                if (!auto_promoted) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    return;
                 }
             }
-            elif(initKey(method, password)) {
-                initCipher(_encryptCTX, 1);
-                initCipher(_decryptCTX, 0);
+
+            // Transparent promotion failure falls back to the originally requested OpenSSL method.
+            if (!initKey(method, password)) {
+                return;
+            }
+
+            if (!initCipher(_encryptCTX, 1)) {
+                _cipher = NULLPTR;
+                _key.reset();
+                _iv.reset();
+                return;
+            }
+
+            if (!initCipher(_decryptCTX, 0)) {
+                _encryptCTX.reset();
+                _cipher = NULLPTR;
+                _key.reset();
+                _iv.reset();
             }
         }
 
@@ -124,7 +155,8 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            if (NULLPTR == _cipher) {
+            if (NULLPTR == _cipher || NULLPTR == _encryptCTX) {
+                outlen = ~0;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                 return NULLPTR;
             }
@@ -180,7 +212,8 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            if (NULLPTR == _cipher) {
+            if (NULLPTR == _cipher || NULLPTR == _decryptCTX) {
+                outlen = ~0;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                 return NULLPTR;
             }
@@ -257,7 +290,7 @@ namespace ppp {
                 return false;
             }
 
-            return true;
+            return NULLPTR != context;
         }
 
         /**
