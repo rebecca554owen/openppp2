@@ -39,7 +39,24 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++
 
       - name: Build runtime snapshot test
-        run: cmake --build build/runtime-diag --target runtime_snapshot_test
+        id: runtime-snapshot-build
+        continue-on-error: true
+        run: |
+          cmake --build build/runtime-diag --target runtime_snapshot_test \
+            > build/runtime-snapshot-build.log 2>&1
+
+      - name: Upload runtime snapshot build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-snapshot-build-log
+          path: build/runtime-snapshot-build.log
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Fail after runtime snapshot diagnostic upload
+        if: steps.runtime-snapshot-build.outcome == 'failure'
+        run: exit 1
 
       - name: Build stop coordinator test
         run: cmake --build build/runtime-diag --target runtime_stop_coordinator_test
