@@ -42,6 +42,8 @@
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
+#include <ppp/app/server/udp/ServerUdpRelayHost.h>
+#include <ppp/app/server/udp/StaticUdpRelayHost.h>
 #include <ppp/app/mux/vmux_net.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/net/Ipep.h>
@@ -61,6 +63,11 @@ namespace ppp {
             class VirtualInternetControlMessageProtocol;
             class VirtualInternetControlMessageProtocolStatic;
 
+            namespace udp {
+                class ServerDatagramPortManager;
+                class StaticDatagramPortManager;
+            }
+
             /**
              * @brief Handles one client session's L2/L3 forwarding, NAT, and control operations.
              *
@@ -74,11 +81,8 @@ namespace ppp {
              *       and the static ICMP/datagram helper classes is required so that those
              *       classes can access internal state without exposing it via public API.
              */
-            class VirtualEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer {
-                friend class                                                                VirtualInternetControlMessageProtocolStatic;
+            class VirtualEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer, public udp::IServerUdpRelayHost, public udp::IStaticUdpRelayHost {
                 friend class                                                                VirtualEthernetSwitcher;
-                friend class                                                                VirtualEthernetDatagramPort;
-                friend class                                                                VirtualEthernetDatagramPortStatic;
 
             public:
                 /** @brief Base information packet type alias. */
@@ -177,6 +181,14 @@ namespace ppp {
                 VirtualEthernetManagedServerPtr                                             GetManagedServer() noexcept { return managed_server_; }
                 /** @brief Returns the traffic statistics object for this session. */
                 ITransmissionStatisticsPtr                                                  GetStatistics() noexcept    { return statistics_; }
+                /** @brief Static-echo allocation context shared with the static datagram/ICMP ports (P2-f). */
+                VirtualEthernetStaticEchoAllocatedContextPtr                                GetStaticAllocatedContext() noexcept { return static_allocated_context_; }
+                /** @brief Static-echo session slot index (P2-f). */
+                int                                                                         GetStaticEchoSessionId() noexcept { return static_echo_session_id_.load(); }
+                /** @brief Most-recent static-echo sender endpoint (P2-f). */
+                boost::asio::ip::udp::endpoint                                              GetStaticEchoSourceEndPoint() noexcept { return static_echo_source_ep_; }
+                /** @brief Releases a static-echo UDP source-port mapping when a port is freed (public since P2-f). */
+                bool                                                                        StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept;
                 /** @brief Returns the link telemetry object for this session. */
                 ppp::diagnostics::LinkTelemetry&                                             GetLinkTelemetry() noexcept { return link_telemetry_; }
                 /** @brief Returns the VMUX instance when sub-channel multiplexing is active. */
@@ -191,6 +203,16 @@ namespace ppp {
                  * @param fd TUN fd value; -1 to clear.
                  */
                 void                                                                        SetPreferredTunFd(int fd) noexcept;
+
+            public:
+                /** @brief IServerUdpRelayHost: hands the datagram manager the exchanger capabilities it needs (P2-e). */
+                udp::ServerUdpRelayHostPorts                                                 BuildServerUdpRelayHostPorts() noexcept override;
+
+                /** @brief IStaticUdpRelayHost: hands the static-echo manager the exchanger capabilities it needs (P2-f). */
+                udp::StaticUdpRelayHostPorts                                                 BuildStaticUdpRelayHostPorts() noexcept override;
+
+                /** @brief Parses a DNS response and stores it in the switcher namespace cache (moved off the port, P2-e-2). */
+                static bool                                                                 NamespaceQueryCache(const std::shared_ptr<VirtualEthernetSwitcher>& switcher, const void* packet, int packet_length) noexcept;
 
             protected:  
                 /**
@@ -444,6 +466,8 @@ namespace ppp {
                  * @brief Uploads per-session rx/tx traffic deltas to the managed server.
                  * @return True if the upload is queued or sent successfully.
                  */
+                int                                                                         NamespaceQueryReply(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const ppp::string& domain, const void* packet, int packet_length, uint16_t queries_type, uint16_t queries_clazz, bool static_transit) noexcept;
+
                 bool                                                                        UploadTrafficToManagedServer() noexcept;
 
                 /**
@@ -515,14 +539,6 @@ namespace ppp {
                  */
                 bool                                                                        StaticEcho(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
 
-                /**
-                 * @brief Releases a static-echo UDP source-port mapping when a port is freed.
-                 *
-                 * @param source_ip   Source IPv4 address (host-byte order).
-                 * @param source_port Source UDP port number.
-                 * @return True if the mapping is found and released.
-                 */
-                bool                                                                        StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept;
 
                 /**
                  * @brief Forwards a static-echo UDP packet to its network destination.
@@ -655,7 +671,8 @@ namespace ppp {
                 FirewallPtr                                                                 firewall_;                  ///< Session-level firewall (may fall back to switcher-level).
                 TimeoutEventHandlerTable                                                    timeouts_;                  ///< Active DNS redirect timeout handlers.
                 VirtualInternetControlMessageProtocolPtr                                    echo_;                      ///< ICMP echo forwarding helper.
-                VirtualEthernetDatagramPortTable                                            datagrams_;                 ///< Active UDP relay ports keyed by source endpoint.
+                std::unique_ptr<udp::ServerDatagramPortManager>                             datagram_manager_;          ///< Owns the UDP relay session table (extracted P2-e).
+                std::unique_ptr<udp::StaticDatagramPortManager>                             static_datagram_manager_;   ///< Owns the static-echo relay session table (extracted P2-f).
                 ITransmissionPtr                                                            transmission_;              ///< Active session transmission channel.
                 VirtualEthernetManagedServerPtr                                             managed_server_;            ///< Go managed-server bridge reference.
                 ITransmissionStatisticsPtr                                                  statistics_last_;           ///< Statistics snapshot from the previous upload tick.
@@ -664,12 +681,10 @@ namespace ppp {
                 ppp::diagnostics::LinkTelemetry                                             link_telemetry_;            ///< Per-session link fault telemetry.
                 std::shared_ptr<vmux::vmux_net>                                             mux_;                       ///< VMUX multiplexed sub-channel instance (may be null).
 
-                SynchronizedObject                                                          static_echo_syncobj_;               ///< Guards all static_echo_* members below.
                 std::shared_ptr<VirtualInternetControlMessageProtocolStatic>                static_echo_;                       ///< Static-echo ICMP forwarding helper.
                 VirtualEthernetStaticEchoAllocatedContextPtr                                static_allocated_context_;          ///< Active static-echo allocation context.
                 boost::asio::ip::udp::endpoint                                              static_echo_source_ep_;             ///< Most-recent static-echo sender endpoint.
                 std::atomic<int>                                                            static_echo_session_id_ = 0;        ///< Atomic slot index for the static-echo session.
-                VirtualEthernetDatagramPortStaticTable                                      static_echo_datagram_ports_;        ///< Static-echo UDP relay ports (key = source_ip:port hash).
             };
         }
     }

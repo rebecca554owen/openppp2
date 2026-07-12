@@ -1,7 +1,5 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetDatagramPort.h>
-#include <ppp/app/client/VEthernetExchanger.h>
-#include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
@@ -29,18 +27,18 @@ namespace ppp {
              * @param transmission Underlying transmission channel for tunneled sends.
              * @param sourceEP Source UDP endpoint represented by this port mapping.
              */
-            VEthernetDatagramPort::VEthernetDatagramPort(const VEthernetExchangerPtr& exchanger, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept
+            VEthernetDatagramPort::VEthernetDatagramPort(const VEthernetExchangerPtr& exchanger, udp::UdpRelayHostPorts ports, const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP) noexcept
                 : disposed_(false)
                 , onlydns_(true)
                 , sendto_(false)
                 , finalize_(false)
                 , timeout_(0)
                 , context_(transmission->GetContext())
-                , switcher_(exchanger->GetSwitcher())
+                , ports_(std::move(ports))
                 , exchanger_(exchanger)
                 , transmission_(transmission)
-                , configuration_(exchanger->GetConfiguration())
-                , sourceEP_(sourceEP) 
+                , configuration_(ports_.get_configuration())
+                , sourceEP_(sourceEP)
 #if defined(_ANDROID)
                 , opened_(0)
                 , socket_(*context_)
@@ -50,7 +48,7 @@ namespace ppp {
 
 #if defined(_ANDROID)
                 buffer_ = Executors::GetCachedBuffer(context_);
-                ProtectorNetwork = switcher_->GetProtectorNetwork();
+                ProtectorNetwork = ports_.get_protector_network();
 #endif
             }
 
@@ -86,12 +84,12 @@ namespace ppp {
                     break;
                 }
 
-                exchanger_->ReleaseDatagramPort(sourceEP_);
+                ports_.release_port(sourceEP_);
                 /**
                  * @brief Notify upstream path about closure when this mapping already transmitted data.
                  */
                 if (fin && transmission) {
-                    if (!exchanger_->DoSendTo(transmission, sourceEP_, sourceEP_, NULLPTR, 0, nullof<YieldContext>())) {
+                    if (!ports_.do_send_to(transmission, sourceEP_, sourceEP_, NULLPTR, 0, nullof<YieldContext>())) {
                         transmission->Dispose();
                     }
                 }
@@ -152,7 +150,7 @@ namespace ppp {
 
 #if defined(_ANDROID)
                     // It is sent out through the local physical NIC.
-                    if (address.is_v4() && switcher_->IsBypassIpAddress(address)) {
+                    if (address.is_v4() && ports_.is_bypass_ip(address)) {
                         // If the socket is currently open, send data directly.
                         SynchronizedObjectScope scope(syncobj_);
                         if (opened_ > 1) {
@@ -213,7 +211,7 @@ namespace ppp {
                     }
 #endif
                     // Send it to the VPN server for outgoing.
-                    ok = exchanger_->DoSendTo(transmission, sourceEP_, destinationEP, (Byte*)packet, packet_length, nullof<YieldContext>());
+                    ok = ports_.do_send_to(transmission, sourceEP_, destinationEP, (Byte*)packet, packet_length, nullof<YieldContext>());
                     if (destinationPort == PPP_DNS_SYS_PORT || !ok) {
                         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "udp_port", "DoSendTo source=%s:%u destination=%s:%u bytes=%d ok=%d",
                             sourceEP_.address().to_string().c_str(),
@@ -255,10 +253,7 @@ namespace ppp {
              * @param destinationEP Destination endpoint associated with the payload.
              */
             void VEthernetDatagramPort::OnMessage(void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
-                std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
-                if (exchanger) {
-                    switcher_->DatagramOutput(sourceEP_, destinationEP, packet, packet_length);
-                }
+                ports_.datagram_output(sourceEP_, destinationEP, packet, packet_length, true);
             }
 
 #if defined(_ANDROID)

@@ -51,7 +51,7 @@ function(openppp2_add_cpp_test target)
         target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
         target_link_options(${target} PRIVATE -fprofile-instr-generate)
     endif()
-    if(target STREQUAL "p2p_replay_window_test" OR target STREQUAL "base64_test" OR target STREQUAL "dns_server_validation_test" OR target STREQUAL "dns_wire_validation_test" OR target STREQUAL "sysctl_validation_test" OR target STREQUAL "dns_redirect_plan_test" OR target STREQUAL "dns_reachability_test" OR target STREQUAL "dns_response_handler_test" OR target STREQUAL "dns_route_dispatcher_test" OR target STREQUAL "dns_udp_relay_test" OR target STREQUAL "dns_host_ports_test" OR target STREQUAL "dns_host_interface_test" OR target STREQUAL "dns_host_wiring_test" OR target STREQUAL "route_host_ports_test" OR target STREQUAL "route_host_interface_test" OR target STREQUAL "aggregator_loader_test" OR target STREQUAL "fake_ip_pool_test" OR target STREQUAL "dns_fake_ip_response_test" OR target STREQUAL "quic_reject_rate_limit_test" OR target STREQUAL "client_bypass_route_loader_test" OR target STREQUAL "exchanger_static_echo_channel_test" OR target STREQUAL "route_table_manager_test" OR target STREQUAL "switcher_timeout_registry_test" OR target STREQUAL "peer_prefix_route_entry_test" OR target STREQUAL "peer_prefix_route_from_json_test")
+    if(target STREQUAL "p2p_replay_window_test" OR target STREQUAL "base64_test" OR target STREQUAL "dns_server_validation_test" OR target STREQUAL "dns_wire_validation_test" OR target STREQUAL "sysctl_validation_test" OR target STREQUAL "dns_redirect_plan_test" OR target STREQUAL "dns_reachability_test" OR target STREQUAL "dns_response_handler_test" OR target STREQUAL "dns_route_dispatcher_test" OR target STREQUAL "dns_udp_relay_test" OR target STREQUAL "dns_host_ports_test" OR target STREQUAL "dns_host_interface_test" OR target STREQUAL "dns_host_wiring_test" OR target STREQUAL "route_host_ports_test" OR target STREQUAL "route_host_interface_test" OR target STREQUAL "aggregator_loader_test" OR target STREQUAL "fake_ip_pool_test" OR target STREQUAL "dns_fake_ip_response_test" OR target STREQUAL "quic_reject_rate_limit_test" OR target STREQUAL "client_bypass_route_loader_test" OR target STREQUAL "exchanger_static_echo_channel_test" OR target STREQUAL "route_table_manager_test" OR target STREQUAL "switcher_timeout_registry_test" OR target STREQUAL "peer_prefix_route_entry_test" OR target STREQUAL "peer_prefix_route_from_json_test" OR target STREQUAL "client_datagram_port_manager_test" OR target STREQUAL "server_datagram_port_manager_test" OR target STREQUAL "static_datagram_port_manager_test")
         target_link_libraries(${target} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
     add_test(NAME ${target} COMMAND ${target})
@@ -139,3 +139,24 @@ openppp2_add_cpp_test(exchanger_static_echo_channel_test SOURCES
     support/ppp_test_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
 openppp2_add_cpp_test(route_table_manager_test SOURCES route_table_manager_test.cpp)
+openppp2_add_cpp_test(client_datagram_port_manager_test SOURCES
+    client_datagram_port_manager_test.cpp
+    support/datagram_manager_stubs.cpp
+    support/ppp_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/udp/ClientDatagramPortManager.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/udp/UdpRelayHost.cpp")
+openppp2_add_cpp_test(server_datagram_port_manager_test SOURCES
+    server_datagram_port_manager_test.cpp
+    support/server_datagram_manager_stubs.cpp
+    support/ppp_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/server/udp/ServerDatagramPortManager.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/server/udp/ServerUdpRelayHost.cpp")
+openppp2_add_cpp_test(static_datagram_port_manager_test SOURCES
+    static_datagram_port_manager_test.cpp
+    support/static_datagram_manager_stubs.cpp
+    support/ppp_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/server/udp/StaticDatagramPortManager.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/server/udp/StaticUdpRelayHost.cpp")

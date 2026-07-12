@@ -142,7 +142,7 @@ namespace ppp {
             VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
                 : VEthernet(context, lwip, vnet, mta)
                 , configuration_(configuration)
-                , dns_interceptor_(std::make_unique<dns::DnsInterceptor>())
+                , dns_interceptor_(std::make_shared<dns::DnsInterceptor>())
                 , route_table_(std::make_unique<RouteTableManager>())
                 , address_manager_(std::make_unique<AssignedAddressManager>())
                 , teardown_(std::make_unique<ClientConnectionTeardown>())
@@ -178,9 +178,6 @@ namespace ppp {
                 block_quic_      = false;
                 icmppackets_aid_ = RandomNext();
             }
-
-            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = default;
-            VEthernetNetworkSwitcher& VEthernetNetworkSwitcher::operator=(VEthernetNetworkSwitcher&&) noexcept = default;
 
             /** @brief Finalizes network switcher on destruction. */
             VEthernetNetworkSwitcher::~VEthernetNetworkSwitcher() noexcept {
@@ -1041,9 +1038,9 @@ namespace ppp {
             }
 
             route::RouteHostPorts VEthernetNetworkSwitcher::BuildRouteHostPorts() noexcept {
-                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
-
                 route::RouteHostPorts host;
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 host.get_tap = [self]() noexcept { return self->GetTap(); };
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 host.get_tap_ni = [self]() noexcept { return self->GetTapNetworkInterface(); };
@@ -1096,10 +1093,22 @@ namespace ppp {
                     };
                 host.get_dns_interceptor = [self]() noexcept { return self->dns_interceptor_; };
                 host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
+#if defined(_LINUX)
                 host.get_default_routes = [self]() noexcept { return self->default_routes_; };
                 host.set_default_routes =
                     [self](route::RouteInformationTablePtr routes) noexcept { self->default_routes_ = std::move(routes); };
                 host.get_nics = [self]() noexcept { return &self->nics_; };
+#else
+                // default_routes_/nics_ back only the linux route backend; other platforms keep
+                // these ports valid with empty stand-ins because their route managers never call them.
+                host.get_default_routes = []() noexcept { return route::RouteInformationTablePtr(); };
+                host.set_default_routes = [](route::RouteInformationTablePtr) noexcept {};
+                host.get_nics = []() noexcept -> ppp::unordered_map<uint32_t, ppp::string>* {
+                    static ppp::unordered_map<uint32_t, ppp::string> empty_nics;
+                    return &empty_nics;
+                };
+#endif // _LINUX vs other desktops
+#endif // !_ANDROID && !_IPHONE: mobile uses RouteTableManager_mobile, no route-ports consumer
                 return host;
             }
 

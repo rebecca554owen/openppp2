@@ -58,6 +58,10 @@ namespace ppp {
              * @return True when supported.
              */
             static bool                                         Support(const ppp::string& method) noexcept;
+            /** @brief Global switch: transparently run aes-*-cfb via AES-NI when the CPU supports it (default on). */
+            static void                                         SetSimdAuto(bool enabled) noexcept;
+            /** @brief Whether this instance is using the AES-NI hardware path. */
+            bool                                                IsHardwareAccelerated() noexcept;
 
         private:
             /**

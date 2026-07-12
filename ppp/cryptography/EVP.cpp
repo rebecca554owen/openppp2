@@ -58,6 +58,17 @@ namespace ppp {
          * @param method Cipher method name.
          * @param password Password used to derive key and IV.
          */
+        // H4: 全局开关，控制 aes-*-cfb 是否在支持 AES-NI 时透明走无锁 aesni 路径（默认开）。
+        static std::atomic<bool> g_evp_simd_auto{true};
+
+        void EVP::SetSimdAuto(bool enabled) noexcept {
+            g_evp_simd_auto.store(enabled, std::memory_order_relaxed);
+        }
+
+        bool EVP::IsHardwareAccelerated() const noexcept {
+            return _aes.IsAttached();
+        }
+
         EVP::EVP(const ppp::string& method, const ppp::string& password) noexcept
             : _cipher(NULLPTR)
             , _method(method)
@@ -67,7 +78,17 @@ namespace ppp {
             bool __i128m = false;
             bool __bgctr = false;
 
-            if (aesni::AES::Support(method, &__i128m, &__bgctr, &__aes_rname)) {
+            // H4: 非 simd 的 aes-*-cfb 在开关开启且 CPU 支持 AES-NI 时，透明改走无锁 aesni 路径。
+            // 密文与 OpenSSL 位对位相同（见 bench/udp/compat_check），对协议/互操作零影响。
+            ppp::string __probe = method;
+            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !aesni::AES::Support(method)) {
+                ppp::string __simd_variant = ppp::string("simd-") + method;
+                if (aesni::AES::Support(__simd_variant)) {
+                    __probe = __simd_variant;
+                }
+            }
+
+            if (aesni::AES::Support(__probe, &__i128m, &__bgctr, &__aes_rname)) {
                 if (initKey(__aes_rname, password)) {
                     _aes.TryAttach(_key.get(), _iv.get(), __i128m, __bgctr);
                 }

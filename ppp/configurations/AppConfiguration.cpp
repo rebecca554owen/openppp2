@@ -331,6 +331,7 @@ namespace ppp {
             config.key.plaintext = true;
             config.key.delta_encode = true;
             config.key.shuffle_data = true;
+            config.key.simd_auto = true;
 
             config.server.log = "";
             config.server.node = 0;
@@ -1720,6 +1721,8 @@ namespace ppp {
             AssignBoolIfPresent(config.key.plaintext, json["key"]["plaintext"]);
             AssignBoolIfPresent(config.key.delta_encode, json["key"]["delta-encode"]);
             AssignBoolIfPresent(config.key.shuffle_data, json["key"]["shuffle-data"]);
+            AssignBoolIfPresent(config.key.simd_auto, json["key"]["simd-auto"]);
+            ppp::cryptography::EVP::SetSimdAuto(config.key.simd_auto);
 
             config.server.log = JsonAuxiliary::AsValue<ppp::string>(json["server"]["log"]);
             config.server.node = JsonAuxiliary::AsValue<int>(json["server"]["node"]);
@@ -2073,6 +2076,7 @@ namespace ppp {
             key["plaintext"] = config.key.plaintext;
             key["delta-encode"] = config.key.delta_encode;
             key["shuffle-data"] = config.key.shuffle_data;
+            key["simd-auto"] = config.key.simd_auto;
             root["key"] = key;
 
             // Set server structure

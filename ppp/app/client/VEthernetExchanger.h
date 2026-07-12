@@ -55,12 +55,17 @@
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
+#include <ppp/app/client/udp/UdpRelayHost.h>
 
 namespace ppp {
     namespace app {
         namespace client {
             class VEthernetNetworkSwitcher;
             class VEthernetDatagramPort;
+
+            namespace udp {
+                class ClientDatagramPortManager;
+            }
 
             /**
              * @brief Core client exchanger that manages the transport session with the remote server.
@@ -89,8 +94,7 @@ namespace ppp {
              * Accessing any mutable member from a different thread without the mutex
              * is undefined behavior.
              */
-            class VEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer {
-                friend class                                                            VEthernetDatagramPort;
+            class VEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer, public udp::IUdpRelayHost {
                 friend class                                                            VEthernetNetworkSwitcher;
                 friend class                                                            ExchangerStaticEchoChannel;
                 friend struct                                                           ExchangerStaticEchoDetail;
@@ -359,6 +363,9 @@ namespace ppp {
                  * @param packet_size    Payload length in bytes.
                  * @return true if the datagram was forwarded; false on error.
                  */
+                /** @brief IUdpRelayHost: hands the datagram manager the exchanger capabilities it needs. */
+                udp::UdpRelayHostPorts                                                   BuildUdpRelayHostPorts() noexcept override;
+
                 virtual bool                                                            SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept;
 
                 /**
@@ -1013,10 +1020,8 @@ namespace ppp {
                 VEthernetNetworkSwitcherPtr                                             switcher_;
                 /** @brief Cached server information received during session establishment. */
                 std::shared_ptr<VirtualEthernetInformation>                             information_;
-                /** @brief Active UDP datagram relay port table (guarded by syncobj_). */
-                VEthernetDatagramPortTable                                              datagrams_;
-                /** @brief Optional local proxy UDP reply handlers (guarded by syncobj_). */
-                DatagramPacketHandlerTable                                              datagram_handlers_;
+                /** @brief UDP datagram relay session manager (P2-c: owns the extracted session tables). */
+                std::unique_ptr<udp::ClientDatagramPortManager>                         datagram_manager_;
                 /** @brief Active transport channel; null when not established. */
                 ITransmissionPtr                                                        transmission_;
                 /** @brief Atomic network state for safe cross-thread reads. */
