@@ -14,6 +14,25 @@ BOOST_AUTO_TEST_CASE(replay_empty_window_accepts_first) {
     BOOST_TEST(window.IsDuplicate(42));
 }
 
+// Aim: sequence zero is a valid first packet but cannot be accepted twice.
+BOOST_AUTO_TEST_CASE(replay_zero_sequence_is_not_an_empty_window_sentinel) {
+    P2PReplayWindow window;
+    BOOST_TEST(!window.IsDuplicate(0));
+    BOOST_REQUIRE(window.Accept(0));
+    BOOST_TEST(window.IsDuplicate(0));
+    BOOST_TEST(!window.Accept(0));
+}
+
+// Aim: Reset restores the empty state even when the prior base was zero.
+BOOST_AUTO_TEST_CASE(replay_reset_after_zero_accepts_zero_once_again) {
+    P2PReplayWindow window;
+    BOOST_REQUIRE(window.Accept(0));
+    window.Reset();
+    BOOST_TEST(!window.IsDuplicate(0));
+    BOOST_REQUIRE(window.Accept(0));
+    BOOST_TEST(!window.Accept(0));
+}
+
 // Aim: re-sending the same sequence inside the window is rejected.
 BOOST_AUTO_TEST_CASE(replay_rejects_duplicate_inside_window) {
     P2PReplayWindow window;

@@ -295,6 +295,12 @@ const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
 
 void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {}
 
+#if defined(_LINUX)
+VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::GetProtectorNetwork() noexcept {
+    return protect_network_;
+}
+#endif
+
 bool VEthernetNetworkSwitcher::RedirectDnsServer(
     const std::shared_ptr<VEthernetExchanger>&,
     const std::shared_ptr<ppp::net::packet::IPFrame>&,
