@@ -1,0 +1,52 @@
+name: Runtime UI PR Diagnostics
+
+on:
+  pull_request:
+    branches: [codex/runtime-ui-lifecycle-integration]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-ui-pr-diagnostics-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  focused-cpp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build clang libboost-all-dev libssl-dev ripgrep >/dev/null
+
+      - name: Include boundary checks
+        run: bash tools/check_include_boundaries.sh
+
+      - name: Compile teardown translation unit
+        run: |
+          clang++ -std=c++17 -DFUNCTION -pthread \
+            -I. -Icommon -Icommon/json/include \
+            -Wno-format -Wno-deprecated-declarations \
+            -fsyntax-only ppp/app/client/ClientConnectionTeardown.cpp
+
+      - name: Configure focused tests
+        run: |
+          cmake -S tests/cpp -B build/runtime-diag -G Ninja \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build focused tests
+        run: |
+          cmake --build build/runtime-diag --target \
+            runtime_snapshot_test \
+            runtime_stop_coordinator_test \
+            p2p_replay_window_test
+
+      - name: Run focused tests
+        run: |
+          ctest --test-dir build/runtime-diag \
+            -R "runtime_snapshot_test|runtime_stop_coordinator_test|p2p_replay_window_test" \
+            --output-on-failure
