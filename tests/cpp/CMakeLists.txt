@@ -57,6 +57,15 @@ function(openppp2_add_cpp_test target)
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
+openppp2_add_cpp_test(runtime_snapshot_test SOURCES
+    runtime_snapshot_test.cpp
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_compile_definitions(runtime_snapshot_test PRIVATE
+    OPENPPP2_RUNTIME_FIXTURE_DIR=\"${OPENPPP2_ROOT}/tests/contracts/runtime-snapshot\")
+openppp2_add_cpp_test(runtime_stop_coordinator_test SOURCES
+    runtime_stop_coordinator_test.cpp)
 openppp2_add_cpp_test(p2p_replay_window_test SOURCES p2p_replay_window_test.cpp)
 openppp2_add_cpp_test(dns_buffer_test SOURCES dns_buffer_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp")
 openppp2_add_cpp_test(dns_message_test SOURCES dns_message_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp" "${OPENPPP2_ROOT}/common/dnslib/message.cpp" "${OPENPPP2_ROOT}/common/dnslib/qs.cpp" "${OPENPPP2_ROOT}/common/dnslib/rr.cpp")
