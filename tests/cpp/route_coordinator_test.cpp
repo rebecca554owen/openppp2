@@ -14,6 +14,7 @@ public:
     int fail_add_at = -1;
     int add_count = 0;
     bool delete_ok = true;
+    bool remove_defaults_ok = true;
     bool restore_ok = true;
     ppp::vector<ppp::string> calls;
     route::RouteInformationTablePtr defaults =
@@ -22,6 +23,11 @@ public:
     route::RouteInformationTablePtr CaptureDefaults() noexcept override {
         calls.emplace_back("capture");
         return defaults;
+    }
+
+    bool RemoveDefaults(const route::RouteInformationTablePtr&) noexcept override {
+        calls.emplace_back("remove-defaults");
+        return remove_defaults_ok;
     }
 
     bool Add(const route::RouteSpec& spec) noexcept override {
@@ -64,7 +70,7 @@ BOOST_AUTO_TEST_CASE(successful_apply_and_stop_are_ordered_and_idempotent) {
     BOOST_TEST(coordinator.Stop());
 
     const ppp::vector<ppp::string> expected = {
-        "capture", "add:1", "add:2", "delete:2", "delete:1", "restore"
+        "capture", "remove-defaults", "add:1", "add:2", "delete:2", "delete:1", "restore"
     };
     BOOST_TEST(view->calls == expected, boost::test_tools::per_element());
     BOOST_TEST(!state.Snapshot().applied);
@@ -80,7 +86,7 @@ BOOST_AUTO_TEST_CASE(partial_apply_failure_rolls_back_in_reverse_order) {
     BOOST_TEST(!coordinator.Apply({ MakeRoute(10), MakeRoute(20) }));
 
     const ppp::vector<ppp::string> expected = {
-        "capture", "add:10", "add:20", "delete:10", "restore"
+        "capture", "remove-defaults", "add:10", "add:20", "delete:10", "restore"
     };
     BOOST_TEST(view->calls == expected, boost::test_tools::per_element());
     const route::RouteStateSnapshot snapshot = state.Snapshot();
@@ -126,4 +132,19 @@ BOOST_AUTO_TEST_CASE(failed_stop_is_idempotent_and_keeps_reporting_failure) {
     BOOST_TEST(!coordinator.Stop());
     BOOST_TEST(view->calls.size() == calls_after_first_stop);
     BOOST_TEST(state.Snapshot().applied);
+}
+
+BOOST_AUTO_TEST_CASE(default_removal_failure_restores_baseline_before_returning) {
+    route::RouteState state;
+    auto platform = std::make_unique<FakeRoutePlatform>();
+    FakeRoutePlatform* view = platform.get();
+    view->remove_defaults_ok = false;
+    route::RouteCoordinator coordinator(state, std::move(platform));
+
+    BOOST_TEST(!coordinator.Apply({ MakeRoute(9) }));
+    const ppp::vector<ppp::string> expected = {
+        "capture", "remove-defaults", "restore"
+    };
+    BOOST_TEST(view->calls == expected, boost::test_tools::per_element());
+    BOOST_TEST(state.Snapshot().default_routes == nullptr);
 }

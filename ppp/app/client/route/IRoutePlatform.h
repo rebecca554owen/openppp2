@@ -24,6 +24,8 @@ namespace ppp {
 
                     virtual std::shared_ptr<ppp::net::native::RouteInformationTable>
                         CaptureDefaults() noexcept = 0;
+                    virtual bool RemoveDefaults(
+                        const std::shared_ptr<ppp::net::native::RouteInformationTable>& routes) noexcept = 0;
                     virtual bool Add(const RouteSpec& route) noexcept = 0;
                     virtual bool Delete(const RouteSpec& route) noexcept = 0;
                     virtual bool RestoreDefaults(

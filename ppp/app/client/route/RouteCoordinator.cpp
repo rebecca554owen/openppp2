@@ -24,6 +24,11 @@ namespace ppp {
 
                     RouteInformationTablePtr defaults = platform_->CaptureDefaults();
                     state_.ReplaceDefaultRoutes(defaults);
+                    if (!platform_->RemoveDefaults(defaults)) {
+                        const bool restored = platform_->RestoreDefaults(defaults);
+                        state_.ResetAfterRollback(restored);
+                        return false;
+                    }
 
                     std::vector<RouteSpec> applied;
                     applied.reserve(routes.size());
