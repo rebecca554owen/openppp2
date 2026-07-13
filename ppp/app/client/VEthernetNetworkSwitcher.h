@@ -22,6 +22,7 @@ namespace ppp::net::packet { class UdpFrame; class BufferSegment; }
 #include <ppp/ethernet/VEthernet.h>
 #include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/app/client/route/RouteHost.h>
+#include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/protocol/VirtualEthernetInformationFwd.h>
 #include <ppp/app/client/ClientNetworkInterface.h>
 #include <ppp/net/native/rib_fwd.h>

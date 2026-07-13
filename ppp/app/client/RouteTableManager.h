@@ -18,6 +18,11 @@ namespace ppp {
     namespace app {
         namespace client {
             class VEthernetNetworkSwitcher;
+            namespace route {
+                class LinuxRoutePlatform;
+                class RouteCoordinator;
+                class RouteState;
+            }
 
             /**
              * @brief Manages host OS route table entries for VPN connect/disconnect.
@@ -30,6 +35,7 @@ namespace ppp {
             class RouteTableManager {
             public:
                 RouteTableManager() noexcept = default;
+                ~RouteTableManager() noexcept;
 
                 /** @brief Attaches the manager to its owning switcher (non-owning). */
                 void Bind(VEthernetNetworkSwitcher* owner) noexcept;
@@ -93,7 +99,13 @@ namespace ppp {
 #endif
 
             private:
+#if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
+                std::unique_ptr<route::LinuxRoutePlatform> NewLinuxRoutePlatform() noexcept;
+#endif
+
                 VEthernetNetworkSwitcher* owner_ = nullptr;
+                route::RouteState* route_state_ = nullptr;
+                std::unique_ptr<route::RouteCoordinator> route_coordinator_;
             };
         }
     }

@@ -38,3 +38,27 @@ namespace ppp {
 
     }
 }
+
+namespace ppp {
+    namespace net {
+        namespace native {
+
+            bool RouteInformationTable::AddRoute(
+                uint32_t ip,
+                int prefix,
+                uint32_t gw) noexcept {
+                RouteEntry entry;
+                entry.Destination = ip;
+                entry.Prefix = prefix;
+                entry.NextHop = gw;
+                routes[ip].emplace_back(entry);
+                return true;
+            }
+
+            RouteEntriesTable& RouteInformationTable::GetAllRoutes() noexcept {
+                return routes;
+            }
+
+        }
+    }
+}

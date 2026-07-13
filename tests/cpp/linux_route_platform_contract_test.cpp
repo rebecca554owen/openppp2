@@ -96,3 +96,22 @@ BOOST_AUTO_TEST_CASE(promiscuous_mode_does_not_remove_or_restore_defaults) {
     BOOST_TEST(platform.RestoreDefaults(nullptr));
     BOOST_TEST(default_mutations == 0);
 }
+
+BOOST_AUTO_TEST_CASE(rib_is_converted_to_route_specs_without_host_dependencies) {
+    auto rib = std::make_shared<ppp::net::native::RouteInformationTable>();
+    BOOST_TEST(rib->AddRoute(0x0a000000u, 8, 10u));
+    BOOST_TEST(rib->AddRoute(0xc0a80000u, 16, 20u));
+
+    std::vector<route::RouteSpec> specs = route::BuildLinuxRouteSpecs(rib);
+    BOOST_REQUIRE(specs.size() == 2u);
+    std::sort(specs.begin(), specs.end(), [](const auto& left, const auto& right) {
+        return left.network < right.network;
+    });
+    BOOST_TEST(specs[0].network == 0x0a000000u);
+    BOOST_TEST(specs[0].prefix == 8);
+    BOOST_TEST(specs[0].gateway == 10u);
+    BOOST_TEST(specs[0].interface_name.empty());
+    BOOST_TEST(specs[1].network == 0xc0a80000u);
+    BOOST_TEST(specs[1].prefix == 16);
+    BOOST_TEST(specs[1].gateway == 20u);
+}

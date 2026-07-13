@@ -87,6 +87,16 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assertEqual([], check_repository_layout.check_repository(root))
 
+    def test_linux_route_manager_cannot_use_route_host_ports(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/RouteTableManager_linux.cpp": (
+                    "route::RouteHostPorts ports = owner_->BuildRouteHostPorts();\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "Linux route manager bypasses RouteState")
+
 
 if __name__ == "__main__":
     unittest.main()

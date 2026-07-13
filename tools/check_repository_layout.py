@@ -94,6 +94,18 @@ def _collect_candidates(root: Path) -> list[Candidate]:
             if relative.startswith("ppp/app/client/") and CLIENT_SERVER_INCLUDE_PATTERN.search(line):
                 candidates.append(Candidate(relative, line_number, "client -> server"))
 
+            if (
+                relative == "ppp/app/client/RouteTableManager_linux.cpp"
+                and "RouteHostPorts" in line
+            ):
+                candidates.append(
+                    Candidate(
+                        relative,
+                        line_number,
+                        "Linux route manager bypasses RouteState",
+                    )
+                )
+
             is_route_or_dns_header = (
                 path.suffix in {".h", ".hpp"}
                 and (

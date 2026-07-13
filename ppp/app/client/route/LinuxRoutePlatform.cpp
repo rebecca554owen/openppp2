@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/route/LinuxRoutePlatform.h>
+#include <ppp/net/native/rib.h>
 
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
 #include <linux/ppp/tap/TapLinux.h>
@@ -29,6 +30,25 @@ namespace ppp {
                         return tail->second;
                     }
                     return underlying_interface;
+                }
+
+                std::vector<RouteSpec> BuildLinuxRouteSpecs(
+                    const RouteInformationTablePtr& rib) noexcept {
+                    std::vector<RouteSpec> specs;
+                    if (NULLPTR == rib) {
+                        return specs;
+                    }
+
+                    for (const auto& pair : rib->GetAllRoutes()) {
+                        for (const ppp::net::native::RouteEntry& entry : pair.second) {
+                            RouteSpec spec;
+                            spec.network = entry.Destination;
+                            spec.gateway = entry.NextHop;
+                            spec.prefix = entry.Prefix;
+                            specs.emplace_back(std::move(spec));
+                        }
+                    }
+                    return specs;
                 }
 
                 LinuxRoutePlatform::LinuxRoutePlatform(

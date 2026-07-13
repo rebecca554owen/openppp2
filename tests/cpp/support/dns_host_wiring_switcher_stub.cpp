@@ -11,6 +11,7 @@
 #include <ppp/app/client/AggregatorLoader.h>
 #include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/configurations/AppConfiguration.h>
@@ -143,6 +144,8 @@ std::shared_ptr<ppp::net::packet::IPFragment> VEthernet::NewFragment() noexcept 
 }  // namespace ppp::ethernet
 
 namespace ppp::app::client {
+
+RouteTableManager::~RouteTableManager() noexcept = default;
 
 VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(
     const std::shared_ptr<boost::asio::io_context>& context,

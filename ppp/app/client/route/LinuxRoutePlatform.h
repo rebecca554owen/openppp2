@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <ppp/app/client/route/IRoutePlatform.h>
 #include <ppp/app/client/route/RouteState.h>
@@ -33,6 +34,9 @@ namespace ppp {
                     const std::string& tap_interface,
                     const std::string& underlying_interface,
                     const std::unordered_map<uint32_t, std::string>& nics) noexcept;
+
+                std::vector<RouteSpec> BuildLinuxRouteSpecs(
+                    const RouteInformationTablePtr& rib) noexcept;
 
                 class LinuxRoutePlatform final : public IRoutePlatform {
                 public:

@@ -1,6 +1,8 @@
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
+#include <ppp/app/client/route/RouteState.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h>
 
@@ -19,8 +21,11 @@ namespace ppp {
     namespace app {
         namespace client {
 
+            RouteTableManager::~RouteTableManager() noexcept = default;
+
             void RouteTableManager::Bind(VEthernetNetworkSwitcher* owner) noexcept {
                 owner_ = owner;
+                route_state_ = NULLPTR == owner ? NULLPTR : &owner->route_state_;
             }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
