@@ -259,10 +259,6 @@ VEthernetNetworkSwitcher::ITransmissionStatisticsPtr VEthernetNetworkSwitcher::N
 VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::NewProtectorNetwork() noexcept {
     return ProtectorNetworkPtr();
 }
-
-VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::GetProtectorNetwork() noexcept {
-    return ProtectorNetworkPtr();
-}
 #endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)

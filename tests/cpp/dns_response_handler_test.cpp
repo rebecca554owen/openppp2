@@ -32,7 +32,7 @@ client_dns::DnsResponseHandlerPorts MakePorts(
     client_dns::DnsResponseHandlerPorts ports;
     ports.enable_dns_cache = false;
     ports.datagram_output =
-        [&inject_ok, &inject_called](const boost::asio::ip::udp::endpoint&,
+        [inject_ok, &inject_called](const boost::asio::ip::udp::endpoint&,
             const boost::asio::ip::udp::endpoint&,
             void*,
             int,
