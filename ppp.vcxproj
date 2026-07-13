@@ -397,6 +397,7 @@
     <ClCompile Include="ppp\app\client\dns\DnsReachabilityParse.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsRedirectPlan.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
+    <ClCompile Include="ppp\app\client\dns\DnsSessionContext.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator.cpp" />
     <ClCompile Include="ppp\app\client\route\DarwinRoutePlatform.cpp" />
