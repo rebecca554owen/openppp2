@@ -2,9 +2,14 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/app/client/route/RouteState.h>
+#include <ppp/app/client/route/IRoutePlatform.h>
 #include <ppp/net/native/rib.h>
 
 namespace route = ppp::app::client::route;
+
+namespace {
+class FakeRouteSnapshot final : public route::IRouteSnapshot {};
+}
 
 BOOST_AUTO_TEST_CASE(snapshot_is_isolated_from_state) {
     route::RouteState state;
@@ -64,7 +69,7 @@ BOOST_AUTO_TEST_CASE(peer_prefix_and_default_routes_are_replaced_together) {
     route::RouteState state;
     auto peer_rib = std::make_shared<ppp::net::native::RouteInformationTable>();
     auto peer_fib = std::make_shared<ppp::net::native::ForwardInformationTable>();
-    auto defaults = std::make_shared<ppp::net::native::RouteInformationTable>();
+    auto defaults = std::make_shared<FakeRouteSnapshot>();
 
     state.ReplacePeerPrefix(peer_rib, peer_fib);
     state.ReplaceDefaultRoutes(defaults);

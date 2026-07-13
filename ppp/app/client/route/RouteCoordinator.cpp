@@ -22,7 +22,7 @@ namespace ppp {
                         return false;
                     }
 
-                    RouteInformationTablePtr defaults = platform_->CaptureDefaults();
+                    RouteSnapshotPtr defaults = platform_->CaptureDefaults();
                     state_.ReplaceDefaultRoutes(defaults);
                     if (!platform_->RemoveDefaults(defaults)) {
                         const bool restored = platform_->RestoreDefaults(defaults);

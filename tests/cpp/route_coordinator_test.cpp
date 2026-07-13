@@ -9,6 +9,9 @@ namespace route = ppp::app::client::route;
 
 namespace {
 
+class FakeRouteSnapshot final : public route::IRouteSnapshot {
+};
+
 class FakeRoutePlatform final : public route::IRoutePlatform {
 public:
     int fail_add_at = -1;
@@ -17,15 +20,15 @@ public:
     bool remove_defaults_ok = true;
     bool restore_ok = true;
     ppp::vector<ppp::string> calls;
-    route::RouteInformationTablePtr defaults =
-        std::make_shared<ppp::net::native::RouteInformationTable>();
+    std::shared_ptr<const route::IRouteSnapshot> defaults =
+        std::make_shared<FakeRouteSnapshot>();
 
-    route::RouteInformationTablePtr CaptureDefaults() noexcept override {
+    std::shared_ptr<const route::IRouteSnapshot> CaptureDefaults() noexcept override {
         calls.emplace_back("capture");
         return defaults;
     }
 
-    bool RemoveDefaults(const route::RouteInformationTablePtr&) noexcept override {
+    bool RemoveDefaults(const std::shared_ptr<const route::IRouteSnapshot>&) noexcept override {
         calls.emplace_back("remove-defaults");
         return remove_defaults_ok;
     }
@@ -41,7 +44,7 @@ public:
         return delete_ok;
     }
 
-    bool RestoreDefaults(const route::RouteInformationTablePtr&) noexcept override {
+    bool RestoreDefaults(const std::shared_ptr<const route::IRouteSnapshot>&) noexcept override {
         calls.emplace_back("restore");
         return restore_ok;
     }

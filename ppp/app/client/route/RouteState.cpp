@@ -29,7 +29,8 @@ namespace ppp {
                     value_.peer_prefix_fib = std::move(fib);
                 }
 
-                void RouteState::ReplaceDefaultRoutes(RouteInformationTablePtr value) noexcept {
+                void RouteState::ReplaceDefaultRoutes(
+                    std::shared_ptr<const IRouteSnapshot> value) noexcept {
                     std::lock_guard<std::mutex> scope(syncobj_);
                     value_.default_routes = std::move(value);
                 }

@@ -55,11 +55,11 @@ namespace ppp {
                         bool promiscuous,
                         LinuxRouteOperations operations) noexcept;
 
-                    RouteInformationTablePtr CaptureDefaults() noexcept override;
-                    bool RemoveDefaults(const RouteInformationTablePtr& routes) noexcept override;
+                    RouteSnapshotPtr CaptureDefaults() noexcept override;
+                    bool RemoveDefaults(const RouteSnapshotPtr& routes) noexcept override;
                     bool Add(const RouteSpec& route) noexcept override;
                     bool Delete(const RouteSpec& route) noexcept override;
-                    bool RestoreDefaults(const RouteInformationTablePtr& routes) noexcept override;
+                    bool RestoreDefaults(const RouteSnapshotPtr& routes) noexcept override;
 
                 private:
                     static LinuxRouteOperations CreateSystemOperations() noexcept;

@@ -400,8 +400,11 @@
     <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteHost.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator.cpp" />
+    <ClCompile Include="ppp\app\client\route\DarwinRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\LinuxRoutePlatform.cpp" />
+    <ClCompile Include="ppp\app\client\route\MobileRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteState.cpp" />
+    <ClCompile Include="ppp\app\client\route\WindowsRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\udp\ClientDatagramPortManager.cpp" />
     <ClCompile Include="ppp\app\client\udp\UdpRelayHost.cpp" />
     <ClCompile Include="ppp\app\server\udp\ServerDatagramPortManager.cpp" />

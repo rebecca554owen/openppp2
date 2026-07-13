@@ -101,7 +101,7 @@ namespace ppp {
                 if (NULLPTR == platform) {
                     return false;
                 }
-                route::RouteInformationTablePtr defaults = platform->CaptureDefaults();
+                route::RouteSnapshotPtr defaults = platform->CaptureDefaults();
                 return platform->RemoveDefaults(defaults);
             }
 

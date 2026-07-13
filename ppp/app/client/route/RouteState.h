@@ -15,6 +15,8 @@ namespace ppp {
         namespace client {
             namespace route {
 
+                class IRouteSnapshot;
+
                 using RouteInformationTablePtr = std::shared_ptr<ppp::net::native::RouteInformationTable>;
                 using ForwardInformationTablePtr = std::shared_ptr<ppp::net::native::ForwardInformationTable>;
 
@@ -23,7 +25,7 @@ namespace ppp {
                     ForwardInformationTablePtr fib;
                     RouteInformationTablePtr peer_prefix_rib;
                     ForwardInformationTablePtr peer_prefix_fib;
-                    RouteInformationTablePtr default_routes;
+                    std::shared_ptr<const IRouteSnapshot> default_routes;
                     std::unordered_map<uint32_t, std::string> nics;
                     std::array<std::unordered_set<uint32_t>, 3> dns_servers;
                     bool applied = false;
@@ -39,7 +41,7 @@ namespace ppp {
                     void ReplacePeerPrefix(
                         RouteInformationTablePtr rib,
                         ForwardInformationTablePtr fib) noexcept;
-                    void ReplaceDefaultRoutes(RouteInformationTablePtr value) noexcept;
+                    void ReplaceDefaultRoutes(std::shared_ptr<const IRouteSnapshot> value) noexcept;
                     void ReplaceNics(std::unordered_map<uint32_t, std::string> value) noexcept;
 
                     void AddDnsServer(int bucket, uint32_t ip) noexcept;

@@ -11,6 +11,25 @@ namespace ppp {
         namespace client {
             namespace route {
 
+                namespace {
+
+                    class LinuxRouteSnapshot final : public IRouteSnapshot {
+                    public:
+                        explicit LinuxRouteSnapshot(RouteInformationTablePtr routes) noexcept
+                            : routes(std::move(routes)) {
+                        }
+
+                        RouteInformationTablePtr routes;
+                    };
+
+                    RouteInformationTablePtr GetLinuxRoutes(const RouteSnapshotPtr& snapshot) noexcept {
+                        const auto linux_snapshot =
+                            std::dynamic_pointer_cast<const LinuxRouteSnapshot>(snapshot);
+                        return NULLPTR == linux_snapshot ? NULLPTR : linux_snapshot->routes;
+                    }
+
+                }
+
                 static ppp::string ToPppString(const std::string& value) {
                     return ppp::string(value.begin(), value.end());
                 }
@@ -81,19 +100,23 @@ namespace ppp {
                       operations_(std::move(operations)) {
                 }
 
-                RouteInformationTablePtr LinuxRoutePlatform::CaptureDefaults() noexcept {
+                RouteSnapshotPtr LinuxRoutePlatform::CaptureDefaults() noexcept {
                     if (promiscuous_ || !operations_.capture_defaults) {
                         return NULLPTR;
                     }
-                    return operations_.capture_defaults(tap_gateway_);
+                    RouteInformationTablePtr routes = operations_.capture_defaults(tap_gateway_);
+                    return NULLPTR == routes
+                        ? RouteSnapshotPtr()
+                        : std::make_shared<LinuxRouteSnapshot>(std::move(routes));
                 }
 
                 bool LinuxRoutePlatform::RemoveDefaults(
-                    const RouteInformationTablePtr& routes) noexcept {
-                    if (promiscuous_ || NULLPTR == routes) {
+                    const RouteSnapshotPtr& routes) noexcept {
+                    RouteInformationTablePtr linux_routes = GetLinuxRoutes(routes);
+                    if (promiscuous_ || NULLPTR == linux_routes) {
                         return true;
                     }
-                    return operations_.remove_all && operations_.remove_all(MakeResolver(), routes);
+                    return operations_.remove_all && operations_.remove_all(MakeResolver(), linux_routes);
                 }
 
                 bool LinuxRoutePlatform::Add(const RouteSpec& route) noexcept {
@@ -105,11 +128,12 @@ namespace ppp {
                 }
 
                 bool LinuxRoutePlatform::RestoreDefaults(
-                    const RouteInformationTablePtr& routes) noexcept {
-                    if (promiscuous_ || NULLPTR == routes) {
+                    const RouteSnapshotPtr& routes) noexcept {
+                    RouteInformationTablePtr linux_routes = GetLinuxRoutes(routes);
+                    if (promiscuous_ || NULLPTR == linux_routes) {
                         return true;
                     }
-                    return operations_.restore_all && operations_.restore_all(MakeResolver(), routes);
+                    return operations_.restore_all && operations_.restore_all(MakeResolver(), linux_routes);
                 }
 
                 LinuxRouteInterfaceResolver LinuxRoutePlatform::MakeResolver() const noexcept {

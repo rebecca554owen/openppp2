@@ -61,11 +61,12 @@ BOOST_AUTO_TEST_CASE(platform_delegates_operations_with_stable_interface_snapsho
     spec.network = 1u;
     spec.gateway = 20u;
     spec.prefix = 32;
-    BOOST_TEST(platform.CaptureDefaults() == defaults);
-    BOOST_TEST(platform.RemoveDefaults(defaults));
+    route::RouteSnapshotPtr snapshot = platform.CaptureDefaults();
+    BOOST_REQUIRE(snapshot != nullptr);
+    BOOST_TEST(platform.RemoveDefaults(snapshot));
     BOOST_TEST(platform.Add(spec));
     BOOST_TEST(platform.Delete(spec));
-    BOOST_TEST(platform.RestoreDefaults(defaults));
+    BOOST_TEST(platform.RestoreDefaults(snapshot));
 
     const ppp::vector<ppp::string> expected = {
         "capture:10", "remove:wlan0", "add:wlan0", "delete:wlan0", "restore:tap0"
