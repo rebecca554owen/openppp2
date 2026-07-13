@@ -45,7 +45,6 @@ namespace ppp {
                     return false;
                 }
 
-                owner_->rib_ = rib;
                 if (NULLPTR != route_state_) {
                     route_state_->ReplaceRib(rib);
                 }

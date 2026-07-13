@@ -112,7 +112,9 @@ namespace ppp {
 
 #if defined(_LINUX)
                 if (ngw != IPEndPoint::AnyAddress) {
-                    owner_->nics_.emplace(std::make_pair(ngw, nic));
+                    owner_->route_state_.AddNic(
+                        ngw,
+                        std::string(nic.begin(), nic.end()));
                 }
 #endif
 
@@ -121,8 +123,8 @@ namespace ppp {
             }
 
             bool ClientBypassRouteLoader::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {
-                owner_->rib_ = NULLPTR;
-                owner_->fib_ = NULLPTR;
+                owner_->route_state_.ReplaceRib(NULLPTR);
+                owner_->route_state_.ReplaceFib(NULLPTR);
 
                 bool any = false;
                 if (gw.is_v4()) {
@@ -138,7 +140,7 @@ namespace ppp {
                                 }
 
                                 if (any) {
-                                    owner_->rib_ = rib;
+                                    owner_->route_state_.ReplaceRib(rib);
                                     ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
                                 }
                             }
@@ -167,7 +169,7 @@ namespace ppp {
 
                 uint32_t nip = htonl(ip.to_v4().to_uint());
 #if defined(_ANDROID) || defined(_IPHONE)
-                if (auto fib = owner_->fib_; NULLPTR != fib) {
+                if (auto fib = owner_->GetFib(); NULLPTR != fib) {
                     uint32_t ngw = fib->GetNextHop(nip);
                     return ngw != tap->GatewayServer;
                 }

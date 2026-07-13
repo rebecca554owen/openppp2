@@ -21,6 +21,7 @@ namespace ppp {
     namespace app {
         namespace client {
 
+            RouteTableManager::RouteTableManager() noexcept = default;
             RouteTableManager::~RouteTableManager() noexcept = default;
 
             void RouteTableManager::Bind(VEthernetNetworkSwitcher* owner) noexcept {
@@ -35,15 +36,16 @@ namespace ppp {
                     return true;
                 }
 
-                if (owner_->route_added_) {
+                route::RouteStateSnapshot route_snapshot = route_state_->Snapshot();
+                if (route_snapshot.applied) {
                     return true;
                 }
 
                 std::shared_ptr<VEthernetExchanger> exchanger = owner_->exchanger_;
                 const bool exchanger_established =
                     NULLPTR != exchanger && exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
-                if (ShouldDeferHostedRouteApply(owner_->route_apply_ready_, exchanger_established)) {
-                    if (!owner_->route_apply_ready_) {
+                if (ShouldDeferHostedRouteApply(route_snapshot.apply_ready, exchanger_established)) {
+                    if (!route_snapshot.apply_ready) {
                         ppp::telemetry::Log(Level::kInfo, "client", "route setup deferred: Open() is still preparing route state");
                     } else {
                         ppp::telemetry::Log(Level::kInfo, "client", "route setup deferred: exchanger is not established");
@@ -52,13 +54,8 @@ namespace ppp {
                     return true;
                 }
 
-                if (exchangeof(owner_->route_added_, true)) {
-                    return true;
-                }
-
 #if defined(_WIN32)
                 if (!owner_->UsePaperAirplaneController()) {
-                    owner_->route_added_ = false;
                     ppp::telemetry::Log(Level::kInfo, "client", "route setup failed: paper-airplane controller unavailable");
                     ppp::telemetry::Count("client.route.fail.paper_airplane", 1);
                     return false;

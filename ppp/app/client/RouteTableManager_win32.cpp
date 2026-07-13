@@ -6,7 +6,6 @@
 #include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/client/route/WindowsRoutePlatform.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
-#include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/net/IPEndPoint.h>
@@ -60,7 +59,6 @@ namespace ppp {
                 if (NULLPTR == route_state_) {
                     return;
                 }
-                route_state_->ReplaceRib(owner_->rib_);
                 std::unique_ptr<route::WindowsRoutePlatform> platform = NewWindowsRoutePlatform();
                 if (NULLPTR == platform) {
                     return;
@@ -68,7 +66,7 @@ namespace ppp {
                 route_coordinator_ = std::make_unique<route::RouteCoordinator>(
                     *route_state_,
                     std::move(platform));
-                if (!route_coordinator_->Apply(route::BuildRouteSpecs(owner_->rib_))) {
+                if (!route_coordinator_->Apply(route::BuildRouteSpecs(route_state_->Snapshot().rib))) {
                     route_coordinator_.reset();
                     return;
                 }
@@ -105,9 +103,10 @@ namespace ppp {
             }
 
             void RouteTableManager::DeleteRouteWithDnsServers() noexcept {
+                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
                 if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
                     if (auto mib = ppp::win32::network::Router::GetIpForwardTable(); NULLPTR != mib) {
-                        for (uint32_t ip : owner_->dns_serverss_[0]) {
+                        for (uint32_t ip : snapshot.dns_servers[0]) {
                             DeleteRoute(mib, ip, tap->GatewayServer, 32);
                         }
                     }
@@ -118,25 +117,21 @@ namespace ppp {
                     if (gw.is_v4()) {
                         uint32_t next_hop = htonl(gw.to_v4().to_uint());
                         if (auto mib = ppp::win32::network::Router::GetIpForwardTable(); NULLPTR != mib) {
-                            for (uint32_t ip : owner_->dns_serverss_[1]) {
+                            for (uint32_t ip : snapshot.dns_servers[1]) {
                                 DeleteRoute(mib, ip, next_hop, 32);
                             }
                         }
                     }
                 }
 
-                for (auto& dns_servers : owner_->dns_serverss_) {
-                    dns_servers.clear();
-                }
+                route_state_->ClearDnsServers();
             }
 
             void RouteTableManager::AddRouteWithDnsServers() noexcept {
-                for (auto& dns_servers : owner_->dns_serverss_) {
-                    dns_servers.clear();
-                }
+                route_state_->ClearDnsServers();
 
                 auto add_dns_server_to_dns_servers =
-                    [](const std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface>& ni, ppp::unordered_set<uint32_t>& dns_servers) noexcept {
+                    [this](const std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface>& ni, int bucket) noexcept {
                         if (NULLPTR == ni) {
                             return false;
                         }
@@ -183,23 +178,23 @@ namespace ppp {
                             }
 
                             dip = htonl(dip);
-                            dns_servers.emplace(dip);
+                            route_state_->AddDnsServer(bucket, dip);
                         }
                         return true;
                     };
 
-                add_dns_server_to_dns_servers(owner_->tun_ni_, owner_->dns_serverss_[0]);
-                add_dns_server_to_dns_servers(owner_->underlying_ni_, owner_->dns_serverss_[1]);
+                add_dns_server_to_dns_servers(owner_->tun_ni_, 0);
+                add_dns_server_to_dns_servers(owner_->underlying_ni_, 1);
 
                 if (NULLPTR != owner_->dns_interceptor_) {
                     owner_->dns_interceptor_->CollectReachabilityIps(
                         owner_->configuration_,
                         owner_->configuration_->dns.intercept_unmatched,
                         [this](uint32_t ip) noexcept {
-                            owner_->dns_serverss_[0].emplace(ip);
+                            route_state_->AddDnsServer(0, ip);
                         },
                         [this](uint32_t ip) noexcept {
-                            owner_->dns_serverss_[1].emplace(ip);
+                            route_state_->AddDnsServer(1, ip);
                         });
 
                     std::shared_ptr<const dns::FakeIpPool> fake_ip_pool = owner_->dns_interceptor_->GetFakeIpPool();
@@ -212,10 +207,11 @@ namespace ppp {
                     }
                 }
 
-                ppp::collections::Dictionary::DeduplicationList(owner_->dns_serverss_[1], owner_->dns_serverss_[0]);
+                route_state_->DeduplicateDnsServers();
+                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
 
                 if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
-                    for (uint32_t ip : owner_->dns_serverss_[0]) {
+                    for (uint32_t ip : snapshot.dns_servers[0]) {
                         AddRoute(ip, tap->GatewayServer, 32);
                     }
                 }
@@ -224,7 +220,7 @@ namespace ppp {
                     boost::asio::ip::address gw = ni->GatewayServer;
                     if (gw.is_v4()) {
                         uint32_t next_hop = htonl(gw.to_v4().to_uint());
-                        for (uint32_t ip : owner_->dns_serverss_[1]) {
+                        for (uint32_t ip : snapshot.dns_servers[1]) {
                             AddRoute(ip, next_hop, 32);
                         }
                     }
@@ -244,7 +240,7 @@ namespace ppp {
                             return false;
                         }
 
-                        if (!self->route_added_) {
+                        if (!self->route_state_.Snapshot().applied) {
                             return false;
                         }
 

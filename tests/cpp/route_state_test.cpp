@@ -43,6 +43,8 @@ BOOST_AUTO_TEST_CASE(reset_requires_completed_rollback) {
     state.MarkApplied(true);
     state.MarkApplyReady(true);
     state.AddDnsServer(1, 0x01010101u);
+    auto rib = std::make_shared<ppp::net::native::RouteInformationTable>();
+    state.ReplaceRib(rib);
 
     BOOST_TEST(!state.ResetAfterRollback(false));
     BOOST_TEST(state.Snapshot().applied);
@@ -50,8 +52,9 @@ BOOST_AUTO_TEST_CASE(reset_requires_completed_rollback) {
     BOOST_TEST(state.ResetAfterRollback(true));
     const route::RouteStateSnapshot snapshot = state.Snapshot();
     BOOST_TEST(!snapshot.applied);
-    BOOST_TEST(!snapshot.apply_ready);
-    BOOST_TEST(snapshot.dns_servers[1].empty());
+    BOOST_TEST(snapshot.apply_ready);
+    BOOST_TEST(snapshot.dns_servers[1].count(0x01010101u) == 1u);
+    BOOST_TEST(snapshot.rib == rib);
 }
 
 BOOST_AUTO_TEST_CASE(invalid_dns_bucket_is_ignored) {
@@ -97,4 +100,21 @@ BOOST_AUTO_TEST_CASE(dns_servers_can_be_deduplicated_and_cleared) {
     BOOST_TEST(snapshot.dns_servers[0].empty());
     BOOST_TEST(snapshot.dns_servers[1].empty());
     BOOST_TEST(snapshot.dns_servers[2].empty());
+}
+
+BOOST_AUTO_TEST_CASE(nic_entries_are_owned_by_state_snapshots) {
+    route::RouteState state;
+    state.AddNic(10u, "eth0");
+    const route::RouteStateSnapshot snapshot = state.Snapshot();
+    BOOST_TEST(snapshot.nics.at(10u) == "eth0");
+}
+
+BOOST_AUTO_TEST_CASE(clear_resets_state_even_without_rollback) {
+    route::RouteState state;
+    state.MarkApplied(true);
+    state.AddDnsServer(0, 1u);
+    state.Clear();
+    const auto snapshot = state.Snapshot();
+    BOOST_TEST(!snapshot.applied);
+    BOOST_TEST(snapshot.dns_servers[0].empty());
 }

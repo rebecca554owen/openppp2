@@ -41,7 +41,7 @@ namespace ppp {
                 }
 
                 std::unordered_map<uint32_t, std::string> nics;
-                for (const auto& pair : owner_->nics_) {
+                for (const auto& pair : route_state_->Snapshot().nics) {
                     nics.emplace(
                         pair.first,
                         std::string(pair.second.begin(), pair.second.end()));
@@ -71,14 +71,6 @@ namespace ppp {
                 if (NULLPTR == route_state_) {
                     return;
                 }
-
-                route_state_->ReplaceRib(owner_->rib_);
-                route_state_->ReplaceFib(owner_->fib_);
-                std::unordered_map<uint32_t, std::string> nics;
-                for (const auto& pair : owner_->nics_) {
-                    nics.emplace(pair.first, std::string(pair.second.begin(), pair.second.end()));
-                }
-                route_state_->ReplaceNics(std::move(nics));
 
                 std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform();
                 if (NULLPTR == platform) {
@@ -284,7 +276,7 @@ namespace ppp {
                             return false;
                         }
 
-                        if (!self->route_added_) {
+                        if (!self->route_state_.Snapshot().applied) {
                             return false;
                         }
 

@@ -40,6 +40,11 @@ namespace ppp {
                     value_.nics = std::move(value);
                 }
 
+                void RouteState::AddNic(uint32_t gateway, std::string interface_name) noexcept {
+                    std::lock_guard<std::mutex> scope(syncobj_);
+                    value_.nics[gateway] = std::move(interface_name);
+                }
+
                 void RouteState::AddDnsServer(int bucket, uint32_t ip) noexcept {
                     if (bucket < 0 || bucket >= static_cast<int>(value_.dns_servers.size())) {
                         return;
@@ -86,8 +91,14 @@ namespace ppp {
                     }
 
                     std::lock_guard<std::mutex> scope(syncobj_);
-                    value_ = RouteStateSnapshot();
+                    value_.default_routes.reset();
+                    value_.applied = false;
                     return true;
+                }
+
+                void RouteState::Clear() noexcept {
+                    std::lock_guard<std::mutex> scope(syncobj_);
+                    value_ = RouteStateSnapshot();
                 }
 
             }

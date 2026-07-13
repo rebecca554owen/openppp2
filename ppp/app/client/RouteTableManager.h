@@ -36,7 +36,7 @@ namespace ppp {
              */
             class RouteTableManager {
             public:
-                RouteTableManager() noexcept = default;
+                RouteTableManager() noexcept;
                 ~RouteTableManager() noexcept;
 
                 /** @brief Attaches the manager to its owning switcher (non-owning). */

@@ -82,10 +82,10 @@ bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
     }
 
     // Add the default IP address of the vpn virtual network adapter to the RIB route table.
-    VEthernetNetworkSwitcher::RouteInformationTablePtr rib = owner_->rib_;
+    VEthernetNetworkSwitcher::RouteInformationTablePtr rib = owner_->GetRib();
     if (NULLPTR == rib) {
         rib = make_shared_object<VEthernetNetworkSwitcher::RouteInformationTable>();
-        owner_->rib_ = rib;
+        owner_->route_state_.ReplaceRib(rib);
     }
 
     // CIDR: 0.0.0.0/0; 0.0.0.0/1; 128.0.0.0/1

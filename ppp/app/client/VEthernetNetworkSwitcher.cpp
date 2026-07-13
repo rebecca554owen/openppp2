@@ -169,7 +169,6 @@ namespace ppp {
                 timeout_registry_->Bind(&GetSynchronizedObject());
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                route_added_     = false;
 #if defined(_LINUX)
                 protect_mode_    = false;
 #endif
@@ -231,11 +230,11 @@ namespace ppp {
             }
 
             VEthernetNetworkSwitcher::RouteInformationTablePtr VEthernetNetworkSwitcher::GetRib() noexcept {
-                return rib_;
+                return route_state_.Snapshot().rib;
             }
 
             VEthernetNetworkSwitcher::ForwardInformationTablePtr VEthernetNetworkSwitcher::GetFib() noexcept {
-                return fib_;
+                return route_state_.Snapshot().fib;
             }
 
             VEthernetNetworkSwitcher::IForwardingPtr VEthernetNetworkSwitcher::GetForwarding() noexcept {

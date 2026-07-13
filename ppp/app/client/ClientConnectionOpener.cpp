@@ -194,19 +194,19 @@ namespace ppp {
 #endif
 
                 // Attempt to load the routing table configuration if the routing table is configured correctly.
-                if (VEthernetNetworkSwitcher::RouteInformationTablePtr rib = owner_->rib_; NULLPTR != rib) {
+                if (VEthernetNetworkSwitcher::RouteInformationTablePtr rib = owner_->GetRib(); NULLPTR != rib) {
                     VEthernetNetworkSwitcher::ForwardInformationTablePtr fib = make_shared_object<VEthernetNetworkSwitcher::ForwardInformationTable>();
                     if (NULLPTR != fib) {
                         fib->Fill(*rib);
 
                         if (fib->IsAvailable()) {
-                            owner_->fib_ = fib;
+                            owner_->route_state_.ReplaceFib(fib);
                         }
                     }
                 }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                owner_->route_apply_ready_ = true;
+                owner_->route_state_.MarkApplyReady(true);
                 if (!owner_->TryApplyHostedNetworkRoutes()) {
                     return false;
                 }

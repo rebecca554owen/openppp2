@@ -17,10 +17,6 @@
                 VEthernetSocksProxySwitcherPtr                                      socks_proxy_;
                 std::unique_ptr<SwitcherTimeoutRegistry>                            timeout_registry_;
                 std::shared_ptr<dns::DnsInterceptor>                                dns_interceptor_;
-                RouteInformationTablePtr                                            rib_;
-                ForwardInformationTablePtr                                          fib_;
-                RouteInformationTablePtr                                            peer_prefix_rib_;
-                ForwardInformationTablePtr                                          peer_prefix_fib_;
                 RouteIPListTablePtr                                                 vbgp_;
                 ppp::string                                                         server_ru_;
                 std::shared_ptr<aggligator::aggligator>                             aggligator_;
@@ -33,7 +29,6 @@
                 SynchronizedObject                                                  prdr_;
 #if defined(_LINUX)
                 bool                                                                protect_mode_  = false;
-                ppp::unordered_map<uint32_t, ppp::string>                           nics_;
 #endif
 #endif
 
@@ -44,22 +39,17 @@
 #if defined(_ANDROID) || defined(_IPHONE)
                 ppp::string                                                         bypass_ip_list_;
 #else
-                bool                                                                route_added_   = false;
-                bool                                                                route_apply_ready_ = false;
                 LoadIPListFileVectorPtr                                             ribs_;
                 std::shared_ptr<ClientNetworkInterface>                             tun_ni_;
                 std::shared_ptr<ClientNetworkInterface>                             underlying_ni_;
                 ppp::string                                                         preferred_nic_;
                 boost::asio::ip::address                                            preferred_ngw_;
-                ppp::unordered_set<uint32_t>                                        dns_serverss_[3];
 
 #if defined(_WIN32)
                 PaperAirplaneControllerPtr                                          paper_airplane_ctrl_;
-                ppp::vector<MIB_IPFORWARDROW>                                       default_routes_;
                 AllNicDnsServerAddresses                                            ni_dns_servers_;
 #elif defined(_LINUX)
                 ppp::string                                                         ni_dns_servers_;
-                RouteInformationTablePtr                                            default_routes_;
 #endif
 #endif
                 std::unique_ptr<RouteTableManager>                                  route_table_;

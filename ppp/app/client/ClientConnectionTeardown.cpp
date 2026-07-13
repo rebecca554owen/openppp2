@@ -95,10 +95,11 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 owner_->RestoreAssignedIPv6();
-                owner_->route_apply_ready_ = false;
+                const bool routes_applied = owner_->route_state_.Snapshot().applied;
+                owner_->route_state_.MarkApplyReady(false);
 
                 // Delete VPN route table information configured in the operating system!
-                if (exchangeof(owner_->route_added_, false)) {
+                if (routes_applied) {
                     // Delete routes entries configured by the VPN program from the operating system.
                     owner_->DeleteRoute();
 
@@ -129,11 +130,7 @@ namespace ppp {
                 // Clear the reference pointers of the held vBGP without making specific clarification, as this may pose thread safety issues.
                 owner_->vbgp_ = NULLPTR;
 
-#if !defined(_MACOS)
-                // Clear the routing table, forwarding table, and DNS server list of the network card, including cache.
-                owner_->rib_ = NULLPTR;
-                owner_->fib_ = NULLPTR;
-#endif
+                owner_->route_state_.Clear();
 
                 // Clear all route tables and forwarding tables held by the current object.
                 owner_->LoadAllIPListWithFilePaths(boost::asio::ip::address_v4::any());

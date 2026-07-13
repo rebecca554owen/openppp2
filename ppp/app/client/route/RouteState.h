@@ -43,6 +43,7 @@ namespace ppp {
                         ForwardInformationTablePtr fib) noexcept;
                     void ReplaceDefaultRoutes(std::shared_ptr<const IRouteSnapshot> value) noexcept;
                     void ReplaceNics(std::unordered_map<uint32_t, std::string> value) noexcept;
+                    void AddNic(uint32_t gateway, std::string interface_name) noexcept;
 
                     void AddDnsServer(int bucket, uint32_t ip) noexcept;
                     void ClearDnsServers() noexcept;
@@ -51,6 +52,7 @@ namespace ppp {
                     void MarkApplied(bool value) noexcept;
                     void MarkApplyReady(bool value) noexcept;
                     bool ResetAfterRollback(bool rollback_complete) noexcept;
+                    void Clear() noexcept;
 
                 private:
                     mutable std::mutex syncobj_;

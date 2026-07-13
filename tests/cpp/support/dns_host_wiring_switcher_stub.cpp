@@ -145,6 +145,7 @@ std::shared_ptr<ppp::net::packet::IPFragment> VEthernet::NewFragment() noexcept 
 
 namespace ppp::app::client {
 
+RouteTableManager::RouteTableManager() noexcept = default;
 RouteTableManager::~RouteTableManager() noexcept = default;
 
 VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(
