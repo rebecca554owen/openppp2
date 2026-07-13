@@ -3,27 +3,14 @@
 
 namespace ppp::app::client::route {
 
-namespace {
-
-int PrefixFromMask(uint32_t mask) noexcept {
-    int prefix = 0;
-    while ((mask & 0x80000000u) != 0) {
-        ++prefix;
-        mask <<= 1;
-    }
-    return prefix;
-}
-
-}
-
 std::vector<RouteSpec> BuildMobileRouteSpecs(const MobileRoutePlan& plan) noexcept {
     std::vector<RouteSpec> routes;
     routes.reserve(1 + plan.tunnel_dns.size() + plan.underlying_dns.size());
 
     RouteSpec subnet;
-    subnet.network = plan.tap_ip & plan.tap_mask;
+    subnet.network = plan.tap_network;
     subnet.gateway = plan.tap_gateway;
-    subnet.prefix = PrefixFromMask(plan.tap_mask);
+    subnet.prefix = plan.tap_prefix;
     routes.emplace_back(subnet);
 
     std::vector<uint32_t> tunnel_dns(plan.tunnel_dns.begin(), plan.tunnel_dns.end());
@@ -41,6 +28,22 @@ std::vector<RouteSpec> BuildMobileRouteSpecs(const MobileRoutePlan& plan) noexce
         }
     }
     return routes;
+}
+
+MobileRoutePlatform::MobileRoutePlatform(AddOperation add) noexcept
+    : add_(std::move(add)) {
+}
+
+bool MobileRoutePlatform::ApplyAll(const std::vector<RouteSpec>& routes) noexcept {
+    if (!add_) {
+        return false;
+    }
+    for (const RouteSpec& route : routes) {
+        if (!add_(route)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }

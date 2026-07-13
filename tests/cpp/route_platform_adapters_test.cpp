@@ -64,8 +64,8 @@ BOOST_AUTO_TEST_CASE(darwin_adapter_owns_platform_operation_boundary) {
 
 BOOST_AUTO_TEST_CASE(mobile_adapter_builds_deduplicated_all_route_plan) {
     route::MobileRoutePlan plan;
-    plan.tap_ip = 0x0a000002u;
-    plan.tap_mask = 0xffffff00u;
+    plan.tap_network = 0x0a000000u;
+    plan.tap_prefix = 24;
     plan.tap_gateway = 0x0a000001u;
     plan.loopback_gateway = 0x7f000001u;
     plan.tunnel_dns = { 1u, 2u };
@@ -80,4 +80,13 @@ BOOST_AUTO_TEST_CASE(mobile_adapter_builds_deduplicated_all_route_plan) {
     BOOST_TEST(specs[2].gateway == plan.tap_gateway);
     BOOST_TEST(specs[3].network == 3u);
     BOOST_TEST(specs[3].gateway == plan.loopback_gateway);
+
+    std::vector<uint32_t> applied;
+    route::MobileRoutePlatform platform(
+        [&applied](const route::RouteSpec& spec) noexcept {
+            applied.emplace_back(spec.network);
+            return true;
+        });
+    BOOST_TEST(platform.ApplyAll(specs));
+    BOOST_TEST(applied.size() == specs.size());
 }
