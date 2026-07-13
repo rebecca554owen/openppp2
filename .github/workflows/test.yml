@@ -28,6 +28,11 @@ jobs:
       - name: Include boundary checks
         run: bash tools/check_include_boundaries.sh
 
+      - name: Repository architecture checks
+        run: |
+          python3 -m unittest tests.tooling.test_repository_layout -v
+          python3 tools/check_repository_layout.py
+
       - name: MSVC project source parity
         run: bash tools/check_vcxproj_sources.sh
 

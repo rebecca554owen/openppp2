@@ -134,3 +134,6 @@ docs/superpowers/
 
 # Local feature worktrees
 .worktrees/
+
+# Python tooling caches
+__pycache__/
