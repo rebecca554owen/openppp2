@@ -399,6 +399,7 @@
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteHost.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteState.cpp" />
     <ClCompile Include="ppp\app\client\udp\ClientDatagramPortManager.cpp" />
     <ClCompile Include="ppp\app\client\udp\UdpRelayHost.cpp" />
     <ClCompile Include="ppp\app\server\udp\ServerDatagramPortManager.cpp" />
