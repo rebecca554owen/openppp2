@@ -398,7 +398,6 @@
     <ClCompile Include="ppp\app\client\dns\DnsRedirectPlan.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsHost.cpp" />
-    <ClCompile Include="ppp\app\client\route\RouteHost.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator.cpp" />
     <ClCompile Include="ppp\app\client\route\DarwinRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\LinuxRoutePlatform.cpp" />

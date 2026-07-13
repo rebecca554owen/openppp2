@@ -97,6 +97,12 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assert_violation(root, "Linux route manager bypasses RouteState")
 
+    def test_route_host_ports_are_removed(self) -> None:
+        root = self.fixture(
+            {"ppp/app/client/Legacy.cpp": "route::RouteHostPorts ports;\n"}
+        )
+        self.assert_violation(root, "legacy RouteHostPorts service locator")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -64,10 +64,9 @@
                 const dns::DnsHostPorts& DnsHostPortsFor(const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept override;
                 void InvalidateDnsHostPorts() noexcept override;
                 bool RedirectDnsServer(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<IPFrame>& packet, const std::shared_ptr<UdpFrame>& frame, const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept override;
-                route::RouteHostPorts BuildRouteHostPorts() noexcept override;
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                void AddRoute() noexcept override;
-                void DeleteRoute() noexcept override;
+                void AddRoute() noexcept;
+                void DeleteRoute() noexcept;
 #else
-                bool AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept override;
+                bool AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept;
 #endif

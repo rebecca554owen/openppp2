@@ -93,10 +93,6 @@ openppp2_add_cpp_test(dns_route_dispatcher_test SOURCES
 openppp2_add_cpp_test(dns_udp_relay_test SOURCES dns_udp_relay_test.cpp)
 openppp2_add_cpp_test(dns_host_ports_test SOURCES dns_host_ports_test.cpp)
 openppp2_add_cpp_test(dns_host_interface_test SOURCES dns_host_interface_test.cpp)
-openppp2_add_cpp_test(route_host_ports_test SOURCES
-    route_host_ports_test.cpp
-    "${OPENPPP2_ROOT}/ppp/app/client/route/RouteHost.cpp")
-openppp2_add_cpp_test(route_host_interface_test SOURCES route_host_interface_test.cpp)
 openppp2_add_cpp_test(route_state_test SOURCES
     route_state_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp")

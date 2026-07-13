@@ -4,7 +4,7 @@
  * @file UdpRelayHost.h
  * @brief Narrow host surface for the UDP relay pipeline without VEthernetExchanger.h.
  *
- * Phase 2 (P2-b/P2-c): mirrors the proven route::RouteHostPorts / dns::DnsHostPorts
+ * Phase 2 (P2-b/P2-c): follows the earlier injected host-port pattern
  * pattern. Lets ClientDatagramPortManager consume exchanger capabilities through injected
  * callbacks instead of a back-pointer + friend, so the UDP relay can be extracted from the
  * God-Object exchanger. See docs/UDP_DECOUPLING_PHASE2_DESIGN.md.

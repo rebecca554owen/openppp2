@@ -106,6 +106,15 @@ def _collect_candidates(root: Path) -> list[Candidate]:
                     )
                 )
 
+            if "RouteHostPorts" in line:
+                candidates.append(
+                    Candidate(
+                        relative,
+                        line_number,
+                        "legacy RouteHostPorts service locator",
+                    )
+                )
+
             is_route_or_dns_header = (
                 path.suffix in {".h", ".hpp"}
                 and (
