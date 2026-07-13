@@ -16,6 +16,7 @@ struct DarwinRouteOperations final {
 
 class DarwinRoutePlatform final : public IRoutePlatform {
 public:
+    DarwinRoutePlatform(uint32_t tap_gateway, bool promiscuous) noexcept;
     explicit DarwinRoutePlatform(DarwinRouteOperations operations) noexcept;
 
     RouteSnapshotPtr CaptureDefaults() noexcept override;
@@ -25,6 +26,10 @@ public:
     bool RestoreDefaults(const RouteSnapshotPtr& routes) noexcept override;
 
 private:
+    static DarwinRouteOperations CreateSystemOperations(
+        uint32_t tap_gateway,
+        bool promiscuous) noexcept;
+
     DarwinRouteOperations operations_;
 };
 

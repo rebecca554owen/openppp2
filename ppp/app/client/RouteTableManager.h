@@ -20,6 +20,7 @@ namespace ppp {
             class VEthernetNetworkSwitcher;
             namespace route {
                 class LinuxRoutePlatform;
+                class DarwinRoutePlatform;
                 class RouteCoordinator;
                 class RouteState;
                 class WindowsRoutePlatform;
@@ -105,6 +106,9 @@ namespace ppp {
 #endif
 #if defined(_WIN32)
                 std::unique_ptr<route::WindowsRoutePlatform> NewWindowsRoutePlatform() noexcept;
+#endif
+#if defined(_MACOS)
+                std::unique_ptr<route::DarwinRoutePlatform> NewDarwinRoutePlatform() noexcept;
 #endif
 
                 VEthernetNetworkSwitcher* owner_ = nullptr;

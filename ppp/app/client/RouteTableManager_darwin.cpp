@@ -1,6 +1,10 @@
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/client/route/DarwinRoutePlatform.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
+#include <ppp/app/client/route/RouteSpecs.h>
+#include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
@@ -22,6 +26,22 @@ namespace ppp {
     namespace app {
         namespace client {
 
+            std::unique_ptr<route::DarwinRoutePlatform>
+            RouteTableManager::NewDarwinRoutePlatform() noexcept {
+                if (NULLPTR == owner_) {
+                    return NULLPTR;
+                }
+                std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap();
+                ppp::tap::TapDarwin* darwin_tap =
+                    NULLPTR == tap ? NULLPTR : dynamic_cast<ppp::tap::TapDarwin*>(tap.get());
+                if (NULLPTR == tap || NULLPTR == darwin_tap) {
+                    return NULLPTR;
+                }
+                return std::make_unique<route::DarwinRoutePlatform>(
+                    tap->GatewayServer,
+                    darwin_tap->IsPromisc());
+            }
+
             void RouteTableManager::AddRoute() noexcept {
                 ppp::telemetry::SpanScope span("client.route.apply");
                 struct ScopedRouteApplyHistogram final {
@@ -35,60 +55,50 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
-                if (auto underlying_ni = owner_->GetUnderlyingNetworkInterface(); NULLPTR != underlying_ni) {
-                    if (auto tap = owner_->GetTap(); NULLPTR != tap) {
-                        ppp::tap::TapDarwin* darwin_tap = dynamic_cast<ppp::tap::TapDarwin*>(tap.get());
-                        if (NULLPTR != darwin_tap && !darwin_tap->IsPromisc()) {
-                            for (auto&& [ip, gw] : underlying_ni->DefaultRoutes) {
-                                ppp::darwin::tun::utun_del_route(ip, gw);
-                            }
-                        }
-                    }
-
-                    ppp::tap::TapDarwin::AddAllRoutes(owner_->rib_);
+                if (NULLPTR == route_state_) {
+                    return;
+                }
+                route_state_->ReplaceRib(owner_->rib_);
+                std::unique_ptr<route::DarwinRoutePlatform> platform = NewDarwinRoutePlatform();
+                if (NULLPTR == platform) {
+                    return;
+                }
+                route_coordinator_ = std::make_unique<route::RouteCoordinator>(
+                    *route_state_,
+                    std::move(platform));
+                if (!route_coordinator_->Apply(route::BuildRouteSpecs(owner_->rib_))) {
+                    route_coordinator_.reset();
+                    return;
                 }
                 AddRouteWithDnsServers();
             }
 
             bool RouteTableManager::DeleteAllDefaultRoute() noexcept {
-                if (auto tap = owner_->GetTap(); NULLPTR != tap) {
-                    auto unix_tap = dynamic_cast<ppp::tap::TapDarwin*>(tap.get());
-                    if (NULLPTR != unix_tap && !unix_tap->IsPromisc()) {
-                        auto rib = ppp::tap::TapDarwin::FindAllDefaultGatewayRoutes({ tap->GatewayServer });
-                        if (NULLPTR != rib) {
-                            for (auto&& [ip, gw] : *rib) {
-                                ppp::darwin::tun::utun_del_route(ip, gw);
-                            }
-                        }
-                        return true;
-                    }
+                std::unique_ptr<route::DarwinRoutePlatform> platform = NewDarwinRoutePlatform();
+                if (NULLPTR == platform) {
+                    return false;
                 }
-                return false;
+                route::RouteSnapshotPtr defaults = platform->CaptureDefaults();
+                return platform->RemoveDefaults(defaults);
             }
 
             void RouteTableManager::DeleteRoute() noexcept {
                 ppp::telemetry::Log(Level::kDebug, "client", "route delete");
                 ppp::telemetry::Count("client.route.delete", 1);
-                if (auto underlying_ni = owner_->GetUnderlyingNetworkInterface(); NULLPTR != underlying_ni) {
-                    ppp::tap::TapDarwin::DeleteAllRoutes(owner_->rib_);
-
-                    if (auto tap = owner_->GetTap(); NULLPTR != tap) {
-                        ppp::tap::TapDarwin* darwin_tap = dynamic_cast<ppp::tap::TapDarwin*>(tap.get());
-                        if (NULLPTR != darwin_tap && !darwin_tap->IsPromisc()) {
-                            for (auto&& [ip, gw] : underlying_ni->DefaultRoutes) {
-                                ppp::darwin::tun::utun_add_route(ip, gw);
-                            }
-                        }
-                    }
+                if (NULLPTR != route_coordinator_) {
+                    route_coordinator_->Stop();
+                    route_coordinator_.reset();
                 }
             }
 
             bool RouteTableManager::AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
-                return ppp::darwin::tun::utun_add_route(ip, prefix, gw);
+                std::unique_ptr<route::DarwinRoutePlatform> platform = NewDarwinRoutePlatform();
+                return NULLPTR != platform && platform->Add(route::RouteSpec{ ip, gw, prefix, {} });
             }
 
             bool RouteTableManager::DeleteRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
-                return ppp::darwin::tun::utun_del_route(ip, prefix, gw);
+                std::unique_ptr<route::DarwinRoutePlatform> platform = NewDarwinRoutePlatform();
+                return NULLPTR != platform && platform->Delete(route::RouteSpec{ ip, gw, prefix, {} });
             }
 
             void RouteTableManager::DeleteRouteWithDnsServers() noexcept {
