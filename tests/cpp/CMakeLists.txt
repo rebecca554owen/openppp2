@@ -107,7 +107,8 @@ openppp2_add_cpp_test(route_coordinator_test SOURCES
 openppp2_add_cpp_test(linux_route_platform_contract_test SOURCES
     linux_route_platform_contract_test.cpp
     support/linux_route_platform_stubs.cpp
-    "${OPENPPP2_ROOT}/ppp/app/client/route/LinuxRoutePlatform.cpp")
+    "${OPENPPP2_ROOT}/ppp/app/client/route/LinuxRoutePlatform.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/route/RouteSpecs.cpp")
 openppp2_add_cpp_test(route_platform_adapters_test SOURCES
     route_platform_adapters_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"

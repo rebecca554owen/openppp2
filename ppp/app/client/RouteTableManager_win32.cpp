@@ -1,6 +1,10 @@
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
+#include <ppp/app/client/route/RouteSpecs.h>
+#include <ppp/app/client/route/RouteState.h>
+#include <ppp/app/client/route/WindowsRoutePlatform.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
@@ -23,6 +27,23 @@ namespace ppp {
     namespace app {
         namespace client {
 
+            std::unique_ptr<route::WindowsRoutePlatform>
+            RouteTableManager::NewWindowsRoutePlatform() noexcept {
+                if (NULLPTR == owner_) {
+                    return NULLPTR;
+                }
+                std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap();
+                std::shared_ptr<ClientNetworkInterface> underlying =
+                    owner_->GetUnderlyingNetworkInterface();
+                if (NULLPTR == tap || NULLPTR == underlying || !underlying->GatewayServer.is_v4()) {
+                    return NULLPTR;
+                }
+                return std::make_unique<route::WindowsRoutePlatform>(
+                    tap->GatewayServer,
+                    underlying->Index,
+                    underlying->GatewayServer.to_string());
+            }
+
             void RouteTableManager::AddRoute() noexcept {
                 ppp::telemetry::SpanScope span("client.route.apply");
                 struct ScopedRouteApplyHistogram final {
@@ -36,54 +57,51 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
-                if (auto tap = owner_->GetTap(); NULLPTR != tap) {
-                    ppp::win32::network::DeleteAllDefaultGatewayRoutes(owner_->default_routes_, { tap->GatewayServer });
+                if (NULLPTR == route_state_) {
+                    return;
                 }
-
-                ppp::win32::network::AddAllRoutes(owner_->rib_);
+                route_state_->ReplaceRib(owner_->rib_);
+                std::unique_ptr<route::WindowsRoutePlatform> platform = NewWindowsRoutePlatform();
+                if (NULLPTR == platform) {
+                    return;
+                }
+                route_coordinator_ = std::make_unique<route::RouteCoordinator>(
+                    *route_state_,
+                    std::move(platform));
+                if (!route_coordinator_->Apply(route::BuildRouteSpecs(owner_->rib_))) {
+                    route_coordinator_.reset();
+                    return;
+                }
                 AddRouteWithDnsServers();
             }
 
             bool RouteTableManager::DeleteAllDefaultRoute() noexcept {
-                if (auto tap = owner_->GetTap(); NULLPTR != tap) {
-                    ppp::vector<MIB_IPFORWARDROW> default_routes;
-                    ppp::win32::network::DeleteAllDefaultGatewayRoutes(default_routes, { tap->GatewayServer });
-                    return true;
+                std::unique_ptr<route::WindowsRoutePlatform> platform = NewWindowsRoutePlatform();
+                if (NULLPTR == platform) {
+                    return false;
                 }
-                return false;
+                route::RouteSnapshotPtr defaults = platform->CaptureDefaults();
+                return platform->RemoveDefaults(defaults);
             }
 
             void RouteTableManager::DeleteRoute() noexcept {
                 ppp::telemetry::Log(Level::kDebug, "client", "route delete");
                 ppp::telemetry::Count("client.route.delete", 1);
-                ppp::win32::network::DeleteAllRoutes(owner_->rib_);
-
-                ppp::win32::network::AddAllRoutes(owner_->default_routes_);
-
-                if (std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> ni = owner_->underlying_ni_; NULLPTR != ni) {
-                    ppp::win32::network::SetDefaultIPGateway(ni->Index, { ni->GatewayServer });
+                if (NULLPTR != route_coordinator_) {
+                    route_coordinator_->Stop();
+                    route_coordinator_.reset();
                 }
             }
 
             bool RouteTableManager::AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
-                MIB_IPFORWARDROW route;
-                if (ppp::win32::network::Router::GetBestRoute(ip, route)) {
-                    if (route.dwForwardDest == ip && route.dwForwardNextHop != gw) {
-                        ppp::win32::network::Router::Delete(route);
-                    }
-                }
-
-                uint32_t mask = IPEndPoint::PrefixToNetmask(prefix);
-                return ppp::win32::network::Router::Add(ip, mask, gw, 1);
+                std::unique_ptr<route::WindowsRoutePlatform> platform = NewWindowsRoutePlatform();
+                return NULLPTR != platform && platform->Add(route::RouteSpec{ ip, gw, prefix, {} });
             }
 
             bool RouteTableManager::DeleteRoute(const std::shared_ptr<MIB_IPFORWARDTABLE>& mib, uint32_t ip, uint32_t gw, int prefix) noexcept {
-                if (NULLPTR == mib) {
-                    return false;
-                }
-
-                uint32_t mask = IPEndPoint::PrefixToNetmask(prefix);
-                return ppp::win32::network::Router::Delete(mib, ip, mask, gw);
+                (void)mib;
+                std::unique_ptr<route::WindowsRoutePlatform> platform = NewWindowsRoutePlatform();
+                return NULLPTR != platform && platform->Delete(route::RouteSpec{ ip, gw, prefix, {} });
             }
 
             void RouteTableManager::DeleteRouteWithDnsServers() noexcept {

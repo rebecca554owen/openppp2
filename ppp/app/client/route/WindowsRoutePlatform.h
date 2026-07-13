@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 #include <ppp/app/client/route/IRoutePlatform.h>
 
@@ -16,6 +17,10 @@ struct WindowsRouteOperations final {
 
 class WindowsRoutePlatform final : public IRoutePlatform {
 public:
+    WindowsRoutePlatform(
+        uint32_t tap_gateway,
+        int underlying_interface_index,
+        std::string underlying_gateway) noexcept;
     explicit WindowsRoutePlatform(WindowsRouteOperations operations) noexcept;
 
     RouteSnapshotPtr CaptureDefaults() noexcept override;
@@ -25,6 +30,11 @@ public:
     bool RestoreDefaults(const RouteSnapshotPtr& routes) noexcept override;
 
 private:
+    static WindowsRouteOperations CreateSystemOperations(
+        uint32_t tap_gateway,
+        int underlying_interface_index,
+        std::string underlying_gateway) noexcept;
+
     WindowsRouteOperations operations_;
 };
 

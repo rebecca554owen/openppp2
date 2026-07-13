@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/app/client/route/LinuxRoutePlatform.h>
+#include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/net/native/rib.h>
 
 namespace route = ppp::app::client::route;
@@ -103,7 +104,7 @@ BOOST_AUTO_TEST_CASE(rib_is_converted_to_route_specs_without_host_dependencies) 
     BOOST_TEST(rib->AddRoute(0x0a000000u, 8, 10u));
     BOOST_TEST(rib->AddRoute(0xc0a80000u, 16, 20u));
 
-    std::vector<route::RouteSpec> specs = route::BuildLinuxRouteSpecs(rib);
+    std::vector<route::RouteSpec> specs = route::BuildRouteSpecs(rib);
     BOOST_REQUIRE(specs.size() == 2u);
     std::sort(specs.begin(), specs.end(), [](const auto& left, const auto& right) {
         return left.network < right.network;

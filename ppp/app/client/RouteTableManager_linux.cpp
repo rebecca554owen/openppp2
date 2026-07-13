@@ -4,6 +4,7 @@
 #include <ppp/app/client/route/LinuxRoutePlatform.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/route/RouteState.h>
+#include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h>
@@ -85,7 +86,7 @@ namespace ppp {
                 }
 
                 const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
-                std::vector<route::RouteSpec> specs = route::BuildLinuxRouteSpecs(snapshot.rib);
+                std::vector<route::RouteSpec> specs = route::BuildRouteSpecs(snapshot.rib);
                 route_coordinator_ = std::make_unique<route::RouteCoordinator>(
                     *route_state_,
                     std::move(platform));

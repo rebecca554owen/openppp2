@@ -22,6 +22,7 @@ namespace ppp {
                 class LinuxRoutePlatform;
                 class RouteCoordinator;
                 class RouteState;
+                class WindowsRoutePlatform;
             }
 
             /**
@@ -101,6 +102,9 @@ namespace ppp {
             private:
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
                 std::unique_ptr<route::LinuxRoutePlatform> NewLinuxRoutePlatform() noexcept;
+#endif
+#if defined(_WIN32)
+                std::unique_ptr<route::WindowsRoutePlatform> NewWindowsRoutePlatform() noexcept;
 #endif
 
                 VEthernetNetworkSwitcher* owner_ = nullptr;

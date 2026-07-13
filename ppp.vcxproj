@@ -404,6 +404,7 @@
     <ClCompile Include="ppp\app\client\route\LinuxRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\MobileRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteState.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteSpecs.cpp" />
     <ClCompile Include="ppp\app\client\route\WindowsRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\udp\ClientDatagramPortManager.cpp" />
     <ClCompile Include="ppp\app\client\udp\UdpRelayHost.cpp" />
