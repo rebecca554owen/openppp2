@@ -131,3 +131,6 @@ ios/App/.build/
 
 # Superpowers planning docs (local agent workflow only)
 docs/superpowers/
+
+# Local feature worktrees
+.worktrees/
