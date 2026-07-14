@@ -32,6 +32,8 @@ public:
         ppp::vector<Byte> response) noexcept;
     void Close() noexcept;
     bool IsClosed() const noexcept;
+    bool IsConfigured() const noexcept;
+    bool HasActiveSession() const noexcept;
 
 private:
     std::shared_ptr<IDnsPolicy> policy_;
@@ -40,6 +42,7 @@ private:
     DnsQueryContext context_;
     std::atomic_uint64_t generation_{0};
     std::atomic_bool closed_{false};
+    std::atomic_bool configured_{false};
     mutable std::mutex syncobj_;
 };
 

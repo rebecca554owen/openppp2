@@ -69,6 +69,8 @@ openppp2_add_cpp_test(runtime_snapshot_publisher_test SOURCES
     runtime_snapshot_publisher_test.cpp)
 openppp2_add_cpp_test(runtime_readiness_test SOURCES
     runtime_readiness_test.cpp)
+openppp2_add_cpp_test(runtime_lifecycle_test SOURCES
+    runtime_lifecycle_test.cpp)
 openppp2_add_cpp_test(tui_runtime_adapter_test SOURCES
     tui_runtime_adapter_test.cpp)
 openppp2_add_cpp_test(p2p_replay_window_test SOURCES p2p_replay_window_test.cpp)

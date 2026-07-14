@@ -38,6 +38,7 @@ bool DnsController::Configure(DnsQueryContext context) noexcept {
     }
     std::lock_guard<std::mutex> scope(syncobj_);
     context_ = std::move(context);
+    configured_.store(true, std::memory_order_release);
     return true;
 }
 
@@ -97,6 +98,8 @@ void DnsController::Close() noexcept {
     {
         std::lock_guard<std::mutex> scope(syncobj_);
         session = std::move(active_session_);
+        context_ = DnsQueryContext();
+        configured_.store(false, std::memory_order_release);
     }
     if (session) {
         session->Close();
@@ -111,6 +114,15 @@ void DnsController::Close() noexcept {
 
 bool DnsController::IsClosed() const noexcept {
     return closed_.load(std::memory_order_acquire);
+}
+
+bool DnsController::IsConfigured() const noexcept {
+    return configured_.load(std::memory_order_acquire);
+}
+
+bool DnsController::HasActiveSession() const noexcept {
+    std::lock_guard<std::mutex> scope(syncobj_);
+    return active_session_ && active_session_->IsActive();
 }
 
 }

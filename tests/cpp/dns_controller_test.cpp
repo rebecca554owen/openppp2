@@ -36,6 +36,8 @@ BOOST_AUTO_TEST_CASE(new_session_replaces_previous_generation) {
     BOOST_TEST(second->Generation() == 2u);
     BOOST_TEST(!first->IsActive());
     BOOST_TEST(second->IsActive());
+    BOOST_TEST(controller.HasActiveSession());
+    BOOST_TEST(!controller.IsConfigured());
 }
 
 BOOST_AUTO_TEST_CASE(close_stops_session_and_timers_and_rejects_new_sessions) {
@@ -46,5 +48,7 @@ BOOST_AUTO_TEST_CASE(close_stops_session_and_timers_and_rejects_new_sessions) {
     controller.Close();
     BOOST_TEST(!session->IsActive());
     BOOST_TEST(timers->cancel_all == 1);
+    BOOST_TEST(!controller.HasActiveSession());
+    BOOST_TEST(!controller.IsConfigured());
     BOOST_TEST(controller.OpenSession(std::make_shared<FakeTransport>()) == nullptr);
 }
