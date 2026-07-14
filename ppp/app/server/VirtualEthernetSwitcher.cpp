@@ -1438,6 +1438,7 @@ namespace ppp {
                 if (bany) {
                     ppp::telemetry::Log(Level::kInfo, "server", "server acceptors running");
                 }
+                running_.store(bany, std::memory_order_release);
                 return bany;
             }
 
@@ -3142,6 +3143,7 @@ namespace ppp {
              */
              void VirtualEthernetSwitcher::Finalize() noexcept {
                 ppp::telemetry::Log(Level::kInfo, "server", "server finalizing");
+                running_.store(false, std::memory_order_release);
                 std::shared_ptr<boost::asio::ip::tcp::resolver> tresolver;
                 std::shared_ptr<boost::asio::ip::udp::resolver> uresolver;
 

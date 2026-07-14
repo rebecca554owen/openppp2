@@ -78,6 +78,7 @@ namespace ppp {
                     return false;
                 }
                 state_.ReplaceRib(std::move(rib));
+                state_.MarkApplied(true);
                 return true;
             }
 

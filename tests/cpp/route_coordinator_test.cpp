@@ -346,6 +346,19 @@ BOOST_AUTO_TEST_CASE(mobile_add_all_route_rejects_after_stop_without_publishing_
     BOOST_TEST(coordinator.Snapshot().rib == nullptr);
 }
 
+BOOST_AUTO_TEST_CASE(mobile_add_all_route_publishes_committed_policy_state) {
+    route::RouteCoordinator coordinator(nullptr);
+    route::RoutePlanInput input;
+    input.tap_ip = htonl(0x0a000002u);
+    input.tap_gateway = htonl(0x0a000001u);
+    input.tap_submask = htonl(0xffffff00u);
+
+    BOOST_REQUIRE(coordinator.AddAllRoute(input));
+    const route::RouteStateSnapshot snapshot = coordinator.Snapshot();
+    BOOST_TEST(snapshot.rib != nullptr);
+    BOOST_TEST(snapshot.applied);
+}
+
 BOOST_AUTO_TEST_CASE(failed_stop_attempt_can_be_retried_explicitly) {
     auto platform = std::make_unique<FakeRoutePlatform>();
     FakeRoutePlatform* view = platform.get();

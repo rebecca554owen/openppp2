@@ -27,4 +27,23 @@ public final class RuntimeStore: ObservableObject {
         state = incoming
         return true
     }
+
+    public func markUnknown() {
+        guard state.phase != .unknown else { return }
+        state.phase = .unknown
+    }
+
+    @discardableResult
+    public func applyUnknown(generation: UInt64, monotonicMs: UInt64) -> Bool {
+        if generation < state.generation ||
+            (generation == state.generation && monotonicMs <= state.monotonicMs) {
+            return false
+        }
+        state = RuntimeSnapshot(
+            generation: generation,
+            monotonicMs: monotonicMs,
+            phase: .unknown
+        )
+        return true
+    }
 }

@@ -201,17 +201,24 @@ namespace ppp {
             }
 
             ppp::app::runtime::RuntimeReadiness VEthernetNetworkSwitcher::GetRuntimeReadiness() noexcept {
-                ppp::app::runtime::RuntimeReadiness readiness;
+                ppp::app::runtime::ClientRuntimeReadinessFacts facts;
                 const std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
-                readiness.session = exchanger &&
+                const std::shared_ptr<ppp::tap::ITap> tap = GetTap();
+                const route::RouteStateSnapshot route_snapshot = route_coordinator_->Snapshot();
+                facts.session_established = exchanger &&
                     exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
-                readiness.adapter = NULLPTR != GetTap();
-                readiness.route = proxy_only_ || route_coordinator_->Snapshot().apply_ready;
-                readiness.dns = proxy_only_ ||
-                    (dns_controller_ && dns_controller_->IsConfigured() &&
-                     dns_controller_->HasActiveSession());
-                readiness.policy = exchanger && NULLPTR != exchanger->GetInformation();
-                return readiness;
+                facts.adapter_open = tap && tap->IsOpen();
+#if defined(_ANDROID) || defined(_IPHONE)
+                facts.route_required = !proxy_only_;
+#else
+                facts.route_required = !proxy_only_ && tap && tap->IsHostedNetwork();
+#endif
+                facts.route_applied = route_snapshot.applied;
+                facts.dns_required = !proxy_only_;
+                facts.dns_configured = dns_controller_ && dns_controller_->IsConfigured();
+                facts.dns_session_active = dns_controller_ && dns_controller_->HasActiveSession();
+                facts.policy_negotiated = exchanger && NULLPTR != exchanger->GetInformation();
+                return ppp::app::runtime::BuildClientRuntimeReadiness(facts);
             }
 
             void VEthernetNetworkSwitcher::RequestedIPv6(const ppp::string& value) noexcept {

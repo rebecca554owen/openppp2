@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openppp2_mobile/runtime/runtime_bridge.dart';
 import 'package:openppp2_mobile/runtime/runtime_snapshot.dart';
 
 Map<String, dynamic> readFixture(String name) {
@@ -10,6 +11,18 @@ Map<String, dynamic> readFixture(String name) {
 }
 
 void main() {
+  test('all canonical fixtures decode', () {
+    final phases = <String, RuntimePhase>{
+      'idle.json': RuntimePhase.idle,
+      'connected.json': RuntimePhase.connected,
+      'reconnecting.json': RuntimePhase.reconnecting,
+      'failed.json': RuntimePhase.failed,
+    };
+    for (final entry in phases.entries) {
+      expect(RuntimeSnapshot.fromJson(readFixture(entry.key)).phase, entry.value);
+    }
+  });
+
   test('connected fixture decodes effective mode and ignores future fields', () {
     final snapshot = RuntimeSnapshot.fromJson(readFixture('connected.json'));
     expect(snapshot.generation, 7);
@@ -31,6 +44,14 @@ void main() {
       () => RuntimeSnapshot.fromJson(readFixture('unsupported-schema.json')),
       throwsFormatException,
     );
+  });
+
+  test('unsupported schema still exposes ordering metadata', () {
+    final ordering = decodeRuntimeOrdering(
+      jsonEncode(readFixture('unsupported-schema.json')),
+    );
+    expect(ordering.generation, 1);
+    expect(ordering.monotonicMs, 1);
   });
 
   test('unknown runtime phase is rejected', () {

@@ -23,6 +23,8 @@ final class HomeViewController: UIViewController {
     private var statistics = VpnStatistics.empty
     private var connectStartedAt: Date?
     private var connectWatchdogTimer: Timer?
+    private var pendingStartGeneration: UInt64?
+    private var runtimeDecodeError: String?
     private var elapsedText = ""
 
     override func viewDidLoad() {
@@ -112,14 +114,36 @@ final class HomeViewController: UIViewController {
     }
 
     @objc private func refreshUI() {
-        if let json = TunnelSharedState.readRuntimeSnapshotJsonIfAlive(),
-           let snapshot = try? TunnelRuntimeBridge.decodeSnapshot(json) {
-            runtimeStore.apply(snapshot)
+        if let json = TunnelSharedState.readRuntimeSnapshotJsonIfAlive() {
+            do {
+                runtimeStore.apply(try TunnelRuntimeBridge.decodeSnapshot(json))
+                runtimeDecodeError = nil
+            } catch {
+                runtimeDecodeError = error.localizedDescription
+                if let ordering = try? TunnelRuntimeBridge.decodeOrdering(json) {
+                    runtimeStore.applyUnknown(
+                        generation: ordering.generation,
+                        monotonicMs: ordering.monotonicMs
+                    )
+                }
+            }
+        } else if runtimeStore.state.phase != .idle {
+            runtimeStore.markUnknown()
+        }
+        if let generation = pendingStartGeneration,
+           runtimeStore.state.generation > generation ||
+           runtimeStore.state.phase == .unknown ||
+           runtimeStore.state.phase == .failed {
+            pendingStartGeneration = nil
         }
         let debugPanelEnabled = store.debugPanelEnabled()
         let profile = store.activeProfile()
         let launchOptions = store.launchOptions()
-        let controls = controlsFor(runtimeStore.state.phase)
+        var controls = controlsFor(runtimeStore.state.phase)
+        if pendingStartGeneration != nil {
+            controls.buttonEnabled = false
+            controls.configEditable = false
+        }
         let statusText = L10n.tr(controls.statusTitleKey)
         var statusDetail = controls.detailKey.isEmpty ? "" : L10n.tr(controls.detailKey)
 
@@ -176,8 +200,8 @@ final class HomeViewController: UIViewController {
             diagnosticLabel.text = nil
             diagnosticLabel.isHidden = true
         }
-        errorLabel.text = vpn.lastError
-        errorLabel.isHidden = vpn.lastError == nil
+        errorLabel.text = runtimeDecodeError ?? vpn.lastError
+        errorLabel.isHidden = errorLabel.text == nil
     }
 
     private func startTimer() {
@@ -259,7 +283,8 @@ final class HomeViewController: UIViewController {
     private func evaluateConnectWatchdog() {
         guard let startedAt = connectStartedAt else { return }
 
-        let stillConnecting = controlsFor(runtimeStore.state.phase).action == .cancel
+        let stillConnecting = pendingStartGeneration != nil ||
+            controlsFor(runtimeStore.state.phase).action == .cancel
         guard stillConnecting else {
             stopConnectWatchdog()
             return
@@ -267,6 +292,7 @@ final class HomeViewController: UIViewController {
 
         let totalSeconds = Int(Date().timeIntervalSince(startedAt))
         if totalSeconds >= TunnelSharedState.connectWatchdogMaxSeconds {
+            pendingStartGeneration = nil
             stopConnectWatchdog()
             vpn.disconnect()
             presentError(L10n.format("home.timeout", TunnelSharedState.connectWatchdogMaxSeconds))
@@ -277,6 +303,7 @@ final class HomeViewController: UIViewController {
         if TunnelSharedState.shouldUseSharedHeartbeat {
             let heartbeatAge = TunnelSharedState.heartbeatAgeMs()
             if heartbeatAge >= 0 && heartbeatAge > TunnelSharedState.heartbeatStaleMilliseconds {
+                pendingStartGeneration = nil
                 stopConnectWatchdog()
                 vpn.disconnect()
                 presentError(L10n.format("home.heartbeatTimeout", Double(heartbeatAge) / 1000))
@@ -288,11 +315,13 @@ final class HomeViewController: UIViewController {
     @objc private func toggleConnection() {
         switch controlsFor(runtimeStore.state.phase).action {
         case .cancel, .stop, .forceStop:
+            pendingStartGeneration = nil
             vpn.disconnect()
             return
         case .none:
             return
         case .start, .retry:
+            guard pendingStartGeneration == nil else { return }
             break
         }
 
@@ -301,21 +330,12 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        statusCard.apply(
-            status: L10n.tr("home.connecting"),
-            detail: L10n.tr("home.vpnStarting"),
-            isConnected: false,
-            isBusy: true,
-            buttonTitle: L10n.tr("home.stop"),
-            buttonEnabled: true,
-            configEditable: false,
-            upload: "\(formatBytes(statistics.txSpeedBytes))/s",
-            download: "\(formatBytes(statistics.rxSpeedBytes))/s",
-            options: store.launchOptions()
-        )
+        pendingStartGeneration = runtimeStore.state.generation
+        refreshUI()
         vpn.connect(profile: profile) { [weak self] result in
             guard let self else { return }
             if case let .failure(error) = result {
+                self.pendingStartGeneration = nil
                 self.stopConnectWatchdog()
                 self.presentError(error.localizedDescription)
             } else {

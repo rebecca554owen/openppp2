@@ -20,6 +20,18 @@ final class RuntimeSnapshotTests: XCTestCase {
         return try TunnelRuntimeBridge.decodeSnapshot(data)
     }
 
+    func testAllCanonicalFixturesDecode() throws {
+        let phases: [(String, RuntimePhase)] = [
+            ("idle.json", .idle),
+            ("connected.json", .connected),
+            ("reconnecting.json", .reconnecting),
+            ("failed.json", .failed),
+        ]
+        for (name, phase) in phases {
+            XCTAssertEqual(try decodeFixture(name).phase, phase)
+        }
+    }
+
     func testConnectedFixtureDecodesEffectiveModeAndFutureFields() throws {
         let snapshot = try decodeFixture("connected.json")
         XCTAssertEqual(snapshot.generation, 7)
@@ -39,6 +51,13 @@ final class RuntimeSnapshotTests: XCTestCase {
     func testUnsupportedSchemaIsRejected() throws {
         let data = try Data(contentsOf: fixtureURL("unsupported-schema.json"))
         XCTAssertThrowsError(try TunnelRuntimeBridge.decodeSnapshot(data))
+    }
+
+    func testUnsupportedSchemaStillExposesOrderingMetadata() throws {
+        let data = try Data(contentsOf: fixtureURL("unsupported-schema.json"))
+        let ordering = try TunnelRuntimeBridge.decodeOrdering(data)
+        XCTAssertEqual(ordering.generation, 1)
+        XCTAssertEqual(ordering.monotonicMs, 1)
     }
 
     func testUnknownPhaseIsRejected() {

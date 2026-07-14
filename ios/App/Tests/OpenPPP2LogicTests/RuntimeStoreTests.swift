@@ -76,4 +76,42 @@ final class RuntimeStoreTests: XCTestCase {
         XCTAssertEqual(store.state.generation, 9)
         XCTAssertEqual(store.state.phase, .starting)
     }
+
+    func testInvalidOrUnavailableSnapshotIsPresentedAsUnknown() {
+        let store = RuntimeStore(initial: snapshot(
+            generation: 8,
+            monotonicMs: 200,
+            phase: .connected
+        ))
+
+        store.markUnknown()
+        XCTAssertEqual(store.state.generation, 8)
+        XCTAssertEqual(store.state.monotonicMs, 200)
+        XCTAssertEqual(store.state.phase, .unknown)
+        XCTAssertTrue(store.apply(snapshot(
+            generation: 8,
+            monotonicMs: 201,
+            phase: .reconnecting
+        )))
+        XCTAssertEqual(store.state.phase, .reconnecting)
+    }
+
+    func testOrderedUnknownRejectsStalePayloadAndAdvancesGenerationWatermark() {
+        let store = RuntimeStore(initial: snapshot(
+            generation: 8,
+            monotonicMs: 200,
+            phase: .connected
+        ))
+
+        XCTAssertFalse(store.applyUnknown(generation: 7, monotonicMs: 300))
+        XCTAssertEqual(store.state.phase, .connected)
+        XCTAssertTrue(store.applyUnknown(generation: 9, monotonicMs: 1))
+        XCTAssertEqual(store.state.generation, 9)
+        XCTAssertEqual(store.state.phase, .unknown)
+        XCTAssertFalse(store.apply(snapshot(
+            generation: 8,
+            monotonicMs: 400,
+            phase: .connected
+        )))
+    }
 }

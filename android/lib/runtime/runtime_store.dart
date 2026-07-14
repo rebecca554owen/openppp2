@@ -26,4 +26,38 @@ class RuntimeStore extends ChangeNotifier {
     notifyListeners();
     return true;
   }
+
+  bool markUnknown() {
+    if (_state.phase == RuntimePhase.unknown) return false;
+    _state = RuntimeSnapshot(
+      generation: _state.generation,
+      monotonicMs: _state.monotonicMs,
+      phase: RuntimePhase.unknown,
+      role: _state.role,
+      server: _state.server,
+      transport: _state.transport,
+      requestedMuxMode: _state.requestedMuxMode,
+      effectiveMuxMode: _state.effectiveMuxMode,
+      muxFallbackReason: _state.muxFallbackReason,
+      p2pState: _state.p2pState,
+      effectivePath: _state.effectivePath,
+      lastError: _state.lastError,
+    );
+    notifyListeners();
+    return true;
+  }
+
+  bool applyUnknown({required int generation, required int monotonicMs}) {
+    if (generation < _state.generation ||
+        (generation == _state.generation && monotonicMs <= _state.monotonicMs)) {
+      return false;
+    }
+    _state = RuntimeSnapshot(
+      generation: generation,
+      monotonicMs: monotonicMs,
+      phase: RuntimePhase.unknown,
+    );
+    notifyListeners();
+    return true;
+  }
 }

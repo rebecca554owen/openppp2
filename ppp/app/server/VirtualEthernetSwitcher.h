@@ -299,6 +299,7 @@ namespace ppp {
                  * @return Disposal state.
                  */
                 virtual bool                                            IsDisposed() noexcept;
+                bool                                                    IsRunning() const noexcept { return running_.load(std::memory_order_acquire); }
 
             public:
                 /** @brief Gets the global traffic statistics collector. */
@@ -827,6 +828,7 @@ namespace ppp {
                 SynchronizedObject                                      syncobj_;           ///< Mutex guarding all shared mutable tables.
                 /** @brief Set to true after Dispose() begins; atomic for lock-free cross-thread reads via IsDisposed(). */
                 std::atomic<bool>                                       disposed_{false};
+                std::atomic<bool>                                       running_{false};
 
                 VirtualEthernetLoggerPtr                                logger_;                        ///< Session activity logger.
                 NatInformationTable                                     nats_;                          ///< IPv4 NAT ownership table (key = IP).

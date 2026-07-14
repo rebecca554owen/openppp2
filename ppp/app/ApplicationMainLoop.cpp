@@ -14,6 +14,7 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/app/tui/TuiRuntimeAdapter.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/diagnostics/Telemetry.h>
@@ -557,16 +558,12 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         exchanger = client->GetExchanger();
     }
 
-    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
     if (runtime.generation != 0 && runtime.phase != ppp::app::runtime::RuntimePhase::Stopping) {
         if (NULLPTR == client) {
             if (NULLPTR != server_ && !server_->IsDisposed()) {
-                ppp::app::runtime::RuntimeReadiness readiness;
-                readiness.session = true;
-                readiness.adapter = true;
-                readiness.route = true;
-                readiness.dns = true;
-                readiness.policy = true;
+                const ppp::app::runtime::RuntimeReadiness readiness =
+                    ppp::app::runtime::BuildServerRuntimeReadiness(server_->IsRunning());
                 runtime_lifecycle_.UpdateReadiness(runtime.generation, readiness, now);
                 runtime_lifecycle_.Transition(
                     runtime.generation,
@@ -587,6 +584,13 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
                 now);
         }
         else if (exchanger->GetNetworkState() == NetworkState::NetworkState_Established) {
+            if (runtime.phase != ppp::app::runtime::RuntimePhase::Connected &&
+                runtime.phase != ppp::app::runtime::RuntimePhase::ApplyingPolicy) {
+                runtime_lifecycle_.Transition(
+                    runtime.generation,
+                    ppp::app::runtime::RuntimePhase::ApplyingPolicy,
+                    now);
+            }
             runtime_lifecycle_.UpdateReadiness(
                 runtime.generation,
                 client->GetRuntimeReadiness(),
@@ -609,23 +613,11 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         outgoing_traffic = 0;
     }
 
-    ppp::string vpn_state = "disconnected";
-    if (NULLPTR != client) {
-        if (NULLPTR == exchanger) {
-            vpn_state = "connecting";
-        } else {
-            NetworkState network_state = exchanger->GetNetworkState();
-            if (network_state == NetworkState::NetworkState_Established) {
-                vpn_state = "established";
-            } else if (network_state == NetworkState::NetworkState_Reconnecting) {
-                vpn_state = "reconnecting";
-            } else {
-                vpn_state = "connecting";
-            }
-        }
-    }
-
-    ppp::string status = "vpn=" + vpn_state;
+    runtime = runtime_lifecycle_.GetSnapshot();
+    const std::vector<std::string> runtime_lines =
+        ppp::app::tui::BuildStatusLines(runtime);
+    ppp::string status = "vpn=";
+    status += runtime_lines.empty() ? "Unknown" : runtime_lines.front().c_str();
     status += " rx=" + ppp::StrFormatByteSize((Int64)incoming_traffic);
     status += " tx=" + ppp::StrFormatByteSize((Int64)outgoing_traffic);
 
@@ -643,6 +635,9 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
 
     ppp::vector<ppp::string> info;
     GetEnvironmentInformationLines(info, incoming_traffic, outgoing_traffic, statistics_snapshot);
+    for (auto line = runtime_lines.rbegin(); line != runtime_lines.rend(); ++line) {
+        info.insert(info.begin(), ppp::string(line->data(), line->size()));
+    }
     ConsoleUI::GetInstance().SetInfoLines(info);
 
 #if defined(_WIN32)

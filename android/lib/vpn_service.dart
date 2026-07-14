@@ -120,8 +120,14 @@ class VpnService {
     if (_initialized) return;
     _initialized = true;
     _channel.setMethodCallHandler(_handleMethodCall);
-    _eventSubscription =
-        _eventChannel.receiveBroadcastStream().listen(_handleEvent);
+    _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
+      _handleEvent,
+      onError: (Object error, StackTrace stackTrace) {
+        _errorController.add('VPN event stream failed: $error');
+        _markRuntimeUnavailable();
+      },
+      onDone: _markRuntimeUnavailable,
+    );
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -178,6 +184,17 @@ class VpnService {
         _runtimeSnapshotController.add(snapshot);
       }
     } catch (error) {
+      try {
+        final ordering = decodeRuntimeOrdering(raw);
+        if (runtimeStore.applyUnknown(
+          generation: ordering.generation,
+          monotonicMs: ordering.monotonicMs,
+        )) {
+          _runtimeSnapshotController.add(runtimeStore.state);
+        }
+      } catch (_) {
+        // A payload without ordering metadata cannot mutate current UI state.
+      }
       _errorController.add('Invalid runtime snapshot: $error');
     }
   }
@@ -194,8 +211,17 @@ class VpnService {
     if (state == VpnState.disconnected) {
       _resetStats();
       _updateLinkState(6);
+      _markRuntimeUnavailable();
     }
     _stateController.add(state);
+  }
+
+  void _markRuntimeUnavailable() {
+    final phase = runtimeStore.state.phase;
+    if (phase == RuntimePhase.idle || phase == RuntimePhase.failed) return;
+    if (runtimeStore.markUnknown()) {
+      _runtimeSnapshotController.add(runtimeStore.state);
+    }
   }
 
   void _resetStats() {

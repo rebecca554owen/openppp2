@@ -39,4 +39,25 @@ void main() {
     expect(store.state.generation, 9);
     expect(store.state.phase, RuntimePhase.starting);
   });
+
+  test('invalid or unavailable snapshot is presented as unknown', () {
+    final store = RuntimeStore(initial: snapshot(8, 200, RuntimePhase.connected));
+    store.markUnknown();
+    expect(store.state.generation, 8);
+    expect(store.state.monotonicMs, 200);
+    expect(store.state.phase, RuntimePhase.unknown);
+    expect(store.apply(snapshot(8, 201, RuntimePhase.reconnecting)), isTrue);
+    expect(store.state.phase, RuntimePhase.reconnecting);
+  });
+
+  test('ordered unknown rejects stale payload and advances generation watermark', () {
+    final store = RuntimeStore(initial: snapshot(8, 200, RuntimePhase.connected));
+    expect(store.applyUnknown(generation: 7, monotonicMs: 300), isFalse);
+    expect(store.state.phase, RuntimePhase.connected);
+
+    expect(store.applyUnknown(generation: 9, monotonicMs: 1), isTrue);
+    expect(store.state.generation, 9);
+    expect(store.state.phase, RuntimePhase.unknown);
+    expect(store.apply(snapshot(8, 400, RuntimePhase.connected)), isFalse);
+  });
 }
