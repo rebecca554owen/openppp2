@@ -58,14 +58,14 @@ The server continues the DNS path by:
 
 ## Client-Side Ownership
 
-`VEthernetNetworkSwitcher` owns client-side routing; DNS interception lives in `dns::DnsInterceptor`, which the switcher delegates to.
+`VEthernetNetworkSwitcher` composes route and DNS services but does not own their domain state. `route::RouteState` owns route data, and `dns::DnsController` owns query/session lifetime.
 
 ### Route Information Base
 
 | Field | Description |
 |-------|-------------|
-| `rib_` | Route information base — all known routes |
-| `fib_` | Forwarding information base — active lookup table |
+| `RouteState::rib` | Route information base — all known routes |
+| `RouteState::fib` | Forwarding information base — active lookup table |
 | `ribs_` | Loaded IP-list sources (files, URLs) |
 | `vbgp_` | Remote route sources (vBGP) |
 
@@ -73,10 +73,17 @@ The server continues the DNS path by:
 
 | Field / object | Description |
 |----------------|-------------|
-| `dns_interceptor_` | DNS orchestrator (rules, resolver, fake-ip pool) |
-| `dns_serverss_` | DNS / provider reachability routes (tunnel vs NIC bypass) |
+| `DnsController` | Query context, session generation, and close ordering |
+| `DnsInterceptor` | DNS policy, resolver, rules, and fake-ip pool |
+| `RouteState::dns_servers` | Value snapshots of tunnel/NIC DNS reachability routes |
 
-`RedirectDnsServer()` keeps the same signature and calls `dns_interceptor_->HandleQuery()`. See [DNS_MODULE_DESIGN.md](DNS_MODULE_DESIGN.md).
+Packet dispatch calls `DnsController::HandleQuery()` with an immutable session snapshot. The controller delegates policy to `DnsInterceptor`; tunnel fallback uses `IDnsTunnelTransport` rather than a concrete exchanger. See [DNS_MODULE_DESIGN.md](DNS_MODULE_DESIGN.md).
+
+### Transaction and teardown
+
+`RouteCoordinator` captures platform defaults, removes conflicting defaults, applies `RouteSpec` values, and records successful operations. Partial failure deletes applied routes in reverse order and restores the platform-private snapshot. `Stop()` is idempotent.
+
+Teardown closes `DnsController` first, disposes the exchanger second, and rolls back routes last. This prevents late DNS callbacks from using a dead transport while preserving DNS route snapshots until removal.
 
 ---
 

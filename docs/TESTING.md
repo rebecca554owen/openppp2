@@ -104,3 +104,16 @@ Android Flutter tests also include native-service static regressions such as `an
 | `ENABLE_COVERAGE` | OFF | Add LLVM coverage flags where supported |
 
 Do not combine `ENABLE_COVERAGE` with `ENABLE_ASAN` in the same build.
+
+## Route and DNS Architecture Gates
+
+```bash
+python3 -m unittest tests.tooling.test_repository_layout -v
+python3 tools/check_repository_layout.py
+python3 tools/check_vcxproj_sources.py
+cmake -S tests/cpp -B build/test -G Ninja
+cmake --build build/test
+ctest --test-dir build/test --output-on-failure
+```
+
+The layout check rejects concrete Switcher/Exchanger names in DNS and route public headers, legacy `RouteHostPorts`/`DnsHostPorts` service locators, mutable container ports, and new declaration-fragment `.inc` files.

@@ -52,14 +52,14 @@ flowchart TD
 
 ## 客户端所有权
 
-`VEthernetNetworkSwitcher` 负责客户端侧路由；DNS 拦截状态由 `dns::DnsInterceptor` 持有，switcher 仅委托。
+`VEthernetNetworkSwitcher` 只负责组合 Route / DNS 服务，不再拥有其领域状态。`route::RouteState` 持有路由数据，`dns::DnsController` 持有查询与 session 生命周期。
 
 ### 路由信息表
 
 | 字段 | 说明 |
 |------|------|
-| `rib_` | 路由信息表——所有已知路由 |
-| `fib_` | 转发信息表——活跃查找表 |
+| `RouteState::rib` | 路由信息表——所有已知路由 |
+| `RouteState::fib` | 转发信息表——活跃查找表 |
 | `ribs_` | 已加载的 IP-list 来源（文件、URL） |
 | `vbgp_` | 远程路由来源（vBGP） |
 
@@ -67,10 +67,17 @@ flowchart TD
 
 | 字段 / 对象 | 说明 |
 |-------------|------|
-| `dns_interceptor_` | DNS 编排器（规则表、resolver、fake-ip 池） |
-| `dns_serverss_` | DNS / provider 可达性路由（tunnel vs NIC bypass） |
+| `DnsController` | 查询上下文、session generation 与关闭顺序 |
+| `DnsInterceptor` | DNS 策略、resolver、规则表和 fake-ip 池 |
+| `RouteState::dns_servers` | tunnel / NIC DNS 可达路由的值快照 |
 
-`RedirectDnsServer()` 签名不变，内部调用 `dns_interceptor_->HandleQuery()`。详见 [DNS_MODULE_DESIGN.md](DNS_MODULE_DESIGN.md)。
+Packet dispatch 使用不可变 session 快照调用 `DnsController::HandleQuery()`；Controller 再委托 `DnsInterceptor` 执行策略，隧道回退仅依赖 `IDnsTunnelTransport`，不依赖具体 Exchanger。详见 [DNS_MODULE_DESIGN.md](DNS_MODULE_DESIGN.md)。
+
+### 路由事务与拆除顺序
+
+`RouteCoordinator` 先捕获平台默认路由，再移除冲突项并应用 `RouteSpec`。部分失败时按逆序删除已应用路由并恢复平台私有快照；`Stop()` 幂等。
+
+拆除顺序固定为：关闭 `DnsController`、释放 Exchanger、最后回滚 Route。这样异步 DNS 回调不会访问失效传输，同时 DNS 路由快照会保留到删除完成。
 
 ---
 

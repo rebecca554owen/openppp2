@@ -42,6 +42,8 @@ flowchart TD
 |------|------|--------|
 | `VEthernetNetworkSwitcher` | 虚拟网卡、路由、DNS、bypass、本地流量分类、代理表面 | `ppp/app/client/VEthernetNetworkSwitcher.*` |
 | `VEthernetExchanger` | 远端会话、握手、保活、密钥状态、static 路径、IPv6、映射 | `ppp/app/client/VEthernetExchanger.*` |
+| `RouteState` / `RouteCoordinator` | 路由数据与事务化系统路由应用 | `ppp/app/client/route/*` |
+| `DnsController` / `DnsSessionContext` | DNS 查询依赖与传输安全的 session 生命周期 | `ppp/app/client/dns/*` |
 | `VEthernetLocalProxySwitcher` | 本地代理入口 | `ppp/app/client/proxys/VEthernetLocalProxySwitcher.*` |
 | `VEthernetHttpProxySwitcher` | HTTP 代理入口 | `ppp/app/client/proxys/VEthernetHttpProxySwitcher.*` |
 | `VEthernetSocksProxySwitcher` | SOCKS 代理入口 | `ppp/app/client/proxys/VEthernetSocksProxySwitcher.*` |
@@ -73,6 +75,8 @@ flowchart TD
 两个核心类型是 `VEthernetNetworkSwitcher` 和 `VEthernetExchanger`。
 
 这是最重要的架构边界。
+
+Switcher 现在是组合根：负责构造并委托 Route / DNS 组件，不再复制 RIB/FIB、DNS 可达路由、平台默认路由或 session 状态。Exchanger 只通过窄接口 `IDnsTunnelTransport` 向 DNS 提供发送能力。
 
 | 类型 | 负责什么 |
 |------|---------|

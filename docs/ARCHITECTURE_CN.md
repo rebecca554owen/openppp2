@@ -476,13 +476,25 @@ sequenceDiagram
 ### 仍保留在 shell 的 include（有意为之）
 
 - `VEthernet.h`：公有继承基类，必须完整类型
-- `DnsHost.h`：PR5 后 switcher 实现 `IDnsHost`
+- `DnsController.h`：DNS 查询上下文与 session 生命周期边界
 - `rib_fwd.h` / `VirtualEthernetInformationFwd.h`：仅前向声明，完整定义在 `.cpp`
 
 ### 暂缓
 
-- **PR6b+ `IRouteBackend` 迁移**：linux route TU 仅剩 `BuildRouteHostPorts` 注入与 `ProtectDefaultRoute` 异步线程的 `shared_from_this`
+- **后续解耦**：继续拆分 Exchanger 职责与 VMUX 依赖；Route/DNS 宿主服务定位器已经移除
 - **`ppp/facade/` 扩展**：`ApplicationBootstrap` 已抽出；更深层的配置/模式解析仍留在 `PppApplication`
+
+---
+
+## 客户端 Route / DNS 所有权
+
+`VEthernetNetworkSwitcher` 现在是组合根，不再重复持有 Route / DNS 领域状态。所有权单向流动：
+
+`Switcher -> RouteCoordinator/DnsController -> RouteState/DnsSessionContext`。
+
+`RouteState` 是 RIB/FIB、peer-prefix 投影、DNS 可达路由、NIC 快照和应用状态的唯一所有者。`RouteCoordinator` 通过 `IRoutePlatform` 执行事务化应用与逆序回滚；Linux、Windows、Darwin、移动端适配器分别封装平台副作用和原生恢复快照。
+
+`DnsController` 持有查询上下文和 session generation。异步回调复制不可变 `DnsSessionContext`，context 只弱引用 `IDnsTunnelTransport`，因此关闭 Controller 后不会延长或误用 Exchanger 生命周期。
 
 ---
 

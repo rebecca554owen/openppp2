@@ -43,6 +43,8 @@ flowchart TD
 |--------|------|--------|
 | `VEthernetNetworkSwitcher` | Virtual adapter, routes, DNS, bypass, local traffic classification, proxy surface | `ppp/app/client/VEthernetNetworkSwitcher.*` |
 | `VEthernetExchanger` | Remote session, handshake, keepalive, key state, static path, IPv6, mapping | `ppp/app/client/VEthernetExchanger.*` |
+| `RouteState` / `RouteCoordinator` | Route data and transactional OS application | `ppp/app/client/route/*` |
+| `DnsController` / `DnsSessionContext` | DNS query dependencies and transport-safe session lifetime | `ppp/app/client/dns/*` |
 | `VEthernetLocalProxySwitcher` | Local proxy entry point | `ppp/app/client/proxys/VEthernetLocalProxySwitcher.*` |
 | `VEthernetHttpProxySwitcher` | HTTP proxy entry | `ppp/app/client/proxys/VEthernetHttpProxySwitcher.*` |
 | `VEthernetSocksProxySwitcher` | SOCKS proxy entry | `ppp/app/client/proxys/VEthernetSocksProxySwitcher.*` |
@@ -74,6 +76,8 @@ flowchart TD
 The two central types are `VEthernetNetworkSwitcher` and `VEthernetExchanger`.
 
 That split is the key architectural boundary.
+
+The switcher is a composition root: it constructs route/DNS components and delegates to them. It does not duplicate their RIB/FIB, DNS reachability, native default-route, or session state. The exchanger implements only the narrow `IDnsTunnelTransport` surface needed by DNS.
 
 | Type | Responsibility |
 |------|----------------|

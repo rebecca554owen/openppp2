@@ -451,6 +451,18 @@ Architecture-level error codes from `ppp/diagnostics/ErrorCodes.def` (selection)
 
 ---
 
+## Client Route and DNS Ownership
+
+`VEthernetNetworkSwitcher` is the composition root, not the owner of route or DNS domain state. Ownership is one-way:
+
+`Switcher -> RouteCoordinator/DnsController -> RouteState/DnsSessionContext`.
+
+`RouteState` is the single owner of RIB/FIB, peer-prefix projections, DNS reachability routes, NIC snapshots, and apply state. `RouteCoordinator` applies routes transactionally through `IRoutePlatform`; Linux, Windows, Darwin, and mobile adapters keep native effects and recovery snapshots private.
+
+`DnsController` owns query context and session generation. DNS callbacks retain `shared_ptr<const DnsSessionContext>`, while the session keeps only a weak `IDnsTunnelTransport`. Closing DNS therefore prevents late callbacks from sending through a disposed exchanger.
+
+---
+
 ## Related Documents
 
 - [`CLIENT_ARCHITECTURE.md`](CLIENT_ARCHITECTURE.md)

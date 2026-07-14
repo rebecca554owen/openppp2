@@ -46,6 +46,12 @@ This triple structure means that a developer can write the handshake logic as a 
 
 ## 2. Thread Pool Architecture
 
+### Route and DNS lifetime boundaries
+
+`RouteState::Snapshot()` copies containers under its mutex and never exposes a mutable container pointer. `RouteCoordinator::Stop()` is atomic and idempotent; platform rollback data remains private to each `IRoutePlatform` snapshot.
+
+DNS asynchronous work copies `shared_ptr<const DnsSessionContext>`. The context contains an atomic active flag and a weak `IDnsTunnelTransport`, so closing the controller invalidates future sends without extending exchanger lifetime. `DnsController::Close()` is idempotent and runs before exchanger disposal.
+
 ### `Executors` Class
 
 The `ppp::threading::Executors` class (`ppp/threading/Executors.h`, `ppp/threading/Executors.cpp`) is the process-wide singleton that manages all `io_context` instances and the threads that drive them. It exposes no constructor — all interaction is through static methods.
