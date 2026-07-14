@@ -460,14 +460,23 @@ namespace ppp {
 
             /** @brief Dispatches switcher finalization and then disposes base VEthernet. */
             void VEthernetNetworkSwitcher::Dispose() noexcept {
+                Dispose(ppp::function<void(bool)>());
+            }
+
+            /** @brief Disposes the switcher and reports after host rollback has completed. */
+            void VEthernetNetworkSwitcher::Dispose(
+                ppp::function<void(bool)> completion) noexcept {
                 auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::dispatch(*context,
-                    [self, this, context]() noexcept {
+                    [self, this, context, completion = std::move(completion)]() mutable noexcept {
                         Finalize();
+                        VEthernet::Dispose();
+                        if (completion) {
+                            completion(WasTeardownSuccessful());
+                        }
                     });
                 ppp::telemetry::Log(Level::kInfo, "client", "TUN detached");
-                VEthernet::Dispose();
             }
 
             /** @brief Releases objects, packets, and timeout handlers. */
@@ -957,7 +966,9 @@ namespace ppp {
 
             /** @brief Releases all runtime services, routes, and related resources. */
             void VEthernetNetworkSwitcher::ReleaseAllObjects() noexcept {
-                teardown_->ReleaseAllObjects();
+                const ppp::app::runtime::RuntimeStopResult result =
+                    teardown_->ReleaseAllObjects();
+                last_teardown_success_.store(result.success, std::memory_order_release);
             }
 
             /** @brief Removes timeout callback associated with a key. */

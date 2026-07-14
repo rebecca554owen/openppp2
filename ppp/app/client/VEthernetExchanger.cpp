@@ -314,7 +314,7 @@ namespace ppp {
             void VEthernetExchanger::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
-                boost::asio::post(*context,
+                boost::asio::dispatch(*context,
                     [self, this, context]() noexcept {
                         Finalize();
                     });

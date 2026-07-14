@@ -27,4 +27,14 @@ void main() {
       );
     }
   });
+
+  test('stop timeout changes presentation without enabling an action', () {
+    final controls = controlsFor(
+      RuntimePhase.stopping,
+      stopTakingTooLong: true,
+    );
+    expect(controls.action, RuntimeConnectionAction.none);
+    expect(controls.buttonEnabled, isFalse);
+    expect(controls.detailLabel, '停止耗时过长');
+  });
 }

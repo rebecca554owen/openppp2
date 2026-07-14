@@ -10,4 +10,11 @@ final class RuntimeControlsTests: XCTestCase {
         XCTAssertEqual(controlsFor(.failed).action, .retry)
         XCTAssertEqual(controlsFor(.unknown).action, .forceStop)
     }
+
+    func testStopTimeoutChangesPresentationWithoutEnablingAction() {
+        let controls = controlsFor(.stopping, stopTakingTooLong: true)
+        XCTAssertEqual(controls.action, .none)
+        XCTAssertFalse(controls.buttonEnabled)
+        XCTAssertEqual(controls.detailKey, "home.stopTakingTooLong")
+    }
 }

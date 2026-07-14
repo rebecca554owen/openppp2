@@ -48,13 +48,21 @@ namespace ppp {
              * @brief Schedules cleanup on the connection strand/context.
              */
             void VirtualEthernetNetworkTcpipConnection::Dispose() noexcept {
+                Dispose(ppp::function<void()>());
+            }
+
+            void VirtualEthernetNetworkTcpipConnection::Dispose(
+                ppp::function<void()> completion) noexcept {
                 auto self = shared_from_this();
                 ppp::threading::Executors::ContextPtr context = context_;
                 ppp::threading::Executors::StrandPtr strand = strand_;
 
                 ppp::threading::Executors::Post(context, strand,
-                    [self, this, context, strand]() noexcept {
+                    [self, this, context, strand, completion = std::move(completion)]() noexcept {
                         Finalize();
+                        if (completion) {
+                            completion();
+                        }
                     });
             }
 

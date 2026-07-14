@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ppp/app/runtime/RuntimeStopPipeline.h>
+
 namespace ppp {
     namespace app {
         namespace client {
@@ -34,7 +36,7 @@ namespace ppp {
             class ClientConnectionTeardown {
             public:
                 void Bind(VEthernetNetworkSwitcher* owner) noexcept;
-                void ReleaseAllObjects() noexcept;
+                ppp::app::runtime::RuntimeStopResult ReleaseAllObjects() noexcept;
 
             private:
                 VEthernetNetworkSwitcher* owner_ = nullptr;

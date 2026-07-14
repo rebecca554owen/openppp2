@@ -62,6 +62,7 @@ namespace ppp {
                 virtual void                                                Update() noexcept;
                 /** @brief Asynchronously releases connection and transmission resources. */
                 virtual void                                                Dispose() noexcept;
+                void                                                        Dispose(ppp::function<void()> completion) noexcept;
                 /**
                  * @brief Checks whether this port has timed out or been disposed.
                  * @param now Current tick count in milliseconds.

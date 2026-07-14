@@ -56,6 +56,7 @@
                 std::unique_ptr<route::RouteCoordinator>                            route_coordinator_;
                 std::unique_ptr<AssignedAddressManager>                             address_manager_;
                 std::unique_ptr<ClientConnectionTeardown>                           teardown_;
+                std::atomic<bool>                                                   last_teardown_success_{true};
                 std::unique_ptr<ClientConnectionOpener>                           connection_opener_;
                 std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
                 std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;

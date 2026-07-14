@@ -35,7 +35,10 @@ public struct RuntimeControlState: Equatable, Sendable {
     }
 }
 
-public func controlsFor(_ phase: RuntimePhase) -> RuntimeControlState {
+public func controlsFor(
+    _ phase: RuntimePhase,
+    stopTakingTooLong: Bool = false
+) -> RuntimeControlState {
     switch phase {
     case .idle:
         return RuntimeControlState(action: .start, buttonEnabled: true, buttonTitleKey: "home.connect", statusTitleKey: "home.notConnected", detailKey: "home.ready", configEditable: true)
@@ -46,7 +49,7 @@ public func controlsFor(_ phase: RuntimePhase) -> RuntimeControlState {
     case .reconnecting:
         return RuntimeControlState(action: .stop, buttonEnabled: true, buttonTitleKey: "home.stop", statusTitleKey: "home.reconnecting", detailKey: "home.networkChanged", configEditable: false, isBusy: true)
     case .stopping:
-        return RuntimeControlState(action: .none, buttonEnabled: false, buttonTitleKey: "home.stop", statusTitleKey: "home.disconnecting", detailKey: "home.stopping", configEditable: false, isBusy: true)
+        return RuntimeControlState(action: .none, buttonEnabled: false, buttonTitleKey: "home.stop", statusTitleKey: "home.disconnecting", detailKey: stopTakingTooLong ? "home.stopTakingTooLong" : "home.stopping", configEditable: false, isBusy: true)
     case .failed:
         return RuntimeControlState(action: .retry, buttonEnabled: true, buttonTitleKey: "home.retry", statusTitleKey: "home.connectFailed", detailKey: "home.ready", configEditable: true)
     case .unknown:

@@ -473,18 +473,58 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
  */
 void PppApplication::Dispose() noexcept {
     const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    bool stop_owner = false;
     if (runtime.generation != 0) {
-        runtime_lifecycle_.TryBeginStop(runtime.generation, Executors::GetTickCount());
+        if (!runtime_lifecycle_.TryBeginStop(
+                runtime.generation, Executors::GetTickCount())) {
+            return;
+        }
+        stop_owner = true;
     }
 
     ConsoleUI::GetInstance().Stop();
-
+    auto complete_stop =
+        [self = shared_from_this(), generation = runtime.generation](
+            bool cleanup_success) noexcept {
+            int error_code = static_cast<int>(ppp::diagnostics::GetLastErrorCode());
+            if (!cleanup_success && error_code == 0) {
+                error_code = static_cast<int>(
+                    ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+            }
+            ppp::app::runtime::RuntimeError error;
+            error.code = static_cast<std::uint32_t>(std::max(0, error_code));
+            error.severity = cleanup_success ? std::string() : "error";
+            error.retryable = !cleanup_success;
+            error.user_message_key = cleanup_success ? std::string() : "CleanupFailed";
+            self->runtime_lifecycle_.CompleteStop(
+                generation,
+                cleanup_success,
+                std::move(error),
+                Executors::GetTickCount());
+        };
     std::shared_ptr<VirtualEthernetSwitcher> server = std::move(server_);
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::move(client_);
+    const int teardown_count = (NULLPTR != server ? 1 : 0) + (NULLPTR != client ? 1 : 0);
+    auto remaining = std::make_shared<std::atomic<int>>(teardown_count);
+    auto cleanup_success = std::make_shared<std::atomic<bool>>(true);
+    auto complete_one =
+        [complete_stop, remaining, cleanup_success](bool success) noexcept {
+            if (!success) {
+                cleanup_success->store(false, std::memory_order_release);
+            }
+            if (remaining->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                complete_stop(cleanup_success->load(std::memory_order_acquire));
+            }
+        };
+
     if (NULLPTR != server) {
-        server->Dispose();
+        ppp::function<void()> completion;
+        if (stop_owner) {
+            completion = [complete_one]() noexcept { complete_one(true); };
+        }
+        server->Dispose(std::move(completion));
     }
 
-    std::shared_ptr<VEthernetNetworkSwitcher> client = std::move(client_);
     if (NULLPTR != client) {
 #if defined(_WIN32)
         ppp::net::proxies::HttpProxy::SetSupportExperimentalQuicProtocol(quic_);
@@ -492,13 +532,21 @@ void PppApplication::Dispose() noexcept {
             client->ClearHttpProxyToSystemEnv();
         }
 #endif
-        client->Dispose();
+        ppp::function<void(bool)> completion;
+        if (stop_owner) {
+            completion = complete_one;
+        }
+        client->Dispose(std::move(completion));
     }
 
     ClearTickAlwaysTimeout();
 
     ppp::telemetry::Flush(3000);
     ppp::telemetry::Shutdown();
+
+    if (stop_owner && teardown_count == 0) {
+        complete_stop(true);
+    }
 }
 
 /**

@@ -1015,12 +1015,14 @@ int openppp2_ios_tap_start(
         error.code = static_cast<uint32_t>(std::max(0, openppp2_ios_last_error_code()));
         error.severity = "error";
         error.user_message_key = "RuntimeFailed";
-        tap->runtime_lifecycle.TryBeginStop(runtime_generation, runtime_now_ms());
-        tap->runtime_lifecycle.CompleteStop(
-            runtime_generation,
-            false,
-            std::move(error),
-            runtime_now_ms());
+        if (tap->runtime_lifecycle.TryBeginStop(runtime_generation, runtime_now_ms()))
+        {
+            tap->runtime_lifecycle.CompleteStop(
+                runtime_generation,
+                false,
+                std::move(error),
+                runtime_now_ms());
+        }
         return 1;
     }
 
@@ -1073,9 +1075,11 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
     }
 
     const ppp::app::runtime::RuntimeSnapshot runtime = tap->runtime_lifecycle.GetSnapshot();
-    if (runtime.generation != 0)
-    {
+    const bool stop_owner = runtime.generation != 0 &&
         tap->runtime_lifecycle.TryBeginStop(runtime.generation, runtime_now_ms());
+    if (runtime.generation != 0 && !stop_owner)
+    {
+        return 0;
     }
 
     std::shared_ptr<VEthernetNetworkSwitcher> client;
@@ -1098,21 +1102,44 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
     ppp::telemetry::Count("ios_tunnel.stop", 1);
     ppp::telemetry::Flush(3000);
 
+    auto cleanup_complete =
+        [tap, runtime, stop_owner, ios_tap, context](
+            bool cleanup_success) mutable noexcept
+        {
+            if (nullptr != ios_tap)
+            {
+                ios_tap->Dispose();
+            }
+            if (stop_owner)
+            {
+                ppp::app::runtime::RuntimeError error;
+                if (!cleanup_success)
+                {
+                    error.code = static_cast<uint32_t>(
+                        ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+                    error.severity = "error";
+                    error.retryable = true;
+                    error.user_message_key = "CleanupFailed";
+                }
+                tap->runtime_lifecycle.CompleteStop(
+                    runtime.generation,
+                    cleanup_success,
+                    std::move(error),
+                    runtime_now_ms());
+            }
+            if (nullptr != context)
+            {
+                Executors::Exit(context);
+            }
+        };
+
     if (nullptr != client)
     {
-        client->Dispose();
+        client->Dispose(cleanup_complete);
     }
-
-    if (nullptr != ios_tap)
+    else
     {
-        ios_tap->Dispose();
-    }
-
-    // Stop only this tunnel's io_context. Never call Executors::Exit() without a
-    // context from the XPC stop thread — that joins worker threads and can SIGSEGV.
-    if (nullptr != context)
-    {
-        Executors::Exit(context);
+        cleanup_complete(true);
     }
 
     if (tap->runtime_thread.joinable())
@@ -1120,23 +1147,16 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
         tap->runtime_thread.join();
     }
 
-    std::lock_guard<std::mutex> scope(tap->sync);
-    tap->tap.reset();
-    tap->client.reset();
-    tap->context.reset();
-    tap->configuration.reset();
-    tap->running = false;
-    tap->stopping = false;
-    tap->link_state = 2;
-    tap->latest_statistics = "{}";
-    const ppp::app::runtime::RuntimeSnapshot stopping = tap->runtime_lifecycle.GetSnapshot();
-    if (stopping.phase == ppp::app::runtime::RuntimePhase::Stopping)
     {
-        tap->runtime_lifecycle.CompleteStop(
-            stopping.generation,
-            true,
-            ppp::app::runtime::RuntimeError(),
-            runtime_now_ms());
+        std::lock_guard<std::mutex> scope(tap->sync);
+        tap->tap.reset();
+        tap->client.reset();
+        tap->context.reset();
+        tap->configuration.reset();
+        tap->running = false;
+        tap->stopping = false;
+        tap->link_state = 2;
+        tap->latest_statistics = "{}";
     }
     return 0;
 }

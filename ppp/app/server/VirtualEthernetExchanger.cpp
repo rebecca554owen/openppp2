@@ -331,11 +331,19 @@ namespace ppp {
 
             /** @brief Defers finalization onto exchanger io context. */
             void VirtualEthernetExchanger::Dispose() noexcept {
+                Dispose(ppp::function<void()>());
+            }
+
+            void VirtualEthernetExchanger::Dispose(
+                ppp::function<void()> completion) noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::post(*context,
-                    [self, this]() noexcept {
+                    [self, this, completion = std::move(completion)]() mutable noexcept {
                         Finalize();
+                        if (completion) {
+                            completion();
+                        }
                     });
             }
 

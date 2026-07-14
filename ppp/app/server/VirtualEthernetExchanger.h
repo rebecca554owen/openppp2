@@ -170,6 +170,7 @@ namespace ppp {
                  *          from any thread; the actual teardown happens on the IO thread.
                  */
                 virtual void                                                                Dispose() noexcept;
+                void                                                                        Dispose(ppp::function<void()> completion) noexcept;
 
                 /** @brief Returns true if this exchanger has been disposed (atomic load). */
                 bool                                                                        IsDisposed() noexcept       { return disposed_.load(std::memory_order_acquire); }

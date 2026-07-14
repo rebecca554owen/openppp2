@@ -3030,11 +3030,16 @@ namespace ppp {
              * @brief Posts asynchronous finalization on switch context.
              */
             void VirtualEthernetSwitcher::Dispose() noexcept {
+                Dispose(ppp::function<void()>());
+            }
+
+            void VirtualEthernetSwitcher::Dispose(
+                ppp::function<void()> completion) noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
-                boost::asio::post(*context,
-                    [self, this]() noexcept {
-                        Finalize();
+                boost::asio::dispatch(*context,
+                    [self, this, completion = std::move(completion)]() mutable noexcept {
+                        Finalize(std::move(completion));
                     });
             }
 
@@ -3118,35 +3123,17 @@ namespace ppp {
                 return make_shared_object<VirtualEthernetManagedServer>(self);
             }
 
-            template <typename TProtocol>
-            /**
-             * @brief Cancels all pending operations on a resolver instance.
-             * @tparam TProtocol Resolver protocol type.
-             * @param resolver Resolver shared pointer to cancel/reset.
-             * @return true when cancellation post is scheduled.
-             */
-            static bool CancelAllResolver(std::shared_ptr<boost::asio::ip::basic_resolver<TProtocol>>& resolver) noexcept {
-                std::shared_ptr<boost::asio::ip::basic_resolver<TProtocol>> i = std::move(resolver);
-                if (NULLPTR == i) {
-                    return false;
-                }
-
-                boost::asio::post(i->get_executor(),
-                    [i]() noexcept {
-                        ppp::net::Socket::Cancel(*i);
-                    });
-                return true;
-            }
-
             /**
              * @brief Performs full shutdown and releases all runtime resources.
              */
              void VirtualEthernetSwitcher::Finalize() noexcept {
+                Finalize(ppp::function<void()>());
+             }
+
+             void VirtualEthernetSwitcher::Finalize(
+                ppp::function<void()> completion) noexcept {
                 ppp::telemetry::Log(Level::kInfo, "server", "server finalizing");
                 running_.store(false, std::memory_order_release);
-                std::shared_ptr<boost::asio::ip::tcp::resolver> tresolver;
-                std::shared_ptr<boost::asio::ip::udp::resolver> uresolver;
-
                 VirtualEthernetNamespaceCachePtr cache;
                 ITapPtr ipv6_transit_tap;
                 NatInformationTable nats;
@@ -3223,16 +3210,6 @@ namespace ppp {
                 CloseIPv6NeighborProxyIfNeed();
                 ppp::ipv6::auxiliary::FinalizeServerEnvironment(configuration_, preferred_nic_, ipv6_transit_tap ? ipv6_transit_tap->GetId() : tun_name_);
 
-                CancelAllResolver(tresolver);
-                CancelAllResolver(uresolver);
-
-                Dictionary::ReleaseAllObjects(exchangers);
-                Dictionary::ReleaseAllObjects(connections);
-
-                if (NULLPTR != ipv6_transit_tap) {
-                    ipv6_transit_tap->Dispose();
-                }
-
                 if (NULLPTR != cache) {
                     cache->Clear();
                 }
@@ -3240,7 +3217,57 @@ namespace ppp {
                 if (NULLPTR != logger) {
                     IDisposable::Dispose(logger);
                 }
-            }
+
+                const std::size_t child_count = exchangers.size() +
+                    connections.size() + (NULLPTR != ipv6_transit_tap ? 1u : 0u);
+                if (child_count == 0) {
+                    if (completion) {
+                        completion();
+                    }
+                    return;
+                }
+
+                auto remaining = std::make_shared<std::atomic<std::size_t>>(child_count);
+                auto completion_holder =
+                    std::make_shared<ppp::function<void()>>(std::move(completion));
+                auto child_complete = [remaining, completion_holder]() noexcept {
+                    if (remaining->fetch_sub(1, std::memory_order_acq_rel) == 1 &&
+                        *completion_holder) {
+                        (*completion_holder)();
+                    }
+                };
+
+                for (auto&& [_, exchanger] : exchangers) {
+                    if (exchanger) {
+                        exchanger->Dispose(child_complete);
+                    }
+                    else {
+                        child_complete();
+                    }
+                }
+                for (auto&& [_, connection] : connections) {
+                    if (connection) {
+                        connection->Dispose(child_complete);
+                    }
+                    else {
+                        child_complete();
+                    }
+                }
+                if (ipv6_transit_tap) {
+                    const auto tap_context = ipv6_transit_tap->GetContext();
+                    if (tap_context) {
+                        boost::asio::dispatch(*tap_context,
+                            [ipv6_transit_tap, tap_context, child_complete]() noexcept {
+                                ipv6_transit_tap->Dispose();
+                                boost::asio::post(*tap_context, child_complete);
+                            });
+                    }
+                    else {
+                        ipv6_transit_tap->Dispose();
+                        child_complete();
+                    }
+                }
+             }
 
             /**
              * @brief Closes and clears all active TCP acceptors.

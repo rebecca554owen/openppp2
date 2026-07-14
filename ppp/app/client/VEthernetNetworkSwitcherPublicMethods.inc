@@ -9,6 +9,8 @@
                 std::shared_ptr<ppp::configurations::AppConfiguration> GetConfiguration() noexcept;
                 std::shared_ptr<VEthernetExchanger> GetExchanger() noexcept;
                 ppp::app::runtime::RuntimeReadiness GetRuntimeReadiness() noexcept;
+                bool WasTeardownSuccessful() const noexcept { return last_teardown_success_.load(std::memory_order_acquire); }
+                void Dispose(ppp::function<void(bool)> completion) noexcept;
                 void RequestedIPv6(const ppp::string& value) noexcept;
                 ppp::string RequestedIPv6() noexcept;
 #if !defined(_ANDROID) && !defined(_IPHONE)

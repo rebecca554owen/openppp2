@@ -293,6 +293,7 @@ namespace ppp {
                  *          multiple times; subsequent calls are no-ops.
                  */
                 virtual void                                            Dispose() noexcept;
+                void                                                    Dispose(ppp::function<void()> completion) noexcept;
 
                 /**
                  * @brief Returns true if the switcher has been disposed.
@@ -446,6 +447,7 @@ namespace ppp {
             private:
                 /** @brief Releases all owned resources synchronously. */
                 void                                                    Finalize() noexcept;
+                void                                                    Finalize(ppp::function<void()> completion) noexcept;
                 /**
                  * @brief Accepts a socket and dispatches it under the specified category.
                  * @param context    I/O context for the new connection.

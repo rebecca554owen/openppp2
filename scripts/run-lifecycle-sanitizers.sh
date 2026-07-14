@@ -11,11 +11,15 @@ cmake -S "$ROOT/tests/cpp" -B "$BUILD_DIR" -G Ninja \
     -DENABLE_SANITIZERS=ON
 cmake --build "$BUILD_DIR" --target \
     runtime_lifecycle_test \
+    runtime_stop_pipeline_test \
+    client_lifecycle_stress_test \
     route_coordinator_test \
     dns_controller_test
 
 for test_binary in \
     runtime_lifecycle_test \
+    runtime_stop_pipeline_test \
+    client_lifecycle_stress_test \
     route_coordinator_test \
     dns_controller_test
 do

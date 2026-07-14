@@ -26,7 +26,10 @@ class RuntimeControlState {
   final bool diagnosticsAvailable;
 }
 
-RuntimeControlState controlsFor(RuntimePhase phase) {
+RuntimeControlState controlsFor(
+  RuntimePhase phase, {
+  bool stopTakingTooLong = false,
+}) {
   switch (phase) {
     case RuntimePhase.idle:
       return const RuntimeControlState(
@@ -72,12 +75,12 @@ RuntimeControlState controlsFor(RuntimePhase phase) {
         isBusy: true,
       );
     case RuntimePhase.stopping:
-      return const RuntimeControlState(
+      return RuntimeControlState(
         action: RuntimeConnectionAction.none,
         buttonEnabled: false,
         buttonLabel: '停止',
         statusLabel: '断开中...',
-        detailLabel: '正在停止 VPN',
+        detailLabel: stopTakingTooLong ? '停止耗时过长' : '正在停止 VPN',
         configEditable: false,
         isBusy: true,
       );

@@ -23,6 +23,8 @@ final class HomeViewController: UIViewController {
     private var statistics = VpnStatistics.empty
     private var connectStartedAt: Date?
     private var connectWatchdogTimer: Timer?
+    private var stopPresentationTimer: Timer?
+    private var stopStartedAt: Date?
     private var pendingStartGeneration: UInt64?
     private var runtimeDecodeError: String?
     private var elapsedText = ""
@@ -42,6 +44,7 @@ final class HomeViewController: UIViewController {
         timer?.invalidate()
         pollTimer?.invalidate()
         connectWatchdogTimer?.invalidate()
+        stopPresentationTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -139,7 +142,14 @@ final class HomeViewController: UIViewController {
         let debugPanelEnabled = store.debugPanelEnabled()
         let profile = store.activeProfile()
         let launchOptions = store.launchOptions()
-        var controls = controlsFor(runtimeStore.state.phase)
+        updateStopPresentationTimer()
+        let stopTakingTooLong = stopStartedAt.map {
+            Date().timeIntervalSince($0) >= 15
+        } ?? false
+        var controls = controlsFor(
+            runtimeStore.state.phase,
+            stopTakingTooLong: stopTakingTooLong
+        )
         if pendingStartGeneration != nil {
             controls.buttonEnabled = false
             controls.configEditable = false
@@ -212,6 +222,20 @@ final class HomeViewController: UIViewController {
             guard let self else { return }
             self.updateElapsedText()
             self.refreshUI()
+        }
+    }
+
+    private func updateStopPresentationTimer() {
+        guard runtimeStore.state.phase == .stopping else {
+            stopStartedAt = nil
+            stopPresentationTimer?.invalidate()
+            stopPresentationTimer = nil
+            return
+        }
+        stopStartedAt = stopStartedAt ?? Date()
+        guard stopPresentationTimer == nil else { return }
+        stopPresentationTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) {
+            [weak self] _ in self?.refreshUI()
         }
     }
 

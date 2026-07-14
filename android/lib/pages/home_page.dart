@@ -41,7 +41,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Timer? _durationTimer;
   Timer? _connectWatchdogTimer;
+  Timer? _stopPresentationTimer;
   Timer? _logPollTimer;
+  DateTime? _stopStartedAt;
+
+  static const _stopPresentationTimeout = Duration(seconds: 15);
 
   StreamSubscription<VpnState>? _stateSub;
   StreamSubscription<VpnStatistics>? _statsSub;
@@ -76,6 +80,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _runtimeChanged() {
     if (!mounted) return;
     final phase = _runtimeStore.state.phase;
+    if (phase == RuntimePhase.stopping) {
+      _stopStartedAt ??= DateTime.now();
+      _stopPresentationTimer ??=
+          Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else {
+      _stopStartedAt = null;
+      _stopPresentationTimer?.cancel();
+      _stopPresentationTimer = null;
+    }
     setState(() {
       final pending = _pendingStartGeneration;
       if (pending != null &&
@@ -440,6 +455,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return controlsFor(_runtimeStore.state.phase).statusLabel;
   }
 
+  bool get _stopTakingTooLong {
+    final startedAt = _stopStartedAt;
+    return startedAt != null &&
+        DateTime.now().difference(startedAt) >= _stopPresentationTimeout;
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -449,6 +470,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _storeSub?.cancel();
     _runtimeStore.removeListener(_runtimeChanged);
     _connectWatchdogTimer?.cancel();
+    _stopPresentationTimer?.cancel();
     _logPollTimer?.cancel();
     _durationTimer?.cancel();
     super.dispose();
@@ -457,7 +479,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final controls = controlsFor(_runtimeStore.state.phase);
+    final controls = controlsFor(
+      _runtimeStore.state.phase,
+      stopTakingTooLong: _stopTakingTooLong,
+    );
     final commandPending = _pendingStartGeneration != null;
     final configEditable = controls.configEditable && !commandPending;
     final statusTitle = controls.statusLabel;

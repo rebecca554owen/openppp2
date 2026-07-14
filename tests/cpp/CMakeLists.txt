@@ -72,6 +72,10 @@ target_compile_definitions(runtime_snapshot_test PRIVATE
     OPENPPP2_RUNTIME_FIXTURE_DIR=\"${OPENPPP2_ROOT}/tests/contracts/runtime-snapshot\")
 openppp2_add_cpp_test(runtime_stop_coordinator_test SOURCES
     runtime_stop_coordinator_test.cpp)
+openppp2_add_cpp_test(runtime_stop_pipeline_test SOURCES
+    runtime_stop_pipeline_test.cpp)
+openppp2_add_cpp_test(client_lifecycle_stress_test SOURCES
+    client_lifecycle_stress_test.cpp)
 openppp2_add_cpp_test(runtime_snapshot_publisher_test SOURCES
     runtime_snapshot_publisher_test.cpp)
 openppp2_add_cpp_test(runtime_readiness_test SOURCES

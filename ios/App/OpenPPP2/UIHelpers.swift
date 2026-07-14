@@ -140,6 +140,7 @@ enum L10n {
         "home.ready": ("准备连接", "Ready to connect"),
         "home.vpnStarting": ("VPN 正在启动", "VPN is starting"),
         "home.stopping": ("正在停止 VPN", "Stopping VPN"),
+        "home.stopTakingTooLong": ("停止耗时过长", "Stopping is taking longer than expected"),
         "home.networkChanged": ("网络已变化", "Network changed"),
         "home.connect": ("连接", "Connect"),
         "home.stop": ("停止", "Stop"),

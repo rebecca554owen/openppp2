@@ -51,28 +51,6 @@ void PppApplication::Release() noexcept {
     ppp::win32::Win32Native::EnabledConsoleWindowClosedButton(true);
 #endif
 
-    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
-    if (runtime.generation != 0) {
-        if (runtime.phase != ppp::app::runtime::RuntimePhase::Stopping) {
-            runtime_lifecycle_.TryBeginStop(runtime.generation, Executors::GetTickCount());
-        }
-
-        const ppp::app::runtime::RuntimeSnapshot stopping = runtime_lifecycle_.GetSnapshot();
-        if (stopping.phase == ppp::app::runtime::RuntimePhase::Stopping) {
-            const int error_code = static_cast<int>(ppp::diagnostics::GetLastErrorCode());
-            ppp::app::runtime::RuntimeError error;
-            error.code = static_cast<std::uint32_t>(std::max(0, error_code));
-            error.severity = error_code == 0 ? std::string() : "error";
-            error.retryable = false;
-            error.user_message_key = error_code == 0 ? std::string() : "RuntimeFailed";
-            runtime_lifecycle_.CompleteStop(
-                stopping.generation,
-                error_code == 0,
-                std::move(error),
-                Executors::GetTickCount());
-        }
-    }
-
     prevent_rerun_.Close();
 }
 
