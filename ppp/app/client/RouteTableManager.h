@@ -6,7 +6,11 @@
  */
 
 #include <memory>
+#include <atomic>
+#include <functional>
+#include <mutex>
 #include <ppp/app/client/route/RouteState.h>
+#include <ppp/app/client/route/RoutePlanInput.h>
 
 namespace ppp { namespace tap { class ITap; } }
 
@@ -18,7 +22,6 @@ typedef struct _MIB_IPFORWARDROW MIB_IPFORWARDROW;
 namespace ppp {
     namespace app {
         namespace client {
-            class VEthernetNetworkSwitcher;
             namespace route {
                 class LinuxRoutePlatform;
                 class DarwinRoutePlatform;
@@ -31,17 +34,13 @@ namespace ppp {
              * @brief Manages host OS route table entries for VPN connect/disconnect.
              *
              * @details Extracted from VEthernetNetworkSwitcher (PR2a-1). Platform bodies
-             *          live in RouteTableManager_{mobile,win32,darwin,linux}.cpp. Bind()
-             *          must be called once from the owning switcher constructor before any
-             *          route operation.
+             *          live in RouteTableManager_{mobile,win32,darwin,linux}.cpp.
              */
             class RouteTableManager {
             public:
                 RouteTableManager() noexcept;
                 ~RouteTableManager() noexcept;
 
-                /** @brief Attaches the manager to its owning switcher (non-owning). */
-                void Bind(VEthernetNetworkSwitcher* owner) noexcept;
                 route::RouteStateSnapshot Snapshot() const noexcept;
                 void ReplaceRib(route::RouteInformationTablePtr value) noexcept;
                 void ReplaceFib(route::ForwardInformationTablePtr value) noexcept;
@@ -57,24 +56,21 @@ namespace ppp {
 
 #if defined(_ANDROID) || defined(_IPHONE)
                 /** @brief Builds mobile-side route table including bypass and DNS exceptions. */
-                bool AddAllRoute(const std::shared_ptr<ppp::tap::ITap>& tap) noexcept;
+                bool AddAllRoute(const route::RoutePlanInput& input) noexcept;
 #endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 /** @brief Installs VPN route entries into host operating system. */
-                void AddRoute() noexcept;
+                void AddRoute(const route::RoutePlanInput& input) noexcept;
 
                 /** @brief Removes VPN route entries from host operating system. */
                 void DeleteRoute() noexcept;
 
-                /** @brief Deletes conflicting default routes while VPN is active. */
-                bool DeleteAllDefaultRoute() noexcept;
-
                 /** @brief Adds DNS-specific route exceptions to operating system table. */
-                void AddRouteWithDnsServers() noexcept;
+                void AddRouteWithDnsServers(const route::RoutePlanInput& input) noexcept;
 
                 /** @brief Removes DNS-specific route exceptions from operating system table. */
-                void DeleteRouteWithDnsServers() noexcept;
+                void DeleteRouteWithDnsServers(const route::RoutePlanInput& input) noexcept;
 
                 /**
                  * @brief Adds one host route into the OS routing table.
@@ -84,16 +80,20 @@ namespace ppp {
                  * @param prefix Prefix length (0-32).
                  * @return true if the route was added; false on OS error.
                  */
-                bool AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept;
+                bool AddRoute(
+                    const route::RoutePlanInput& input,
+                    uint32_t ip,
+                    uint32_t gw,
+                    int prefix) noexcept;
 
 #if defined(_WIN32)
                 /**
                  * @brief Deletes one host route from a Windows MIB_IPFORWARDTABLE snapshot.
                  */
-                bool DeleteRoute(const std::shared_ptr<_MIB_IPFORWARDTABLE>& mib, uint32_t ip, uint32_t gw, int prefix) noexcept;
+                bool DeleteRoute(const route::RoutePlanInput& input, const std::shared_ptr<_MIB_IPFORWARDTABLE>& mib, uint32_t ip, uint32_t gw, int prefix) noexcept;
 #else
                 /** @brief Deletes one host route from the Unix routing table. */
-                bool DeleteRoute(uint32_t ip, uint32_t gw, int prefix) noexcept;
+                bool DeleteRoute(const route::RoutePlanInput& input, uint32_t ip, uint32_t gw, int prefix) noexcept;
 #endif
 
                 /**
@@ -106,25 +106,28 @@ namespace ppp {
                     return !route_apply_ready || !exchanger_established;
                 }
 
-                /** @brief Applies hosted-network routes once the remote session is established. */
-                bool TryApplyHostedNetworkRoutes() noexcept;
-
                 /** @brief Starts background default-route protector worker. */
-                bool ProtectDefaultRoute() noexcept;
+                bool ProtectDefaultRoute(const route::RoutePlanInput& input) noexcept;
 #endif
 
             private:
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
-                std::unique_ptr<route::LinuxRoutePlatform> NewLinuxRoutePlatform() noexcept;
+                static std::unique_ptr<route::LinuxRoutePlatform> NewLinuxRoutePlatform(const route::RoutePlanInput& input) noexcept;
 #endif
 #if defined(_WIN32)
-                std::unique_ptr<route::WindowsRoutePlatform> NewWindowsRoutePlatform() noexcept;
+                static std::unique_ptr<route::WindowsRoutePlatform> NewWindowsRoutePlatform(const route::RoutePlanInput& input) noexcept;
 #endif
 #if defined(_MACOS)
-                std::unique_ptr<route::DarwinRoutePlatform> NewDarwinRoutePlatform() noexcept;
+                static std::unique_ptr<route::DarwinRoutePlatform> NewDarwinRoutePlatform(const route::RoutePlanInput& input) noexcept;
 #endif
+                struct ProtectionState final {
+                    std::atomic_bool active{false};
+                    std::mutex mutex;
+                    std::function<bool()> remove_defaults;
+                };
+                void StopProtection() noexcept;
 
-                VEthernetNetworkSwitcher* owner_ = nullptr;
+                std::shared_ptr<ProtectionState> protection_;
                 std::unique_ptr<route::RouteCoordinator> route_coordinator_;
             };
         }

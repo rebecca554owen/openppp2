@@ -1,12 +1,9 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/RouteTableManager.h>
-#include <ppp/configurations/AppConfiguration.h>
-#include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/route/LinuxRoutePlatform.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/client/route/RouteSpecs.h>
-#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/net/IPEndPoint.h>
@@ -27,36 +24,19 @@ namespace ppp {
         namespace client {
 
             std::unique_ptr<route::LinuxRoutePlatform>
-            RouteTableManager::NewLinuxRoutePlatform() noexcept {
-                if (NULLPTR == owner_) {
+            RouteTableManager::NewLinuxRoutePlatform(const route::RoutePlanInput& input) noexcept {
+                if (input.tap_interface.name.empty() || input.underlying_interface.name.empty()) {
                     return NULLPTR;
                 }
-
-                std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap();
-                std::shared_ptr<ClientNetworkInterface> tap_ni = owner_->GetTapNetworkInterface();
-                std::shared_ptr<ClientNetworkInterface> underlying_ni = owner_->GetUnderlyingNetworkInterface();
-                ppp::tap::TapLinux* linux_tap =
-                    NULLPTR == tap ? NULLPTR : dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                if (NULLPTR == tap || NULLPTR == tap_ni || NULLPTR == underlying_ni || NULLPTR == linux_tap) {
-                    return NULLPTR;
-                }
-
-                std::unordered_map<uint32_t, std::string> nics;
-                for (const auto& pair : Snapshot().nics) {
-                    nics.emplace(
-                        pair.first,
-                        std::string(pair.second.begin(), pair.second.end()));
-                }
-
                 return std::make_unique<route::LinuxRoutePlatform>(
-                    tap->GatewayServer,
-                    std::string(tap_ni->Name.begin(), tap_ni->Name.end()),
-                    std::string(underlying_ni->Name.begin(), underlying_ni->Name.end()),
-                    std::move(nics),
-                    linux_tap->IsPromisc());
+                    input.tap_gateway,
+                    input.tap_interface.name,
+                    input.underlying_interface.name,
+                    input.nics,
+                    input.tap_promiscuous);
             }
 
-            void RouteTableManager::AddRoute() noexcept {
+            void RouteTableManager::AddRoute(const route::RoutePlanInput& input) noexcept {
                 ppp::telemetry::SpanScope span("client.route.apply");
                 struct ScopedRouteApplyHistogram final {
                     std::chrono::steady_clock::time_point started_at = std::chrono::steady_clock::now();
@@ -69,7 +49,7 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
-                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform();
+                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform(input);
                 if (NULLPTR == platform) {
                     return;
                 }
@@ -82,29 +62,21 @@ namespace ppp {
                 if (!route_coordinator_->Apply(specs)) {
                     return;
                 }
-                AddRouteWithDnsServers();
-            }
-
-            bool RouteTableManager::DeleteAllDefaultRoute() noexcept {
-                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform();
-                if (NULLPTR == platform) {
-                    return false;
-                }
-                route::RouteSnapshotPtr defaults = platform->CaptureDefaults();
-                return platform->RemoveDefaults(defaults);
+                AddRouteWithDnsServers(input);
             }
 
             void RouteTableManager::DeleteRoute() noexcept {
                 ppp::telemetry::Log(Level::kDebug, "client", "route delete");
                 ppp::telemetry::Count("client.route.delete", 1);
 
+                StopProtection();
                 if (NULLPTR != route_coordinator_) {
                     route_coordinator_->Stop();
                 }
             }
 
-            bool RouteTableManager::AddRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
-                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform();
+            bool RouteTableManager::AddRoute(const route::RoutePlanInput& input, uint32_t ip, uint32_t gw, int prefix) noexcept {
+                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform(input);
                 if (NULLPTR == platform) {
                     return false;
                 }
@@ -115,8 +87,8 @@ namespace ppp {
                 return platform->Add(spec);
             }
 
-            bool RouteTableManager::DeleteRoute(uint32_t ip, uint32_t gw, int prefix) noexcept {
-                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform();
+            bool RouteTableManager::DeleteRoute(const route::RoutePlanInput& input, uint32_t ip, uint32_t gw, int prefix) noexcept {
+                std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform(input);
                 if (NULLPTR == platform) {
                     return false;
                 }
@@ -127,38 +99,34 @@ namespace ppp {
                 return platform->Delete(spec);
             }
 
-            void RouteTableManager::DeleteRouteWithDnsServers() noexcept {
+            void RouteTableManager::DeleteRouteWithDnsServers(const route::RoutePlanInput& input) noexcept {
                 const route::RouteStateSnapshot snapshot = Snapshot();
-                if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
-                    for (uint32_t ip : snapshot.dns_servers[0]) {
-                        DeleteRoute(ip, tap->GatewayServer, 32);
-                    }
+                for (uint32_t ip : snapshot.dns_servers[0]) {
+                    DeleteRoute(input, ip, input.tap_gateway, 32);
                 }
 
-                if (std::shared_ptr<ClientNetworkInterface> ni = owner_->GetUnderlyingNetworkInterface(); NULLPTR != ni) {
-                    boost::asio::ip::address gw = ni->GatewayServer;
-                    if (gw.is_v4()) {
-                        uint32_t next_hop = htonl(gw.to_v4().to_uint());
-                        for (uint32_t ip : snapshot.dns_servers[1]) {
-                            DeleteRoute(ip, next_hop, 32);
-                        }
+                const boost::asio::ip::address& gw = input.underlying_interface.gateway;
+                if (gw.is_v4()) {
+                    uint32_t next_hop = htonl(gw.to_v4().to_uint());
+                    for (uint32_t ip : snapshot.dns_servers[1]) {
+                        DeleteRoute(input, ip, next_hop, 32);
                     }
                 }
 
                 ClearDnsServers();
             }
 
-            void RouteTableManager::AddRouteWithDnsServers() noexcept {
+            void RouteTableManager::AddRouteWithDnsServers(const route::RoutePlanInput& input) noexcept {
                 ClearDnsServers();
 
                 auto add_dns_server_to_dns_servers =
-                    [this](const std::shared_ptr<ClientNetworkInterface>& ni, int bucket) noexcept {
-                        if (NULLPTR == ni) {
+                    [this](const route::RouteInterfaceSnapshot& ni, int bucket) noexcept {
+                        if (ni.name.empty()) {
                             return false;
                         }
 
                         uint32_t ips[2] = { IPEndPoint::AnyAddress, IPEndPoint::AnyAddress };
-                        boost::asio::ip::address nips[] = { ni->IPAddress, ni->SubmaskAddress };
+                        boost::asio::ip::address nips[] = { ni.ip, ni.submask };
                         for (int i = 0; i < arraysizeof(nips); i++) {
                             boost::asio::ip::address& ip = nips[i];
                             if (ip.is_v4()) {
@@ -167,7 +135,7 @@ namespace ppp {
                         }
 
                         uint32_t rip = ips[0] & ips[1];
-                        for (boost::asio::ip::address& ip : ni->DnsAddresses) {
+                        for (const boost::asio::ip::address& ip : ni.dns) {
                             if (ip.is_v6()) {
                                 continue;
                             }
@@ -204,103 +172,61 @@ namespace ppp {
                         return true;
                     };
 
-                add_dns_server_to_dns_servers(owner_->GetTapNetworkInterface(), 0);
-                add_dns_server_to_dns_servers(owner_->GetUnderlyingNetworkInterface(), 1);
-
-                if (NULLPTR != owner_->dns_controller_ && NULLPTR != owner_->configuration_) {
-                    owner_->dns_controller_->CollectReachabilityIps(
-                        owner_->configuration_,
-                        owner_->configuration_->dns.intercept_unmatched,
-                        [this](uint32_t ip) noexcept { AddDnsServer(0, ip); },
-                        [this](uint32_t ip) noexcept { AddDnsServer(1, ip); });
+                add_dns_server_to_dns_servers(input.tap_interface, 0);
+                add_dns_server_to_dns_servers(input.underlying_interface, 1);
+                for (uint32_t ip : input.tunnel_dns) {
+                    AddDnsServer(0, ip);
                 }
-
-                if (NULLPTR != owner_->dns_controller_) {
-                    uint32_t fake_ip_route_network = 0;
-                    int fake_ip_route_prefix = 0;
-                    if (owner_->dns_controller_->GetFakeIpRoute(fake_ip_route_network, fake_ip_route_prefix)) {
-                        if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
-                            AddRoute(fake_ip_route_network, tap->GatewayServer, fake_ip_route_prefix);
-                        }
-                    }
+                for (uint32_t ip : input.underlying_dns) {
+                    AddDnsServer(1, ip);
+                }
+                if (input.has_fake_ip_route) {
+                    AddRoute(input, input.fake_ip_route.network, input.tap_gateway, input.fake_ip_route.prefix);
                 }
 
                 DeduplicateDnsServers();
                 const route::RouteStateSnapshot snapshot = Snapshot();
 
-                if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
-                    for (uint32_t ip : snapshot.dns_servers[0]) {
-                        AddRoute(ip, tap->GatewayServer, 32);
-                    }
+                for (uint32_t ip : snapshot.dns_servers[0]) {
+                    AddRoute(input, ip, input.tap_gateway, 32);
                 }
 
-                if (std::shared_ptr<ClientNetworkInterface> ni = owner_->GetUnderlyingNetworkInterface(); NULLPTR != ni) {
-                    boost::asio::ip::address gw = ni->GatewayServer;
-                    if (gw.is_v4()) {
-                        uint32_t next_hop = htonl(gw.to_v4().to_uint());
-                        for (uint32_t ip : snapshot.dns_servers[1]) {
-                            AddRoute(ip, next_hop, 32);
-                        }
+                const boost::asio::ip::address& gw = input.underlying_interface.gateway;
+                if (gw.is_v4()) {
+                    uint32_t next_hop = htonl(gw.to_v4().to_uint());
+                    for (uint32_t ip : snapshot.dns_servers[1]) {
+                        AddRoute(input, ip, next_hop, 32);
                     }
                 }
             }
 
-            bool RouteTableManager::ProtectDefaultRoute() noexcept {
-                auto tap = owner_->GetTap();
-                if (NULLPTR == tap) {
+            bool RouteTableManager::ProtectDefaultRoute(const route::RoutePlanInput& input) noexcept {
+                if (input.tap_promiscuous || !protection_) {
                     return false;
                 }
-
-                auto unix_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
-                if (NULLPTR == unix_tap || unix_tap->IsPromisc()) {
-                    return false;
-                }
-
-                auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(owner_->shared_from_this());
-                std::thread([self]() noexcept {
-                    auto prepare = [self]() noexcept {
-                        if (self->IsDisposed()) {
-                            return false;
-                        }
-
-                        if (!self->route_table_->Snapshot().applied) {
-                            return false;
-                        }
-
-                        std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface> underlying_ni = self->underlying_ni_;
-                        if (NULLPTR == underlying_ni) {
-                            return false;
-                        }
-
-                        boost::asio::ip::address gw = underlying_ni->GatewayServer;
-                        if (!gw.is_v4()) {
-                            return false;
-                        }
-
-                        return true;
-                    };
-
+                StopProtection();
+                auto state = protection_;
+                state->remove_defaults = [input]() noexcept {
+                    auto platform = NewLinuxRoutePlatform(input);
+                    if (!platform) {
+                        return false;
+                    }
+                    auto defaults = platform->CaptureDefaults();
+                    return platform->RemoveDefaults(defaults);
+                };
+                state->active.store(true, std::memory_order_release);
+                std::thread([state]() noexcept {
                     ppp::SetThreadName("protector");
-                    for (;;) {
+                    while (state->active.load(std::memory_order_acquire)) {
                         uint64_t start = ppp::GetTickCount();
-
-                        bool ok = prepare();
-                        if (!ok) {
-                            break;
-                        }
-
-                        if (self->prdr_.try_lock()) {
-                            ok = prepare();
-                            if (ok) {
-                                ok = self->route_table_->DeleteAllDefaultRoute();
-                            }
-
-                            self->prdr_.unlock();
-                            if (!ok) {
+                        {
+                            std::lock_guard<std::mutex> lock(state->mutex);
+                            if (!state->active.load(std::memory_order_acquire) ||
+                                !state->remove_defaults || !state->remove_defaults()) {
+                                state->active.store(false, std::memory_order_release);
                                 break;
                             }
                         }
-
                         uint64_t now = ppp::GetTickCount();
                         uint64_t delta = 0;
                         if (now >= start) {

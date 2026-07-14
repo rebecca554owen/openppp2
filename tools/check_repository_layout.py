@@ -142,6 +142,22 @@ def _collect_candidates(root: Path) -> list[Candidate]:
                     )
                 )
 
+            if (
+                re.fullmatch(
+                    r"ppp/app/client/RouteTableManager(?:_(?:linux|darwin|win32|mobile))?\.(?:h|cpp)",
+                    relative,
+                )
+                and "owner_" in line
+                and not _is_comment_line(line)
+            ):
+                candidates.append(
+                    Candidate(
+                        relative,
+                        line_number,
+                        "route manager retains concrete host owner",
+                    )
+                )
+
             if "RouteHostPorts" in line:
                 candidates.append(
                     Candidate(

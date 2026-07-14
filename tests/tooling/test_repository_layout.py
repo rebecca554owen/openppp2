@@ -97,6 +97,16 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assert_violation(root, "Linux route manager bypasses RouteState")
 
+    def test_route_manager_cannot_retain_switcher_owner(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/RouteTableManager_linux.cpp": (
+                    "auto tap = owner_->GetTap();\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "route manager retains concrete host owner")
+
     def test_route_host_ports_are_removed(self) -> None:
         root = self.fixture(
             {"ppp/app/client/Legacy.cpp": "route::RouteHostPorts ports;\n"}

@@ -24,16 +24,19 @@ namespace ppp {
             }
 
             void PeerPrefixRouteManager::Clear() noexcept {
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                const route::RoutePlanInput input = owner_->BuildRoutePlanInput();
+#endif
 #if defined(_WIN32)
                 auto mib = ppp::win32::network::Router::GetIpForwardTable();
 #endif
                 for (const auto& route : owner_->applied_peer_prefix_routes_) {
 #if defined(_WIN32)
                     if (NULLPTR != mib) {
-                        owner_->route_table_->DeleteRoute(mib, route.Destination, route.NextHop, route.Prefix);
+                        owner_->route_table_->DeleteRoute(input, mib, route.Destination, route.NextHop, route.Prefix);
                     }
 #elif !defined(_ANDROID) && !defined(_IPHONE)
-                    owner_->route_table_->DeleteRoute(route.Destination, route.NextHop, route.Prefix);
+                    owner_->route_table_->DeleteRoute(input, route.Destination, route.NextHop, route.Prefix);
 #endif
                 }
                 owner_->applied_peer_prefix_routes_.clear();
@@ -68,6 +71,9 @@ namespace ppp {
                 const auto& dynamic_routes = extensions.PeerRouteTable.HasAny()
                     ? extensions.PeerRouteTable.routes
                     : owner_->dynamic_peer_routes_;
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                const route::RoutePlanInput route_input = owner_->BuildRoutePlanInput();
+#endif
 
                 auto install_route = [&](const ppp::app::protocol::PeerPrefixRouteEntry& route) -> bool {
                     if (!route.HasVia()) {
@@ -89,7 +95,7 @@ namespace ppp {
                     }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                    if (!owner_->route_table_->AddRoute(network, via, route.prefix)) {
+                    if (!owner_->route_table_->AddRoute(route_input, network, via, route.prefix)) {
                         return false;
                     }
 #endif
@@ -97,10 +103,10 @@ namespace ppp {
                     if (!rib->AddRoute(network, route.prefix, via)) {
 #if defined(_WIN32)
                         if (auto mib = ppp::win32::network::Router::GetIpForwardTable(); NULLPTR != mib) {
-                            owner_->route_table_->DeleteRoute(mib, network, via, route.prefix);
+                            owner_->route_table_->DeleteRoute(route_input, mib, network, via, route.prefix);
                         }
 #elif !defined(_ANDROID) && !defined(_IPHONE)
-                        owner_->route_table_->DeleteRoute(network, via, route.prefix);
+                        owner_->route_table_->DeleteRoute(route_input, network, via, route.prefix);
 #endif
                         return false;
                     }

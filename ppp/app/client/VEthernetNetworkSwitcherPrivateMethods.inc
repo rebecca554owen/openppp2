@@ -1,6 +1,7 @@
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 bool                                                                FixUnderlyingNgw() noexcept;
 #endif
+                route::RoutePlanInput                                               BuildRoutePlanInput() noexcept;
 
                 bool                                                                EmplaceTimeout(void* k, const std::shared_ptr<ppp::threading::Timer::TimeoutEventHandler>& timeout) noexcept;
                 bool                                                                DeleteTimeout(void* k) noexcept;

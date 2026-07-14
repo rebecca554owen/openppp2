@@ -58,6 +58,8 @@ namespace ppp {
                 class DnsSessionContext;
             }
 
+            namespace route { struct RoutePlanInput; }
+
             namespace proxys {
                 class VEthernetHttpProxySwitcher;
                 class VEthernetSocksProxySwitcher;

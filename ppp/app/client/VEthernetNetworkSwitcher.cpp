@@ -28,6 +28,7 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
+#include <ppp/diagnostics/Telemetry.h>
 #include <ppp/ipv6/IPv6Packet.h>
 
 #include <ppp/threading/Timer.h>
@@ -156,7 +157,6 @@ namespace ppp {
                 , information_extensions_(std::make_unique<VirtualEthernetInformationExtensions>())
                 , icmppackets_aid_(0) {
 
-                route_table_->Bind(this);
                 address_manager_->Bind(this);
                 teardown_->Bind(this);
                 connection_opener_->Bind(this);
@@ -284,13 +284,93 @@ namespace ppp {
                 return ip == gw ? true : htonl((ntohl(gw) & ntohl(mask)) + 1) == ip;
             }
 
+            route::RoutePlanInput VEthernetNetworkSwitcher::BuildRoutePlanInput() noexcept {
+                route::RoutePlanInput input;
+                if (const std::shared_ptr<ppp::tap::ITap> tap = GetTap(); tap) {
+                    input.tap_ip = tap->IPAddress;
+                    input.tap_gateway = tap->GatewayServer;
+                    input.tap_submask = tap->SubmaskAddress;
+                    input.tap_hosted = tap->IsHostedNetwork();
+#if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
+                    if (auto* platform_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get())) {
+                        input.tap_promiscuous = platform_tap->IsPromisc();
+                    }
+#elif defined(_MACOS)
+                    if (auto* platform_tap = dynamic_cast<ppp::tap::TapDarwin*>(tap.get())) {
+                        input.tap_promiscuous = platform_tap->IsPromisc();
+                    }
+#endif
+                }
+
+                auto copy_interface = [](const std::shared_ptr<ClientNetworkInterface>& source) {
+                    route::RouteInterfaceSnapshot target;
+                    if (!source) return target;
+                    target.name.assign(source->Name.begin(), source->Name.end());
+                    target.index = source->Index;
+                    target.ip = source->IPAddress;
+                    target.gateway = source->GatewayServer;
+                    target.submask = source->SubmaskAddress;
+                    target.dns.assign(source->DnsAddresses.begin(), source->DnsAddresses.end());
+                    return target;
+                };
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                input.tap_interface = copy_interface(tun_ni_);
+                input.underlying_interface = copy_interface(underlying_ni_);
+#endif
+                for (const auto& pair : route_table_->Snapshot().nics) {
+                    input.nics.emplace(pair.first, std::string(pair.second.begin(), pair.second.end()));
+                }
+                if (dns_controller_ && configuration_) {
+                    dns_controller_->CollectReachabilityIps(
+                        configuration_,
+                        configuration_->dns.intercept_unmatched,
+                        [&input](uint32_t ip) noexcept { input.tunnel_dns.emplace(ip); },
+                        [&input](uint32_t ip) noexcept { input.underlying_dns.emplace(ip); });
+                    input.has_fake_ip_route = dns_controller_->GetFakeIpRoute(
+                        input.fake_ip_route.network, input.fake_ip_route.prefix);
+                    input.fake_ip_route.gateway = input.tap_gateway;
+                }
+                return input;
+            }
+
 #if !defined(_ANDROID) && !defined(_IPHONE)
             boost::asio::ip::address VEthernetNetworkSwitcher::LastAssignedIPv6() noexcept {
                 return address_manager_->LastAssignedIPv6();
             }
 
             bool VEthernetNetworkSwitcher::TryApplyHostedNetworkRoutes() noexcept {
-                return route_table_->TryApplyHostedNetworkRoutes();
+                route::RoutePlanInput input = BuildRoutePlanInput();
+                if (!input.tap_hosted) return true;
+                const route::RouteStateSnapshot snapshot = route_table_->Snapshot();
+                if (snapshot.applied) return true;
+                const bool established = exchanger_ &&
+                    exchanger_->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
+                if (RouteTableManager::ShouldDeferHostedRouteApply(snapshot.apply_ready, established)) {
+                    ppp::telemetry::Count("client.route.defer", 1);
+                    return true;
+                }
+#if defined(_WIN32)
+                if (!UsePaperAirplaneController()) return false;
+#endif
+                route_table_->AddRoute(input);
+                if (!route_table_->Snapshot().applied) return false;
+                {
+                    ppp::telemetry::SpanScope span("client.dns.apply");
+#if defined(_WIN32)
+                    if (tun_ni_) {
+                        ppp::win32::network::SetAllNicsDnsAddresses(tun_ni_->DnsAddresses, ni_dns_servers_);
+                    }
+                    ppp::tap::TapWindows::DnsFlushResolverCache();
+                    if (underlying_ni_) {
+                        ppp::win32::network::DeleteAllDefaultGatewayRoutes(underlying_ni_->GatewayServer);
+                    }
+#else
+                    if (tun_ni_) ppp::unix__::UnixAfx::SetDnsAddresses(tun_ni_->DnsAddresses);
+#endif
+                }
+                ppp::telemetry::Count("client.dns.setup", 1);
+                route_table_->ProtectDefaultRoute(input);
+                return true;
             }
 #endif
 
@@ -755,7 +835,13 @@ namespace ppp {
 #if defined(_ANDROID) || defined(_IPHONE)
             /** @brief Builds mobile-side route table including bypass and DNS exceptions. */
             bool VEthernetNetworkSwitcher::AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept {
-                if (!route_table_->AddAllRoute(tap)) {
+                route::RoutePlanInput input = BuildRoutePlanInput();
+                input.tap_ip = tap->IPAddress;
+                input.tap_gateway = tap->GatewayServer;
+                input.tap_submask = tap->SubmaskAddress;
+                input.bypass_ip_list.assign(bypass_ip_list_.begin(), bypass_ip_list_.end());
+                bypass_ip_list_.clear();
+                if (!route_table_->AddAllRoute(input)) {
                     return false;
                 }
 
@@ -832,10 +918,11 @@ namespace ppp {
 
             /** @brief Removes VPN route entries and restores system defaults. */
             void VEthernetNetworkSwitcher::DeleteRoute() noexcept {
+                const route::RoutePlanInput input = BuildRoutePlanInput();
                 ClearPeerPrefixRoutes();
                 route_table_->DeleteRoute();
                 FixUnderlyingNgw();
-                route_table_->DeleteRouteWithDnsServers();
+                route_table_->DeleteRouteWithDnsServers(input);
             }
 
             /** @brief Returns formatted cached remote URI string. */
@@ -926,7 +1013,7 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             void VEthernetNetworkSwitcher::AddRoute() noexcept {
-                route_table_->AddRoute();
+                route_table_->AddRoute(BuildRoutePlanInput());
             }
 #endif
 
