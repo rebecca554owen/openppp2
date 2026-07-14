@@ -41,7 +41,9 @@ public:
         RuntimeSnapshot snapshot;
         {
             std::lock_guard<std::mutex> scope(mutex_);
-            if (generation == 0 || generation != generation_) {
+            if (generation == 0 || generation != generation_ ||
+                stop_coordinator_.IsStopping(generation) ||
+                stop_coordinator_.IsCompleted(generation)) {
                 return false;
             }
             requested_phase_ = phase;
@@ -59,7 +61,9 @@ public:
         RuntimeSnapshot snapshot;
         {
             std::lock_guard<std::mutex> scope(mutex_);
-            if (generation == 0 || generation != generation_) {
+            if (generation == 0 || generation != generation_ ||
+                stop_coordinator_.IsStopping(generation) ||
+                stop_coordinator_.IsCompleted(generation)) {
                 return false;
             }
             readiness_ = readiness;

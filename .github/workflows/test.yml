@@ -14,6 +14,19 @@ permissions:
   contents: read
 
 jobs:
+  lifecycle-sanitizers:
+    name: Lifecycle ASan and UBSan
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang libboost-all-dev libssl-dev
+      - name: Run lifecycle sanitizers
+        run: bash scripts/run-lifecycle-sanitizers.sh
+
   cpp-linux:
     name: C++ unit tests (Linux)
     runs-on: ubuntu-latest

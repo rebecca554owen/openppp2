@@ -91,3 +91,41 @@ BOOST_AUTO_TEST_CASE(stop_completion_publishes_idle_or_failed) {
                static_cast<int>(RuntimePhase::Failed));
     BOOST_TEST(lifecycle.GetSnapshot().last_error.code == 91u);
 }
+
+BOOST_AUTO_TEST_CASE(stopping_or_completed_generation_cannot_be_revived) {
+    RuntimeLifecycle lifecycle;
+    const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 1);
+    BOOST_REQUIRE(lifecycle.TryBeginStop(generation, 2));
+    BOOST_TEST(!lifecycle.Transition(generation, RuntimePhase::Connected, 3));
+    BOOST_TEST(!lifecycle.UpdateReadiness(generation, FullyReady(), 4));
+    BOOST_REQUIRE(lifecycle.CompleteStop(generation, true, RuntimeError(), 5));
+    BOOST_TEST(!lifecycle.Transition(generation, RuntimePhase::Connected, 6));
+    BOOST_TEST(!lifecycle.UpdateReadiness(generation, FullyReady(), 7));
+    BOOST_TEST(static_cast<int>(lifecycle.GetSnapshot().phase) ==
+               static_cast<int>(RuntimePhase::Idle));
+}
+
+BOOST_AUTO_TEST_CASE(one_hundred_generations_cancel_from_every_startup_phase) {
+    const RuntimePhase phases[] = {
+        RuntimePhase::Starting,
+        RuntimePhase::PreparingHost,
+        RuntimePhase::Connecting,
+        RuntimePhase::Handshaking,
+        RuntimePhase::ApplyingPolicy,
+        RuntimePhase::Reconnecting,
+    };
+
+    RuntimeLifecycle lifecycle;
+    std::uint64_t now = 1;
+    for (std::uint64_t cycle = 1; cycle <= 100; ++cycle) {
+        const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), now++);
+        BOOST_REQUIRE_EQUAL(generation, cycle);
+        const RuntimePhase phase = phases[(cycle - 1) % (sizeof(phases) / sizeof(phases[0]))];
+        BOOST_REQUIRE(lifecycle.Transition(generation, phase, now++));
+        BOOST_REQUIRE(lifecycle.TryBeginStop(generation, now++));
+        BOOST_TEST(!lifecycle.TryBeginStop(generation, now++));
+        BOOST_REQUIRE(lifecycle.CompleteStop(generation, true, RuntimeError(), now++));
+        BOOST_TEST(static_cast<int>(lifecycle.GetSnapshot().phase) ==
+                   static_cast<int>(RuntimePhase::Idle));
+    }
+}
