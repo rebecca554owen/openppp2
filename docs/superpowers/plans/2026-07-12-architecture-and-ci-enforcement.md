@@ -291,12 +291,12 @@ git add .github docs/TESTING.md
 - Create: `.github/workflows/integration-linux.yml`
 - Modify: `docs/TESTING.md`
 
-- [ ] **Step 1: Create namespace and baseline snapshot**
-- [ ] **Step 2: Run client route/DNS application through test adapter or binary**
-- [ ] **Step 3: Trigger normal stop and compare final state to baseline**
-- [ ] **Step 4: Trigger partial-start failure and compare rollback**
-- [ ] **Step 5: Upload before/after diffs**
-- [ ] **Step 6: Commit**
+- [x] **Step 1: Create namespace and baseline snapshot**
+- [x] **Step 2: Run client route/DNS application through test adapter or binary**
+- [x] **Step 3: Trigger normal stop and compare final state to baseline**
+- [x] **Step 4: Trigger partial-start failure and compare rollback**
+- [x] **Step 5: Upload before/after diffs**
+- [x] **Step 6: Commit**
 
 Acceptance invariant:
 

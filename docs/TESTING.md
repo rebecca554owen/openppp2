@@ -117,3 +117,25 @@ ctest --test-dir build/test --output-on-failure
 ```
 
 The layout check rejects concrete Switcher/Exchanger names in DNS and route public headers, legacy `RouteHostPorts`/`DnsHostPorts` service locators, mutable container ports, and new declaration-fragment `.inc` files.
+
+## Documentation and Runtime Contract Gates
+
+```bash
+python3 -m unittest tests.tooling.test_check_docs -v
+python3 tools/check_docs.py
+bash scripts/test-runtime-contract.sh cpp
+```
+
+CI invokes the same runtime-contract script with `dart` and `swift` in the Flutter and macOS jobs. All three
+loaders use `tests/contracts/runtime-snapshot` directly, and `SHA256SUMS` prevents fixture drift.
+
+## Linux Namespace Route/DNS Rollback
+
+The integration test requires root and `iproute2`:
+
+```bash
+sudo bash tests/integration/linux/route_dns_rollback.sh
+```
+
+It compares the namespace route table and namespace-local resolver file with their baselines after both a normal
+stop and a partial apply failure. CI uploads the before/after snapshots for inspection.
