@@ -249,14 +249,14 @@ git commit -m "refactor(route): use Linux route platform adapter"
 - Modify: `.github/workflows/test.yml`
 - Modify: Android and iOS test fixture loaders
 
-- [ ] **Step 1: Run C++ fixture tests**
-- [ ] **Step 2: Run Dart fixture tests**
-- [ ] **Step 3: Run Swift fixture tests**
-- [ ] **Step 4: Fail if fixture hashes differ across copied bundles**
+- [x] **Step 1: Run C++ fixture tests**
+- [x] **Step 2: Run Dart fixture tests**
+- [x] **Step 3: Run Swift fixture tests**
+- [x] **Step 4: Fail if fixture hashes differ across copied bundles**
 
 Prefer reading the repository fixtures directly where build tools permit; otherwise copy them during test setup and verify hashes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts .github android ios tests/contracts

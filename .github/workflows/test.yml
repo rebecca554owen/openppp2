@@ -65,6 +65,9 @@ jobs:
       - name: Build
         run: cmake --build build/test
 
+      - name: Runtime contract (C++)
+        run: bash scripts/test-runtime-contract.sh cpp
+
       - name: Run tests
         run: |
           mkdir -p build/coverage
@@ -131,6 +134,7 @@ jobs:
       - name: Test
         run: |
           flutter pub get
+          bash ../scripts/test-runtime-contract.sh dart
           flutter test --coverage
           echo "Flutter tests completed" | tee coverage/flutter-summary.txt
       - name: Upload Flutter coverage
@@ -151,4 +155,5 @@ jobs:
       - name: Run XCTest
         run: |
           chmod +x run-tests.sh
+          bash ../../scripts/test-runtime-contract.sh swift
           ./run-tests.sh
