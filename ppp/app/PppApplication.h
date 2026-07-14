@@ -33,6 +33,8 @@
 
 #include <ppp/stdafx.h>
 #include <ppp/app/ApplicationMode.h>
+#include <ppp/app/runtime/RuntimeLifecycle.h>
+#include <ppp/app/runtime/RuntimeSnapshotJson.h>
 #include <ppp/diagnostics/PreventReturn.h>
 #include <ppp/diagnostics/Stopwatch.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
@@ -205,6 +207,12 @@ public:
      * @return Shared pointer to `BufferswapAllocator`; null before `Run()` completes.
      */
     std::shared_ptr<ppp::threading::BufferswapAllocator> GetBufferAllocator() noexcept;
+
+    ppp::app::runtime::RuntimeSnapshot GetRuntimeSnapshot() const noexcept;
+    std::string GetRuntimeSnapshotJson() const noexcept;
+    std::uint64_t SubscribeRuntimeSnapshots(
+        ppp::app::runtime::RuntimeLifecycle::Listener listener) noexcept;
+    void UnsubscribeRuntimeSnapshots(std::uint64_t token) noexcept;
 
 public:
     /**
@@ -394,6 +402,7 @@ private:
     ppp::diagnostics::Stopwatch                                             stopwatch_;                   ///< Elapsed-time tracker for uptime display.
     ppp::diagnostics::PreventReturn                                         prevent_rerun_;               ///< Guard that prevents re-entrant execution.
     ppp::transmissions::ITransmissionStatistics                             transmission_statistics_;     ///< Accumulated traffic statistics snapshot.
+    ppp::app::runtime::RuntimeLifecycle                                     runtime_lifecycle_;            ///< Authoritative runtime state contract.
 };
 
 } // namespace app

@@ -200,6 +200,20 @@ namespace ppp {
                 return exchanger_;
             }
 
+            ppp::app::runtime::RuntimeReadiness VEthernetNetworkSwitcher::GetRuntimeReadiness() noexcept {
+                ppp::app::runtime::RuntimeReadiness readiness;
+                const std::shared_ptr<VEthernetExchanger> exchanger = exchanger_;
+                readiness.session = exchanger &&
+                    exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
+                readiness.adapter = NULLPTR != GetTap();
+                readiness.route = proxy_only_ || route_state_.Snapshot().apply_ready;
+                readiness.dns = proxy_only_ ||
+                    (dns_controller_ && dns_controller_->IsConfigured() &&
+                     dns_controller_->HasActiveSession());
+                readiness.policy = exchanger && NULLPTR != exchanger->GetInformation();
+                return readiness;
+            }
+
             void VEthernetNetworkSwitcher::RequestedIPv6(const ppp::string& value) noexcept {
                 requested_ipv6_ = value;
             }

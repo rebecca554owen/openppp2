@@ -51,6 +51,28 @@ void PppApplication::Release() noexcept {
     ppp::win32::Win32Native::EnabledConsoleWindowClosedButton(true);
 #endif
 
+    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    if (runtime.generation != 0) {
+        if (runtime.phase != ppp::app::runtime::RuntimePhase::Stopping) {
+            runtime_lifecycle_.TryBeginStop(runtime.generation, Executors::GetTickCount());
+        }
+
+        const ppp::app::runtime::RuntimeSnapshot stopping = runtime_lifecycle_.GetSnapshot();
+        if (stopping.phase == ppp::app::runtime::RuntimePhase::Stopping) {
+            const int error_code = static_cast<int>(ppp::diagnostics::GetLastErrorCode());
+            ppp::app::runtime::RuntimeError error;
+            error.code = static_cast<std::uint32_t>(std::max(0, error_code));
+            error.severity = error_code == 0 ? std::string() : "error";
+            error.retryable = false;
+            error.user_message_key = error_code == 0 ? std::string() : "RuntimeFailed";
+            runtime_lifecycle_.CompleteStop(
+                stopping.generation,
+                error_code == 0,
+                std::move(error),
+                Executors::GetTickCount());
+        }
+    }
+
     prevent_rerun_.Close();
 }
 
@@ -139,6 +161,15 @@ bool Windows_PreparedEthernetEnvironment(const std::shared_ptr<NetworkInterface>
 int PppApplication::Main(int argc, const char* argv[]) noexcept {
     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Success);
 
+    ppp::app::runtime::RuntimeSnapshot runtime_seed;
+    runtime_seed.role = proxy_mode_ ? "proxy" : (client_mode_ ? "client" : "server");
+    const std::uint64_t runtime_generation =
+        runtime_lifecycle_.Begin(std::move(runtime_seed), Executors::GetTickCount());
+    runtime_lifecycle_.Transition(
+        runtime_generation,
+        ppp::app::runtime::RuntimePhase::PreparingHost,
+        Executors::GetTickCount());
+
     if (!proxy_mode_ && !ppp::IsUserAnAdministrator()) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPrivilegeRequired);
         return -1;
@@ -173,12 +204,20 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
     quic_ = ppp::net::proxies::HttpProxy::IsSupportExperimentalQuicProtocol();
 #endif
 
+    runtime_lifecycle_.Transition(
+        runtime_generation,
+        ppp::app::runtime::RuntimePhase::Connecting,
+        Executors::GetTickCount());
     if (!PreparedLoopbackEnvironment(network_interface_)) {
         if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppPreflightCheckFailed);
         }
         return -1;
     }
+    runtime_lifecycle_.Transition(
+        runtime_generation,
+        ppp::app::runtime::RuntimePhase::Handshaking,
+        Executors::GetTickCount());
 
     /**
      * @brief TUI startup with isatty-based fallback.

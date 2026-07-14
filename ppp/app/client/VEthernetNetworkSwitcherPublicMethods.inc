@@ -8,6 +8,7 @@
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> GetConfiguration() noexcept;
                 std::shared_ptr<VEthernetExchanger> GetExchanger() noexcept;
+                ppp::app::runtime::RuntimeReadiness GetRuntimeReadiness() noexcept;
                 void RequestedIPv6(const ppp::string& value) noexcept;
                 ppp::string RequestedIPv6() noexcept;
 #if !defined(_ANDROID) && !defined(_IPHONE)

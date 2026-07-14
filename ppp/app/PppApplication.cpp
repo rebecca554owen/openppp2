@@ -108,6 +108,23 @@ std::shared_ptr<AppConfiguration> PppApplication::GetConfiguration() noexcept {
     return configuration_;
 }
 
+ppp::app::runtime::RuntimeSnapshot PppApplication::GetRuntimeSnapshot() const noexcept {
+    return runtime_lifecycle_.GetSnapshot();
+}
+
+std::string PppApplication::GetRuntimeSnapshotJson() const noexcept {
+    return ppp::app::runtime::SerializeRuntimeSnapshot(GetRuntimeSnapshot());
+}
+
+std::uint64_t PppApplication::SubscribeRuntimeSnapshots(
+    ppp::app::runtime::RuntimeLifecycle::Listener listener) noexcept {
+    return runtime_lifecycle_.Subscribe(std::move(listener));
+}
+
+void PppApplication::UnsubscribeRuntimeSnapshots(std::uint64_t token) noexcept {
+    runtime_lifecycle_.Unsubscribe(token);
+}
+
 bool PppApplication::OnShutdownApplication() noexcept {
     return ShutdownApplication(false);
 }

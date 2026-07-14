@@ -471,6 +471,11 @@ void PppApplication::GetEnvironmentInformationLines(ppp::vector<ppp::string>& li
  * @brief Disposes active server/client switchers and clears periodic timers.
  */
 void PppApplication::Dispose() noexcept {
+    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    if (runtime.generation != 0) {
+        runtime_lifecycle_.TryBeginStop(runtime.generation, Executors::GetTickCount());
+    }
+
     ConsoleUI::GetInstance().Stop();
 
     std::shared_ptr<VirtualEthernetSwitcher> server = std::move(server_);
@@ -550,6 +555,53 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     std::shared_ptr<VEthernetExchanger> exchanger = NULLPTR;
     if (NULLPTR != client) {
         exchanger = client->GetExchanger();
+    }
+
+    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    if (runtime.generation != 0 && runtime.phase != ppp::app::runtime::RuntimePhase::Stopping) {
+        if (NULLPTR == client) {
+            if (NULLPTR != server_ && !server_->IsDisposed()) {
+                ppp::app::runtime::RuntimeReadiness readiness;
+                readiness.session = true;
+                readiness.adapter = true;
+                readiness.route = true;
+                readiness.dns = true;
+                readiness.policy = true;
+                runtime_lifecycle_.UpdateReadiness(runtime.generation, readiness, now);
+                runtime_lifecycle_.Transition(
+                    runtime.generation,
+                    ppp::app::runtime::RuntimePhase::Connected,
+                    now);
+            }
+        }
+        else if (NULLPTR == exchanger) {
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connecting,
+                now);
+        }
+        else if (exchanger->GetNetworkState() == NetworkState::NetworkState_Reconnecting) {
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Reconnecting,
+                now);
+        }
+        else if (exchanger->GetNetworkState() == NetworkState::NetworkState_Established) {
+            runtime_lifecycle_.UpdateReadiness(
+                runtime.generation,
+                client->GetRuntimeReadiness(),
+                now);
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connected,
+                now);
+        }
+        else {
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Handshaking,
+                now);
+        }
     }
 
     if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
