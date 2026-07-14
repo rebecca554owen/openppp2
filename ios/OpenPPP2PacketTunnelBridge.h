@@ -60,6 +60,11 @@ int openppp2_ios_tap_input(
 
 int openppp2_ios_tap_get_link_state(openppp2_ios_tap* tap);
 
+int openppp2_ios_tap_get_runtime_snapshot(
+    openppp2_ios_tap* tap,
+    char*             buffer,
+    int               buffer_size);
+
 int openppp2_ios_tap_get_statistics(
     openppp2_ios_tap* tap,
     char*             buffer,

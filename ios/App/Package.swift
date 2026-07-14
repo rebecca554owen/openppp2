@@ -16,6 +16,7 @@ let package = Package(
                 "ProfileImportExport.swift",
                 "Runtime/RuntimeSnapshot.swift",
                 "Runtime/RuntimeStore.swift",
+                "Runtime/RuntimeControls.swift",
                 "Runtime/TunnelRuntimeBridge.swift",
             ]
         ),

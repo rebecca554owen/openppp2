@@ -19,7 +19,7 @@ class RuntimeStore extends ChangeNotifier {
       return false;
     }
     if (incoming.generation == _state.generation &&
-        incoming.monotonicMs < _state.monotonicMs) {
+        incoming.monotonicMs <= _state.monotonicMs) {
       return false;
     }
     _state = incoming;

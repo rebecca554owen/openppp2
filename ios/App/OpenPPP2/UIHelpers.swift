@@ -143,6 +143,8 @@ enum L10n {
         "home.networkChanged": ("网络已变化", "Network changed"),
         "home.connect": ("连接", "Connect"),
         "home.stop": ("停止", "Stop"),
+        "home.retry": ("重试", "Retry"),
+        "home.forceStop": ("强制停止", "Force Stop"),
         "home.noProfile": ("没有配置", "No Profile"),
         "home.selectProfile": ("点击选择一个配置", "Tap to choose a profile"),
         "home.route.geo": ("GEO 分流", "GEO"),

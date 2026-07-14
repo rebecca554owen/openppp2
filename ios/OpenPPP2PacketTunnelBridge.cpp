@@ -2,6 +2,8 @@
 #include <ios/ppp/tap/TapIos.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/runtime/RuntimeLifecycle.h>
+#include <ppp/app/runtime/RuntimeSnapshotJson.h>
 #include <ppp/auxiliary/JsonAuxiliary.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
@@ -54,6 +56,7 @@ struct openppp2_ios_tap
     bool                                                                        running = false;
     bool                                                                        stopping = false;
     std::atomic<bool>                                                           packet_logging { false };
+    ppp::app::runtime::RuntimeLifecycle                                         runtime_lifecycle;
 };
 
 namespace
@@ -76,6 +79,74 @@ namespace
     ppp::string g_last_error_text = "success";
     std::once_flag g_runtime_bootstrap_once;
     std::once_flag g_telemetry_sink_once;
+
+    uint64_t runtime_now_ms() noexcept
+    {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    void refresh_runtime(openppp2_ios_tap* tap) noexcept
+    {
+        if (tap == nullptr)
+        {
+            return;
+        }
+
+        const ppp::app::runtime::RuntimeSnapshot runtime = tap->runtime_lifecycle.GetSnapshot();
+        if (runtime.generation == 0 || runtime.phase == ppp::app::runtime::RuntimePhase::Stopping)
+        {
+            return;
+        }
+
+        std::shared_ptr<VEthernetNetworkSwitcher> client;
+        {
+            std::lock_guard<std::mutex> scope(tap->sync);
+            client = tap->client;
+        }
+        if (client == nullptr)
+        {
+            tap->runtime_lifecycle.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connecting,
+                runtime_now_ms());
+            return;
+        }
+
+        std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
+        if (exchanger == nullptr)
+        {
+            tap->runtime_lifecycle.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connecting,
+                runtime_now_ms());
+        }
+        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting)
+        {
+            tap->runtime_lifecycle.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Reconnecting,
+                runtime_now_ms());
+        }
+        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established)
+        {
+            tap->runtime_lifecycle.UpdateReadiness(
+                runtime.generation,
+                client->GetRuntimeReadiness(),
+                runtime_now_ms());
+            tap->runtime_lifecycle.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connected,
+                runtime_now_ms());
+        }
+        else
+        {
+            tap->runtime_lifecycle.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Handshaking,
+                runtime_now_ms());
+        }
+    }
 
     void native_logf(const char* format, ...) noexcept
     {
@@ -924,10 +995,39 @@ int openppp2_ios_tap_start(
         }
     }
 
+    ppp::app::runtime::RuntimeSnapshot runtime_seed;
+    runtime_seed.role = "client";
+    const uint64_t runtime_generation = tap->runtime_lifecycle.Begin(
+        std::move(runtime_seed),
+        runtime_now_ms());
+    tap->runtime_lifecycle.Transition(
+        runtime_generation,
+        ppp::app::runtime::RuntimePhase::PreparingHost,
+        runtime_now_ms());
+    tap->runtime_lifecycle.Transition(
+        runtime_generation,
+        ppp::app::runtime::RuntimePhase::Connecting,
+        runtime_now_ms());
+
     if (!start_runtime(tap, configuration_json, options, statistics_writer, statistics_user_data))
     {
+        ppp::app::runtime::RuntimeError error;
+        error.code = static_cast<uint32_t>(std::max(0, openppp2_ios_last_error_code()));
+        error.severity = "error";
+        error.user_message_key = "RuntimeFailed";
+        tap->runtime_lifecycle.TryBeginStop(runtime_generation, runtime_now_ms());
+        tap->runtime_lifecycle.CompleteStop(
+            runtime_generation,
+            false,
+            std::move(error),
+            runtime_now_ms());
         return 1;
     }
+
+    tap->runtime_lifecycle.Transition(
+        runtime_generation,
+        ppp::app::runtime::RuntimePhase::Handshaking,
+        runtime_now_ms());
 
     return 0;
 }
@@ -970,6 +1070,12 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
     if (nullptr == tap)
     {
         return 0;
+    }
+
+    const ppp::app::runtime::RuntimeSnapshot runtime = tap->runtime_lifecycle.GetSnapshot();
+    if (runtime.generation != 0)
+    {
+        tap->runtime_lifecycle.TryBeginStop(runtime.generation, runtime_now_ms());
     }
 
     std::shared_ptr<VEthernetNetworkSwitcher> client;
@@ -1023,6 +1129,15 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
     tap->stopping = false;
     tap->link_state = 2;
     tap->latest_statistics = "{}";
+    const ppp::app::runtime::RuntimeSnapshot stopping = tap->runtime_lifecycle.GetSnapshot();
+    if (stopping.phase == ppp::app::runtime::RuntimePhase::Stopping)
+    {
+        tap->runtime_lifecycle.CompleteStop(
+            stopping.generation,
+            true,
+            ppp::app::runtime::RuntimeError(),
+            runtime_now_ms());
+    }
     return 0;
 }
 
@@ -1084,6 +1199,27 @@ int openppp2_ios_tap_get_link_state(openppp2_ios_tap* tap)
         tap->link_state = 0;
     }
     return tap->link_state;
+}
+
+int openppp2_ios_tap_get_runtime_snapshot(
+    openppp2_ios_tap* tap,
+    char*             buffer,
+    int               buffer_size)
+{
+    if (nullptr == tap)
+    {
+        return 0;
+    }
+
+    refresh_runtime(tap);
+    const std::string encoded = ppp::app::runtime::SerializeRuntimeSnapshot(
+        tap->runtime_lifecycle.GetSnapshot());
+    const ppp::string snapshot(encoded.data(), encoded.size());
+    if (!copy_text(snapshot, buffer, buffer_size))
+    {
+        return 0;
+    }
+    return static_cast<int>(snapshot.size());
 }
 
 int openppp2_ios_tap_get_statistics(

@@ -46,6 +46,21 @@ final class RuntimeStoreTests: XCTestCase {
         XCTAssertEqual(store.state.phase, .stopping)
     }
 
+    func testDuplicateTimestampWithinGenerationIsIgnored() {
+        let store = RuntimeStore(initial: snapshot(
+            generation: 8,
+            monotonicMs: 200,
+            phase: .stopping
+        ))
+
+        XCTAssertFalse(store.apply(snapshot(
+            generation: 8,
+            monotonicMs: 200,
+            phase: .connected
+        )))
+        XCTAssertEqual(store.state.phase, .stopping)
+    }
+
     func testNewGenerationReplacesPriorState() {
         let store = RuntimeStore(initial: snapshot(
             generation: 8,

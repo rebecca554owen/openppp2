@@ -61,6 +61,9 @@ final class OpenPPP2PacketTunnelAdapter {
 
         if let tap {
             openppp2_ios_tap_stop(tap, stopReason)
+            if let snapshot = readNativeRuntimeSnapshot() {
+                TunnelSharedState.writeRuntimeSnapshotJson(snapshot)
+            }
             openppp2_ios_tap_destroy(tap)
             self.tap = nil
         }
@@ -216,6 +219,19 @@ final class OpenPPP2PacketTunnelAdapter {
         return String(cString: buffer)
     }
 
+    private func readNativeRuntimeSnapshot() -> String? {
+        guard let tap else {
+            return nil
+        }
+
+        var buffer = [CChar](repeating: 0, count: 2_048)
+        let count = openppp2_ios_tap_get_runtime_snapshot(tap, &buffer, Int32(buffer.count))
+        guard count > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
     private func readPackets() {
         guard isRunning else {
             return
@@ -281,6 +297,9 @@ final class OpenPPP2PacketTunnelAdapter {
             guard let self, self.isRunning else { return }
             if let statistics = self.readNativeStatisticsJson() {
                 self.latestStatisticsJson = statistics
+            }
+            if let snapshot = self.readNativeRuntimeSnapshot() {
+                TunnelSharedState.writeRuntimeSnapshotJson(snapshot)
             }
             self.packetFlowDiagnostics.heartbeatTick(
                 linkState: Int(self.linkState()),

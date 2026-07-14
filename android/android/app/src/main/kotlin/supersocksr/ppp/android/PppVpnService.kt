@@ -61,6 +61,7 @@ class PppVpnService : VpnService() {
     private var linkStateHandler: Handler? = null
     private var connectStartedAtMs: Long = 0L
     private var lastReportedLinkState: Int = 6
+    private var lastReportedRuntimeSnapshot: String? = null
     private var activeConfigJson: String? = null
     private var activeVpnOptionsJson: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -79,8 +80,22 @@ class PppVpnService : VpnService() {
                 6
             }
             publishLinkState(ls)
+            val runtimeSnapshot = try {
+                libopenppp2.get_runtime_snapshot()
+            } catch (e: Throwable) {
+                PppLog.write(this@PppVpnService, "get_runtime_snapshot poller failed", e)
+                null
+            }
+            publishRuntimeSnapshot(runtimeSnapshot)
             linkStateHandler?.postDelayed(this, 1000L)
         }
+    }
+
+    private fun publishRuntimeSnapshot(value: String?, forceEvent: Boolean = false) {
+        if (value.isNullOrBlank()) return
+        if (!forceEvent && value == lastReportedRuntimeSnapshot) return
+        lastReportedRuntimeSnapshot = value
+        MainActivity.sendEvent(mapOf("type" to "runtimeSnapshot", "value" to value))
     }
 
     private fun publishLinkState(value: Int, forceEvent: Boolean = false) {
@@ -93,6 +108,7 @@ class PppVpnService : VpnService() {
     private fun startLinkStatePoller() {
         if (linkStateThread != null) return
         lastReportedLinkState = 6
+        lastReportedRuntimeSnapshot = null
         val t = HandlerThread("openppp2-linkstate").also { it.start() }
         linkStateThread = t
         val h = Handler(t.looper)
@@ -101,6 +117,11 @@ class PppVpnService : VpnService() {
     }
 
     private fun stopLinkStatePoller() {
+        try {
+            publishRuntimeSnapshot(libopenppp2.get_runtime_snapshot(), forceEvent = true)
+        } catch (e: Throwable) {
+            PppLog.write(this, "final get_runtime_snapshot failed", e)
+        }
         linkStateHandler?.removeCallbacksAndMessages(null)
         linkStateHandler = null
         linkStateThread?.quitSafely()

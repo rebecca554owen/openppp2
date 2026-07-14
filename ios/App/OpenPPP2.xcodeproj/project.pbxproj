@@ -40,6 +40,10 @@
 		10000000000000000000002F /* UIHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012F /* UIHelpers.swift */; };
 		100000000000000000000135 /* ProfileImportExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000133 /* ProfileImportExport.swift */; };
 		100000000000000000000136 /* ProfileDocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000134 /* ProfileDocumentPicker.swift */; };
+		100000000000000000000137 /* RuntimeSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000140 /* RuntimeSnapshot.swift */; };
+		100000000000000000000138 /* RuntimeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000141 /* RuntimeStore.swift */; };
+		100000000000000000000139 /* TunnelRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000142 /* TunnelRuntimeBridge.swift */; };
+		10000000000000000000013A /* RuntimeControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000143 /* RuntimeControls.swift */; };
 		100000000000000000000005 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* NetworkExtension.framework */; };
 		100000000000000000000006 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* NetworkExtension.framework */; };
 		100000000000000000000007 /* OpenPPP2.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000106 /* OpenPPP2.xcframework */; };
@@ -111,6 +115,10 @@
 		10000000000000000000012F /* UIHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIHelpers.swift; sourceTree = "<group>"; };
 		100000000000000000000133 /* ProfileImportExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileImportExport.swift; sourceTree = "<group>"; };
 		100000000000000000000134 /* ProfileDocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileDocumentPicker.swift; sourceTree = "<group>"; };
+		100000000000000000000140 /* RuntimeSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime/RuntimeSnapshot.swift; sourceTree = "<group>"; };
+		100000000000000000000141 /* RuntimeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime/RuntimeStore.swift; sourceTree = "<group>"; };
+		100000000000000000000142 /* TunnelRuntimeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime/TunnelRuntimeBridge.swift; sourceTree = "<group>"; };
+		100000000000000000000143 /* RuntimeControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime/RuntimeControls.swift; sourceTree = "<group>"; };
 		100000000000000000000201 /* OpenPPP2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenPPP2.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000202 /* OpenPPP2PacketTunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenPPP2PacketTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -160,6 +168,10 @@
 				100000000000000000000134 /* ProfileDocumentPicker.swift */,
 				100000000000000000000125 /* VPNController.swift */,
 				100000000000000000000126 /* HomeViewController.swift */,
+				100000000000000000000140 /* RuntimeSnapshot.swift */,
+				100000000000000000000141 /* RuntimeStore.swift */,
+				100000000000000000000142 /* TunnelRuntimeBridge.swift */,
+				100000000000000000000143 /* RuntimeControls.swift */,
 				100000000000000000000127 /* SelectProfileViewController.swift */,
 				100000000000000000000128 /* ProfilesViewController.swift */,
 				100000000000000000000129 /* ProfileEditViewController.swift */,
@@ -323,6 +335,10 @@
 				100000000000000000000136 /* ProfileDocumentPicker.swift in Sources */,
 				100000000000000000000025 /* VPNController.swift in Sources */,
 				100000000000000000000026 /* HomeViewController.swift in Sources */,
+				100000000000000000000137 /* RuntimeSnapshot.swift in Sources */,
+				100000000000000000000138 /* RuntimeStore.swift in Sources */,
+				100000000000000000000139 /* TunnelRuntimeBridge.swift in Sources */,
+				10000000000000000000013A /* RuntimeControls.swift in Sources */,
 				100000000000000000000027 /* SelectProfileViewController.swift in Sources */,
 				100000000000000000000028 /* ProfilesViewController.swift in Sources */,
 				100000000000000000000029 /* ProfileEditViewController.swift in Sources */,

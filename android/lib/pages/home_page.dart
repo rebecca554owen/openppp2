@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/config_profile.dart';
 import '../models/launch_route_mode.dart';
+import '../runtime/runtime_controls.dart';
+import '../runtime/runtime_snapshot.dart';
+import '../runtime/runtime_store.dart';
 import '../services/profile_store.dart';
 import '../services/telemetry_settings_store.dart';
 import '../vpn_service.dart';
@@ -20,8 +23,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final _vpnService = VpnService();
   final _store = ProfileStore();
+  late final RuntimeStore _runtimeStore;
 
-  VpnState _state = VpnState.disconnected;
   VpnStatistics _stats = const VpnStatistics();
   List<ConfigProfile> _profiles = const [];
   ConfigProfile? _active;
@@ -52,6 +55,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _vpnService.init();
+    _runtimeStore = _vpnService.runtimeStore;
+    _runtimeStore.addListener(_runtimeChanged);
     _stateSub = _vpnService.stateStream.listen(_applyState);
     _statsSub = _vpnService.statsStream.listen((stats) {
       if (!mounted) return;
@@ -69,6 +74,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     unawaited(_refreshStore());
     unawaited(_refreshStartupState());
     unawaited(_loadDebugPanelEnabled());
+  }
+
+  void _runtimeChanged() {
+    if (!mounted) return;
+    final phase = _runtimeStore.state.phase;
+    setState(() {
+      if (phase == RuntimePhase.connected) {
+        _connectedAt ??= DateTime.now();
+        _connectWatchdogTimer?.cancel();
+        _startDurationTimer();
+      } else if (phase == RuntimePhase.idle || phase == RuntimePhase.failed) {
+        _connectedAt = null;
+        _durationTimer?.cancel();
+        _duration = '00:00:00';
+      } else if (phase == RuntimePhase.reconnecting) {
+        _connectedAt = null;
+      }
+    });
   }
 
   Future<void> _refreshStore() async {
@@ -90,22 +113,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _applyLinkState(int ls) {
     if (!mounted) return;
-    final wasEstablished = _linkState == 0;
-    final promoteConnected = ls == 0 && _state != VpnState.connected;
-    final demoteReconnecting = wasEstablished &&
-        ls != 0 &&
-        ls != 6 &&
-        _state == VpnState.connected;
-    if (ls == _linkState && !promoteConnected && !demoteReconnecting) return;
-
+    if (ls == _linkState) return;
     setState(() => _linkState = ls);
-    if (promoteConnected) {
-      _connectWatchdogTimer?.cancel();
-      _applyState(VpnState.connected);
-    } else if (demoteReconnecting) {
-      _applyState(VpnState.connecting);
-      _connectedAt = null;
-    }
   }
 
   @override
@@ -168,12 +177,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _applyState(VpnState state) {
     if (!mounted) return;
     setState(() {
-      _state = state;
-      if (state == VpnState.connected) {
-        _connectedAt ??= DateTime.now();
-        _connectWatchdogTimer?.cancel();
-        _startDurationTimer();
-      } else if (state == VpnState.disconnected) {
+      if (state == VpnState.disconnected) {
         _connectedAt = null;
         _connectWatchdogTimer?.cancel();
         _durationTimer?.cancel();
@@ -203,11 +207,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _formatSpeed(int bps) => '${_formatBytes(bps)}/s';
 
   Future<void> _toggleConnection() async {
-    if (_state == VpnState.disconnecting) return;
-
-    if (_state == VpnState.connected || _state == VpnState.connecting) {
-      await _stopVpnForDebug();
-      return;
+    switch (controlsFor(_runtimeStore.state.phase).action) {
+      case RuntimeConnectionAction.cancel:
+      case RuntimeConnectionAction.stop:
+      case RuntimeConnectionAction.forceStop:
+        await _stopVpnForDebug();
+        return;
+      case RuntimeConnectionAction.none:
+        return;
+      case RuntimeConnectionAction.start:
+      case RuntimeConnectionAction.retry:
+        break;
     }
 
     if (_connectInFlight) return;
@@ -249,31 +259,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final startedAt = DateTime.now();
     _connectWatchdogTimer =
         Timer.periodic(const Duration(seconds: 5), (timer) async {
-      if (!mounted || _state != VpnState.connecting) {
+      if (!mounted) {
         timer.cancel();
         return;
       }
-      if (_vpnService.currentState == VpnState.connected) {
+      final phase = _runtimeStore.state.phase;
+      if (phase == RuntimePhase.connected) {
         timer.cancel();
-        if (!mounted) return;
-        _applyState(VpnState.connected);
         return;
       }
-      // onStarted / VPN started means the native engine is live even when
-      // linkState polling still reports CONNECTING.
+      if (controlsFor(phase).action != RuntimeConnectionAction.cancel) {
+        timer.cancel();
+        return;
+      }
       final log = await _vpnService.readLog();
-      if (log.contains('onStarted key=') || log.contains('VPN started with key=')) {
-        timer.cancel();
-        if (!mounted) return;
-        _applyState(VpnState.connected);
-        return;
-      }
-      if (_linkState == 0) {
-        timer.cancel();
-        if (!mounted) return;
-        _applyState(VpnState.connected);
-        return;
-      }
       final hbAgeMs = await _vpnService.getVpnHeartbeatAgeMs();
       final hbStale = hbAgeMs < 0 || hbAgeMs > 30000;
       final totalSec = DateTime.now().difference(startedAt).inSeconds;
@@ -287,9 +286,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           : log.contains('vpnThread started')
               ? '连接超时（$reason）：native 引擎已启动但未完成握手。\n请检查所选配置的服务器地址、密钥与网络连通性。'
               : '连接超时（$reason）：VPN 未进入已连接状态。';
-      if (!mounted || _state != VpnState.connecting) return;
+      if (!mounted ||
+          controlsFor(_runtimeStore.state.phase).action !=
+              RuntimeConnectionAction.cancel) {
+        return;
+      }
       setState(() {
-        _state = VpnState.disconnected;
         _lastError = error;
       });
       await _vpnService.disconnect();
@@ -374,8 +376,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _stopVpnForDebug() async {
     _connectWatchdogTimer?.cancel();
     await _vpnService.disconnect();
-    if (!mounted) return;
-    setState(() => _state = VpnState.disconnected);
   }
 
   Future<void> _applyProfile(ConfigProfile profile) async {
@@ -383,7 +383,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _store.setActive(profile.id);
     await _refreshStore();
     if (!mounted) return;
-    if (_state == VpnState.connected || _state == VpnState.connecting) {
+    if (!controlsFor(_runtimeStore.state.phase).configEditable) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已切换到「${profile.name}」，重连后生效')),
       );
@@ -419,47 +419,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final next = await _store.getProfileOptions(active.id);
     if (!mounted) return;
     setState(() => _launchOptions = next);
-    if (_state == VpnState.connected || _state == VpnState.connecting) {
+    if (!controlsFor(_runtimeStore.state.phase).configEditable) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('快捷设置已保存，重连后生效')),
       );
     }
   }
 
-  String _connectingLabel() {
-    if (!_debugPanelEnabled) return '连接中...';
-    switch (_linkState) {
-      case 4:
-        return '重连中...';
-      case 5:
-        return '握手中...';
-      case 2:
-        return '初始化客户端...';
-      case 3:
-        return '初始化交换器...';
-      case 6:
-        return '启动引擎...';
-      default:
-        return '连接中...';
-    }
-  }
-
   String _getStateText() {
-    switch (_state) {
-      case VpnState.connected:
-        return '已连接';
-      case VpnState.connecting:
-        return '连接中';
-      case VpnState.disconnecting:
-        return '断开中';
-      case VpnState.disconnected:
-        return '未连接';
-    }
+    return controlsFor(_runtimeStore.state.phase).statusLabel;
   }
-
-  bool get _isActive => _state == VpnState.connected;
-  bool get _isBusy =>
-      _state == VpnState.connecting || _state == VpnState.disconnecting;
 
   @override
   void dispose() {
@@ -469,6 +438,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _errorSub?.cancel();
     _linkStateSub?.cancel();
     _storeSub?.cancel();
+    _runtimeStore.removeListener(_runtimeChanged);
     _connectWatchdogTimer?.cancel();
     _logPollTimer?.cancel();
     _durationTimer?.cancel();
@@ -478,18 +448,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isActive = _isActive;
-    final isBusy = _isBusy;
-    final isVpnLive = isActive || isBusy;
-
-    final statusTitle = isActive
-        ? '已连接'
-        : (_state == VpnState.connecting
-            ? _connectingLabel()
-            : (_state == VpnState.disconnecting ? '断开中...' : '未连接'));
-    final statusDetail = isActive
-        ? _duration
-        : (isBusy ? 'VPN 正在启动' : '准备连接');
+    final controls = controlsFor(_runtimeStore.state.phase);
+    final statusTitle = controls.statusLabel;
+    final statusDetail =
+        controls.isConnected ? _duration : controls.detailLabel;
 
     final routeMode = LaunchRouteMode.fromOptions(_launchOptions);
 
@@ -505,27 +467,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             HomeStatusCard(
               statusText: statusTitle,
               detailText: statusDetail,
-              isConnected: isActive,
-              isBusy: isBusy,
-              buttonLabel: isVpnLive ? '停止' : '连接',
-              buttonEnabled: _state != VpnState.disconnecting,
+              isConnected: controls.isConnected,
+              isBusy: controls.isBusy,
+              buttonLabel: controls.buttonLabel,
+              buttonEnabled: controls.buttonEnabled,
               uploadText: _formatSpeed(_stats.txSpeedBytes),
               downloadText: _formatSpeed(_stats.rxSpeedBytes),
               allowLan: _launchOptions['allowLan'] == true,
               blockQuic: _launchOptions['blockQuic'] == true,
               routeMode: routeMode,
               onConnect: _toggleConnection,
-              onAllowLanChanged: _active == null
+              onAllowLanChanged: _active == null || !controls.configEditable
                   ? null
                   : (v) => _updateLaunchOption((o) {
                         o['allowLan'] = v;
                       }),
-              onBlockQuicChanged: _active == null
+              onBlockQuicChanged: _active == null || !controls.configEditable
                   ? null
                   : (v) => _updateLaunchOption((o) {
                         o['blockQuic'] = v;
                       }),
-              onRouteModeChanged: _active == null
+              onRouteModeChanged: _active == null || !controls.configEditable
                   ? null
                   : (mode) => _updateLaunchOption((o) {
                         final next = LaunchRouteMode.applyTo(o, mode);
@@ -548,9 +510,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.add_circle_outline),
                   tooltip: '添加配置',
-                  onSelected: (value) {
-                    if (value == 'new') _addProfile();
-                  },
+                  onSelected: controls.configEditable
+                      ? (value) {
+                          if (value == 'new') _addProfile();
+                        }
+                      : null,
                   itemBuilder: (_) => const [
                     PopupMenuItem(
                       value: 'new',
@@ -571,10 +535,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               activeId: _active?.id,
               shrinkWrap: true,
               maxHeight: MediaQuery.sizeOf(context).height * 0.38,
-              onTap: _applyProfile,
-              onApply: _applyProfile,
-              onEdit: _editProfile,
-              onTogglePin: _togglePin,
+              onTap: controls.configEditable ? _applyProfile : null,
+              onApply: controls.configEditable ? _applyProfile : null,
+              onEdit: controls.configEditable ? _editProfile : null,
+              onTogglePin: controls.configEditable ? _togglePin : null,
             ),
             if (_lastError != null) ...[
               const SizedBox(height: 12),

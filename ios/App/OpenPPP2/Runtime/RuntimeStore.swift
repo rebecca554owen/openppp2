@@ -21,7 +21,7 @@ public final class RuntimeStore: ObservableObject {
             return false
         }
         if incoming.generation == state.generation,
-           incoming.monotonicMs < state.monotonicMs {
+           incoming.monotonicMs <= state.monotonicMs {
             return false
         }
         state = incoming

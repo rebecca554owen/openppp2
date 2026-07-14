@@ -2,6 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 
+import 'runtime/runtime_bridge.dart';
+import 'runtime/runtime_snapshot.dart';
+import 'runtime/runtime_store.dart';
+
 enum VpnState {
   disconnected,
   connecting,
@@ -36,10 +40,14 @@ class VpnStatistics {
       return null;
     }
 
-    final nativeTxSpeedBytes = value(['tx', 'txBytes', 'outgoing', 'outgoingTraffic']) ?? 0;
-    final nativeRxSpeedBytes = value(['rx', 'rxBytes', 'incoming', 'incomingTraffic']) ?? 0;
-    final nativeInBytes = value(['in', 'inBytes', 'incomingTotal', 'incomingTrafficTotal']);
-    final nativeOutBytes = value(['out', 'outBytes', 'outgoingTotal', 'outgoingTrafficTotal']);
+    final nativeTxSpeedBytes =
+        value(['tx', 'txBytes', 'outgoing', 'outgoingTraffic']) ?? 0;
+    final nativeRxSpeedBytes =
+        value(['rx', 'rxBytes', 'incoming', 'incomingTraffic']) ?? 0;
+    final nativeInBytes =
+        value(['in', 'inBytes', 'incomingTotal', 'incomingTrafficTotal']);
+    final nativeOutBytes =
+        value(['out', 'outBytes', 'outgoingTotal', 'outgoingTrafficTotal']);
     final previousInBytes = previous?.inBytes ?? 0;
     final previousOutBytes = previous?.outBytes ?? 0;
     final hasPreviousTotals = previousInBytes > 0 || previousOutBytes > 0;
@@ -81,11 +89,16 @@ class VpnService {
   final _statsController = StreamController<VpnStatistics>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _linkStateController = StreamController<int>.broadcast();
+  final _runtimeSnapshotController =
+      StreamController<RuntimeSnapshot>.broadcast();
 
   Stream<VpnState> get stateStream => _stateController.stream;
   Stream<VpnStatistics> get statsStream => _statsController.stream;
   Stream<String> get errorStream => _errorController.stream;
   Stream<int> get linkStateStream => _linkStateController.stream;
+  Stream<RuntimeSnapshot> get runtimeSnapshotStream =>
+      _runtimeSnapshotController.stream;
+  final RuntimeStore runtimeStore = RuntimeStore();
 
   VpnState _currentState = VpnState.disconnected;
   VpnState get currentState => _currentState;
@@ -107,7 +120,8 @@ class VpnService {
     if (_initialized) return;
     _initialized = true;
     _channel.setMethodCallHandler(_handleMethodCall);
-    _eventSubscription = _eventChannel.receiveBroadcastStream().listen(_handleEvent);
+    _eventSubscription =
+        _eventChannel.receiveBroadcastStream().listen(_handleEvent);
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -131,12 +145,19 @@ class VpnService {
       } else if (type == 'statistics') {
         final value = event['value'];
         _applyStatistics(
-          value is String ? value : jsonEncode(Map<String, dynamic>.from(value as Map)),
+          value is String
+              ? value
+              : jsonEncode(Map<String, dynamic>.from(value as Map)),
         );
       } else if (type == 'linkState') {
         final value = event['value'];
         if (value is int) {
           _updateLinkState(value);
+        }
+      } else if (type == 'runtimeSnapshot') {
+        final value = event['value'];
+        if (value is String) {
+          _applyRuntimeSnapshot(value);
         }
       } else if (type == 'error') {
         final value = event['value']?.toString() ?? 'Unknown VPN error';
@@ -147,6 +168,17 @@ class VpnService {
           _updateState(VpnState.disconnected);
         }
       }
+    }
+  }
+
+  void _applyRuntimeSnapshot(String raw) {
+    try {
+      final snapshot = decodeRuntimeSnapshot(raw);
+      if (runtimeStore.apply(snapshot)) {
+        _runtimeSnapshotController.add(snapshot);
+      }
+    } catch (error) {
+      _errorController.add('Invalid runtime snapshot: $error');
     }
   }
 
@@ -174,7 +206,9 @@ class VpnService {
 
   VpnStatistics _applyStatistics(String raw) {
     final normalizedRaw = raw.trim();
-    if (normalizedRaw.isEmpty || normalizedRaw == '{}' || normalizedRaw == _lastStatsRaw) {
+    if (normalizedRaw.isEmpty ||
+        normalizedRaw == '{}' ||
+        normalizedRaw == _lastStatsRaw) {
       return _currentStats;
     }
     final json = jsonDecode(normalizedRaw) as Map<String, dynamic>;

@@ -126,6 +126,9 @@ class libopenppp2 {
         external fun get_link_state(): Int
 
         @JvmStatic
+        external fun get_runtime_snapshot(): String?
+
+        @JvmStatic
         external fun get_aggligator_state(): Int
 
         @JvmStatic

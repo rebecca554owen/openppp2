@@ -33,6 +33,8 @@
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <common/aggligator/aggligator.h>
 #include <ppp/app/client/GeoRuleGenerator.h>
+#include <ppp/app/runtime/RuntimeLifecycle.h>
+#include <ppp/app/runtime/RuntimeSnapshotJson.h>
 
 #include <android/OpenPPP2VpnProtectBridge.h>
 #include <android/OpenPPP2TelemetryBridge.h>
@@ -78,6 +80,7 @@
 #include <jni.h>
 
 #include <iostream>
+#include <algorithm>
 #include <string>
 #include <memory>
 #include <exception>
@@ -329,6 +332,7 @@ public:
         uint64_t                                                            out = UINT64_MAX;
     }                                                                       last_reported_statistics_;
     uint32_t                                                                stats_perf_log_ticks_ = 0;
+    ppp::app::runtime::RuntimeLifecycle                                     runtime_lifecycle_;
 
 private:
     bool                                                                    ReportTransmissionStatistics() noexcept;
@@ -427,6 +431,41 @@ bool                                                                        libo
 }
 
 bool                                                                        libopenppp2_application::OnTick(uint64_t now) noexcept {
+    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    std::shared_ptr<VEthernetNetworkSwitcher> client = std::atomic_load(&client_);
+    if (runtime.generation != 0 &&
+        runtime.phase != ppp::app::runtime::RuntimePhase::Stopping &&
+        NULLPTR != client) {
+        std::shared_ptr<VEthernetExchanger> exchanger = client->GetExchanger();
+        if (NULLPTR == exchanger) {
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connecting,
+                now);
+        }
+        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting) {
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Reconnecting,
+                now);
+        }
+        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established) {
+            runtime_lifecycle_.UpdateReadiness(
+                runtime.generation,
+                client->GetRuntimeReadiness(),
+                now);
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Connected,
+                now);
+        }
+        else {
+            runtime_lifecycle_.Transition(
+                runtime.generation,
+                ppp::app::runtime::RuntimePhase::Handshaking,
+                now);
+        }
+    }
     ReportTransmissionStatistics();
     return true;
 }
@@ -688,6 +727,10 @@ int                                                                         libo
 
 bool                                                                        libopenppp2_application::Release() noexcept {
     bool any = false;
+    const ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
+    if (runtime.generation != 0) {
+        runtime_lifecycle_.TryBeginStop(runtime.generation, Executors::GetTickCount());
+    }
     std::shared_ptr<Timer> timeout = std::move(timeout_);
     if (NULLPTR != timeout) {
         timeout->Dispose();
@@ -708,6 +751,15 @@ bool                                                                        libo
     transmission_statistics_.Clear();
     last_reported_statistics_ = {};
     stats_perf_log_ticks_ = 0;
+
+    const ppp::app::runtime::RuntimeSnapshot stopping = runtime_lifecycle_.GetSnapshot();
+    if (stopping.phase == ppp::app::runtime::RuntimePhase::Stopping) {
+        runtime_lifecycle_.CompleteStop(
+            stopping.generation,
+            true,
+            ppp::app::runtime::RuntimeError(),
+            Executors::GetTickCount());
+    }
     return any;
 }
 
@@ -909,6 +961,22 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_get_1link_1stat
     else {
         return LIBOPENPPP2_LINK_STATE_UNKNOWN;
     }
+}
+
+// package: supersocksr.ppp.android.c
+// public final class libopenpppp2
+// public native string get_runtime_snapshot()
+__LIBOPENPPP2__(jstring) Java_supersocksr_ppp_android_c_libopenppp2_get_1runtime_1snapshot(JNIEnv* env, jobject* this_) noexcept {
+    __LIBOPENPPP2_MAIN__;
+
+    std::shared_ptr<libopenppp2_application> app = libopenppp2_application::GetDefault();
+    if (NULLPTR == app) {
+        return JNIENV_NewStringUTF(env, NULLPTR);
+    }
+
+    const std::string json = ppp::app::runtime::SerializeRuntimeSnapshot(
+        app->runtime_lifecycle_.GetSnapshot());
+    return JNIENV_NewStringUTF(env, json.c_str());
 }
 
 // package: supersocksr.ppp.android.c
@@ -1701,10 +1769,41 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                         }
                     }
 
+                    ppp::app::runtime::RuntimeSnapshot runtime_seed;
+                    runtime_seed.role = "client";
+                    const std::uint64_t runtime_generation = app->runtime_lifecycle_.Begin(
+                        std::move(runtime_seed),
+                        Executors::GetTickCount());
+                    app->runtime_lifecycle_.Transition(
+                        runtime_generation,
+                        ppp::app::runtime::RuntimePhase::PreparingHost,
+                        Executors::GetTickCount());
+                    app->runtime_lifecycle_.Transition(
+                        runtime_generation,
+                        ppp::app::runtime::RuntimePhase::Connecting,
+                        Executors::GetTickCount());
+
                     int err = libopenppp2_try_open_ethernet_switcher(context, ethernet);
                     if (err != LIBOPENPPP2_ERROR_SUCCESS) {
+                        ppp::app::runtime::RuntimeError error;
+                        error.code = static_cast<std::uint32_t>(std::max(0, err));
+                        error.severity = "error";
+                        error.user_message_key = "RuntimeFailed";
+                        app->runtime_lifecycle_.TryBeginStop(
+                            runtime_generation,
+                            Executors::GetTickCount());
+                        app->runtime_lifecycle_.CompleteStop(
+                            runtime_generation,
+                            false,
+                            std::move(error),
+                            Executors::GetTickCount());
                         return err;
                     }
+
+                    app->runtime_lifecycle_.Transition(
+                        runtime_generation,
+                        ppp::app::runtime::RuntimePhase::Handshaking,
+                        Executors::GetTickCount());
 
                     auto protector = ethernet->GetProtectorNetwork();
                     if (NULLPTR == protector) {
@@ -1730,6 +1829,23 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                         });
                 }
                 else if (err != LIBOPENPPP2_ERROR_IT_IS_RUNING) {
+                    const ppp::app::runtime::RuntimeSnapshot runtime =
+                        app->runtime_lifecycle_.GetSnapshot();
+                    if (runtime.generation != 0 &&
+                        runtime.phase != ppp::app::runtime::RuntimePhase::Failed) {
+                        ppp::app::runtime::RuntimeError error;
+                        error.code = static_cast<std::uint32_t>(std::max(0, err));
+                        error.severity = "error";
+                        error.user_message_key = "RuntimeFailed";
+                        app->runtime_lifecycle_.TryBeginStop(
+                            runtime.generation,
+                            Executors::GetTickCount());
+                        app->runtime_lifecycle_.CompleteStop(
+                            runtime.generation,
+                            false,
+                            std::move(error),
+                            Executors::GetTickCount());
+                    }
                     app->Release();
                     context->stop();
                 }
