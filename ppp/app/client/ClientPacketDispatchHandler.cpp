@@ -4,7 +4,7 @@
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
-#include <ppp/app/client/dns/DnsHost.h>
+#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/diagnostics/Error.h>
@@ -267,7 +267,8 @@ ANDROID_DNS_REDIRECT_TRACE(
                         NULLPTR != messages ? (int)messages->Length : -1,
                         Ipep::ToAddress(packet->Destination).to_string().c_str());
 #endif
-                    if (owner_->RedirectDnsServer(exchanger, packet, frame, messages)) {
+                    if (NULLPTR != owner_->dns_controller_ &&
+                        owner_->dns_controller_->HandleQuery(owner_->dns_session_, packet, frame, messages)) {
 #if defined(_ANDROID)
     ANDROID_DNS_REDIRECT_TRACE( "dns_redirect udp53 handled");
 #endif
@@ -278,9 +279,10 @@ ANDROID_DNS_REDIRECT_TRACE(
                             IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                         const boost::asio::ip::udp::endpoint destEP(
                             Ipep::ToAddress(packet->Destination), PPP_DNS_SYS_PORT);
-                        const dns::DnsHostPorts dns_ports = owner_->DnsHostPortsFor(exchanger);
-                        dns_ports.handle_resolver_response(
-                            messages, sourceEP, destEP, ppp::vector<Byte>{});
+                        if (NULLPTR != owner_->dns_controller_) {
+                            owner_->dns_controller_->HandleResolverResponse(
+                                owner_->dns_session_, messages, sourceEP, destEP, ppp::vector<Byte>{});
+                        }
                     }
                     return true;
                 }

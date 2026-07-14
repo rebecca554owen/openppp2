@@ -1,7 +1,6 @@
 #include "DnsUdpRelay.h"
 
 #include <ppp/configurations/AppConfiguration.h>
-#include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
@@ -9,6 +8,9 @@
 #include <ppp/dns/DnsWireValidation.h>
 #include <ppp/net/Socket.h>
 #include <ppp/threading/Timer.h>
+#if defined(_LINUX)
+#include <linux/ppp/net/ProtectorNetwork.h>
+#endif
 
 using ppp::threading::Timer;
 
@@ -39,21 +41,21 @@ namespace ppp {
             namespace dns {
 
                 bool DnsUdpRelay::RunCoroutine(
-                    const DnsHostPorts& host,
+                    const DnsQueryContext& query,
                     ppp::coroutines::YieldContext& y,
                     const std::shared_ptr<boost::asio::ip::udp::socket>& socket,
                     const std::shared_ptr<Byte>& buffer,
                     const boost::asio::ip::address& serverIP,
-                    const std::shared_ptr<VEthernetExchanger>& exchanger,
+                    const std::shared_ptr<const DnsSessionContext>& session,
                     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                     const std::shared_ptr<boost::asio::io_context>& context,
                     const boost::asio::ip::udp::endpoint& sourceEP,
                     const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
 
-                    (void)exchanger;
-                    const auto fallback_tunnel = [host, messages, sourceEP, destinationEP]() noexcept {
-                        host.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                    (void)session;
+                    const auto fallback_tunnel = [query, messages, sourceEP, destinationEP]() noexcept {
+                        query.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
                     };
 
                     boost::system::error_code ec;
@@ -81,7 +83,7 @@ namespace ppp {
 
 #if defined(_LINUX)
                     if (!serverIP.is_loopback()) {
-                        auto protector_network = host.get_protector_network();
+                        auto protector_network = query.protector_network;
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(handle, y)) {
 #if defined(_ANDROID)
@@ -125,7 +127,7 @@ namespace ppp {
 
                     const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
                     const std::shared_ptr<ppp::configurations::AppConfiguration> configuration =
-                        host.get_configuration();
+                        query.configuration;
 
                     const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
                         [socket_weak, handle](Timer*) noexcept {
@@ -146,7 +148,7 @@ namespace ppp {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
                     }
 
-                    if (!host.emplace_timeout(socket.get(), cb)) {
+                    if (!query.emplace_timeout(socket.get(), cb)) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                     }
 
@@ -161,9 +163,9 @@ namespace ppp {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     }
 
-                    *receive_again = [host, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, max_buffer_size, handle, receive_again]() noexcept {
+                    *receive_again = [query, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, max_buffer_size, handle, receive_again]() noexcept {
                         socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,
-                            [host, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, handle, receive_again](boost::system::error_code ec, size_t sz) noexcept {
+                            [query, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, handle, receive_again](boost::system::error_code ec, size_t sz) noexcept {
                                 if (ec == boost::system::errc::success && sz > 0) {
                                     if (!ShouldAcceptRelayResponse(
                                             *serverEPPtr, serverEP,
@@ -176,7 +178,7 @@ namespace ppp {
                                     ANDROID_DNS_UDP_RELAY_TRACE("dns_redirect recv ok fd=%d bytes=%d",
                                         handle,
                                         (int)sz);
-                                    host.datagram_output(sourceEP, destinationEP, buffer.get(), static_cast<int>(sz), false);
+                                    query.datagram_output(sourceEP, destinationEP, buffer.get(), static_cast<int>(sz), false);
                                 }
                                 else {
 #if defined(_ANDROID)
@@ -184,10 +186,10 @@ namespace ppp {
                                         handle,
                                         ec.value());
 #endif
-                                    host.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                                    query.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
                                 }
 
-                                host.delete_timeout(socket.get());
+                                query.delete_timeout(socket.get());
                                 *receive_again = std::function<void()>();
                                 ppp::net::Socket::Closesocket(socket);
                                 if (timeout) {
@@ -201,33 +203,29 @@ namespace ppp {
                 }
 
                 bool DnsUdpRelay::Spawn(
-                    const DnsHostPorts& host,
-                    const std::shared_ptr<VEthernetExchanger>& exchanger,
+                    const DnsQueryContext& query,
+                    const std::shared_ptr<const DnsSessionContext>& session,
                     const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
                     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                     const boost::asio::ip::address& serverIP,
                     const boost::asio::ip::address& destinationIP) noexcept {
 
-                    if (!CanSpawn(host, exchanger)) {
+                    if (!CanSpawn(query, session)) {
                         return false;
                     }
 
-                    std::shared_ptr<boost::asio::io_context> context = exchanger->GetContext();
+                    std::shared_ptr<boost::asio::io_context> context = query.io_context;
                     if (NULLPTR == context) {
                         return false;
                     }
 
-                    std::shared_ptr<Byte> buffer = exchanger->GetBuffer();
+                    std::shared_ptr<Byte> buffer;
+                    if (query.allocator) {
+                        buffer = ppp::threading::BufferswapAllocator::MakeByteArray(query.allocator, PPP_BUFFER_SIZE);
+                    }
                     if (NULLPTR == buffer) {
-                        const auto configuration = host.get_configuration();
-                        const auto allocator = configuration ? configuration->GetBufferAllocator() : nullptr;
-                        if (allocator) {
-                            buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, PPP_BUFFER_SIZE);
-                        }
-                        if (NULLPTR == buffer) {
-                            buffer = std::shared_ptr<Byte>(new Byte[PPP_BUFFER_SIZE], std::default_delete<Byte[]>());
-                        }
+                        buffer = std::shared_ptr<Byte>(new Byte[PPP_BUFFER_SIZE], std::default_delete<Byte[]>());
                     }
 
                     const std::shared_ptr<boost::asio::ip::udp::socket> socket =
@@ -240,12 +238,11 @@ namespace ppp {
                         ppp::net::IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                     const boost::asio::ip::udp::endpoint destinationEP(destinationIP, frame->Destination.Port);
 
-                    const auto allocator = host.get_buffer_allocator();
-                    return ppp::coroutines::YieldContext::Spawn(allocator.get(), *context,
-                        [host, socket, buffer, frame, messages, packet, context, serverIP, sourceEP, destinationEP, exchanger](ppp::coroutines::YieldContext& y) noexcept {
+                    return ppp::coroutines::YieldContext::Spawn(query.allocator.get(), *context,
+                        [query, socket, buffer, frame, messages, packet, context, serverIP, sourceEP, destinationEP, session](ppp::coroutines::YieldContext& y) noexcept {
                             (void)packet;
                             return DnsUdpRelay::RunCoroutine(
-                                host, y, socket, buffer, serverIP, exchanger, frame, messages, context, sourceEP, destinationEP);
+                                query, y, socket, buffer, serverIP, session, frame, messages, context, sourceEP, destinationEP);
                         });
                 }
 

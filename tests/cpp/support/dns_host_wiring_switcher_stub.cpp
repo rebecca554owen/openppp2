@@ -1,5 +1,3 @@
-#include <ppp/app/client/dns/DnsHost.h>
-#include <ppp/app/client/dns/DnsResponseHandler.h>
 #include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/ClientConnectionOpener.h>
@@ -16,15 +14,10 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/ethernet/VEthernet.h>
-#include <ppp/net/asio/vdns.h>
 
 namespace {
 
 bool g_inject_ok = true;
-bool g_datagram_output_called = false;
-int g_datagram_output_bytes = 0;
-bool g_tunnel_send_called = false;
-bool g_tunnel_send_result = false;
 
 }  // namespace
 
@@ -41,36 +34,6 @@ namespace ppp::configurations {
 AppConfiguration::AppConfiguration() noexcept = default;
 
 }  // namespace ppp::configurations
-
-namespace ppp::app::client::dns::test {
-
-void ResetDnsHostWiringSpy() noexcept {
-    g_datagram_output_called = false;
-    g_datagram_output_bytes = 0;
-    g_tunnel_send_called = false;
-}
-
-void SetDnsHostTunnelSendResult(bool result) noexcept {
-    g_tunnel_send_result = result;
-}
-
-bool DnsHostTunnelSendCalled() noexcept {
-    return g_tunnel_send_called;
-}
-
-void SetDnsHostInjectOk(bool inject_ok) noexcept {
-    g_inject_ok = inject_ok;
-}
-
-bool DnsHostDatagramOutputCalled() noexcept {
-    return g_datagram_output_called;
-}
-
-int DnsHostDatagramOutputBytes() noexcept {
-    return g_datagram_output_bytes;
-}
-
-}  // namespace ppp::app::client::dns::test
 
 namespace ppp::ethernet {
 
@@ -289,90 +252,11 @@ bool VEthernetNetworkSwitcher::LoadAllDnsRules(const ppp::string&, bool) noexcep
     return false;
 }
 
-const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
-    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
-
-    static dns::DnsHostPorts ports;
-    ports = BuildDnsHostPorts(exchanger);
-    return ports;
-}
-
-void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {}
-
 #if defined(_LINUX)
 VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::GetProtectorNetwork() noexcept {
     return protect_network_;
 }
 #endif
-
-bool VEthernetNetworkSwitcher::RedirectDnsServer(
-    const std::shared_ptr<VEthernetExchanger>&,
-    const std::shared_ptr<ppp::net::packet::IPFrame>&,
-    const std::shared_ptr<ppp::net::packet::UdpFrame>&,
-    const std::shared_ptr<ppp::net::packet::BufferSegment>&) noexcept {
-    return false;
-}
-
-dns::DnsHostPorts VEthernetNetworkSwitcher::BuildDnsHostPorts(
-    const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
-
-    const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
-    auto datagram_output =
-        [self](const boost::asio::ip::udp::endpoint& sourceEP,
-            const boost::asio::ip::udp::endpoint& destinationEP,
-            void* packet,
-            int packet_size,
-            bool caching) noexcept {
-            return self->DatagramOutput(
-                sourceEP, destinationEP, packet, packet_size, caching);
-        };
-
-    dns::DnsHostPorts host;
-    host.datagram_output = datagram_output;
-    host.get_tap = [self]() noexcept { return self->GetTap(); };
-    host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
-    host.get_buffer_allocator = [self]() noexcept { return self->GetBufferAllocator(); };
-    host.emplace_timeout =
-        [self](void* key,
-            const std::shared_ptr<ppp::function<void(ppp::threading::Timer*)>>& timeout) noexcept {
-            return self->EmplaceTimeout(key, timeout);
-        };
-    host.delete_timeout = [self](void* key) noexcept { return self->DeleteTimeout(key); };
-#if defined(_LINUX)
-    host.get_protector_network = [self]() noexcept { return self->GetProtectorNetwork(); };
-#endif
-    host.handle_resolver_response =
-        [exchanger, datagram_output, self](
-            const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
-            const boost::asio::ip::udp::endpoint& sourceEP,
-            const boost::asio::ip::udp::endpoint& destEP,
-            ppp::vector<ppp::Byte> response) noexcept {
-            dns::DnsResponseHandlerPorts ports;
-            const std::shared_ptr<ppp::configurations::AppConfiguration> configuration =
-                self->GetConfiguration();
-            if (NULLPTR != configuration && configuration->udp.dns.cache) {
-                ports.enable_dns_cache = true;
-                ports.write_cache =
-                    [](const ppp::Byte* packet, int packet_size) noexcept {
-                        ppp::net::asio::vdns::AddCache(packet, packet_size);
-                    };
-            }
-            ports.datagram_output = datagram_output;
-            if (NULLPTR != exchanger) {
-                ports.tunnel_send =
-                    [](const boost::asio::ip::udp::endpoint&,
-                        const boost::asio::ip::udp::endpoint&,
-                        const void*,
-                        int) noexcept {
-                        g_tunnel_send_called = true;
-                        return g_tunnel_send_result;
-                    };
-            }
-            dns::DnsResponseHandler::HandleWithPorts(
-                ports, messages, sourceEP, destEP, std::move(response));
-        };
-    return host;
-}
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
 void VEthernetNetworkSwitcher::AddRoute() noexcept {}
@@ -384,11 +268,9 @@ bool VEthernetNetworkSwitcher::DatagramOutput(
     const boost::asio::ip::udp::endpoint&,
     const boost::asio::ip::udp::endpoint&,
     void*,
-    int packet_size,
+    int,
     bool) noexcept {
 
-    g_datagram_output_called = true;
-    g_datagram_output_bytes = packet_size;
     return g_inject_ok;
 }
 
@@ -416,11 +298,3 @@ bool VEthernetNetworkSwitcher::DeleteTimeout(void* key) noexcept {
 }
 
 }  // namespace ppp::app::client
-
-namespace ppp::net::asio::vdns {
-
-bool AddCache(const ppp::Byte*, int) noexcept {
-    return true;
-}
-
-}  // namespace ppp::net::asio::vdns

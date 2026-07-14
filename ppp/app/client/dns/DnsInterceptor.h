@@ -5,7 +5,6 @@
  * @brief Owns DNS rules, resolver lifecycle, and intercepted query handling.
  */
 
-#include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/app/client/dns/IDnsPolicy.h>
 #include <ppp/app/client/dns/FakeIpPool.h>
 #include <ppp/app/client/dns/DnsRedirectPlan.h>
@@ -25,8 +24,6 @@ namespace ppp { namespace net { class ProtectorNetwork; } }
 namespace ppp {
     namespace app {
         namespace client {
-            class VEthernetExchanger;
-
             namespace dns {
 
                 class DnsInterceptor final : public IDnsPolicy {
@@ -59,11 +56,11 @@ namespace ppp {
                         const ppp::function<void(uint32_t)>& add_nic_ip) noexcept;
 
                     bool HandleQuery(
-                        const DnsHostPorts& host,
-                        const std::shared_ptr<VEthernetExchanger>& exchanger,
+                        const DnsQueryContext& context,
+                        const std::shared_ptr<const DnsSessionContext>& session,
                         const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
                         const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
-                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept;
+                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept override;
 
                     std::shared_ptr<ppp::dns::DnsResolver> GetResolver() const noexcept { return dns_resolver_; }
 

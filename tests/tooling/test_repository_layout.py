@@ -103,6 +103,12 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assert_violation(root, "legacy RouteHostPorts service locator")
 
+    def test_dns_host_service_locator_is_removed(self) -> None:
+        root = self.fixture(
+            {"ppp/app/client/Legacy.cpp": "DnsHostPorts cache; IDnsHost* host;\n"}
+        )
+        self.assert_violation(root, "legacy DNS host service locator")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,8 @@
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/app/client/dns/DnsController.h>
+#include <ppp/app/client/dns/DnsQueryContext.h>
+#include <ppp/net/asio/vdns.h>
 #include <ppp/transmissions/ITransmissionQoS.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
@@ -145,7 +147,35 @@ namespace ppp {
                 owner_->qos_             = std::move(qos);
                 owner_->exchanger_       = std::move(exchanger);
                 if (NULLPTR != owner_->dns_controller_) {
+                    const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(owner_->shared_from_this());
+                    dns::DnsQueryContext dns_context;
+                    dns_context.datagram_output = [self](const auto& source, const auto& destination, void* packet, int size, bool caching) noexcept {
+                        return self->DatagramOutput(source, destination, packet, size, caching);
+                    };
+                    dns_context.tap = owner_->GetTap();
+                    dns_context.configuration = owner_->configuration_;
+                    dns_context.allocator = owner_->GetBufferAllocator();
+                    dns_context.io_context = owner_->GetContext();
+                    dns_context.emplace_timeout = [self](void* key, const auto& timeout) noexcept {
+                        return self->EmplaceTimeout(key, timeout);
+                    };
+                    dns_context.delete_timeout = [self](void* key) noexcept {
+                        return self->DeleteTimeout(key);
+                    };
+                    dns_context.write_cache = [](const Byte* packet, int size) noexcept {
+                        ppp::net::asio::vdns::AddCache(packet, size);
+                    };
+#if defined(_LINUX)
+                    dns_context.protector_network = protector_network;
+#endif
+                    dns_context.handle_resolver_response = [](const auto&, const auto&, const auto&, auto) noexcept {};
+                    if (!owner_->dns_controller_->Configure(std::move(dns_context))) {
+                        return false;
+                    }
                     owner_->dns_session_ = owner_->dns_controller_->OpenSession(owner_->exchanger_);
+                    if (NULLPTR == owner_->dns_session_) {
+                        return false;
+                    }
                 }
 
 #if defined(_LINUX)

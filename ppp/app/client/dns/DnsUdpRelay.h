@@ -5,7 +5,8 @@
  * @brief Legacy UDP DNS relay (socket protect + async receive).
  */
 
-#include <ppp/app/client/dns/DnsHost.h>
+#include <ppp/app/client/dns/DnsQueryContext.h>
+#include <ppp/app/client/dns/DnsSessionContext.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/dns/DnsWireValidation.h>
@@ -20,8 +21,6 @@ namespace ppp {
 namespace ppp {
     namespace app {
         namespace client {
-            class VEthernetExchanger;
-
             namespace dns {
 
                 class DnsUdpRelay final {
@@ -42,14 +41,14 @@ namespace ppp {
                     }
 
                     static bool CanSpawn(
-                        const DnsHostPorts& host,
-                        const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
-                        return host.IsValid() && NULLPTR != exchanger;
+                        const DnsQueryContext& context,
+                        const std::shared_ptr<const DnsSessionContext>& session) noexcept {
+                        return context.IsValid() && NULLPTR != session && session->IsActive();
                     }
 
                     static bool Spawn(
-                        const DnsHostPorts& host,
-                        const std::shared_ptr<VEthernetExchanger>& exchanger,
+                        const DnsQueryContext& context,
+                        const std::shared_ptr<const DnsSessionContext>& session,
                         const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
                         const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                         const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
@@ -57,15 +56,15 @@ namespace ppp {
                         const boost::asio::ip::address& destinationIP) noexcept;
 
                     static bool RunCoroutine(
-                        const DnsHostPorts& host,
+                        const DnsQueryContext& context,
                         ppp::coroutines::YieldContext& y,
                         const std::shared_ptr<boost::asio::ip::udp::socket>& socket,
                         const std::shared_ptr<Byte>& buffer,
                         const boost::asio::ip::address& serverIP,
-                        const std::shared_ptr<VEthernetExchanger>& exchanger,
+                        const std::shared_ptr<const DnsSessionContext>& session,
                         const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                         const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
-                        const std::shared_ptr<boost::asio::io_context>& context,
+                        const std::shared_ptr<boost::asio::io_context>& io_context,
                         const boost::asio::ip::udp::endpoint& sourceEP,
                         const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
                 };

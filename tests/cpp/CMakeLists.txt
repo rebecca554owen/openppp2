@@ -30,7 +30,6 @@ set(OPENPPP2_AGGREGATOR_LOADER_TEST_SUPPORT
     support/ppp_test_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/AggregatorLoader.cpp"
-    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
@@ -90,16 +89,18 @@ openppp2_add_cpp_test(dns_response_handler_test SOURCES
 openppp2_add_cpp_test(dns_route_dispatcher_test SOURCES
     dns_route_dispatcher_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsRouteDispatcher.cpp")
-openppp2_add_cpp_test(dns_udp_relay_test SOURCES dns_udp_relay_test.cpp)
-openppp2_add_cpp_test(dns_host_ports_test SOURCES dns_host_ports_test.cpp)
-openppp2_add_cpp_test(dns_host_interface_test SOURCES dns_host_interface_test.cpp)
+openppp2_add_cpp_test(dns_udp_relay_test SOURCES
+    dns_udp_relay_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsSessionContext.cpp")
 openppp2_add_cpp_test(dns_session_context_test SOURCES
     dns_session_context_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsSessionContext.cpp")
 openppp2_add_cpp_test(dns_controller_test SOURCES
     dns_controller_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsController.cpp"
-    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsSessionContext.cpp")
+    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsSessionContext.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
 openppp2_add_cpp_test(route_state_test SOURCES
     route_state_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp")
@@ -117,12 +118,6 @@ openppp2_add_cpp_test(route_platform_adapters_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/DarwinRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/MobileRoutePlatform.cpp")
-openppp2_add_cpp_test(dns_host_wiring_test SOURCES
-    dns_host_wiring_test.cpp
-    ${OPENPPP2_AGGREGATOR_LOADER_TEST_SUPPORT}
-    "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsHost.cpp")
-target_include_directories(dns_host_wiring_test BEFORE PRIVATE
-    "${CMAKE_CURRENT_LIST_DIR}/support/fake_aggligator")
 add_test(
     NAME client_packet_dispatch_compile_test
     COMMAND bash "${OPENPPP2_ROOT}/tools/check_dispatch_handler_compiles.sh"

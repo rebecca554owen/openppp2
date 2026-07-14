@@ -66,12 +66,6 @@ namespace ppp {
                 if (std::shared_ptr<VEthernetExchanger> exchanger = std::move(owner_->exchanger_); NULLPTR != exchanger) {
                     exchanger->Dispose();
                 }
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                // prdr_ is already held. Calling the public invalidator here would lock it twice.
-                owner_->InvalidateDnsHostPortsLocked();
-#else
-                owner_->InvalidateDnsHostPorts();
-#endif
 
                 // Shutdown and release the qos control module.
                 if (std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = std::move(owner_->qos_);  NULLPTR != qos) {

@@ -1,4 +1,3 @@
-#include <ppp/app/client/dns/DnsResponseHandler.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
@@ -14,8 +13,6 @@
 #include <ppp/app/client/AggregatorLoader.h>
 #include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
-#include <ppp/app/client/dns/DnsResponseHandler.h>
-#include <ppp/app/client/dns/DnsHost.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
@@ -923,118 +920,6 @@ namespace ppp {
                     return false;
                 }
                 return exchanger_->StaticEchoAddRemoteEndPoint(remoteEP);
-            }
-
-            /** @brief Entry point for DNS redirection decision and async execution. */
-            dns::DnsHostPorts VEthernetNetworkSwitcher::BuildDnsHostPorts(
-                const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
-
-                const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
-                auto datagram_output =
-                    [self](const boost::asio::ip::udp::endpoint& sourceEP,
-                        const boost::asio::ip::udp::endpoint& destinationEP,
-                        void* packet,
-                        int packet_size,
-                        bool caching) noexcept {
-                        return self->DatagramOutput(
-                            sourceEP, destinationEP, packet, packet_size, caching);
-                    };
-
-                dns::DnsHostPorts host;
-                host.datagram_output = datagram_output;
-                host.get_tap = [self]() noexcept { return self->GetTap(); };
-                host.get_configuration = [self]() noexcept { return self->GetConfiguration(); };
-                host.get_buffer_allocator = [self]() noexcept { return self->GetBufferAllocator(); };
-                host.emplace_timeout =
-                    [self](void* key,
-                        const std::shared_ptr<ppp::function<void(ppp::threading::Timer*)>>& timeout) noexcept {
-                        return self->EmplaceTimeout(key, timeout);
-                    };
-                host.delete_timeout = [self](void* key) noexcept { return self->DeleteTimeout(key); };
-#if defined(_LINUX)
-                host.get_protector_network = [self]() noexcept { return self->GetProtectorNetwork(); };
-#endif
-                host.handle_resolver_response =
-                    [exchanger, datagram_output, self](
-                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
-                        const boost::asio::ip::udp::endpoint& sourceEP,
-                        const boost::asio::ip::udp::endpoint& destEP,
-                        ppp::vector<Byte> response) noexcept {
-                        dns::DnsResponseHandlerPorts ports;
-                        const std::shared_ptr<ppp::configurations::AppConfiguration> configuration =
-                            self->GetConfiguration();
-                        if (NULLPTR != configuration && configuration->udp.dns.cache) {
-                            ports.enable_dns_cache = true;
-                            ports.write_cache =
-                                [](const Byte* packet, int packet_size) noexcept {
-                                    ppp::net::asio::vdns::AddCache(packet, packet_size);
-                                };
-                        }
-                        ports.datagram_output = datagram_output;
-                        if (NULLPTR != exchanger) {
-                            ports.tunnel_send =
-                                [exchanger](const boost::asio::ip::udp::endpoint& sourceEP,
-                                    const boost::asio::ip::udp::endpoint& destinationEP,
-                                    const void* packet,
-                                    int packet_size) noexcept {
-                                    return exchanger->SendTo(
-                                        sourceEP, destinationEP, packet, packet_size);
-                                };
-                        }
-                        dns::DnsResponseHandler::HandleWithPorts(
-                            ports, messages, sourceEP, destEP, std::move(response));
-                    };
-                return host;
-            }
-
-            const dns::DnsHostPorts& VEthernetNetworkSwitcher::DnsHostPortsFor(
-                const std::shared_ptr<VEthernetExchanger>& exchanger) noexcept {
-
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                SynchronizedObjectScope scope(prdr_);
-#else
-                SynchronizedObjectScope scope(GetSynchronizedObject());
-#endif
-
-                if (std::shared_ptr<VEthernetExchanger> cached = dns_host_ports_exchanger_.lock();
-                    cached == exchanger && NULLPTR != dns_host_ports_cache_ && dns_host_ports_cache_->IsValid()) {
-                    ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache hit");
-                    return *dns_host_ports_cache_;
-                }
-
-                if (NULLPTR == dns_host_ports_cache_) {
-                    dns_host_ports_cache_ = std::make_unique<dns::DnsHostPorts>();
-                }
-
-                ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache rebuild");
-                *dns_host_ports_cache_ = BuildDnsHostPorts(exchanger);
-                dns_host_ports_exchanger_ = exchanger;
-                return *dns_host_ports_cache_;
-            }
-
-            void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                SynchronizedObjectScope scope(prdr_);
-#else
-                SynchronizedObjectScope scope(GetSynchronizedObject());
-#endif
-                ppp::telemetry::Log(Level::kDebug, "client", "dns_host_ports cache invalidate");
-                InvalidateDnsHostPortsLocked();
-            }
-
-            bool VEthernetNetworkSwitcher::RedirectDnsServer(
-                const std::shared_ptr<VEthernetExchanger>& exchanger,
-                const std::shared_ptr<IPFrame>& packet,
-                const std::shared_ptr<UdpFrame>& frame,
-                const std::shared_ptr<BufferSegment>& messages) noexcept {
-
-                if (NULLPTR == dns_interceptor_) {
-                    return false;
-                }
-
-                return dns_interceptor_->HandleQuery(
-                    DnsHostPortsFor(exchanger),
-                    exchanger, packet, frame, messages);
             }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)

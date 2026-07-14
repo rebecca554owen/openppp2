@@ -115,6 +115,15 @@ def _collect_candidates(root: Path) -> list[Candidate]:
                     )
                 )
 
+            if any(token in line for token in ("DnsHostPorts", "IDnsHost", "dns_host_ports_cache_")):
+                candidates.append(
+                    Candidate(
+                        relative,
+                        line_number,
+                        "legacy DNS host service locator",
+                    )
+                )
+
             is_route_or_dns_header = (
                 path.suffix in {".h", ".hpp"}
                 and (
