@@ -29,10 +29,28 @@ namespace ppp {
                     value_.peer_prefix_fib = std::move(fib);
                 }
 
-                void RouteState::ReplaceDefaultRoutes(
-                    std::shared_ptr<const IRouteSnapshot> value) noexcept {
+                void RouteState::AppendDefaultRoute(RouteSnapshotPtr value) noexcept {
+                    if (!value) {
+                        return;
+                    }
                     std::lock_guard<std::mutex> scope(syncobj_);
-                    value_.default_routes = std::move(value);
+                    value_.default_routes.emplace_back(std::move(value));
+                }
+
+                bool RouteState::RemoveDefaultRoute(const RouteSnapshotPtr& value) noexcept {
+                    std::lock_guard<std::mutex> scope(syncobj_);
+                    const auto item = std::find(
+                        value_.default_routes.begin(), value_.default_routes.end(), value);
+                    if (item == value_.default_routes.end()) {
+                        return false;
+                    }
+                    value_.default_routes.erase(item);
+                    return true;
+                }
+
+                void RouteState::ClearDefaultRoutes() noexcept {
+                    std::lock_guard<std::mutex> scope(syncobj_);
+                    value_.default_routes.clear();
                 }
 
                 void RouteState::ReplaceNics(std::unordered_map<uint32_t, std::string> value) noexcept {
@@ -91,7 +109,9 @@ namespace ppp {
                     }
 
                     std::lock_guard<std::mutex> scope(syncobj_);
-                    value_.default_routes.reset();
+                    if (!value_.default_routes.empty()) {
+                        return false;
+                    }
                     value_.applied = false;
                     return true;
                 }

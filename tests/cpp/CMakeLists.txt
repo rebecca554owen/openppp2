@@ -57,7 +57,7 @@ function(openppp2_add_cpp_test target)
             -fno-omit-frame-pointer)
         target_link_options(${target} PRIVATE -fsanitize=address,undefined)
     endif()
-    if(target STREQUAL "runtime_snapshot_test" OR target STREQUAL "p2p_replay_window_test" OR target STREQUAL "base64_test" OR target STREQUAL "dns_server_validation_test" OR target STREQUAL "dns_wire_validation_test" OR target STREQUAL "sysctl_validation_test" OR target STREQUAL "dns_redirect_plan_test" OR target STREQUAL "dns_reachability_test" OR target STREQUAL "dns_response_handler_test" OR target STREQUAL "dns_route_dispatcher_test" OR target STREQUAL "dns_udp_relay_test" OR target STREQUAL "dns_host_ports_test" OR target STREQUAL "dns_host_interface_test" OR target STREQUAL "dns_host_wiring_test" OR target STREQUAL "dns_session_context_test" OR target STREQUAL "dns_controller_test" OR target STREQUAL "route_host_ports_test" OR target STREQUAL "route_host_interface_test" OR target STREQUAL "route_state_test" OR target STREQUAL "route_coordinator_test" OR target STREQUAL "linux_route_platform_contract_test" OR target STREQUAL "route_platform_adapters_test" OR target STREQUAL "aggregator_loader_test" OR target STREQUAL "fake_ip_pool_test" OR target STREQUAL "dns_fake_ip_response_test" OR target STREQUAL "quic_reject_rate_limit_test" OR target STREQUAL "client_bypass_route_loader_test" OR target STREQUAL "exchanger_static_echo_channel_test" OR target STREQUAL "route_table_manager_test" OR target STREQUAL "switcher_timeout_registry_test" OR target STREQUAL "peer_prefix_route_entry_test" OR target STREQUAL "peer_prefix_route_from_json_test" OR target STREQUAL "client_datagram_port_manager_test" OR target STREQUAL "server_datagram_port_manager_test" OR target STREQUAL "static_datagram_port_manager_test")
+    if(target STREQUAL "runtime_snapshot_test" OR target STREQUAL "p2p_replay_window_test" OR target STREQUAL "base64_test" OR target STREQUAL "dns_server_validation_test" OR target STREQUAL "dns_wire_validation_test" OR target STREQUAL "sysctl_validation_test" OR target STREQUAL "dns_redirect_plan_test" OR target STREQUAL "dns_reachability_test" OR target STREQUAL "dns_response_handler_test" OR target STREQUAL "dns_route_dispatcher_test" OR target STREQUAL "dns_udp_relay_test" OR target STREQUAL "dns_host_ports_test" OR target STREQUAL "dns_host_interface_test" OR target STREQUAL "dns_host_wiring_test" OR target STREQUAL "dns_session_context_test" OR target STREQUAL "dns_controller_test" OR target STREQUAL "route_host_ports_test" OR target STREQUAL "route_host_interface_test" OR target STREQUAL "route_state_test" OR target STREQUAL "route_coordinator_test" OR target STREQUAL "linux_route_platform_contract_test" OR target STREQUAL "route_platform_adapters_test" OR target STREQUAL "aggregator_loader_test" OR target STREQUAL "fake_ip_pool_test" OR target STREQUAL "dns_fake_ip_response_test" OR target STREQUAL "quic_reject_rate_limit_test" OR target STREQUAL "client_bypass_route_loader_test" OR target STREQUAL "exchanger_static_echo_channel_test" OR target STREQUAL "switcher_timeout_registry_test" OR target STREQUAL "peer_prefix_route_entry_test" OR target STREQUAL "peer_prefix_route_from_json_test" OR target STREQUAL "client_datagram_port_manager_test" OR target STREQUAL "server_datagram_port_manager_test" OR target STREQUAL "static_datagram_port_manager_test")
         target_link_libraries(${target} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
     add_test(NAME ${target} COMMAND ${target})
@@ -119,10 +119,22 @@ openppp2_add_cpp_test(dns_controller_test SOURCES
 openppp2_add_cpp_test(route_state_test SOURCES
     route_state_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp")
+openppp2_add_cpp_test(client_connection_teardown_state_test SOURCES
+    client_connection_teardown_state_test.cpp)
 openppp2_add_cpp_test(route_coordinator_test SOURCES
     route_coordinator_test.cpp
+    support/ppp_test_stubs.cpp
+    support/route_coordinator_platform_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteCoordinator.cpp"
-    "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp")
+    "${OPENPPP2_ROOT}/ppp/app/client/route/RouteCoordinator_mobile.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/route/MobileRoutePlatform.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/route/RouteSpecs.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+target_compile_definitions(route_coordinator_test PRIVATE
+    OPENPPP2_ROUTE_TEST_MOBILE)
 openppp2_add_cpp_test(linux_route_platform_contract_test SOURCES
     linux_route_platform_contract_test.cpp
     support/linux_route_platform_stubs.cpp
@@ -177,7 +189,6 @@ openppp2_add_cpp_test(exchanger_static_echo_channel_test SOURCES
     exchanger_static_echo_channel_test.cpp
     support/ppp_test_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
-openppp2_add_cpp_test(route_table_manager_test SOURCES route_table_manager_test.cpp)
 openppp2_add_cpp_test(client_datagram_port_manager_test SOURCES
     client_datagram_port_manager_test.cpp
     support/datagram_manager_stubs.cpp

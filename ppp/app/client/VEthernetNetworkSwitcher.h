@@ -37,7 +37,6 @@ namespace ppp {
         namespace client {
             class VEthernetExchanger;
             class VEthernetDatagramPort;
-            class RouteTableManager;
             class AssignedAddressManager;
             class ClientConnectionTeardown;
             class ClientConnectionOpener;
@@ -58,7 +57,10 @@ namespace ppp {
                 class DnsSessionContext;
             }
 
-            namespace route { struct RoutePlanInput; }
+            namespace route {
+                class RouteCoordinator;
+                struct RoutePlanInput;
+            }
 
             namespace proxys {
                 class VEthernetHttpProxySwitcher;
@@ -72,7 +74,6 @@ namespace ppp {
             class VEthernetNetworkSwitcher : public ppp::ethernet::VEthernet {
             private:
                 friend class VEthernetExchanger;
-                friend class RouteTableManager;
                 friend class AssignedAddressManager;
                 friend class ClientConnectionTeardown;
                 friend class ClientConnectionOpener;

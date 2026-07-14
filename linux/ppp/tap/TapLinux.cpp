@@ -132,6 +132,29 @@ namespace ppp {
                 return true;
             }
 
+            static bool TryRouteExists(
+                const ppp::string& interface_id,
+                UInt32 address,
+                int prefix,
+                UInt32 gateway,
+                bool& exists) noexcept {
+                if (prefix < 0 || prefix > 32) {
+                    prefix = 32;
+                }
+                const uint32_t mask = IPEndPoint::PrefixToNetmask(prefix);
+                uint32_t ignored_gateway = 0;
+                bool query_succeeded = false;
+                exists = TapLinux::GetDefaultGateway(
+                    &ignored_gateway,
+                    [&interface_id, address, gateway, mask](const char* interface_name,
+                        uint32_t ip, uint32_t gw, uint32_t route_mask, int) noexcept {
+                        return (interface_id.empty() || interface_id == interface_name) &&
+                            ip == address && gw == gateway && route_mask == mask;
+                    },
+                    &query_succeeded);
+                return query_succeeded;
+            }
+
             static int GetInterfaceIndexByName(const ppp::string& ifrName) noexcept {
                 if (!IsSafeInterfaceName(ifrName)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TapLinuxUnsafeToken);
@@ -992,9 +1015,6 @@ namespace ppp {
             int err = ioctl(ifc_ctl_sock.sock_v4, action, &rt);
             if (err < 0) {
                 err = errno;
-                if (err == EEXIST) {
-                    err = 0;
-                }
             }
             return err;
         }
@@ -1071,13 +1091,25 @@ namespace ppp {
             return SetRouteToLinux(address, prefix, gw, false);
         }
 
-        bool TapLinux::AddRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept {
+        TapLinux::RouteMutationResult TapLinux::AddRouteStatus(
+            const ppp::string& ifrName,
+            UInt32 address,
+            int prefix,
+            UInt32 gw) noexcept {
             if (ifc_ctl_sock_compatible_route) {
-                bool ok = SetRouteToLinux(address, prefix, gw, true);
-                if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+                bool exists = false;
+                if (TryRouteExists(ifrName, address, prefix, gw, exists) && exists) {
+                    return RouteMutationResult::Unchanged;
                 }
-                return ok;
+                bool ok = SetRouteToLinux(address, prefix, gw, true);
+                if (ok) {
+                    return RouteMutationResult::Changed;
+                }
+                if (TryRouteExists(ifrName, address, prefix, gw, exists) && exists) {
+                    return RouteMutationResult::Unchanged;
+                }
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
+                return RouteMutationResult::Failed;
             }
 
             if (prefix < 0 || prefix > 32) {
@@ -1092,16 +1124,31 @@ namespace ppp {
 
             int err = TapLinux::SetRoute(SIOCADDRT, ifrName, in_dst, prefix, in_gw);
             if (0 == err) {
-                return true;
+                return RouteMutationResult::Changed;
+            }
+            if (EEXIST == err) {
+                bool exists = false;
+                const bool query_succeeded =
+                    TryRouteExists(ifrName, address, prefix, gw, exists);
+                return ClassifyRouteAddResult(err, query_succeeded, exists);
             }
 
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
-            return false;
+            return RouteMutationResult::Failed;
+        }
+
+        bool TapLinux::AddRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept {
+            return AddRouteStatus(ifrName, address, prefix, gw) !=
+                RouteMutationResult::Failed;
         }
 
         bool TapLinux::DeleteRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept {
             if (ifc_ctl_sock_compatible_route) {
-                return SetRouteToLinux(address, prefix, gw, false);
+                if (SetRouteToLinux(address, prefix, gw, false)) {
+                    return true;
+                }
+                bool exists = false;
+                return TryRouteExists(ifrName, address, prefix, gw, exists) && !exists;
             }
 
             if (prefix < 0 || prefix > 32) {
@@ -1132,7 +1179,7 @@ namespace ppp {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteDeleteFailed);
             }
 
-            return any;
+            return any || ENOENT == last_err || ESRCH == last_err;
         }
 
         ppp::string TapLinux::GetDeviceId(const ppp::string& ifrName) noexcept {
@@ -1251,7 +1298,7 @@ namespace ppp {
          * eth0    00000000        00000000        0001    0       0       1000    00000000        0       0       0
          * One header line, and then one line by route by route table entry.
         */
-        bool TapLinux::GetDefaultGateway(UInt32* address, const ppp::function<bool(const char*, uint32_t ip, uint32_t gw, uint32_t mask, int metric)>& predicate) noexcept {
+        bool TapLinux::GetDefaultGateway(UInt32* address, const ppp::function<bool(const char*, uint32_t ip, uint32_t gw, uint32_t mask, int metric)>& predicate, bool* query_succeeded) noexcept {
             unsigned long d, g, fl, rc, us, metric, mask;
             char buf[256];
             char eth[256];
@@ -1261,6 +1308,9 @@ namespace ppp {
             FILE* f;
             char* p;
 
+            if (query_succeeded) {
+                *query_succeeded = false;
+            }
             if (!address || !predicate) {
                 return false;
             }
@@ -1268,6 +1318,9 @@ namespace ppp {
             f = fopen("/proc/net/route", "r");
             if (!f) {
                 return false;
+            }
+            if (query_succeeded) {
+                *query_succeeded = true;
             }
 
             while (fgets(buf, sizeof(buf), f)) {
@@ -1823,17 +1876,20 @@ namespace ppp {
             return DeleteAddAllRoutes2(rib, true);
         }
 
-        std::shared_ptr<ppp::net::native::RouteInformationTable> TapLinux::FindAllDefaultGatewayRoutes(const ppp::unordered_set<uint32_t>& bypass_gws) noexcept {
+        bool TapLinux::TryFindAllDefaultGatewayRoutes(
+            const ppp::unordered_set<uint32_t>& bypass_gws,
+            std::shared_ptr<ppp::net::native::RouteInformationTable>& routes) noexcept {
+            routes.reset();
             std::shared_ptr<ppp::net::native::RouteInformationTable> rib = make_shared_object<ppp::net::native::RouteInformationTable>();
             if (NULLPTR == rib) {
-                return NULLPTR;
+                return false;
             }
 
             uint32_t mid = inet_addr("128.0.0.0");
-            bool any = false;
             uint32_t address = 0;
+            bool query_succeeded = false;
             GetDefaultGateway(&address,
-                [&rib, mid, &any, &bypass_gws](const char* interface_name, uint32_t ip, uint32_t gw, uint32_t mask, int metric) noexcept {
+                [&rib, mid, &bypass_gws](const char* interface_name, uint32_t ip, uint32_t gw, uint32_t mask, int metric) noexcept {
                     if (metric != -1) {
                         bool ok = (ip == ppp::net::IPEndPoint::AnyAddress && mask == mid) ||
                             (ip == ppp::net::IPEndPoint::AnyAddress && mask == ppp::net::IPEndPoint::AnyAddress) ||
@@ -1861,10 +1917,24 @@ namespace ppp {
                     }
 
                     int prefix_mask = IPEndPoint::NetmaskToPrefix(mask); // cidr
-                    any |= rib->AddRoute(ip, prefix_mask, gw);
+                    rib->AddRoute(ip, prefix_mask, gw);
                     return false;
-                });
-            return any ? rib : NULLPTR;
+                },
+                &query_succeeded);
+            if (!query_succeeded) {
+                return false;
+            }
+            routes = std::move(rib);
+            return true;
+        }
+
+        std::shared_ptr<ppp::net::native::RouteInformationTable> TapLinux::FindAllDefaultGatewayRoutes(const ppp::unordered_set<uint32_t>& bypass_gws) noexcept {
+            std::shared_ptr<ppp::net::native::RouteInformationTable> routes;
+            if (!TryFindAllDefaultGatewayRoutes(bypass_gws, routes) ||
+                !routes || routes->GetAllRoutes().empty()) {
+                return NULLPTR;
+            }
+            return routes;
         }
 
 #if defined(_ANDROID)

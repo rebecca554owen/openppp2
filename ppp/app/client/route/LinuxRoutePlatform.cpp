@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/route/LinuxRoutePlatform.h>
+#include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/net/native/rib.h>
 
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
@@ -15,17 +16,23 @@ namespace ppp {
 
                     class LinuxRouteSnapshot final : public IRouteSnapshot {
                     public:
-                        explicit LinuxRouteSnapshot(RouteInformationTablePtr routes) noexcept
-                            : routes(std::move(routes)) {
+                        explicit LinuxRouteSnapshot(RouteSpec route) noexcept
+                            : route(std::move(route)) {
                         }
 
-                        RouteInformationTablePtr routes;
+                        RouteSpec route;
                     };
 
-                    RouteInformationTablePtr GetLinuxRoutes(const RouteSnapshotPtr& snapshot) noexcept {
-                        const auto linux_snapshot =
-                            std::dynamic_pointer_cast<const LinuxRouteSnapshot>(snapshot);
-                        return NULLPTR == linux_snapshot ? NULLPTR : linux_snapshot->routes;
+                    std::shared_ptr<const LinuxRouteSnapshot> AsLinuxSnapshot(
+                        const RouteSnapshotPtr& snapshot) noexcept {
+                        return std::dynamic_pointer_cast<const LinuxRouteSnapshot>(snapshot);
+                    }
+
+                    bool SameRoute(const RouteSpec& left, const RouteSpec& right) noexcept {
+                        return left.network == right.network &&
+                            left.gateway == right.gateway &&
+                            left.prefix == right.prefix &&
+                            left.interface_name == right.interface_name;
                     }
 
                 }
@@ -81,56 +88,74 @@ namespace ppp {
                       operations_(std::move(operations)) {
                 }
 
-                RouteSnapshotPtr LinuxRoutePlatform::CaptureDefaults() noexcept {
-                    if (promiscuous_ || !operations_.capture_defaults) {
-                        return NULLPTR;
+                DefaultRouteCapture LinuxRoutePlatform::CaptureDefaults() noexcept {
+                    std::vector<RouteSnapshotPtr> snapshots;
+                    if (promiscuous_) {
+                        return snapshots;
                     }
-                    RouteInformationTablePtr routes = operations_.capture_defaults(tap_gateway_);
-                    return NULLPTR == routes
-                        ? RouteSnapshotPtr()
-                        : std::make_shared<LinuxRouteSnapshot>(std::move(routes));
+                    if (!operations_.capture_defaults) {
+                        return std::nullopt;
+                    }
+                    RouteInformationTablePtr routes;
+                    if (!operations_.capture_defaults(tap_gateway_, routes)) {
+                        return std::nullopt;
+                    }
+                    for (RouteSpec route : BuildRouteSpecs(routes)) {
+                        snapshots.emplace_back(
+                            std::make_shared<LinuxRouteSnapshot>(Resolve(std::move(route))));
+                    }
+                    return snapshots;
                 }
 
-                bool LinuxRoutePlatform::RemoveDefaults(
-                    const RouteSnapshotPtr& routes) noexcept {
-                    RouteInformationTablePtr linux_routes = GetLinuxRoutes(routes);
-                    if (promiscuous_ || NULLPTR == linux_routes) {
+                bool LinuxRoutePlatform::RemoveDefault(
+                    const RouteSnapshotPtr& route) noexcept {
+                    if (promiscuous_) {
                         return true;
                     }
-                    return operations_.remove_all && operations_.remove_all(MakeResolver(), linux_routes);
+                    const auto snapshot = AsLinuxSnapshot(route);
+                    return snapshot && operations_.remove &&
+                        operations_.remove(snapshot->route);
                 }
 
-                bool LinuxRoutePlatform::Add(const RouteSpec& route) noexcept {
-                    return operations_.add && operations_.add(Resolve(route));
+                RouteAddResult LinuxRoutePlatform::Add(const RouteSpec& route) noexcept {
+                    return operations_.add
+                        ? operations_.add(Resolve(route))
+                        : RouteAddResult::Failed;
                 }
 
                 bool LinuxRoutePlatform::Delete(const RouteSpec& route) noexcept {
                     return operations_.remove && operations_.remove(Resolve(route));
                 }
 
-                bool LinuxRoutePlatform::RestoreDefaults(
-                    const RouteSnapshotPtr& routes) noexcept {
-                    RouteInformationTablePtr linux_routes = GetLinuxRoutes(routes);
-                    if (promiscuous_ || NULLPTR == linux_routes) {
+                bool LinuxRoutePlatform::RestoreDefault(
+                    const RouteSnapshotPtr& route) noexcept {
+                    if (promiscuous_) {
                         return true;
                     }
-                    return operations_.restore_all && operations_.restore_all(MakeResolver(), linux_routes);
+                    const auto snapshot = AsLinuxSnapshot(route);
+                    if (!snapshot) {
+                        return false;
+                    }
+                    const DefaultRouteCapture current_defaults = CaptureDefaults();
+                    if (!current_defaults) {
+                        return false;
+                    }
+                    for (const RouteSnapshotPtr& current : *current_defaults) {
+                        if (SameDefault(route, current)) {
+                            return true;
+                        }
+                    }
+                    return operations_.add &&
+                        operations_.add(snapshot->route) != RouteAddResult::Failed;
                 }
 
-                LinuxRouteInterfaceResolver LinuxRoutePlatform::MakeResolver() const noexcept {
-                    const uint32_t tap_gateway = tap_gateway_;
-                    const std::string tap_interface = tap_interface_;
-                    const std::string underlying_interface = underlying_interface_;
-                    const std::unordered_map<uint32_t, std::string> nics = nics_;
-                    return [tap_gateway, tap_interface, underlying_interface, nics](
-                        ppp::net::native::RouteEntry& entry) noexcept {
-                        return SelectLinuxInterface(
-                            entry.NextHop,
-                            tap_gateway,
-                            tap_interface,
-                            underlying_interface,
-                            nics);
-                    };
+                bool LinuxRoutePlatform::SameDefault(
+                    const RouteSnapshotPtr& left,
+                    const RouteSnapshotPtr& right) noexcept {
+                    const auto left_snapshot = AsLinuxSnapshot(left);
+                    const auto right_snapshot = AsLinuxSnapshot(right);
+                    return left_snapshot && right_snapshot &&
+                        SameRoute(left_snapshot->route, right_snapshot->route);
                 }
 
                 RouteSpec LinuxRoutePlatform::Resolve(RouteSpec route) const noexcept {
@@ -148,33 +173,25 @@ namespace ppp {
                 LinuxRouteOperations LinuxRoutePlatform::CreateSystemOperations() noexcept {
                     LinuxRouteOperations operations;
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
-                    operations.capture_defaults = [](uint32_t gateway) noexcept {
-                        return ppp::tap::TapLinux::FindAllDefaultGatewayRoutes({ gateway });
-                    };
-                    operations.remove_all = [](
-                        const LinuxRouteInterfaceResolver& resolve,
-                        const RouteInformationTablePtr& routes) noexcept {
-                        ppp::function<ppp::string(ppp::net::native::RouteEntry&)> resolver =
-                            [resolve](ppp::net::native::RouteEntry& entry) noexcept {
-                                return ToPppString(resolve(entry));
-                            };
-                        return ppp::tap::TapLinux::DeleteAllRoutes(resolver, routes);
-                    };
-                    operations.restore_all = [](
-                        const LinuxRouteInterfaceResolver& resolve,
-                        const RouteInformationTablePtr& routes) noexcept {
-                        ppp::function<ppp::string(ppp::net::native::RouteEntry&)> resolver =
-                            [resolve](ppp::net::native::RouteEntry& entry) noexcept {
-                                return ToPppString(resolve(entry));
-                            };
-                        return ppp::tap::TapLinux::AddAllRoutes(resolver, routes);
+                    operations.capture_defaults = [](uint32_t gateway,
+                        RouteInformationTablePtr& routes) noexcept {
+                        return ppp::tap::TapLinux::TryFindAllDefaultGatewayRoutes(
+                            { gateway }, routes);
                     };
                     operations.add = [](const RouteSpec& route) noexcept {
-                        return ppp::tap::TapLinux::AddRoute(
+                        const ppp::tap::TapLinux::RouteMutationResult result =
+                            ppp::tap::TapLinux::AddRouteStatus(
                             ToPppString(route.interface_name),
                             route.network,
                             route.prefix,
                             route.gateway);
+                        if (result == ppp::tap::TapLinux::RouteMutationResult::Changed) {
+                            return RouteAddResult::Created;
+                        }
+                        if (result == ppp::tap::TapLinux::RouteMutationResult::Unchanged) {
+                            return RouteAddResult::Unchanged;
+                        }
+                        return RouteAddResult::Failed;
                     };
                     operations.remove = [](const RouteSpec& route) noexcept {
                         return ppp::tap::TapLinux::DeleteRoute(

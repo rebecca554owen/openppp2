@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace ppp {
     namespace app {
@@ -22,16 +24,27 @@ namespace ppp {
                 };
 
                 using RouteSnapshotPtr = std::shared_ptr<const IRouteSnapshot>;
+                using DefaultRouteCapture =
+                    std::optional<std::vector<RouteSnapshotPtr>>;
+
+                enum class RouteAddResult {
+                    Failed,
+                    Unchanged,
+                    Created,
+                };
 
                 class IRoutePlatform {
                 public:
                     virtual ~IRoutePlatform() noexcept = default;
 
-                    virtual RouteSnapshotPtr CaptureDefaults() noexcept = 0;
-                    virtual bool RemoveDefaults(const RouteSnapshotPtr& routes) noexcept = 0;
-                    virtual bool Add(const RouteSpec& route) noexcept = 0;
+                    virtual DefaultRouteCapture CaptureDefaults() noexcept = 0;
+                    virtual bool RemoveDefault(const RouteSnapshotPtr& route) noexcept = 0;
+                    virtual RouteAddResult Add(const RouteSpec& route) noexcept = 0;
                     virtual bool Delete(const RouteSpec& route) noexcept = 0;
-                    virtual bool RestoreDefaults(const RouteSnapshotPtr& routes) noexcept = 0;
+                    virtual bool RestoreDefault(const RouteSnapshotPtr& route) noexcept = 0;
+                    virtual bool SameDefault(
+                        const RouteSnapshotPtr& left,
+                        const RouteSnapshotPtr& right) noexcept = 0;
                 };
 
             }

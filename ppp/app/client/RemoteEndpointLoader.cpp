@@ -1,6 +1,6 @@
 #include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
-#include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/transmissions/proxys/IForwarding.h>
@@ -86,7 +86,7 @@ bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
     VEthernetNetworkSwitcher::RouteInformationTablePtr rib = owner_->GetRib();
     if (NULLPTR == rib) {
         rib = make_shared_object<VEthernetNetworkSwitcher::RouteInformationTable>();
-                owner_->route_table_->ReplaceRib(rib);
+                owner_->route_coordinator_->ReplaceRib(rib);
     }
 
     // CIDR: 0.0.0.0/0; 0.0.0.0/1; 128.0.0.0/1

@@ -68,19 +68,35 @@ BOOST_AUTO_TEST_CASE(invalid_dns_bucket_is_ignored) {
     BOOST_TEST(snapshot.dns_servers[2].empty());
 }
 
-BOOST_AUTO_TEST_CASE(peer_prefix_and_default_routes_are_replaced_together) {
+BOOST_AUTO_TEST_CASE(default_route_items_are_copied_and_removed_by_identity) {
     route::RouteState state;
     auto peer_rib = std::make_shared<ppp::net::native::RouteInformationTable>();
     auto peer_fib = std::make_shared<ppp::net::native::ForwardInformationTable>();
-    auto defaults = std::make_shared<FakeRouteSnapshot>();
+    auto first = std::make_shared<FakeRouteSnapshot>();
+    auto second = std::make_shared<FakeRouteSnapshot>();
 
     state.ReplacePeerPrefix(peer_rib, peer_fib);
-    state.ReplaceDefaultRoutes(defaults);
+    state.AppendDefaultRoute(first);
+    state.AppendDefaultRoute(second);
 
-    const route::RouteStateSnapshot snapshot = state.Snapshot();
+    route::RouteStateSnapshot snapshot = state.Snapshot();
     BOOST_TEST(snapshot.peer_prefix_rib == peer_rib);
     BOOST_TEST(snapshot.peer_prefix_fib == peer_fib);
-    BOOST_TEST(snapshot.default_routes == defaults);
+    BOOST_REQUIRE(snapshot.default_routes.size() == 2u);
+    BOOST_TEST(snapshot.default_routes[0] == first);
+    BOOST_TEST(snapshot.default_routes[1] == second);
+
+    snapshot.default_routes.clear();
+    BOOST_TEST(state.Snapshot().default_routes.size() == 2u);
+
+    BOOST_TEST(state.RemoveDefaultRoute(first));
+    const route::RouteStateSnapshot remaining = state.Snapshot();
+    BOOST_REQUIRE(remaining.default_routes.size() == 1u);
+    BOOST_TEST(remaining.default_routes[0] == second);
+    BOOST_TEST(!state.RemoveDefaultRoute(first));
+
+    state.ClearDefaultRoutes();
+    BOOST_TEST(state.Snapshot().default_routes.empty());
 }
 
 BOOST_AUTO_TEST_CASE(dns_servers_can_be_deduplicated_and_cleared) {

@@ -2,7 +2,7 @@
 #include <ppp/app/client/VEthernetNetworkTcpipStack.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
-#include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/ClientConnectionTeardown.h>
 #include <ppp/app/client/ClientConnectionOpener.h>
@@ -143,7 +143,7 @@ namespace ppp {
                 , configuration_(configuration)
                 , dns_controller_(std::make_shared<dns::DnsController>(
                     std::make_unique<dns::DnsInterceptor>(), nullptr))
-                , route_table_(std::make_unique<RouteTableManager>())
+                , route_coordinator_(std::make_unique<route::RouteCoordinator>(nullptr))
                 , address_manager_(std::make_unique<AssignedAddressManager>())
                 , teardown_(std::make_unique<ClientConnectionTeardown>())
                 , connection_opener_(std::make_unique<ClientConnectionOpener>())
@@ -206,7 +206,7 @@ namespace ppp {
                 readiness.session = exchanger &&
                     exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
                 readiness.adapter = NULLPTR != GetTap();
-                readiness.route = proxy_only_ || route_table_->Snapshot().apply_ready;
+                readiness.route = proxy_only_ || route_coordinator_->Snapshot().apply_ready;
                 readiness.dns = proxy_only_ ||
                     (dns_controller_ && dns_controller_->IsConfigured() &&
                      dns_controller_->HasActiveSession());
@@ -243,11 +243,11 @@ namespace ppp {
             }
 
             VEthernetNetworkSwitcher::RouteInformationTablePtr VEthernetNetworkSwitcher::GetRib() noexcept {
-                return route_table_->Snapshot().rib;
+                return route_coordinator_->Snapshot().rib;
             }
 
             VEthernetNetworkSwitcher::ForwardInformationTablePtr VEthernetNetworkSwitcher::GetFib() noexcept {
-                return route_table_->Snapshot().fib;
+                return route_coordinator_->Snapshot().fib;
             }
 
             VEthernetNetworkSwitcher::IForwardingPtr VEthernetNetworkSwitcher::GetForwarding() noexcept {
@@ -317,7 +317,7 @@ namespace ppp {
                 input.tap_interface = copy_interface(tun_ni_);
                 input.underlying_interface = copy_interface(underlying_ni_);
 #endif
-                for (const auto& pair : route_table_->Snapshot().nics) {
+                for (const auto& pair : route_coordinator_->Snapshot().nics) {
                     input.nics.emplace(pair.first, std::string(pair.second.begin(), pair.second.end()));
                 }
                 if (dns_controller_ && configuration_) {
@@ -341,19 +341,21 @@ namespace ppp {
             bool VEthernetNetworkSwitcher::TryApplyHostedNetworkRoutes() noexcept {
                 route::RoutePlanInput input = BuildRoutePlanInput();
                 if (!input.tap_hosted) return true;
-                const route::RouteStateSnapshot snapshot = route_table_->Snapshot();
+                const route::RouteStateSnapshot snapshot = route_coordinator_->Snapshot();
                 if (snapshot.applied) return true;
                 const bool established = exchanger_ &&
                     exchanger_->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
-                if (RouteTableManager::ShouldDeferHostedRouteApply(snapshot.apply_ready, established)) {
+                if (route::RouteCoordinator::ShouldDeferHostedRouteApply(snapshot.apply_ready, established)) {
                     ppp::telemetry::Count("client.route.defer", 1);
                     return true;
                 }
+                if (!route_coordinator_->AddRoute(input)) return false;
 #if defined(_WIN32)
-                if (!UsePaperAirplaneController()) return false;
+                if (!UsePaperAirplaneController()) {
+                    route_coordinator_->DeleteRoute();
+                    return false;
+                }
 #endif
-                route_table_->AddRoute(input);
-                if (!route_table_->Snapshot().applied) return false;
                 {
                     ppp::telemetry::SpanScope span("client.dns.apply");
 #if defined(_WIN32)
@@ -369,7 +371,7 @@ namespace ppp {
 #endif
                 }
                 ppp::telemetry::Count("client.dns.setup", 1);
-                route_table_->ProtectDefaultRoute(input);
+                route_coordinator_->ProtectDefaultRoute(input);
                 return true;
             }
 #endif
@@ -841,7 +843,7 @@ namespace ppp {
                 input.tap_submask = tap->SubmaskAddress;
                 input.bypass_ip_list.assign(bypass_ip_list_.begin(), bypass_ip_list_.end());
                 bypass_ip_list_.clear();
-                if (!route_table_->AddAllRoute(input)) {
+                if (!route_coordinator_->AddAllRoute(input)) {
                     return false;
                 }
 
@@ -893,36 +895,17 @@ namespace ppp {
 #if !defined(_ANDROID) && !defined(_IPHONE)
             /** @brief Attempts to restore default route on underlying physical NIC. */
             bool VEthernetNetworkSwitcher::FixUnderlyingNgw() noexcept {
-                auto ni = underlying_ni_;
-                if (NULLPTR == ni) {
-                    return false;
-                }
-
-                auto gw = ni->GatewayServer;
-                if (gw.is_v4() && !IPEndPoint::IsInvalid(gw) && !gw.is_loopback()) {
-                    uint32_t next_hop = htonl(gw.to_v4().to_uint());
-#if defined(_WIN32)
-                    // Repair physical ethernet route table information on windows platform!
-                    ppp::win32::network::Router::Add(IPEndPoint::AnyAddress, IPEndPoint::AnyAddress, next_hop, 1);
-#elif defined(_MACOS)
-                    ppp::darwin::tun::utun_add_route2(IPEndPoint::AnyAddress, IPEndPoint::AnyAddress, next_hop);
-#else
-                    // Repair physical ethernet route table information on linux platform!
-                    ppp::tap::TapLinux::AddRoute(ni->Name, IPEndPoint::AnyAddress, IPEndPoint::AnyAddress, next_hop);
-#endif
-                    return true;
-                }
-
-                return false;
+                return route_coordinator_->EnsureUnderlyingDefault(BuildRoutePlanInput());
             }
 
             /** @brief Removes VPN route entries and restores system defaults. */
-            void VEthernetNetworkSwitcher::DeleteRoute() noexcept {
-                const route::RoutePlanInput input = BuildRoutePlanInput();
-                ClearPeerPrefixRoutes();
-                route_table_->DeleteRoute();
-                FixUnderlyingNgw();
-                route_table_->DeleteRouteWithDnsServers(input);
+            bool VEthernetNetworkSwitcher::DeleteRoute() noexcept {
+                if (!route_coordinator_->DeleteRoute()) {
+                    return false;
+                }
+                applied_peer_prefix_routes_.clear();
+                route_coordinator_->ReplacePeerPrefix(NULLPTR, NULLPTR);
+                return true;
             }
 
             /** @brief Returns formatted cached remote URI string. */
@@ -1012,8 +995,8 @@ namespace ppp {
             }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-            void VEthernetNetworkSwitcher::AddRoute() noexcept {
-                route_table_->AddRoute(BuildRoutePlanInput());
+            bool VEthernetNetworkSwitcher::AddRoute() noexcept {
+                return route_coordinator_->AddRoute(BuildRoutePlanInput());
             }
 #endif
 

@@ -12,18 +12,11 @@ namespace ppp {
         namespace client {
             namespace route {
 
-                using LinuxRouteInterfaceResolver =
-                    std::function<std::string(ppp::net::native::RouteEntry&)>;
-
                 struct LinuxRouteOperations final {
-                    std::function<RouteInformationTablePtr(uint32_t gateway)> capture_defaults;
                     std::function<bool(
-                        const LinuxRouteInterfaceResolver& resolve,
-                        const RouteInformationTablePtr& routes)> remove_all;
-                    std::function<bool(
-                        const LinuxRouteInterfaceResolver& resolve,
-                        const RouteInformationTablePtr& routes)> restore_all;
-                    std::function<bool(const RouteSpec& route)> add;
+                        uint32_t gateway,
+                        RouteInformationTablePtr& routes)> capture_defaults;
+                    std::function<RouteAddResult(const RouteSpec& route)> add;
                     std::function<bool(const RouteSpec& route)> remove;
                 };
 
@@ -51,15 +44,17 @@ namespace ppp {
                         bool promiscuous,
                         LinuxRouteOperations operations) noexcept;
 
-                    RouteSnapshotPtr CaptureDefaults() noexcept override;
-                    bool RemoveDefaults(const RouteSnapshotPtr& routes) noexcept override;
-                    bool Add(const RouteSpec& route) noexcept override;
+                    DefaultRouteCapture CaptureDefaults() noexcept override;
+                    bool RemoveDefault(const RouteSnapshotPtr& route) noexcept override;
+                    RouteAddResult Add(const RouteSpec& route) noexcept override;
                     bool Delete(const RouteSpec& route) noexcept override;
-                    bool RestoreDefaults(const RouteSnapshotPtr& routes) noexcept override;
+                    bool RestoreDefault(const RouteSnapshotPtr& route) noexcept override;
+                    bool SameDefault(
+                        const RouteSnapshotPtr& left,
+                        const RouteSnapshotPtr& right) noexcept override;
 
                 private:
                     static LinuxRouteOperations CreateSystemOperations() noexcept;
-                    LinuxRouteInterfaceResolver MakeResolver() const noexcept;
                     RouteSpec Resolve(RouteSpec route) const noexcept;
 
                     uint32_t tap_gateway_ = 0;

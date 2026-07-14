@@ -18,6 +18,26 @@ namespace ppp
             typedef std::lock_guard<SynchronizedObject>                             SynchronizedObjectScope;
 
         public:
+            enum class RouteMutationResult
+            {
+                Failed,
+                Unchanged,
+                Changed,
+            };
+
+            static RouteMutationResult                                              ClassifyRouteAddResult(int error, bool query_succeeded, bool exact_exists) noexcept
+            {
+                if (error == 0)
+                {
+                    return RouteMutationResult::Changed;
+                }
+                if (error == EEXIST && query_succeeded && exact_exists)
+                {
+                    return RouteMutationResult::Unchanged;
+                }
+                return RouteMutationResult::Failed;
+            }
+
             TapLinux(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, void* tun, uint32_t address, uint32_t gw, uint32_t mask, bool hosted_network);
             virtual ~TapLinux() noexcept;
             
@@ -29,6 +49,7 @@ namespace ppp
             bool                                                                    AddRoute(UInt32 address, int prefix, UInt32 gw) noexcept;
             bool                                                                    DeleteRoute(UInt32 address, int prefix, UInt32 gw) noexcept;
             static bool                                                             AddRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept;
+            static RouteMutationResult                                              AddRouteStatus(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept;
             static bool                                                             DeleteRoute(const ppp::string& ifrName, UInt32 address, int prefix, UInt32 gw) noexcept;
 
         public: 
@@ -48,7 +69,7 @@ namespace ppp
 
         public: 
             static bool                                                             GetDefaultGateway(char* ifrName, UInt32* address) noexcept;
-            static bool                                                             GetDefaultGateway(UInt32* address, const ppp::function<bool(const char*, uint32_t ip, uint32_t gw, uint32_t mask, int metric)>& predicate) noexcept;
+            static bool                                                             GetDefaultGateway(UInt32* address, const ppp::function<bool(const char*, uint32_t ip, uint32_t gw, uint32_t mask, int metric)>& predicate, bool* query_succeeded = NULLPTR) noexcept;
             static void                                                             CompatibleRoute(bool compatible) noexcept;
             static bool                                                             SetIPAddress(
                 const ppp::string&                                                  ifrName,
@@ -84,6 +105,7 @@ namespace ppp
             static bool                                                             AddAllRoutes(const ppp::function<ppp::string(ppp::net::native::RouteEntry&)>& interface_name, std::shared_ptr<ppp::net::native::RouteInformationTable> rib) noexcept;
             static bool                                                             DeleteAllRoutes(const ppp::function<ppp::string(ppp::net::native::RouteEntry&)>& interface_name, std::shared_ptr<ppp::net::native::RouteInformationTable> rib) noexcept;
             static std::shared_ptr<ppp::net::native::RouteInformationTable>         FindAllDefaultGatewayRoutes(const ppp::unordered_set<uint32_t>& bypass_gws) noexcept;
+            static bool                                                             TryFindAllDefaultGatewayRoutes(const ppp::unordered_set<uint32_t>& bypass_gws, std::shared_ptr<ppp::net::native::RouteInformationTable>& routes) noexcept;
 #if defined(_ANDROID)   
             static std::shared_ptr<ITap>                                            From(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& id, void* tun, uint32_t address, uint32_t gw, uint32_t mask, bool promisc, bool hosted_network) noexcept;
 #endif  

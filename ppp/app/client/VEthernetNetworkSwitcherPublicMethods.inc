@@ -62,8 +62,8 @@
                 virtual std::shared_ptr<ppp::threading::BufferswapAllocator> GetBufferAllocator() noexcept override;
                 virtual bool BlockQUIC(bool value) noexcept;
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                void AddRoute() noexcept;
-                void DeleteRoute() noexcept;
+                bool AddRoute() noexcept;
+                bool DeleteRoute() noexcept;
 #else
                 bool AddAllRoute(const std::shared_ptr<ITap>& tap) noexcept;
 #endif

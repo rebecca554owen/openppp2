@@ -53,7 +53,7 @@
                 ppp::string                                                         ni_dns_servers_;
 #endif
 #endif
-                std::unique_ptr<RouteTableManager>                                  route_table_;
+                std::unique_ptr<route::RouteCoordinator>                            route_coordinator_;
                 std::unique_ptr<AssignedAddressManager>                             address_manager_;
                 std::unique_ptr<ClientConnectionTeardown>                           teardown_;
                 std::unique_ptr<ClientConnectionOpener>                           connection_opener_;

@@ -53,6 +53,61 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assert_violation(root, "route/DNS public API exposes concrete host")
 
+    def test_route_public_header_cannot_expose_windows_mib_type(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/Bad.h": "MIB_IPFORWARDTABLE routes;\n",
+            }
+        )
+        self.assert_violation(root, "route public API exposes Windows MIB type")
+
+    def test_route_public_header_cannot_expose_windows_mib_row(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/Bad.h": "MIB_IPFORWARDROW route;\n",
+            }
+        )
+        self.assert_violation(root, "route public API exposes Windows MIB type")
+
+    def test_route_public_header_cannot_expose_windows_mib_aliases_and_tags(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/Bad.h": (
+                    "PMIB_IPFORWARDTABLE table;\n"
+                    "struct _MIB_IPFORWARDROW row;\n"
+                    "MIB_IPFORWARD_ROW2 row2;\n"
+                ),
+            }
+        )
+        violations = check_repository_layout.check_repository(root)
+        self.assertEqual(
+            3,
+            sum("route public API exposes Windows MIB type" in item for item in violations),
+        )
+
+    def test_switcher_cannot_ignore_route_transaction_result(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/VEthernetNetworkSwitcher.cpp": (
+                    "route_coordinator_->AddRoute(input);\n"
+                    "ApplyDnsPolicy();\n"
+                    "route_coordinator_->ProtectDefaultRoute(input);\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "switcher ignores route transaction result")
+
+    def test_switcher_cannot_apply_host_policy_before_route_commit(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/VEthernetNetworkSwitcher.cpp": (
+                    "UsePaperAirplaneController();\n"
+                    "if (!route_coordinator_->AddRoute(input)) return false;\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "host policy precedes route transaction")
+
     def test_dns_public_header_cannot_expose_exchanger(self) -> None:
         root = self.fixture(
             {
@@ -90,22 +145,65 @@ class RepositoryLayoutTests(unittest.TestCase):
     def test_linux_route_manager_cannot_use_route_host_ports(self) -> None:
         root = self.fixture(
             {
-                "ppp/app/client/RouteTableManager_linux.cpp": (
+                "ppp/app/client/route/RouteCoordinator_linux.cpp": (
                     "route::RouteHostPorts ports = owner_->BuildRouteHostPorts();\n"
                 ),
             }
         )
         self.assert_violation(root, "Linux route manager bypasses RouteState")
 
-    def test_route_manager_cannot_retain_switcher_owner(self) -> None:
+    def test_route_coordinator_cannot_retain_switcher_owner(self) -> None:
         root = self.fixture(
             {
-                "ppp/app/client/RouteTableManager_linux.cpp": (
+                "ppp/app/client/route/RouteCoordinator_linux.cpp": (
                     "auto tap = owner_->GetTap();\n"
                 ),
             }
         )
-        self.assert_violation(root, "route manager retains concrete host owner")
+        self.assert_violation(root, "route coordinator retains concrete host owner")
+
+    def test_switcher_delete_route_cannot_bypass_coordinator_peer_rollback(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/VEthernetNetworkSwitcher.cpp": (
+                    "bool VEthernetNetworkSwitcher::DeleteRoute() noexcept {\n"
+                    "    ClearPeerPrefixRoutes();\n"
+                    "    return route_coordinator_->DeleteRoute();\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "peer route teardown bypasses coordinator undo")
+
+    def test_legacy_route_table_manager_is_removed(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/RouteTableManager.h": (
+                    "class RouteTableManager {};\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "legacy RouteTableManager intermediary")
+
+    def test_route_table_manager_symbol_is_rejected_in_any_ppp_source(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/LegacyRouteOwner.cpp": (
+                    "RouteTableManager manager;\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "legacy RouteTableManager intermediary")
+
+    def test_any_route_source_cannot_retain_owner_wrapper(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/RouteWorker.cpp": (
+                    "auto tap = owner_->GetTap();\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "route coordinator retains concrete host owner")
 
     def test_route_host_ports_are_removed(self) -> None:
         root = self.fixture(
@@ -122,8 +220,8 @@ class RepositoryLayoutTests(unittest.TestCase):
     def test_route_manager_platform_source_requires_stdafx_first(self) -> None:
         root = self.fixture(
             {
-                "ppp/app/client/RouteTableManager_linux.cpp": (
-                    "#include <ppp/app/client/RouteTableManager.h>\n"
+                "ppp/app/client/route/RouteCoordinator_linux.cpp": (
+                    "#include <ppp/app/client/route/RouteCoordinator.h>\n"
                     "#include <ppp/stdafx.h>\n"
                 ),
             }
@@ -141,6 +239,82 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assert_violation(root, "Linux route adapter requires complete RouteEntry")
 
+    def test_linux_eexist_requires_exact_query_and_production_classifier(self) -> None:
+        degraded_blocks = (
+            "return ClassifyRouteAddResult(err, true, true);\n",
+            (
+                "bool exists = false;\n"
+                "TryRouteExists(ifrName, address, prefix, gw, exists);\n"
+                "return exists ? RouteMutationResult::Unchanged : "
+                "RouteMutationResult::Failed;\n"
+            ),
+            (
+                "bool exists = false;\n"
+                "TryRouteExists(ifrName, address, prefix, gw, exists);\n"
+                "ClassifyRouteAddResult(err, true, exists);\n"
+                "return RouteMutationResult::Unchanged;\n"
+            ),
+        )
+        for degraded in degraded_blocks:
+            with self.subTest(degraded=degraded):
+                root = self.fixture(
+                    {
+                        "linux/ppp/tap/TapLinux.cpp": (
+                            "TapLinux::RouteMutationResult TapLinux::AddRouteStatus() {\n"
+                            "if (EEXIST == err) {\n"
+                            f"{degraded}"
+                            "}\n"
+                            "}\n"
+                        ),
+                    }
+                )
+                self.assert_violation(
+                    root,
+                    "Linux route EEXIST bypasses exact production classifier",
+                )
+
+    def test_darwin_system_route_probe_must_bind_tap_exact_query(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/DarwinRoutePlatform.cpp": (
+                    "operations.route_exists = [](const RouteSpec&, bool&) {\n"
+                    "    return TapDarwin::TryFindAllDefaultGatewayRoutes();\n"
+                    "};\n"
+                ),
+            }
+        )
+        self.assert_violation(
+            root,
+            "Darwin system route probe bypasses exact route query",
+        )
+
+    def test_darwin_route_query_must_use_all_route_identity_helper(self) -> None:
+        degraded_methods = (
+            (
+                "FetchAllRouteNtreeStuff([](int, uint32_t ip, uint32_t gw, "
+                "uint32_t mask) { return ip == address; });\n"
+            ),
+            (
+                "TryFindAllDefaultGatewayRoutes({}, routes);\n"
+                "return IsExactRoute(address, prefix, gw, ip, mask, next_hop);\n"
+            ),
+        )
+        for degraded in degraded_methods:
+            with self.subTest(degraded=degraded):
+                root = self.fixture(
+                    {
+                        "darwin/ppp/tap/TapDarwin.cpp": (
+                            "bool TapDarwin::TryRouteExists() {\n"
+                            f"{degraded}"
+                            "}\n"
+                        ),
+                    }
+                )
+                self.assert_violation(
+                    root,
+                    "Darwin route query bypasses all-route production identity",
+                )
+
     def test_windows_gateway_requires_allocator_safe_string_conversion(self) -> None:
         root = self.fixture(
             {
@@ -150,6 +324,29 @@ class RepositoryLayoutTests(unittest.TestCase):
             }
         )
         self.assert_violation(root, "Windows gateway crosses string allocator boundary")
+
+    def test_windows_route_add_cannot_probe_or_delete_preexisting_routes(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/WindowsRoutePlatform.cpp": (
+                    "operations.add = [](const RouteSpec& route) noexcept {\n"
+                    "    Router::GetBestRoute(route.network, best);\n"
+                    "    Router::Delete(best);\n"
+                    "};\n"
+                    "operations.restore_default = [](const auto& route) noexcept {\n"
+                    "    Router::Delete(route);\n"
+                    "};\n"
+                ),
+            }
+        )
+        violations = check_repository_layout.check_repository(root)
+        self.assertEqual(
+            2,
+            sum(
+                "Windows route Add mutates pre-existing route" in item
+                for item in violations
+            ),
+        )
 
 
 if __name__ == "__main__":

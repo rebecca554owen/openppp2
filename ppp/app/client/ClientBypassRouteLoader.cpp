@@ -1,6 +1,6 @@
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
-#include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/io/File.h>
@@ -113,7 +113,7 @@ namespace ppp {
 
 #if defined(_LINUX)
                 if (ngw != IPEndPoint::AnyAddress) {
-                owner_->route_table_->AddNic(
+                owner_->route_coordinator_->AddNic(
                         ngw,
                         std::string(nic.begin(), nic.end()));
                 }
@@ -124,8 +124,8 @@ namespace ppp {
             }
 
             bool ClientBypassRouteLoader::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {
-                    owner_->route_table_->ReplaceRib(NULLPTR);
-                    owner_->route_table_->ReplaceFib(NULLPTR);
+                    owner_->route_coordinator_->ReplaceRib(NULLPTR);
+                    owner_->route_coordinator_->ReplaceFib(NULLPTR);
 
                 bool any = false;
                 if (gw.is_v4()) {
@@ -141,7 +141,7 @@ namespace ppp {
                                 }
 
                                 if (any) {
-                owner_->route_table_->ReplaceRib(rib);
+                owner_->route_coordinator_->ReplaceRib(rib);
                                     ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
                                 }
                             }

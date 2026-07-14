@@ -1,7 +1,7 @@
 #include <ppp/app/client/ClientConnectionTeardown.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
-#include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/app/client/dns/DnsController.h>
@@ -9,6 +9,7 @@
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <ppp/transmissions/proxys/IForwarding.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
+#include <ppp/diagnostics/Error.h>
 #include <common/aggligator/aggligator.h>
 
 #if defined(_WIN32)
@@ -92,14 +93,27 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 owner_->RestoreAssignedIPv6();
-                const bool routes_applied = owner_->route_table_->Snapshot().applied;
-                owner_->route_table_->MarkApplyReady(false);
+                const route::RouteStateSnapshot route_snapshot =
+                    owner_->route_coordinator_->Snapshot();
+                const bool routes_applied = route_snapshot.applied;
+                const bool rollback_pending =
+                    routes_applied || !route_snapshot.default_routes.empty();
+                bool route_cleanup_complete = true;
+                owner_->route_coordinator_->MarkApplyReady(false);
 
                 // Delete VPN route table information configured in the operating system!
-                if (routes_applied) {
+                if (rollback_pending) {
                     // Delete routes entries configured by the VPN program from the operating system.
-                    owner_->DeleteRoute();
+                    route_cleanup_complete = owner_->DeleteRoute();
+                    if (!route_cleanup_complete) {
+                        ppp::diagnostics::SetLastErrorCode(
+                            ppp::diagnostics::ErrorCode::RouteDeleteFailed);
+                    }
+                }
 
+                const ClientTeardownRouteActions route_actions =
+                    route_state_.CompleteAttempt(routes_applied, route_cleanup_complete);
+                if (route_actions.restore_dns) {
 #if defined(_WIN32)
                     ppp::telemetry::Log(Level::kDebug, "client", "DNS teardown");
                     // Restore all dns servers addresses that have been configured when VPN routes are enabled.
@@ -116,21 +130,20 @@ namespace ppp {
 #endif
                 }
 
-                owner_->ClearPeerPrefixRoutes();
+                if (route_actions.release_network_state) {
+                    // To clean up the managed and unmanaged data currently held by the class,
+                    // You need to go through the complete construct fill process again after the Release of this function.
+                    owner_->ribs_.reset();
+                    owner_->tun_ni_.reset();
+                    owner_->underlying_ni_.reset();
 
-                // To clean up the managed and unmanaged data currently held by the class,
-                // You need to go through the complete construct fill process again after the Release of this function.
-                owner_->ribs_.reset();
-                owner_->tun_ni_.reset();
-                owner_->underlying_ni_.reset();
+                    // Clear the reference pointers of the held vBGP without making specific clarification, as this may pose thread safety issues.
+                    owner_->vbgp_ = NULLPTR;
 
-                // Clear the reference pointers of the held vBGP without making specific clarification, as this may pose thread safety issues.
-                owner_->vbgp_ = NULLPTR;
-
-                owner_->route_table_->Clear();
-
-                // Clear all route tables and forwarding tables held by the current object.
-                owner_->LoadAllIPListWithFilePaths(boost::asio::ip::address_v4::any());
+                    owner_->route_coordinator_->Clear();
+                    // Clear all route tables and forwarding tables held by the current object.
+                    owner_->LoadAllIPListWithFilePaths(boost::asio::ip::address_v4::any());
+                }
 #endif
 
 #if defined(_LINUX)

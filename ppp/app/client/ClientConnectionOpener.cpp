@@ -1,7 +1,7 @@
 #include <ppp/app/client/ClientConnectionOpener.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
-#include <ppp/app/client/RouteTableManager.h>
+#include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
@@ -235,13 +235,13 @@ namespace ppp {
                         fib->Fill(*rib);
 
                         if (fib->IsAvailable()) {
-                owner_->route_table_->ReplaceFib(fib);
+                owner_->route_coordinator_->ReplaceFib(fib);
                         }
                     }
                 }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                owner_->route_table_->MarkApplyReady(true);
+                owner_->route_coordinator_->MarkApplyReady(true);
                 if (!owner_->TryApplyHostedNetworkRoutes()) {
                     return false;
                 }

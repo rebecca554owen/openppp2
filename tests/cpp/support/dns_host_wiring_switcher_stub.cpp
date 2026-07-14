@@ -8,7 +8,6 @@
 #include <ppp/app/client/QuicRejectRateLimiter.h>
 #include <ppp/app/client/AggregatorLoader.h>
 #include <ppp/app/client/RemoteEndpointLoader.h>
-#include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/SwitcherTimeoutRegistry.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
@@ -108,8 +107,9 @@ std::shared_ptr<ppp::net::packet::IPFragment> VEthernet::NewFragment() noexcept 
 
 namespace ppp::app::client {
 
-RouteTableManager::RouteTableManager() noexcept = default;
-RouteTableManager::~RouteTableManager() noexcept = default;
+route::RouteCoordinator::RouteCoordinator(
+    std::unique_ptr<route::IRoutePlatform>) noexcept {}
+route::RouteCoordinator::~RouteCoordinator() noexcept = default;
 
 VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(
     const std::shared_ptr<boost::asio::io_context>& context,
@@ -259,9 +259,9 @@ VEthernetNetworkSwitcher::ProtectorNetworkPtr VEthernetNetworkSwitcher::GetProte
 #endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-void VEthernetNetworkSwitcher::AddRoute() noexcept {}
+bool VEthernetNetworkSwitcher::AddRoute() noexcept { return true; }
 
-void VEthernetNetworkSwitcher::DeleteRoute() noexcept {}
+bool VEthernetNetworkSwitcher::DeleteRoute() noexcept { return true; }
 #endif
 
 bool VEthernetNetworkSwitcher::DatagramOutput(

@@ -400,6 +400,10 @@
     <ClCompile Include="ppp\app\client\dns\DnsController.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsSessionContext.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteCoordinator_mobile.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteCoordinator_win32.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteCoordinator_darwin.cpp" />
+    <ClCompile Include="ppp\app\client\route\RouteCoordinator_linux.cpp" />
     <ClCompile Include="ppp\app\client\route\DarwinRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\LinuxRoutePlatform.cpp" />
     <ClCompile Include="ppp\app\client\route\MobileRoutePlatform.cpp" />
@@ -465,11 +469,6 @@
     <ClCompile Include="ppp\app\client\AggregatorLoader.cpp" />
     <ClCompile Include="ppp\app\client\RemoteEndpointLoader.cpp" />
     <ClCompile Include="ppp\app\client\SwitcherTimeoutRegistry.cpp" />
-    <ClCompile Include="ppp\app\client\RouteTableManager.cpp" />
-    <ClCompile Include="ppp\app\client\RouteTableManager_mobile.cpp" />
-    <ClCompile Include="ppp\app\client\RouteTableManager_win32.cpp" />
-    <ClCompile Include="ppp\app\client\RouteTableManager_darwin.cpp" />
-    <ClCompile Include="ppp\app\client\RouteTableManager_linux.cpp" />
     <ClCompile Include="ppp\app\client\ClientNetworkInterfaceResolver.cpp" />
     <ClCompile Include="ppp\app\client\QuicRejectRateLimiter.cpp" />
     <ClCompile Include="ppp\app\client\VEthernetDatagramPort.cpp" />
@@ -803,7 +802,6 @@
     <ClInclude Include="ppp\app\client\ClientPacketDispatchHandler.h" />
     <ClInclude Include="ppp\app\client\ClientNetworkInterface.h" />
     <ClInclude Include="ppp\app\client\ClientNetworkInterfaceResolver.h" />
-    <ClInclude Include="ppp\app\client\RouteTableManager.h" />
     <ClInclude Include="ppp\app\client\QuicRejectRateLimiter.h" />
     <ClInclude Include="ppp\app\client\VEthernetDatagramPort.h" />
     <ClInclude Include="ppp\app\client\VEthernetExchanger.h" />
