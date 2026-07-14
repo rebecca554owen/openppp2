@@ -56,6 +56,7 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
 #include <ppp/app/client/udp/UdpRelayHost.h>
+#include <ppp/app/client/dns/IDnsTunnelTransport.h>
 
 namespace ppp {
     namespace app {
@@ -94,7 +95,7 @@ namespace ppp {
              * Accessing any mutable member from a different thread without the mutex
              * is undefined behavior.
              */
-            class VEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer, public udp::IUdpRelayHost {
+            class VEthernetExchanger : public ppp::app::protocol::VirtualEthernetLinklayer, public udp::IUdpRelayHost, public dns::IDnsTunnelTransport {
                 friend class                                                            VEthernetNetworkSwitcher;
                 friend class                                                            ExchangerStaticEchoChannel;
                 friend struct                                                           ExchangerStaticEchoDetail;
@@ -367,6 +368,7 @@ namespace ppp {
                 udp::UdpRelayHostPorts                                                   BuildUdpRelayHostPorts() noexcept override;
 
                 virtual bool                                                            SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept;
+                bool                                                                    SendDnsDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept override;
 
                 /**
                  * @brief Registers an optional local handler for inbound UDP replies keyed by source endpoint.

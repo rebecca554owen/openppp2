@@ -6,6 +6,7 @@
  */
 
 #include <ppp/app/client/dns/DnsHost.h>
+#include <ppp/app/client/dns/IDnsPolicy.h>
 #include <ppp/app/client/dns/FakeIpPool.h>
 #include <ppp/app/client/dns/DnsRedirectPlan.h>
 #include <ppp/app/client/dns/Rule.h>
@@ -28,7 +29,7 @@ namespace ppp {
 
             namespace dns {
 
-                class DnsInterceptor final {
+                class DnsInterceptor final : public IDnsPolicy {
                 public:
                     using RuleMap = ppp::unordered_map<ppp::string, Rule::Ptr>;
 
@@ -43,7 +44,7 @@ namespace ppp {
 #endif
                     ) noexcept;
 
-                    void Close() noexcept;
+                    void Close() noexcept override;
 
                     void OnSessionInfo(
                         const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions,

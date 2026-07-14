@@ -54,6 +54,8 @@ namespace ppp {
                 class DnsResponseHandler;
                 class DnsUdpRelay;
                 class DnsInterceptor;
+                class DnsController;
+                class DnsSessionContext;
             }
 
             namespace proxys {

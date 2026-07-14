@@ -1652,6 +1652,10 @@ namespace ppp {
                 return datagram_manager_->SendTo(sourceEP, destinationEP, packet, packet_size);
             }
 
+            bool VEthernetExchanger::SendDnsDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept {
+                return SendTo(sourceEP, destinationEP, packet, packet_size);
+            }
+
             /** @brief Registers a local datagram reply handler for a specific source endpoint. */
             bool VEthernetExchanger::RegisterDatagramHandler(const boost::asio::ip::udp::endpoint& sourceEP, const DatagramPacketHandler& handler) noexcept {
                 if (!handler) {

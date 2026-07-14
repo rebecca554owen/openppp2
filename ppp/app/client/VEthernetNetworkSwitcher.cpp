@@ -21,6 +21,7 @@
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
+#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/transmissions/proxys/IForwarding.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/transmissions/ITransmissionQoS.h>
@@ -143,6 +144,7 @@ namespace ppp {
                 : VEthernet(context, lwip, vnet, mta)
                 , configuration_(configuration)
                 , dns_interceptor_(std::make_shared<dns::DnsInterceptor>())
+                , dns_controller_(std::make_shared<dns::DnsController>(dns_interceptor_, nullptr))
                 , route_table_(std::make_unique<RouteTableManager>())
                 , address_manager_(std::make_unique<AssignedAddressManager>())
                 , teardown_(std::make_unique<ClientConnectionTeardown>())

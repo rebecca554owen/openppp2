@@ -3,6 +3,7 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
+#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <ppp/transmissions/proxys/IForwarding.h>
@@ -56,6 +57,11 @@ namespace ppp {
                     socks_proxy->Dispose();
                 }
 
+                if (NULLPTR != owner_->dns_controller_) {
+                    owner_->dns_controller_->Close();
+                }
+                owner_->dns_session_.reset();
+
                 // Close and release the exchanger.
                 if (std::shared_ptr<VEthernetExchanger> exchanger = std::move(owner_->exchanger_); NULLPTR != exchanger) {
                     exchanger->Dispose();
@@ -80,10 +86,6 @@ namespace ppp {
                 // Close and release the forwarding.
                 if (VEthernetNetworkSwitcher::IForwardingPtr forwarding = std::move(owner_->forwarding_); NULLPTR != forwarding) {
                     forwarding->Dispose();
-                }
-
-                if (NULLPTR != owner_->dns_interceptor_) {
-                    owner_->dns_interceptor_->Close();
                 }
 
 #if defined(_WIN32)

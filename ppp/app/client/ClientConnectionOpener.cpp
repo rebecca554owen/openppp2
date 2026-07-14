@@ -5,6 +5,7 @@
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetSocksProxySwitcher.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
+#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/transmissions/ITransmissionQoS.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
@@ -143,6 +144,9 @@ namespace ppp {
                 // Mounts the various service objects created and opened by the current constructor.
                 owner_->qos_             = std::move(qos);
                 owner_->exchanger_       = std::move(exchanger);
+                if (NULLPTR != owner_->dns_controller_) {
+                    owner_->dns_session_ = owner_->dns_controller_->OpenSession(owner_->exchanger_);
+                }
 
 #if defined(_LINUX)
                 owner_->protect_network_ = std::move(protector_network);
