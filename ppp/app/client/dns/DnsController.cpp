@@ -7,10 +7,62 @@
 namespace ppp::app::client::dns {
 
 DnsController::DnsController(
-    std::shared_ptr<IDnsPolicy> policy,
+    std::unique_ptr<IDnsPolicy> policy,
     std::shared_ptr<IDnsTimerScheduler> timers) noexcept
     : policy_(std::move(policy)),
       timers_(std::move(timers)) {
+}
+
+DnsController::~DnsController() noexcept = default;
+
+bool DnsController::Open(
+    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+    const std::shared_ptr<boost::asio::io_context>& context,
+    bool proxy_only
+#if defined(_LINUX)
+    , const std::shared_ptr<ppp::net::ProtectorNetwork>& protect_network
+#endif
+) noexcept {
+    return policy_ && policy_->Open(
+        configuration,
+        context,
+        proxy_only
+#if defined(_LINUX)
+        , protect_network
+#endif
+    );
+}
+
+void DnsController::OnSessionInfo(
+    const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions,
+    bool allow_ipv6_response) noexcept {
+    if (policy_) {
+        policy_->OnSessionInfo(extensions, allow_ipv6_response);
+    }
+}
+
+int DnsController::LoadRules(const ppp::string& rules, bool from_file) noexcept {
+    return policy_ ? policy_->LoadRules(rules, from_file) : 0;
+}
+
+void DnsController::CollectReachabilityIps(
+    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+    bool intercept_unmatched,
+    const ppp::function<void(uint32_t)>& add_tunnel_ip,
+    const ppp::function<void(uint32_t)>& add_nic_ip) noexcept {
+    if (policy_) {
+        policy_->CollectReachabilityIps(
+            configuration, intercept_unmatched, add_tunnel_ip, add_nic_ip);
+    }
+}
+
+boost::asio::ip::address DnsController::RewriteFakeIpAddress(
+    const boost::asio::ip::address& address) const noexcept {
+    return policy_ ? policy_->RewriteFakeIpAddress(address) : address;
+}
+
+bool DnsController::GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept {
+    return policy_ && policy_->GetFakeIpRoute(network, prefix);
 }
 
 std::shared_ptr<const DnsSessionContext> DnsController::OpenSession(

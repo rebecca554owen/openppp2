@@ -193,8 +193,8 @@ namespace ppp {
                     return true;
                 }
 
-                if (NULLPTR != owner_->dns_interceptor_) {
-                    owner_->dns_interceptor_->Open(
+                if (NULLPTR != owner_->dns_controller_) {
+                    owner_->dns_controller_->Open(
                         owner_->configuration_,
                         owner_->GetContext(),
                         owner_->proxy_only_

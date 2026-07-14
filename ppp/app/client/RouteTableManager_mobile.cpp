@@ -4,7 +4,7 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/route/MobileRoutePlatform.h>
 #include <ppp/app/client/route/RouteState.h>
-#include <ppp/app/client/dns/DnsInterceptor.h>
+#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
@@ -66,8 +66,8 @@ namespace ppp {
                 plan.tap_prefix = IPEndPoint::NetmaskToPrefix(tap->SubmaskAddress);
                 plan.tap_gateway = tap->GatewayServer;
                 plan.loopback_gateway = IPEndPoint::LoopbackAddress;
-                if (NULLPTR != owner_->dns_interceptor_) {
-                    owner_->dns_interceptor_->CollectReachabilityIps(
+                if (NULLPTR != owner_->dns_controller_) {
+                    owner_->dns_controller_->CollectReachabilityIps(
                         owner_->configuration_,
                         owner_->configuration_->dns.intercept_unmatched,
                         [&plan](uint32_t ip) noexcept {

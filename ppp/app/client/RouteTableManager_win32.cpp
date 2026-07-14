@@ -6,7 +6,7 @@
 #include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/client/route/WindowsRoutePlatform.h>
-#include <ppp/app/client/dns/DnsInterceptor.h>
+#include <ppp/app/client/dns/DnsController.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/net/IPEndPoint.h>
@@ -182,8 +182,8 @@ namespace ppp {
                 add_dns_server_to_dns_servers(owner_->tun_ni_, 0);
                 add_dns_server_to_dns_servers(owner_->underlying_ni_, 1);
 
-                if (NULLPTR != owner_->dns_interceptor_) {
-                    owner_->dns_interceptor_->CollectReachabilityIps(
+                if (NULLPTR != owner_->dns_controller_) {
+                    owner_->dns_controller_->CollectReachabilityIps(
                         owner_->configuration_,
                         owner_->configuration_->dns.intercept_unmatched,
                         [this](uint32_t ip) noexcept {
@@ -193,10 +193,9 @@ namespace ppp {
                     AddDnsServer(1, ip);
                         });
 
-                    std::shared_ptr<const dns::FakeIpPool> fake_ip_pool = owner_->dns_interceptor_->GetFakeIpPool();
                     uint32_t fake_ip_route_network = 0;
                     int fake_ip_route_prefix = 0;
-                    if (NULLPTR != fake_ip_pool && fake_ip_pool->GetRoute(fake_ip_route_network, fake_ip_route_prefix)) {
+                    if (owner_->dns_controller_->GetFakeIpRoute(fake_ip_route_network, fake_ip_route_prefix)) {
                         if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
                             AddRoute(fake_ip_route_network, tap->GatewayServer, fake_ip_route_prefix);
                         }

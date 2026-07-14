@@ -16,7 +16,6 @@
                 VEthernetHttpProxySwitcherPtr                                       http_proxy_;
                 VEthernetSocksProxySwitcherPtr                                      socks_proxy_;
                 std::unique_ptr<SwitcherTimeoutRegistry>                            timeout_registry_;
-                std::shared_ptr<dns::DnsInterceptor>                                dns_interceptor_;
                 std::shared_ptr<dns::DnsController>                                 dns_controller_;
                 std::shared_ptr<const dns::DnsSessionContext>                       dns_session_;
                 RouteIPListTablePtr                                                 vbgp_;

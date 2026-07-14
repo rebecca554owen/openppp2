@@ -55,6 +55,10 @@ namespace ppp {
                         const ppp::function<void(uint32_t)>& add_tunnel_ip,
                         const ppp::function<void(uint32_t)>& add_nic_ip) noexcept;
 
+                    boost::asio::ip::address RewriteFakeIpAddress(
+                        const boost::asio::ip::address& address) const noexcept override;
+                    bool GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept override;
+
                     bool HandleQuery(
                         const DnsQueryContext& context,
                         const std::shared_ptr<const DnsSessionContext>& session,

@@ -569,6 +569,28 @@ namespace ppp {
                     return DnsRouteDispatcher::Dispatch(plan, dispatch_ports);
                 }
 
+                boost::asio::ip::address DnsInterceptor::RewriteFakeIpAddress(
+                    const boost::asio::ip::address& address) const noexcept {
+                    if (!address.is_v4()) {
+                        return address;
+                    }
+                    const std::shared_ptr<const FakeIpPool> pool = GetFakeIpPool();
+                    if (!pool || !pool->IsEnabled()) {
+                        return address;
+                    }
+                    const uint32_t real_host =
+                        pool->LookupRealIpHostOrder(address.to_v4().to_uint());
+                    return real_host == 0
+                        ? address
+                        : boost::asio::ip::address_v4(real_host);
+                }
+
+                bool DnsInterceptor::GetFakeIpRoute(
+                    uint32_t& network, int& prefix) const noexcept {
+                    const std::shared_ptr<const FakeIpPool> pool = GetFakeIpPool();
+                    return pool && pool->GetRoute(network, prefix);
+                }
+
             }
         }
     }

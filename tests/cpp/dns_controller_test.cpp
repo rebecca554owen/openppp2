@@ -23,11 +23,24 @@ public:
         const void*, int) noexcept override { return true; }
 };
 
+class FakePolicy final : public dns::IDnsPolicy {
+public:
+    bool HandleQuery(
+        const dns::DnsQueryContext&,
+        const std::shared_ptr<const dns::DnsSessionContext>&,
+        const std::shared_ptr<ppp::net::packet::IPFrame>&,
+        const std::shared_ptr<ppp::net::packet::UdpFrame>&,
+        const std::shared_ptr<ppp::net::packet::BufferSegment>&) noexcept override {
+        return false;
+    }
+    void Close() noexcept override {}
+};
+
 }
 
 BOOST_AUTO_TEST_CASE(new_session_replaces_previous_generation) {
     auto timers = std::make_shared<FakeTimers>();
-    dns::DnsController controller(nullptr, timers);
+    dns::DnsController controller(std::make_unique<FakePolicy>(), timers);
     auto first = controller.OpenSession(std::make_shared<FakeTransport>());
     auto second = controller.OpenSession(std::make_shared<FakeTransport>());
     BOOST_REQUIRE(first != nullptr);
@@ -42,7 +55,7 @@ BOOST_AUTO_TEST_CASE(new_session_replaces_previous_generation) {
 
 BOOST_AUTO_TEST_CASE(close_stops_session_and_timers_and_rejects_new_sessions) {
     auto timers = std::make_shared<FakeTimers>();
-    dns::DnsController controller(nullptr, timers);
+    dns::DnsController controller(std::make_unique<FakePolicy>(), timers);
     auto session = controller.OpenSession(std::make_shared<FakeTransport>());
     controller.Close();
     controller.Close();
@@ -51,4 +64,13 @@ BOOST_AUTO_TEST_CASE(close_stops_session_and_timers_and_rejects_new_sessions) {
     BOOST_TEST(!controller.HasActiveSession());
     BOOST_TEST(!controller.IsConfigured());
     BOOST_TEST(controller.OpenSession(std::make_shared<FakeTransport>()) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(fake_ip_rewrite_is_owned_by_controller) {
+    auto timers = std::make_shared<FakeTimers>();
+    dns::DnsController controller(std::make_unique<FakePolicy>(), timers);
+    const auto ipv4 = boost::asio::ip::make_address("10.0.0.7");
+    const auto ipv6 = boost::asio::ip::make_address("2001:db8::7");
+    BOOST_TEST(controller.RewriteFakeIpAddress(ipv4) == ipv4);
+    BOOST_TEST(controller.RewriteFakeIpAddress(ipv6) == ipv6);
 }

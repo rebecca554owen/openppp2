@@ -140,8 +140,8 @@ namespace ppp {
             VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
                 : VEthernet(context, lwip, vnet, mta)
                 , configuration_(configuration)
-                , dns_interceptor_(std::make_shared<dns::DnsInterceptor>())
-                , dns_controller_(std::make_shared<dns::DnsController>(dns_interceptor_, nullptr))
+                , dns_controller_(std::make_shared<dns::DnsController>(
+                    std::make_unique<dns::DnsInterceptor>(), nullptr))
                 , route_table_(std::make_unique<RouteTableManager>())
                 , address_manager_(std::make_unique<AssignedAddressManager>())
                 , teardown_(std::make_unique<ClientConnectionTeardown>())
@@ -461,22 +461,10 @@ namespace ppp {
 
             /** @brief Converts UDP payload to IP frame and emits it to local output. */
             boost::asio::ip::address VEthernetNetworkSwitcher::RewriteFakeIpAddress(const boost::asio::ip::address& addr) const noexcept {
-                if (!addr.is_v4() || NULLPTR == dns_interceptor_) {
+                if (!addr.is_v4() || NULLPTR == dns_controller_) {
                     return addr;
                 }
-
-                std::shared_ptr<const dns::FakeIpPool> pool = dns_interceptor_->GetFakeIpPool();
-                if (NULLPTR == pool || !pool->IsEnabled()) {
-                    return addr;
-                }
-
-                const uint32_t fake_host = addr.to_v4().to_uint();
-                const uint32_t real_host = pool->LookupRealIpHostOrder(fake_host);
-                if (real_host == 0) {
-                    return addr;
-                }
-
-                return boost::asio::ip::address_v4(real_host);
+                return dns_controller_->RewriteFakeIpAddress(addr);
             }
 
             bool VEthernetNetworkSwitcher::DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching) noexcept {
@@ -575,8 +563,8 @@ namespace ppp {
 
                 *information_extensions_ = extensions;
 
-                if (NULLPTR != dns_interceptor_) {
-                    dns_interceptor_->OnSessionInfo(extensions, HasManagedIPv6Assignment(extensions));
+                if (NULLPTR != dns_controller_) {
+                    dns_controller_->OnSessionInfo(extensions, HasManagedIPv6Assignment(extensions));
                 }
 
                 bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
@@ -606,8 +594,8 @@ namespace ppp {
 #else
                 *information_extensions_ = extensions;
 
-                if (NULLPTR != dns_interceptor_) {
-                    dns_interceptor_->OnSessionInfo(extensions, HasManagedIPv6Assignment(extensions));
+                if (NULLPTR != dns_controller_) {
+                    dns_controller_->OnSessionInfo(extensions, HasManagedIPv6Assignment(extensions));
                 }
 #endif
 
@@ -912,8 +900,8 @@ namespace ppp {
                 }
 
                 int events = 0;
-                if (NULLPTR != dns_interceptor_) {
-                    events = dns_interceptor_->LoadRules(rules, load_file_or_string);
+                if (NULLPTR != dns_controller_) {
+                    events = dns_controller_->LoadRules(rules, load_file_or_string);
                 }
 
                 if (1 > events) {

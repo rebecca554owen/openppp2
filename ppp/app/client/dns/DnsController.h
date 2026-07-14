@@ -8,13 +8,41 @@
 #include <ppp/app/client/dns/IDnsPolicy.h>
 #include <ppp/app/client/dns/IDnsTimerScheduler.h>
 
+namespace ppp::configurations { class AppConfiguration; }
+namespace ppp::app::protocol { struct VirtualEthernetInformationExtensions; }
+#if defined(_LINUX)
+namespace ppp::net { class ProtectorNetwork; }
+#endif
+
 namespace ppp::app::client::dns {
 
 class DnsController final {
 public:
     DnsController(
-        std::shared_ptr<IDnsPolicy> policy,
+        std::unique_ptr<IDnsPolicy> policy,
         std::shared_ptr<IDnsTimerScheduler> timers) noexcept;
+    ~DnsController() noexcept;
+
+    bool Open(
+        const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+        const std::shared_ptr<boost::asio::io_context>& context,
+        bool proxy_only
+#if defined(_LINUX)
+        , const std::shared_ptr<ppp::net::ProtectorNetwork>& protect_network
+#endif
+    ) noexcept;
+    void OnSessionInfo(
+        const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions,
+        bool allow_ipv6_response) noexcept;
+    int LoadRules(const ppp::string& rules, bool from_file = false) noexcept;
+    void CollectReachabilityIps(
+        const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+        bool intercept_unmatched,
+        const ppp::function<void(uint32_t)>& add_tunnel_ip,
+        const ppp::function<void(uint32_t)>& add_nic_ip) noexcept;
+    boost::asio::ip::address RewriteFakeIpAddress(
+        const boost::asio::ip::address& address) const noexcept;
+    bool GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept;
 
     std::shared_ptr<const DnsSessionContext> OpenSession(
         const std::shared_ptr<IDnsTunnelTransport>& transport) noexcept;
@@ -36,7 +64,7 @@ public:
     bool HasActiveSession() const noexcept;
 
 private:
-    std::shared_ptr<IDnsPolicy> policy_;
+    std::unique_ptr<IDnsPolicy> policy_;
     std::shared_ptr<IDnsTimerScheduler> timers_;
     std::shared_ptr<DnsSessionContext> active_session_;
     DnsQueryContext context_;
