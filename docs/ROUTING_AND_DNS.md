@@ -1,5 +1,9 @@
 # Routing And DNS
 
+> Status: Active
+> Type: Reference
+> Last verified: c993753
+
 [中文版本](ROUTING_AND_DNS_CN.md)
 
 ## Scope
@@ -11,6 +15,10 @@ with continued DNS handling on the server.
 Main anchors:
 
 - `ppp/app/client/VEthernetNetworkSwitcher.*`
+- `ppp/app/client/route/RouteState.*`
+- `ppp/app/client/route/RouteCoordinator.*`
+- `ppp/app/client/route/RoutePlanInput.h`
+- `ppp/app/client/dns/DnsController.*`
 - `ppp/app/client/dns/Rule.*`
 - `ppp/app/server/VirtualEthernetExchanger.*`
 - `ppp/app/server/VirtualEthernetDatagramPort.*`
@@ -60,6 +68,11 @@ The server continues the DNS path by:
 
 `VEthernetNetworkSwitcher` composes route and DNS services but does not own their domain state. `route::RouteState` owns route data, and `dns::DnsController` owns query/session lifetime.
 
+Before an operation, the Switcher copies TAP facts, interface snapshots, configuration flags, bypass entries, DNS
+reachability, and fake-IP routing into a `RoutePlanInput`. Route managers and platform adapters receive that value
+as `const` input and do not retain a Switcher pointer. The default-route protection worker captures only its plan
+and an independently owned cancellation state.
+
 ### Route Information Base
 
 | Field | Description |
@@ -74,10 +87,13 @@ The server continues the DNS path by:
 | Field / object | Description |
 |----------------|-------------|
 | `DnsController` | Query context, session generation, and close ordering |
-| `DnsInterceptor` | DNS policy, resolver, rules, and fake-ip pool |
+| `DnsInterceptor` | Controller-owned DNS policy, resolver, rules, and fake-ip pool |
 | `RouteState::dns_servers` | Value snapshots of tunnel/NIC DNS reachability routes |
 
 Packet dispatch calls `DnsController::HandleQuery()` with an immutable session snapshot. The controller delegates policy to `DnsInterceptor`; tunnel fallback uses `IDnsTunnelTransport` rather than a concrete exchanger. See [DNS_MODULE_DESIGN.md](DNS_MODULE_DESIGN.md).
+
+`DnsController` is the only production entry point for rule loading, negotiated session information, fake-IP
+rewrite, fake-IP route projection, and resolver reachability. The Switcher no longer stores a second interceptor.
 
 ### Transaction and teardown
 

@@ -1,5 +1,9 @@
 # 路由与 DNS
 
+> Status: Active
+> Type: Reference
+> Last verified: c993753
+
 [English Version](ROUTING_AND_DNS.md)
 
 ## 范围
@@ -9,6 +13,10 @@
 主要锚点：
 
 - `ppp/app/client/VEthernetNetworkSwitcher.*`
+- `ppp/app/client/route/RouteState.*`
+- `ppp/app/client/route/RouteCoordinator.*`
+- `ppp/app/client/route/RoutePlanInput.h`
+- `ppp/app/client/dns/DnsController.*`
 - `ppp/app/client/dns/Rule.*`
 - `ppp/app/server/VirtualEthernetExchanger.*`
 - `ppp/app/server/VirtualEthernetDatagramPort.*`
@@ -54,6 +62,10 @@ flowchart TD
 
 `VEthernetNetworkSwitcher` 只负责组合 Route / DNS 服务，不再拥有其领域状态。`route::RouteState` 持有路由数据，`dns::DnsController` 持有查询与 session 生命周期。
 
+每次操作前，Switcher 会把 TAP 事实、网卡快照、配置标志、bypass 条目、DNS 可达性和 fake-IP 路由
+复制到 `RoutePlanInput`。Route manager 与平台 adapter 只接收 `const` 值输入，不再保存 Switcher 指针。
+默认路由保护线程只捕获 plan 与独立拥有的取消状态。
+
 ### 路由信息表
 
 | 字段 | 说明 |
@@ -68,10 +80,13 @@ flowchart TD
 | 字段 / 对象 | 说明 |
 |-------------|------|
 | `DnsController` | 查询上下文、session generation 与关闭顺序 |
-| `DnsInterceptor` | DNS 策略、resolver、规则表和 fake-ip 池 |
+| `DnsInterceptor` | 由 Controller 独占的 DNS 策略、resolver、规则表和 fake-ip 池 |
 | `RouteState::dns_servers` | tunnel / NIC DNS 可达路由的值快照 |
 
 Packet dispatch 使用不可变 session 快照调用 `DnsController::HandleQuery()`；Controller 再委托 `DnsInterceptor` 执行策略，隧道回退仅依赖 `IDnsTunnelTransport`，不依赖具体 Exchanger。详见 [DNS_MODULE_DESIGN.md](DNS_MODULE_DESIGN.md)。
+
+规则加载、协商 session 信息、fake-IP rewrite、fake-IP 路由投影和 resolver 可达性在生产代码中都只经
+`DnsController` 进入；Switcher 不再额外保存 interceptor。
 
 ### 路由事务与拆除顺序
 
