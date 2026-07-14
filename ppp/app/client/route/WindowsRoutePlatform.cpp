@@ -129,7 +129,8 @@ WindowsRouteOperations WindowsRoutePlatform::CreateSystemOperations(
         const bool gateway_ok = underlying_gateway.empty() ||
             ppp::win32::network::SetDefaultIPGateway(
                 underlying_interface_index,
-                ppp::vector<ppp::string>{ underlying_gateway });
+                ppp::vector<ppp::string>{
+                    ppp::string(underlying_gateway.data(), underlying_gateway.size()) });
         return routes_ok && gateway_ok;
     };
 #else

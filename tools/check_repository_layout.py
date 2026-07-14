@@ -87,6 +87,42 @@ def _collect_candidates(root: Path) -> list[Candidate]:
             candidates.append(Candidate(relative, 1, "new .inc declaration fragment"))
 
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+        if re.fullmatch(
+            r"ppp/app/client/RouteTableManager_(?:linux|darwin|win32|mobile)\.cpp",
+            relative,
+        ):
+            first_code_line = next((line.strip() for line in lines if line.strip()), "")
+            if first_code_line != "#include <ppp/stdafx.h>":
+                candidates.append(
+                    Candidate(relative, 1, "platform source must include stdafx first")
+                )
+
+        if relative == "ppp/app/client/route/LinuxRoutePlatform.cpp":
+            contents = "\n".join(lines)
+            if "entry." in contents and "#include <ppp/net/native/rib.h>" not in contents:
+                candidates.append(
+                    Candidate(
+                        relative,
+                        1,
+                        "Linux route adapter requires complete RouteEntry",
+                    )
+                )
+
+        if relative == "ppp/app/client/route/WindowsRoutePlatform.cpp":
+            for line_number, line in enumerate(lines, 1):
+                if re.search(
+                    r"ppp::vector\s*<\s*ppp::string\s*>\s*\{\s*underlying_gateway\s*\}",
+                    line,
+                ):
+                    candidates.append(
+                        Candidate(
+                            relative,
+                            line_number,
+                            "Windows gateway crosses string allocator boundary",
+                        )
+                    )
+
         for line_number, line in enumerate(lines, 1):
             if relative.startswith("ppp/app/protocol/") and PROTOCOL_REVERSE_INCLUDE_PATTERN.search(line):
                 candidates.append(Candidate(relative, line_number, "protocol -> client/server"))

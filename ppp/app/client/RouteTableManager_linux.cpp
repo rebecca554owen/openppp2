@@ -1,3 +1,4 @@
+#include <ppp/stdafx.h>
 #include <ppp/app/client/RouteTableManager.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>

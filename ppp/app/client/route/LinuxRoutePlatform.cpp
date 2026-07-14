@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/route/LinuxRoutePlatform.h>
+#include <ppp/net/native/rib.h>
 
 #if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
 #include <linux/ppp/tap/TapLinux.h>

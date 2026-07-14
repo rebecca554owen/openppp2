@@ -109,6 +109,38 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assert_violation(root, "legacy DNS host service locator")
 
+    def test_route_manager_platform_source_requires_stdafx_first(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/RouteTableManager_linux.cpp": (
+                    "#include <ppp/app/client/RouteTableManager.h>\n"
+                    "#include <ppp/stdafx.h>\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "platform source must include stdafx first")
+
+    def test_linux_route_platform_requires_complete_route_entry(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/LinuxRoutePlatform.cpp": (
+                    "#include <ppp/stdafx.h>\n"
+                    "auto next_hop = entry.NextHop;\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "Linux route adapter requires complete RouteEntry")
+
+    def test_windows_gateway_requires_allocator_safe_string_conversion(self) -> None:
+        root = self.fixture(
+            {
+                "ppp/app/client/route/WindowsRoutePlatform.cpp": (
+                    "ppp::vector<ppp::string>{ underlying_gateway };\n"
+                ),
+            }
+        )
+        self.assert_violation(root, "Windows gateway crosses string allocator boundary")
+
 
 if __name__ == "__main__":
     unittest.main()
