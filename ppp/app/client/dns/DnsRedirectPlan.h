@@ -52,7 +52,7 @@ namespace ppp {
                 public:
                     static DnsRedirectPlanResult Decide(const DnsRedirectPlanInput& input) noexcept;
 
-                    /** Same semantics as VEthernetNetworkSwitcher::IPAddressIsGatewayServer. */
+                    /** Returns whether the destination identifies the tunnel gateway DNS endpoint. */
                     static bool IsGatewayDnsServer(uint32_t destination, uint32_t gateway, uint32_t mask) noexcept;
                 };
 
