@@ -2,7 +2,7 @@
 
 > Status: Stable
 > Type: Reference
-> Last verified: pending-runtime-ui-stage
+> Last verified: d8ddd71
 
 本文定义原生 OpenPPP2 Runtime 与桌面 TUI、Android、iOS UI 之间的版本 1
 状态边界。

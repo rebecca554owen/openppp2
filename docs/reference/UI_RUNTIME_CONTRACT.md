@@ -2,7 +2,7 @@
 
 > Status: Stable
 > Type: Reference
-> Last verified: pending-runtime-ui-stage
+> Last verified: d8ddd71
 
 This document defines the version 1 state boundary between the native OpenPPP2
 runtime and the desktop, Android, and iOS user interfaces.

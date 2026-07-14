@@ -2,7 +2,7 @@
 
 > Status: Accepted
 > Type: ADR
-> Last verified: pending-runtime-ui-stage
+> Last verified: d8ddd71
 
 ## Decision
 
