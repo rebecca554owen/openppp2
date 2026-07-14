@@ -46,6 +46,11 @@ jobs:
           python3 -m unittest tests.tooling.test_repository_layout -v
           python3 tools/check_repository_layout.py
 
+      - name: Documentation governance checks
+        run: |
+          python3 -m unittest tests.tooling.test_check_docs -v
+          python3 tools/check_docs.py
+
       - name: MSVC project source parity
         run: bash tools/check_vcxproj_sources.sh
 

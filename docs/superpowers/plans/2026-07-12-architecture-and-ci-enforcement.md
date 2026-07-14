@@ -1,5 +1,9 @@
 # Architecture and CI Enforcement Implementation Plan
 
+> Status: In progress
+> Type: Plan
+> Last verified: a9cfec7
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn repository conventions into executable architecture, documentation, formatting, and cross-platform CI rules.
@@ -33,7 +37,7 @@
 - Create: `docs/design/README.md`
 - Modify: `docs/README.md`
 
-- [ ] **Step 1: Define code placement matrix**
+- [x] **Step 1: Define code placement matrix**
 
 Document exact ownership:
 
@@ -47,7 +51,7 @@ platform directories OS calls and adapters
 android/ios          presentation and platform bridge only
 ```
 
-- [ ] **Step 2: Define prohibited patterns**
+- [x] **Step 2: Define prohibited patterns**
 
 Add explicit rules:
 
@@ -59,7 +63,7 @@ no raw mutable container pointer in new service interfaces
 no reverse protocol -> client/server include
 ```
 
-- [ ] **Step 3: Add document metadata template**
+- [x] **Step 3: Add document metadata template**
 
 ```markdown
 > Status: Draft
@@ -70,11 +74,11 @@ no reverse protocol -> client/server include
 > Related issue: #123
 ```
 
-- [ ] **Step 4: Add formatting files**
+- [x] **Step 4: Add formatting files**
 
 Use 4 spaces, no tabs, 120-column target, C++17, own header first, and no global reformat requirement.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CONTRIBUTING.md .editorconfig .clang-format .markdownlint.yml docs
@@ -89,7 +93,7 @@ git add CONTRIBUTING.md .editorconfig .clang-format .markdownlint.yml docs
 - Test: `tests/tooling/test_repository_layout.py`
 - Modify: `.github/workflows/test.yml`
 
-- [ ] **Step 1: Add failing tooling tests**
+- [x] **Step 1: Add failing tooling tests**
 
 Create temporary fixture trees and assert detection of:
 
@@ -101,22 +105,22 @@ runtime including linux/windows implementation
 UI code importing core-private paths
 ```
 
-- [ ] **Step 2: Implement layout checker**
+- [x] **Step 2: Implement layout checker**
 
 The script exits non-zero and prints exact file, line, and violated rule.
 
-- [ ] **Step 3: Freeze RouteHostPorts surface**
+- [x] **Step 3: Freeze RouteHostPorts surface**
 
 Record the current callback member count in the checker. Fail when the count increases. The check is intentionally temporary until `RouteHostPorts` is removed.
 
-- [ ] **Step 4: Add CI step**
+- [x] **Step 4: Add CI step**
 
 ```bash
 python3 tools/check_repository_layout.py
 bash tools/check_include_boundaries.sh
 ```
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 python3 -m unittest tests/tooling/test_repository_layout.py
@@ -132,19 +136,19 @@ git add tools tests/tooling .github
 - Create: `tests/tooling/test_check_docs.py`
 - Modify: `.github/workflows/test.yml`
 
-- [ ] **Step 1: Test missing metadata**
+- [x] **Step 1: Test missing metadata**
 
 Design, audit, plan, ADR, and governance files must declare `Status`, `Type`, and `Last verified` or be explicitly grandfathered in a migration allowlist.
 
-- [ ] **Step 2: Test broken relative links**
+- [x] **Step 2: Test broken relative links**
 
 Resolve Markdown links relative to each document and fail with source path and target.
 
-- [ ] **Step 3: Test bilingual reference pairing**
+- [x] **Step 3: Test bilingual reference pairing**
 
 Stable reference documents listed as bilingual in `docs/README.md` must have both files. Draft designs are exempt.
 
-- [ ] **Step 4: Add CI and commit**
+- [x] **Step 4: Add CI and commit**
 
 ```bash
 python3 -m unittest tests/tooling/test_check_docs.py
@@ -176,17 +180,17 @@ public:
 };
 ```
 
-- [ ] **Step 1: Test Reset clears transactional state**
+- [x] **Step 1: Test Reset clears transactional state**
 
-- [ ] **Step 2: Move route-owned fields into RouteState**
+- [x] **Step 2: Move route-owned fields into RouteState**
 
 Keep compatibility accessors temporarily, but make RouteState the owner.
 
-- [ ] **Step 3: Update teardown and route manager**
+- [x] **Step 3: Update teardown and route manager**
 
 Use `RouteState::Reset()` only after host rollback completes.
 
-- [ ] **Step 4: Run route tests and commit**
+- [x] **Step 4: Run route tests and commit**
 
 ```bash
 ctest --test-dir build/test -R "route_state|route_table|route_host" --output-on-failure
@@ -216,21 +220,21 @@ public:
 };
 ```
 
-- [ ] **Step 1: Write fake-platform coordinator tests**
+- [x] **Step 1: Write fake-platform coordinator tests**
 
 Verify apply order, rollback after failure, and idempotent delete.
 
-- [ ] **Step 2: Implement interface and one Linux adapter first**
+- [x] **Step 2: Implement interface and one Linux adapter first**
 
 Do not migrate all platforms in one PR. Preserve current behavior behind the interface.
 
-- [ ] **Step 3: Migrate Windows and Darwin in separate commits**
+- [x] **Step 3: Migrate Windows and Darwin in separate commits**
 
 Each platform commit must pass its compile job.
 
-- [ ] **Step 4: Remove mutable container pointer access from migrated route paths**
+- [x] **Step 4: Remove mutable container pointer access from migrated route paths**
 
-- [ ] **Step 5: Commit per platform**
+- [x] **Step 5: Commit per platform**
 
 Use messages such as:
 

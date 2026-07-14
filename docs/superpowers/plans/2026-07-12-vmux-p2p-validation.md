@@ -1,5 +1,9 @@
 # VMUX and P2P Validation Implementation Plan
 
+> Status: Planned
+> Type: Plan
+> Last verified: a9cfec7
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Validate VMUX modes with observable requested/effective state, then prepare a secure and testable P2P direct-path implementation without weakening relay connectivity.

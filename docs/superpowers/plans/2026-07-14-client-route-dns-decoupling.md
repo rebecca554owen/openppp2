@@ -1,5 +1,9 @@
 # Client Route/DNS Decoupling Implementation Plan
 
+> Status: In progress
+> Type: Plan
+> Last verified: a9cfec7
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move client route and DNS state, orchestration, platform effects, and session lifetime out of `VEthernetNetworkSwitcher`, leaving it as a composition root with one-way ownership.

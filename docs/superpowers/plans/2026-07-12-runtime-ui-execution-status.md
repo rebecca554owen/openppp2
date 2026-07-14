@@ -1,5 +1,8 @@
 # Runtime/UI Execution Status
 
+> Type: Status report
+> Last verified: a9cfec7
+
 > Branch: `codex/runtime-ui-lifecycle-foundation`
 > Integration branch: `codex/runtime-ui-lifecycle-integration`
 > Pull request: #39
