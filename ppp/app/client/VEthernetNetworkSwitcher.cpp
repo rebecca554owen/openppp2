@@ -206,7 +206,7 @@ namespace ppp {
                 readiness.session = exchanger &&
                     exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established;
                 readiness.adapter = NULLPTR != GetTap();
-                readiness.route = proxy_only_ || route_state_.Snapshot().apply_ready;
+                readiness.route = proxy_only_ || route_table_->Snapshot().apply_ready;
                 readiness.dns = proxy_only_ ||
                     (dns_controller_ && dns_controller_->IsConfigured() &&
                      dns_controller_->HasActiveSession());
@@ -243,11 +243,11 @@ namespace ppp {
             }
 
             VEthernetNetworkSwitcher::RouteInformationTablePtr VEthernetNetworkSwitcher::GetRib() noexcept {
-                return route_state_.Snapshot().rib;
+                return route_table_->Snapshot().rib;
             }
 
             VEthernetNetworkSwitcher::ForwardInformationTablePtr VEthernetNetworkSwitcher::GetFib() noexcept {
-                return route_state_.Snapshot().fib;
+                return route_table_->Snapshot().fib;
             }
 
             VEthernetNetworkSwitcher::IForwardingPtr VEthernetNetworkSwitcher::GetForwarding() noexcept {

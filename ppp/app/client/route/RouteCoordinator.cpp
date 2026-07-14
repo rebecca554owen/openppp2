@@ -7,10 +7,26 @@ namespace ppp {
             namespace route {
 
                 RouteCoordinator::RouteCoordinator(
-                    RouteState& state,
                     std::unique_ptr<IRoutePlatform> platform) noexcept
-                    : state_(state),
-                      platform_(std::move(platform)) {
+                    : platform_(std::move(platform)) {
+                }
+
+                RouteStateSnapshot RouteCoordinator::Snapshot() const noexcept {
+                    return state_.Snapshot();
+                }
+
+                bool RouteCoordinator::SetPlatform(
+                    std::unique_ptr<IRoutePlatform> platform) noexcept {
+                    if (!platform || stopped_.load(std::memory_order_acquire) ||
+                        state_.Snapshot().applied) {
+                        return false;
+                    }
+                    platform_ = std::move(platform);
+                    return true;
+                }
+
+                RouteState& RouteCoordinator::MutableState() noexcept {
+                    return state_;
                 }
 
                 bool RouteCoordinator::Apply(const std::vector<RouteSpec>& routes) noexcept {

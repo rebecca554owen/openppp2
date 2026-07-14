@@ -55,18 +55,14 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
-                if (NULLPTR == route_state_) {
-                    return;
-                }
                 std::unique_ptr<route::DarwinRoutePlatform> platform = NewDarwinRoutePlatform();
                 if (NULLPTR == platform) {
                     return;
                 }
-                route_coordinator_ = std::make_unique<route::RouteCoordinator>(
-                    *route_state_,
-                    std::move(platform));
-                if (!route_coordinator_->Apply(route::BuildRouteSpecs(route_state_->Snapshot().rib))) {
-                    route_coordinator_.reset();
+                if (!route_coordinator_->SetPlatform(std::move(platform))) {
+                    return;
+                }
+                if (!route_coordinator_->Apply(route::BuildRouteSpecs(Snapshot().rib))) {
                     return;
                 }
                 AddRouteWithDnsServers();
@@ -86,7 +82,6 @@ namespace ppp {
                 ppp::telemetry::Count("client.route.delete", 1);
                 if (NULLPTR != route_coordinator_) {
                     route_coordinator_->Stop();
-                    route_coordinator_.reset();
                 }
             }
 
@@ -101,7 +96,7 @@ namespace ppp {
             }
 
             void RouteTableManager::DeleteRouteWithDnsServers() noexcept {
-                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
+                const route::RouteStateSnapshot snapshot = Snapshot();
                 if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
                     for (uint32_t ip : snapshot.dns_servers[0]) {
                         DeleteRoute(ip, tap->GatewayServer, 32);
@@ -118,11 +113,11 @@ namespace ppp {
                     }
                 }
 
-                route_state_->ClearDnsServers();
+                ClearDnsServers();
             }
 
             void RouteTableManager::AddRouteWithDnsServers() noexcept {
-                route_state_->ClearDnsServers();
+                ClearDnsServers();
 
                 auto add_dns_server_to_dns_servers =
                     [this](const std::shared_ptr<VEthernetNetworkSwitcher::NetworkInterface>& ni, int bucket) noexcept {
@@ -172,7 +167,7 @@ namespace ppp {
                             }
 
                             dip = htonl(dip);
-                            route_state_->AddDnsServer(bucket, dip);
+                            AddDnsServer(bucket, dip);
                         }
                         return true;
                     };
@@ -185,10 +180,10 @@ namespace ppp {
                         owner_->configuration_,
                         owner_->configuration_->dns.intercept_unmatched,
                         [this](uint32_t ip) noexcept {
-                            route_state_->AddDnsServer(0, ip);
+                    AddDnsServer(0, ip);
                         },
                         [this](uint32_t ip) noexcept {
-                            route_state_->AddDnsServer(1, ip);
+                    AddDnsServer(1, ip);
                         });
 
                     std::shared_ptr<const dns::FakeIpPool> fake_ip_pool = owner_->dns_interceptor_->GetFakeIpPool();
@@ -201,8 +196,8 @@ namespace ppp {
                     }
                 }
 
-                route_state_->DeduplicateDnsServers();
-                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
+                DeduplicateDnsServers();
+                const route::RouteStateSnapshot snapshot = Snapshot();
 
                 if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
                     for (uint32_t ip : snapshot.dns_servers[0]) {
@@ -239,7 +234,7 @@ namespace ppp {
                             return false;
                         }
 
-                        if (!self->route_state_.Snapshot().applied) {
+                        if (!self->route_table_->Snapshot().applied) {
                             return false;
                         }
 

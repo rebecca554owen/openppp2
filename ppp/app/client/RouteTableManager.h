@@ -6,6 +6,7 @@
  */
 
 #include <memory>
+#include <ppp/app/client/route/RouteState.h>
 
 namespace ppp { namespace tap { class ITap; } }
 
@@ -41,6 +42,18 @@ namespace ppp {
 
                 /** @brief Attaches the manager to its owning switcher (non-owning). */
                 void Bind(VEthernetNetworkSwitcher* owner) noexcept;
+                route::RouteStateSnapshot Snapshot() const noexcept;
+                void ReplaceRib(route::RouteInformationTablePtr value) noexcept;
+                void ReplaceFib(route::ForwardInformationTablePtr value) noexcept;
+                void ReplacePeerPrefix(
+                    route::RouteInformationTablePtr rib,
+                    route::ForwardInformationTablePtr fib) noexcept;
+                void AddNic(uint32_t gateway, std::string interface_name) noexcept;
+                void MarkApplyReady(bool value) noexcept;
+                void Clear() noexcept;
+                void ClearDnsServers() noexcept;
+                void AddDnsServer(int bucket, uint32_t ip) noexcept;
+                void DeduplicateDnsServers() noexcept;
 
 #if defined(_ANDROID) || defined(_IPHONE)
                 /** @brief Builds mobile-side route table including bypass and DNS exceptions. */
@@ -112,7 +125,6 @@ namespace ppp {
 #endif
 
                 VEthernetNetworkSwitcher* owner_ = nullptr;
-                route::RouteState* route_state_ = nullptr;
                 std::unique_ptr<route::RouteCoordinator> route_coordinator_;
             };
         }

@@ -37,14 +37,14 @@ namespace ppp {
 #endif
                 }
                 owner_->applied_peer_prefix_routes_.clear();
-                const route::RouteStateSnapshot snapshot = owner_->route_state_.Snapshot();
+                const route::RouteStateSnapshot snapshot = owner_->route_table_->Snapshot();
                 if (NULLPTR != snapshot.peer_prefix_rib) {
                     snapshot.peer_prefix_rib->Clear();
                 }
                 if (NULLPTR != snapshot.peer_prefix_fib) {
                     snapshot.peer_prefix_fib->Clear();
                 }
-                owner_->route_state_.ReplacePeerPrefix(NULLPTR, NULLPTR);
+                    owner_->route_table_->ReplacePeerPrefix(NULLPTR, NULLPTR);
             }
 
             bool PeerPrefixRouteManager::Apply(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
@@ -134,7 +134,7 @@ namespace ppp {
                     if (NULLPTR != fib) {
                         fib->Fill(*rib);
                         if (fib->IsAvailable()) {
-                            owner_->route_state_.ReplacePeerPrefix(rib, fib);
+                owner_->route_table_->ReplacePeerPrefix(rib, fib);
                         }
                     }
 

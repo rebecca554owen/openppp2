@@ -46,9 +46,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (NULLPTR != route_state_) {
-                    route_state_->ReplaceRib(rib);
-                }
+                ReplaceRib(rib);
 
                 uint32_t cidr = ntohl(tap->SubmaskAddress);
                 cidr = cidr & ntohl(tap->IPAddress);

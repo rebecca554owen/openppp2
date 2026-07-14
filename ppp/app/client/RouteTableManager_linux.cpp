@@ -42,7 +42,7 @@ namespace ppp {
                 }
 
                 std::unordered_map<uint32_t, std::string> nics;
-                for (const auto& pair : route_state_->Snapshot().nics) {
+                for (const auto& pair : Snapshot().nics) {
                     nics.emplace(
                         pair.first,
                         std::string(pair.second.begin(), pair.second.end()));
@@ -69,22 +69,17 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kDebug, "client", "route add");
                 ppp::telemetry::Count("client.route.add", 1);
-                if (NULLPTR == route_state_) {
-                    return;
-                }
-
                 std::unique_ptr<route::LinuxRoutePlatform> platform = NewLinuxRoutePlatform();
                 if (NULLPTR == platform) {
                     return;
                 }
 
-                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
+                const route::RouteStateSnapshot snapshot = Snapshot();
                 std::vector<route::RouteSpec> specs = route::BuildRouteSpecs(snapshot.rib);
-                route_coordinator_ = std::make_unique<route::RouteCoordinator>(
-                    *route_state_,
-                    std::move(platform));
+                if (!route_coordinator_->SetPlatform(std::move(platform))) {
+                    return;
+                }
                 if (!route_coordinator_->Apply(specs)) {
-                    route_coordinator_.reset();
                     return;
                 }
                 AddRouteWithDnsServers();
@@ -105,7 +100,6 @@ namespace ppp {
 
                 if (NULLPTR != route_coordinator_) {
                     route_coordinator_->Stop();
-                    route_coordinator_.reset();
                 }
             }
 
@@ -134,11 +128,7 @@ namespace ppp {
             }
 
             void RouteTableManager::DeleteRouteWithDnsServers() noexcept {
-                if (NULLPTR == route_state_) {
-                    return;
-                }
-
-                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
+                const route::RouteStateSnapshot snapshot = Snapshot();
                 if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
                     for (uint32_t ip : snapshot.dns_servers[0]) {
                         DeleteRoute(ip, tap->GatewayServer, 32);
@@ -155,14 +145,11 @@ namespace ppp {
                     }
                 }
 
-                route_state_->ClearDnsServers();
+                ClearDnsServers();
             }
 
             void RouteTableManager::AddRouteWithDnsServers() noexcept {
-                if (NULLPTR == route_state_) {
-                    return;
-                }
-                route_state_->ClearDnsServers();
+                ClearDnsServers();
 
                 auto add_dns_server_to_dns_servers =
                     [this](const std::shared_ptr<ClientNetworkInterface>& ni, int bucket) noexcept {
@@ -212,7 +199,7 @@ namespace ppp {
                             }
 
                             dip = htonl(dip);
-                            route_state_->AddDnsServer(bucket, dip);
+                            AddDnsServer(bucket, dip);
                         }
                         return true;
                     };
@@ -224,8 +211,8 @@ namespace ppp {
                     owner_->dns_interceptor_->CollectReachabilityIps(
                         owner_->configuration_,
                         owner_->configuration_->dns.intercept_unmatched,
-                        [this](uint32_t ip) noexcept { route_state_->AddDnsServer(0, ip); },
-                        [this](uint32_t ip) noexcept { route_state_->AddDnsServer(1, ip); });
+                        [this](uint32_t ip) noexcept { AddDnsServer(0, ip); },
+                        [this](uint32_t ip) noexcept { AddDnsServer(1, ip); });
                 }
 
                 if (std::shared_ptr<dns::DnsInterceptor> interceptor = owner_->dns_interceptor_; NULLPTR != interceptor) {
@@ -239,8 +226,8 @@ namespace ppp {
                     }
                 }
 
-                route_state_->DeduplicateDnsServers();
-                const route::RouteStateSnapshot snapshot = route_state_->Snapshot();
+                DeduplicateDnsServers();
+                const route::RouteStateSnapshot snapshot = Snapshot();
 
                 if (std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); NULLPTR != tap) {
                     for (uint32_t ip : snapshot.dns_servers[0]) {
@@ -277,7 +264,7 @@ namespace ppp {
                             return false;
                         }
 
-                        if (!self->route_state_.Snapshot().applied) {
+                        if (!self->route_table_->Snapshot().applied) {
                             return false;
                         }
 

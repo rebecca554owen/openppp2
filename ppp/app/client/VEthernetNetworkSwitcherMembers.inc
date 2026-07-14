@@ -55,7 +55,6 @@
 #endif
 #endif
                 std::unique_ptr<RouteTableManager>                                  route_table_;
-                route::RouteState                                                   route_state_;
                 std::unique_ptr<AssignedAddressManager>                             address_manager_;
                 std::unique_ptr<ClientConnectionTeardown>                           teardown_;
                 std::unique_ptr<ClientConnectionOpener>                           connection_opener_;

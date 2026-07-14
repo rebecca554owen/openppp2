@@ -1,6 +1,7 @@
 #include <ppp/app/client/ClientConnectionTeardown.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/client/RouteTableManager.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
 #include <ppp/app/client/dns/DnsController.h>
@@ -91,8 +92,8 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
                 owner_->RestoreAssignedIPv6();
-                const bool routes_applied = owner_->route_state_.Snapshot().applied;
-                owner_->route_state_.MarkApplyReady(false);
+                const bool routes_applied = owner_->route_table_->Snapshot().applied;
+                owner_->route_table_->MarkApplyReady(false);
 
                 // Delete VPN route table information configured in the operating system!
                 if (routes_applied) {
@@ -126,7 +127,7 @@ namespace ppp {
                 // Clear the reference pointers of the held vBGP without making specific clarification, as this may pose thread safety issues.
                 owner_->vbgp_ = NULLPTR;
 
-                owner_->route_state_.Clear();
+                owner_->route_table_->Clear();
 
                 // Clear all route tables and forwarding tables held by the current object.
                 owner_->LoadAllIPListWithFilePaths(boost::asio::ip::address_v4::any());

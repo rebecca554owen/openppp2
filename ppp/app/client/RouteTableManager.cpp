@@ -21,12 +21,56 @@ namespace ppp {
     namespace app {
         namespace client {
 
-            RouteTableManager::RouteTableManager() noexcept = default;
+            RouteTableManager::RouteTableManager() noexcept
+                : route_coordinator_(std::make_unique<route::RouteCoordinator>(nullptr)) {
+            }
             RouteTableManager::~RouteTableManager() noexcept = default;
 
             void RouteTableManager::Bind(VEthernetNetworkSwitcher* owner) noexcept {
                 owner_ = owner;
-                route_state_ = NULLPTR == owner ? NULLPTR : &owner->route_state_;
+            }
+
+            route::RouteStateSnapshot RouteTableManager::Snapshot() const noexcept {
+                return route_coordinator_->Snapshot();
+            }
+
+            void RouteTableManager::ReplaceRib(route::RouteInformationTablePtr value) noexcept {
+                route_coordinator_->MutableState().ReplaceRib(std::move(value));
+            }
+
+            void RouteTableManager::ReplaceFib(route::ForwardInformationTablePtr value) noexcept {
+                route_coordinator_->MutableState().ReplaceFib(std::move(value));
+            }
+
+            void RouteTableManager::ReplacePeerPrefix(
+                route::RouteInformationTablePtr rib,
+                route::ForwardInformationTablePtr fib) noexcept {
+                route_coordinator_->MutableState().ReplacePeerPrefix(
+                    std::move(rib), std::move(fib));
+            }
+
+            void RouteTableManager::AddNic(uint32_t gateway, std::string interface_name) noexcept {
+                route_coordinator_->MutableState().AddNic(gateway, std::move(interface_name));
+            }
+
+            void RouteTableManager::MarkApplyReady(bool value) noexcept {
+                route_coordinator_->MutableState().MarkApplyReady(value);
+            }
+
+            void RouteTableManager::Clear() noexcept {
+                route_coordinator_->MutableState().Clear();
+            }
+
+            void RouteTableManager::ClearDnsServers() noexcept {
+                route_coordinator_->MutableState().ClearDnsServers();
+            }
+
+            void RouteTableManager::AddDnsServer(int bucket, uint32_t ip) noexcept {
+                route_coordinator_->MutableState().AddDnsServer(bucket, ip);
+            }
+
+            void RouteTableManager::DeduplicateDnsServers() noexcept {
+                route_coordinator_->MutableState().DeduplicateDnsServers();
             }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
@@ -36,7 +80,7 @@ namespace ppp {
                     return true;
                 }
 
-                route::RouteStateSnapshot route_snapshot = route_state_->Snapshot();
+                route::RouteStateSnapshot route_snapshot = Snapshot();
                 if (route_snapshot.applied) {
                     return true;
                 }
