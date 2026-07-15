@@ -528,7 +528,9 @@
     <ClCompile Include="ppp\p2p\P2PChannel.cpp" />
     <ClCompile Include="ppp\p2p\P2PConfigHelper.cpp" />
     <ClCompile Include="ppp\p2p\P2PCrypto.cpp" />
+    <ClCompile Include="ppp\p2p\P2PKeyDerivation.cpp" />
     <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp" />
+    <ClCompile Include="ppp\p2p\P2POfferToken.cpp" />
     <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp" />
     <ClCompile Include="ppp\p2p\P2PStunClient.cpp" />
     <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp" />
@@ -842,8 +844,14 @@
     <ClInclude Include="ppp\configurations\AppConfiguration.h" />
     <ClInclude Include="ppp\configurations\MappingConfiguration.h" />
     <ClInclude Include="ppp\p2p\P2PDefs.h" />
+    <ClInclude Include="ppp\p2p\P2PCapabilityGate.h" />
+    <ClInclude Include="ppp\p2p\P2PControlPacket.h" />
+    <ClInclude Include="ppp\p2p\P2PControlStateMachine.h" />
+    <ClInclude Include="ppp\p2p\P2PKeyDerivation.h" />
+    <ClInclude Include="ppp\p2p\P2POfferToken.h" />
     <ClInclude Include="ppp\p2p\P2PPacketHeader.h" />
     <ClInclude Include="ppp\p2p\P2PReplayWindow.h" />
+    <ClInclude Include="ppp\p2p\P2PState.h" />
     <ClInclude Include="ppp\p2p\P2PBufferPool.h" />
     <ClInclude Include="ppp\p2p\P2PCrypto.h" />
     <ClInclude Include="ppp\p2p\P2PSocketProtector.h" />

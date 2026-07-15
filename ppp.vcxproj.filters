@@ -555,7 +555,13 @@
     <ClCompile Include="ppp\p2p\P2PCrypto.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PKeyDerivation.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\p2p\P2POfferToken.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp">
@@ -1271,10 +1277,28 @@
     <ClInclude Include="ppp\p2p\P2PDefs.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PCapabilityGate.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PControlPacket.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PControlStateMachine.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PKeyDerivation.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2POfferToken.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\p2p\P2PPacketHeader.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\p2p\P2PReplayWindow.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PState.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\p2p\P2PBufferPool.h">
