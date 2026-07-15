@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 1c5cd39
+> Last verified: 1c9fa59
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -340,7 +340,7 @@ No socket forwarding is enabled yet.
 - [x] **Step 3: Authenticate probe/ack before Direct transition** (`1598ea4`)
 - [x] **Step 4: Forward data only while state is Direct** (`669d5be`)
 - [x] **Step 5: Fall back to relay on timeout, auth failure, socket error, or migration failure** (`1c5cd39`)
-- [ ] **Step 6: Test UDP blocked, symmetric NAT, stale token, spoofed endpoint, and process restart**
+- [x] **Step 6: Test UDP blocked, symmetric NAT, stale token, spoofed endpoint, and process restart** (`1c9fa59`)
 - [ ] **Step 7: Verify UI never reports Direct before authentication**
 - [ ] **Step 8: Commit in platform-separated PRs**
 
@@ -367,15 +367,21 @@ attempt state, and securely erases stored keys, tokens, replay material, receive
 buffers, endpoints, candidates, and counters. Invalid unsolicited network MAC,
 token, or AEAD input still drops silently and cannot force relay fallback.
 
-Verification at `1c5cd39`: production `openppp2_lib` build passed; C++ tests
-51/51, tooling tests 82/82, and MSVC source parity 202/202 passed. The seven P2P
-ASan/UBSan tests passed with CTest retry; the new production-linked channel test
+Verification at `1c9fa59`: production `openppp2_lib` build passed; C++ tests
+52/52, tooling tests 82/82, and MSVC source parity 202/202 passed. The eight P2P
+ASan/UBSan tests passed with CTest retry; the production-linked channel test
 covers repeated Close, receive/timer cancellation callbacks, first-reason
-retention, and socket-protection failure. This WSL environment intermittently
-faults while initializing ASan before test code runs; the channel test passed on
-retry and no sanitizer diagnostic was reported. Independent review finished
-with Critical 0, Important 0, Minor 0. The real encrypted-packet/callback/replay
-combination and device/NAT adversarial evidence remain in Steps 6-8; no Android
-or iOS device result is claimed. VMUX Task 4
+retention, socket-protection failure, and a bound local UDP blackhole that
+deterministically reaches timeout without ICMP port-unreachable ambiguity.
+Synthetic relay observations cover symmetric NAT classification and punch
+policy. Existing validator tests cover TTL expiry, stale sequence/epoch, and
+spoofed observed endpoints; a fresh channel object confirms that attempt state
+is not restored. These are local unit/simulation results, not proof of production
+UDP-blocked classification, real NAT behavior, device behavior, or a real
+process restart. This WSL environment intermittently faults while initializing
+ASan before test code runs; all tests passed on retry and no sanitizer diagnostic
+was reported. Independent review finished with Critical 0, Important 0. The
+real encrypted-packet/callback/replay combination and platform evidence remain
+in Steps 7-8; no Android or iOS device result is claimed. VMUX Task 4
 Step 5 was completed separately at `ded25d6` with actual carrier-container churn
 coverage; it does not claim real network I/O.
