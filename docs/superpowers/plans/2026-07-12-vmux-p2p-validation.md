@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 463f137
+> Last verified: ded25d6
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -162,10 +162,14 @@ git add benchmarks
 - [x] **Step 2: Test reordered per-flow frames remain isolated**
 - [x] **Step 3: Test bounded reorder memory**
 - [x] **Step 4: Test retiring link with in-flight writes**
-- [ ] **Step 5: Test actual `vmux_net` repeated grow/shrink under ASan**
+- [x] **Step 5: Test actual `vmux_net` repeated grow/shrink under ASan**
 
-  The 100-cycle `MuxLinkDrainState` unit loop passed local ASan/UBSan on
-  2026-07-15 (4 cases), but it does not exercise real carrier add/remove or I/O.
+  The root-linked `vmux_net_churn_integration_test` drives the production
+  attach helper, live RX/TX containers, in-flight retirement gate, reap,
+  exactly-once transport disposal, and runtime active-link count for 100
+  grow/shrink cycles. It passed both the normal jemalloc build and the
+  ASan+UBSan build with leak detection on 2026-07-15 (`ded25d6`). This is
+  carrier-container lifecycle evidence; it does not claim real network I/O.
 - [x] **Step 6: Commit** (`2566750`)
 
 ```bash
