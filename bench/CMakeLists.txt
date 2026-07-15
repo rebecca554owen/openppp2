@@ -25,18 +25,22 @@ get_filename_component(OPENPPP2_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 find_package(OpenSSL REQUIRED)
 find_package(benchmark REQUIRED)
 find_library(JEMALLOC_LIBRARY NAMES jemalloc)
+set(OPENPPP2_BOOST_INCLUDE_DIR "" CACHE PATH "Directory containing boost/version.hpp")
 
 set(OPENPPP2_BENCH_INCLUDES
     "${OPENPPP2_ROOT}"
     "${OPENPPP2_ROOT}/common"
     "${OPENPPP2_ROOT}/common/json/include")
 
-foreach(_hint /usr/include /usr/local/include /opt/homebrew/include)
-    if(EXISTS "${_hint}/boost/version.hpp")
-        list(APPEND OPENPPP2_BENCH_INCLUDES "${_hint}")
-        break()
-    endif()
-endforeach()
+if(NOT OPENPPP2_BOOST_INCLUDE_DIR)
+    find_path(_OPENPPP2_BOOST_INCLUDE_DIR boost/version.hpp
+        HINTS /usr/include /usr/local/include /opt/homebrew/include)
+    set(OPENPPP2_BOOST_INCLUDE_DIR "${_OPENPPP2_BOOST_INCLUDE_DIR}")
+endif()
+if(NOT EXISTS "${OPENPPP2_BOOST_INCLUDE_DIR}/boost/version.hpp")
+    message(FATAL_ERROR "OPENPPP2_BOOST_INCLUDE_DIR must contain boost/version.hpp")
+endif()
+list(APPEND OPENPPP2_BENCH_INCLUDES "${OPENPPP2_BOOST_INCLUDE_DIR}")
 
 set(PPP_CRYPTO_SRCS
     "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"

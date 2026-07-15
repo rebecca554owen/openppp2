@@ -91,7 +91,10 @@ jobs:
       - name: UDP benchmark correctness smoke
         if: matrix.suffix == ''
         run: |
-          cmake -S bench -B build-bench -DCMAKE_BUILD_TYPE=Release
+          TP="${{ github.workspace }}/third-party"
+          cmake -S bench -B build-bench \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPENPPP2_BOOST_INCLUDE_DIR="$TP/boost"
           cmake --build build-bench -j$(nproc)
           ctest --test-dir build-bench --output-on-failure -L correctness
 

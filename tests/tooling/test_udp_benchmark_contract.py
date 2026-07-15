@@ -17,6 +17,18 @@ class UdpBenchmarkContractTests(unittest.TestCase):
             self.assertIn(f"ppp_add_bench({target}", cmake)
             self.assertIn(f"COMMAND {target} --benchmark_min_time=0.001", cmake)
 
+    def test_linux_smoke_uses_the_built_boost_headers(self):
+        cmake = (ROOT / "bench" / "CMakeLists.txt").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "build-linux-amd64.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("OPENPPP2_BOOST_INCLUDE_DIR", cmake)
+        self.assertIn(
+            '-DOPENPPP2_BOOST_INCLUDE_DIR="$TP/boost"',
+            workflow,
+        )
+
     def test_micro_runner_records_every_required_metric(self):
         runner = (ROOT / "tools" / "bench" / "run_micro.sh").read_text(encoding="utf-8")
 
