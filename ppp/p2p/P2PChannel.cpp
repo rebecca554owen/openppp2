@@ -181,14 +181,12 @@ namespace ppp {
 
             local_endpoint_ = socket_->local_endpoint(ec);
 
-            if (protector_) {
-                int fd = static_cast<int>(socket_->native_handle());
-                if (!protector_->Protect(fd)) {
-                    socket_->close(ec);
-                    socket_.reset();
-                    TransitionTo(P2PChannelState::Relay);
-                    return;
-                }
+            int fd = static_cast<int>(socket_->native_handle());
+            if (!ProtectP2PSocket(protector_, fd)) {
+                socket_->close(ec);
+                socket_.reset();
+                TransitionTo(P2PChannelState::Relay);
+                return;
             }
 
 #if defined(_LINUX) && !defined(_ANDROID) && defined(UDP_GRO)

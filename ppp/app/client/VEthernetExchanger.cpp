@@ -24,6 +24,8 @@
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
+#include <ppp/p2p/P2PCapabilityGate.h>
+#include <ppp/p2p/P2PSocketProtector.h>
 
 #include <chrono>
 
@@ -229,7 +231,14 @@ namespace ppp {
                     request.ClientIPv4Req = ipv4_req;
                 }
 
-                if (configuration->p2p.enabled) {
+                const auto protector = ppp::p2p::CreateSocketProtector();
+                const auto p2p_capability = ppp::p2p::P2PCapabilityGate::Evaluate(
+                    configuration->p2p.enabled,
+                    configuration->p2p.mode.c_str(),
+                    transmission->HasAuthenticatedSessionExporter(),
+                    protector && protector->IsReady(),
+                    ppp::p2p::ProductionAuthenticatedControlV1Ready);
+                if (p2p_capability.allowed) {
                     request.P2P.enabled = true;
                     request.P2P.mode = configuration->p2p.mode;
                     request.P2P.action = "register";
@@ -239,6 +248,9 @@ namespace ppp {
                             request.P2P.virtual_ip = tap->IPAddress;
                         }
                     }
+                }
+                else if (configuration->p2p.enabled) {
+                    ppp::telemetry::Log(Level::kInfo, "p2p", "direct registration suppressed reason=%s", p2p_capability.reason);
                 }
 
                 if (!configuration->client.peer_route_announce.empty()) {

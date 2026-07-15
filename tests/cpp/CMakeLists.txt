@@ -105,6 +105,9 @@ openppp2_add_cpp_test(p2p_offer_token_test SOURCES
 target_link_libraries(p2p_offer_token_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_control_state_machine_test SOURCES
     p2p_control_state_machine_test.cpp)
+openppp2_add_cpp_test(p2p_capability_gate_test SOURCES
+    p2p_capability_gate_test.cpp)
+target_link_libraries(p2p_capability_gate_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(dns_buffer_test SOURCES dns_buffer_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp")
 openppp2_add_cpp_test(dns_message_test SOURCES dns_message_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp" "${OPENPPP2_ROOT}/common/dnslib/message.cpp" "${OPENPPP2_ROOT}/common/dnslib/qs.cpp" "${OPENPPP2_ROOT}/common/dnslib/rr.cpp")
 openppp2_add_cpp_test(dns_server_validation_test SOURCES dns_server_validation_test.cpp)

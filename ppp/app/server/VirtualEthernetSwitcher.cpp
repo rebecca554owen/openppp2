@@ -22,6 +22,7 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h> /* SpanScope RAII */
+#include <ppp/p2p/P2PCapabilityGate.h>
 
 #include <openssl/rand.h>
 #include <chrono>
@@ -4003,8 +4004,8 @@ namespace ppp {
                     return false;
                 }
 
-                response.P2P.enabled = configuration_->p2p.enabled;
-                response.P2P.mode = configuration_->p2p.mode;
+                response.P2P.enabled = false;
+                response.P2P.mode = "relay";
                 response.P2P.virtual_ip = request.P2P.virtual_ip;
 
                 // Fix #3: Only accept explicit "register" actions with enabled=true.
@@ -4015,15 +4016,17 @@ namespace ppp {
                     return false;
                 }
 
-                if (!configuration_->p2p.enabled) {
-                    response.P2P.action = "reject";
-                    response.P2P.reason = "p2p-disabled";
-                    return false;
-                }
-
-                if (configuration_->p2p.mode != "direct-preferred") {
+                const auto p2p_capability = ppp::p2p::P2PCapabilityGate::Evaluate(
+                    configuration_->p2p.enabled,
+                    configuration_->p2p.mode.c_str(),
+                    transmission->HasAuthenticatedSessionExporter(),
+                    request.P2P.enabled,
+                    ppp::p2p::ProductionAuthenticatedControlV1Ready);
+                response.P2P.enabled = p2p_capability.allowed;
+                response.P2P.mode = p2p_capability.allowed ? configuration_->p2p.mode : "relay";
+                if (!p2p_capability.allowed) {
                     response.P2P.action = "status";
-                    response.P2P.reason = "relay-only";
+                    response.P2P.reason = p2p_capability.reason;
                     return false;
                 }
 
@@ -4251,6 +4254,22 @@ namespace ppp {
                 ITransmissionPtr source_transmission = source_exchanger->GetTransmission();
                 ITransmissionPtr destination_transmission = destination_exchanger->GetTransmission();
                 if (NULLPTR == source_transmission || NULLPTR == destination_transmission) {
+                    return false;
+                }
+
+                const auto source_capability = ppp::p2p::P2PCapabilityGate::Evaluate(
+                    configuration_->p2p.enabled,
+                    configuration_->p2p.mode.c_str(),
+                    source_transmission->HasAuthenticatedSessionExporter(),
+                    true,
+                    ppp::p2p::ProductionAuthenticatedControlV1Ready);
+                const auto destination_capability = ppp::p2p::P2PCapabilityGate::Evaluate(
+                    configuration_->p2p.enabled,
+                    configuration_->p2p.mode.c_str(),
+                    destination_transmission->HasAuthenticatedSessionExporter(),
+                    true,
+                    ppp::p2p::ProductionAuthenticatedControlV1Ready);
+                if (!source_capability.allowed || !destination_capability.allowed) {
                     return false;
                 }
 

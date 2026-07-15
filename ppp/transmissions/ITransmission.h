@@ -85,6 +85,16 @@ namespace ppp {
             virtual bool                                                                            ShiftToScheduler() noexcept = 0;
             /** @brief Returns remote TCP endpoint information. */
             virtual boost::asio::ip::tcp::endpoint                                                  GetRemoteEndPoint() noexcept = 0;
+            /** @brief Reports whether this transport exposes an authenticated session exporter. */
+            virtual bool HasAuthenticatedSessionExporter() const noexcept { return false; }
+            /** @brief Exports authenticated session-bound key material, unavailable by default. */
+            virtual bool ExportAuthenticatedSessionKey(const char* /*label*/,
+                                                       const std::uint8_t* /*context*/,
+                                                       std::size_t /*context_length*/,
+                                                       std::uint8_t* /*output*/,
+                                                       std::size_t /*output_length*/) noexcept {
+                return false;
+            }
 
         public:
             /**

@@ -100,13 +100,11 @@ namespace ppp {
             }
 
             int fd = static_cast<int>(socket->native_handle());
-            if (protector_) {
-                if (!protector_->Protect(fd)) {
-                    // H1: Protection failed — do not return an unprotected socket.
-                    boost::system::error_code ec;
-                    socket->close(ec);
-                    return nullptr;
-                }
+            if (!ProtectP2PSocket(protector_, fd)) {
+                // H1: Protection failed — do not return an unprotected socket.
+                boost::system::error_code ec;
+                socket->close(ec);
+                return nullptr;
             }
 
             return socket;
