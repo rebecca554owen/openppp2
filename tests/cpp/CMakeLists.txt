@@ -101,6 +101,10 @@ openppp2_add_cpp_test(p2p_key_derivation_test SOURCES
     p2p_key_derivation_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2PKeyDerivation.cpp")
 target_link_libraries(p2p_key_derivation_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_relay_offer_test SOURCES
+    p2p_relay_offer_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp")
+target_link_libraries(p2p_relay_offer_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_offer_token_test SOURCES
     p2p_offer_token_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2POfferToken.cpp"

@@ -531,6 +531,7 @@
     <ClCompile Include="ppp\p2p\P2PCrypto.cpp" />
     <ClCompile Include="ppp\p2p\P2PDatagramTransport.cpp" />
     <ClCompile Include="ppp\p2p\P2PKeyDerivation.cpp" />
+    <ClCompile Include="ppp\p2p\P2PRelayOffer.cpp" />
     <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp" />
     <ClCompile Include="ppp\p2p\P2POfferToken.cpp" />
     <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp" />
