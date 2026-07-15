@@ -2,9 +2,11 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/p2p/P2POfferToken.h>
+#include <ppp/p2p/P2PControlStateMachine.h>
 #include <ppp/p2p/P2PKeyDerivation.h>
 
 #include <array>
+#include <stdexcept>
 
 using namespace ppp::p2p;
 
@@ -43,6 +45,22 @@ P2POfferBinding Binding() {
     binding.source = Endpoint(120, 4000);
     binding.destination = Endpoint(140, 5000);
     binding.ttl_seconds = 30;
+    return binding;
+}
+
+P2POfferBinding ProbeAckBinding(const P2POfferBinding& probe) {
+    auto binding = probe;
+    binding.message_type = P2PControlType::ProbeAck;
+    binding.sender_role = 1;
+    binding.receiver_role = 0;
+    binding.direction = 1;
+    binding.source = Endpoint(140, 5000);
+    binding.destination = Endpoint(120, 4000);
+    binding.sequence = 8;
+    binding.nonce = BuildP2PV1Nonce(Bytes<8>(210), binding.sequence);
+    if (!CreateP2PProbeTranscriptHash(probe, binding.probe_transcript_hash)) {
+        throw std::runtime_error("failed to hash probe transcript");
+    }
     return binding;
 }
 
@@ -248,4 +266,119 @@ BOOST_AUTO_TEST_CASE(stale_authenticated_sequence_is_rejected_by_validator) {
     BOOST_REQUIRE(CreateP2POfferToken(key, stale, stale_token));
     BOOST_TEST(!ValidateP2POfferToken(key, stale, stale,
         stale.source, stale.destination, 0, stale_token, Bytes<8>(200), replay));
+}
+
+BOOST_AUTO_TEST_CASE(only_a_validated_probe_ack_can_enter_direct) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+
+    P2PReplayWindow replay;
+    auto proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay);
+    BOOST_REQUIRE(proof.has_value());
+
+    P2PControlStateMachine machine;
+    BOOST_REQUIRE(machine.MarkEligible());
+    BOOST_REQUIRE(machine.AcceptOffer());
+    BOOST_REQUIRE(machine.AcceptProbeAck(std::move(*proof)));
+    BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Direct));
+    BOOST_TEST(std::string(machine.EffectivePath()) == "direct");
+}
+
+BOOST_AUTO_TEST_CASE(validated_probe_ack_proof_is_consumed_once) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+    P2PReplayWindow replay;
+    auto proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay);
+    BOOST_REQUIRE(proof.has_value());
+
+    P2PControlStateMachine first;
+    BOOST_REQUIRE(first.MarkEligible());
+    BOOST_REQUIRE(first.AcceptOffer());
+    BOOST_REQUIRE(first.AcceptProbeAck(std::move(*proof)));
+
+    P2PControlStateMachine second;
+    BOOST_REQUIRE(second.MarkEligible());
+    BOOST_REQUIRE(second.AcceptOffer());
+    BOOST_TEST(!second.AcceptProbeAck(std::move(*proof)));
+    BOOST_TEST(static_cast<int>(second.State()) == static_cast<int>(P2PState::Probing));
+}
+
+BOOST_AUTO_TEST_CASE(out_of_order_state_does_not_consume_probe_ack_proof) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+    P2PReplayWindow replay;
+    auto proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay);
+    BOOST_REQUIRE(proof.has_value());
+
+    P2PControlStateMachine machine;
+    BOOST_TEST(!machine.AcceptProbeAck(std::move(*proof)));
+    BOOST_REQUIRE(machine.MarkEligible());
+    BOOST_REQUIRE(machine.AcceptOffer());
+    BOOST_TEST(machine.AcceptProbeAck(std::move(*proof)));
+}
+
+BOOST_AUTO_TEST_CASE(probe_ack_is_bound_to_probe_transcript_and_single_use_sequence) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+
+    P2PReplayWindow replay;
+    auto wrong_transcript = ack;
+    wrong_transcript.probe_transcript_hash[0] ^= 1;
+    P2POfferToken wrong_token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, wrong_transcript, wrong_token));
+    BOOST_TEST(!AuthenticateP2PProbeAck(key, wrong_transcript, probe,
+        ack.source, ack.destination, 0, wrong_token, Bytes<8>(210), replay).has_value());
+
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+    BOOST_REQUIRE(AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay).has_value());
+    BOOST_TEST(!AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(probe_ack_rejects_an_unrelated_outstanding_probe) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+
+    auto unrelated = probe;
+    unrelated.sequence++;
+    unrelated.nonce = BuildP2PV1Nonce(Bytes<8>(200), unrelated.sequence);
+    P2PReplayWindow replay;
+    BOOST_TEST(!AuthenticateP2PProbeAck(key, ack, unrelated,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(a_probe_never_produces_a_probe_ack_proof) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, probe, token));
+    P2PReplayWindow replay;
+    BOOST_TEST(!AuthenticateP2PProbeAck(key, probe, probe,
+        probe.source, probe.destination, 0, token, Bytes<8>(200), replay).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(non_ack_control_rejects_probe_transcript_hash) {
+    const auto key = Bytes<32>(9);
+    auto probe = Binding();
+    probe.probe_transcript_hash = Bytes<32>(220);
+    P2POfferToken token{};
+    BOOST_TEST(!CreateP2POfferToken(key, probe, token));
 }

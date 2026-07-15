@@ -847,6 +847,7 @@
     <ClInclude Include="ppp\app\mux\IMuxTransport.h" />
     <ClInclude Include="ppp\app\mux\MuxTransportAdapter.h" />
     <ClInclude Include="ppp\p2p\P2PCapabilityGate.h" />
+    <ClInclude Include="ppp\p2p\P2PAuthenticatedProbeAck.h" />
     <ClInclude Include="ppp\p2p\P2PControlPacket.h" />
     <ClInclude Include="ppp\p2p\P2PControlStateMachine.h" />
     <ClInclude Include="ppp\p2p\P2PKeyDerivation.h" />

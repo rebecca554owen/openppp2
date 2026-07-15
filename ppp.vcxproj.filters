@@ -1292,6 +1292,9 @@
     <ClInclude Include="ppp\p2p\P2PControlStateMachine.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\p2p\P2PAuthenticatedProbeAck.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\p2p\P2PKeyDerivation.h">
       <Filter>头文件</Filter>
     </ClInclude>

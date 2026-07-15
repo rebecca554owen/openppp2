@@ -1,10 +1,12 @@
 #pragma once
 
+#include <ppp/p2p/P2PAuthenticatedProbeAck.h>
 #include <ppp/p2p/P2PControlPacket.h>
 #include <ppp/p2p/P2PReplayWindow.h>
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace ppp::p2p {
 
@@ -28,6 +30,7 @@ struct P2POfferBinding {
     std::uint32_t sequence = 0;
     std::array<std::uint8_t, 12> nonce{};
     std::uint8_t ttl_seconds = 0;
+    std::array<std::uint8_t, 32> probe_transcript_hash{};
 
     friend bool operator==(const P2POfferBinding& a,
                            const P2POfferBinding& b) noexcept {
@@ -42,13 +45,18 @@ struct P2POfferBinding {
             a.direction == b.direction && a.source == b.source &&
             a.destination == b.destination &&
             a.sequence == b.sequence && a.nonce == b.nonce &&
-            a.ttl_seconds == b.ttl_seconds;
+            a.ttl_seconds == b.ttl_seconds &&
+            a.probe_transcript_hash == b.probe_transcript_hash;
     }
 };
 
 bool CreateP2POfferToken(const std::array<std::uint8_t, 32>& token_key,
                          const P2POfferBinding& binding,
                          P2POfferToken& token) noexcept;
+
+bool CreateP2PProbeTranscriptHash(
+    const P2POfferBinding& probe,
+    std::array<std::uint8_t, 32>& transcript_hash) noexcept;
 
 bool ValidateP2POfferToken(const std::array<std::uint8_t, 32>& token_key,
                            const P2POfferBinding& received,
@@ -59,5 +67,16 @@ bool ValidateP2POfferToken(const std::array<std::uint8_t, 32>& token_key,
                            const P2POfferToken& token,
                            const std::array<std::uint8_t, 8>& expected_nonce_prefix,
                            P2PReplayWindow& replay_window) noexcept;
+
+std::optional<P2PAuthenticatedProbeAck> AuthenticateP2PProbeAck(
+    const std::array<std::uint8_t, 32>& token_key,
+    const P2POfferBinding& received,
+    const P2POfferBinding& outstanding_probe,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t elapsed_milliseconds,
+    const P2POfferToken& token,
+    const std::array<std::uint8_t, 8>& expected_nonce_prefix,
+    P2PReplayWindow& replay_window) noexcept;
 
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ppp/p2p/P2PAuthenticatedProbeAck.h>
 #include <ppp/p2p/P2PState.h>
 
 namespace ppp::p2p {
@@ -24,8 +25,11 @@ public:
         return Move(P2PState::Eligible, P2PState::Probing);
     }
 
-    bool AcceptProbeAck(bool authenticated) noexcept {
-        if (!authenticated) return false;
+    bool AcceptProbeAck(bool) noexcept { return false; }
+
+    bool AcceptProbeAck(P2PAuthenticatedProbeAck&& ack) noexcept {
+        if (state_ != P2PState::Probing) return false;
+        if (!ack.Consume()) return false;
         return Move(P2PState::Probing, P2PState::Direct);
     }
 
@@ -33,10 +37,7 @@ public:
         return Move(P2PState::Direct, P2PState::Suspect);
     }
 
-    bool AcceptRecoveryAck(bool authenticated) noexcept {
-        if (!authenticated) return false;
-        return Move(P2PState::Suspect, P2PState::Direct);
-    }
+    bool AcceptRecoveryAck(bool) noexcept { return false; }
 
     bool BeginFallback() noexcept {
         if (state_ != P2PState::Eligible && state_ != P2PState::Probing &&
