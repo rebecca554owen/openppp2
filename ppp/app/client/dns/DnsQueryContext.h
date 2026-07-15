@@ -51,7 +51,7 @@ struct DnsQueryContext final {
         ppp::vector<Byte>)> handle_resolver_response;
 
     bool IsValid() const noexcept {
-        return datagram_output && tap && configuration && allocator && io_context &&
+        return datagram_output && tap && configuration && io_context &&
             emplace_timeout && delete_timeout && handle_resolver_response;
     }
 };

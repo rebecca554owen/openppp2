@@ -74,3 +74,18 @@ BOOST_AUTO_TEST_CASE(fake_ip_rewrite_is_owned_by_controller) {
     BOOST_TEST(controller.RewriteFakeIpAddress(ipv4) == ipv4);
     BOOST_TEST(controller.RewriteFakeIpAddress(ipv6) == ipv6);
 }
+
+BOOST_AUTO_TEST_CASE(query_context_accepts_standard_allocator_fallback) {
+    dns::DnsQueryContext context;
+    context.datagram_output = [](const auto&, const auto&, void*, int, bool) { return true; };
+    context.tap = std::shared_ptr<ppp::tap::ITap>(reinterpret_cast<ppp::tap::ITap*>(1), [](auto*) {});
+    context.configuration = std::shared_ptr<ppp::configurations::AppConfiguration>(
+        reinterpret_cast<ppp::configurations::AppConfiguration*>(1), [](auto*) {});
+    context.io_context = std::make_shared<boost::asio::io_context>();
+    context.emplace_timeout = [](void*, const auto&) { return true; };
+    context.delete_timeout = [](void*) { return true; };
+    context.handle_resolver_response = [](const auto&, const auto&, const auto&, auto) {};
+
+    BOOST_TEST(context.allocator == nullptr);
+    BOOST_TEST(context.IsValid());
+}
