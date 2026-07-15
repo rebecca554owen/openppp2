@@ -298,10 +298,18 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
             -DENABLE_ASAN=ON \
+            -DENABLE_UBSAN=ON \
+            -DENABLE_VMUX_CHURN_TEST=ON \
             -DENABLE_SYSNAT=OFF \
             -DENABLE_IO_URING=OFF \
             -DENABLE_SIMD=OFF
           make -j$(nproc)
+
+      - name: Run VMUX carrier churn sanitizers
+        run: |
+          ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:strict_string_checks=1" \
+          UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+            bin/vmux_net_churn_integration_test
 
       - name: Collect ASan artifact
         run: |

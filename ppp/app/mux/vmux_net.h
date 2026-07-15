@@ -66,6 +66,7 @@ namespace vmux {
 
     private:
         friend class                                                                vmux_skt;
+        friend struct                                                               vmux_net_test_access;
 
         template <typename _Tp>
         struct packet_less {
@@ -404,6 +405,10 @@ namespace vmux {
         static uint64_t                                                             now_tick() noexcept { return ppp::threading::Executors::GetTickCount(); }
 
     private:
+        /** @brief Attach one validated carrier to the scheduling containers. Caller holds syncobj_. */
+        bool                                                                        attach_linklayer_locked(
+            const IMuxTransportPtr&                                                 connection,
+            vmux_linklayer_ptr&                                                     linklayer) noexcept;
         /** @brief Send packet to one specific underlying link-layer endpoint. */
         bool                                                                        underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const PostInternalAsynchronousCallback& posted_ac) noexcept;
 

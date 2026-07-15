@@ -66,12 +66,19 @@ ENDIF()
 # linked. NEVER ship an ASan build to production; it is for reproducing the
 # vmux teardown heap-corruption only.
 OPTION(ENABLE_ASAN "Build with AddressSanitizer (diagnostic only; disables jemalloc)" OFF)
-IF(ENABLE_ASAN AND NOT MSVC)
-    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g")
+OPTION(ENABLE_UBSAN "Build with UndefinedBehaviorSanitizer (diagnostic only)" OFF)
+SET(PPP_SANITIZER_FLAGS "")
+IF(ENABLE_ASAN)
+    SET(PPP_SANITIZER_FLAGS "${PPP_SANITIZER_FLAGS} -fsanitize=address")
 ENDIF()
-
-IF(NOT ENABLE_ASAN)
+IF(ENABLE_UBSAN)
+    SET(PPP_SANITIZER_FLAGS "${PPP_SANITIZER_FLAGS} -fsanitize=undefined")
+ENDIF()
+IF((ENABLE_ASAN OR ENABLE_UBSAN) AND NOT MSVC)
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${PPP_SANITIZER_FLAGS} -fno-omit-frame-pointer -g")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${PPP_SANITIZER_FLAGS} -fno-omit-frame-pointer -g")
+ENDIF()
+IF(NOT ENABLE_ASAN AND NOT ENABLE_UBSAN)
     ADD_DEFINITIONS(-DJEMALLOC)
 ENDIF()
 ADD_DEFINITIONS(-DFUNCTION)
@@ -184,6 +191,7 @@ IF(PPP_TELEMETRY)
 ENDIF()
 
 OPTION(ENABLE_TESTS "Build unit tests (GTest)" OFF)
+OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
 IF(ENABLE_COVERAGE AND NOT MSVC)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Coverage.cmake)
@@ -273,10 +281,9 @@ ELSE()
     # When the __MUSL__ macro is enabled and compilation errors are encountered, you can add the connector option: -static
     # -rdynamic -Wl,-Bstatic -Wl,-Bdynamic -lstdc++ -lpthread -ldl -lz -lrt
     IF(NOT MSVC)
-        IF(ENABLE_ASAN)
-            # ASan needs its runtime dynamically linked; do not force -Bstatic
-            # and add the sanitizer to the link line.
-            SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -rdynamic -fsanitize=address")
+        IF(ENABLE_ASAN OR ENABLE_UBSAN)
+            # Sanitizers need their runtimes dynamically linked; do not force -Bstatic.
+            SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -rdynamic ${PPP_SANITIZER_FLAGS}")
         ELSE()
             SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -rdynamic -Wl,-Bstatic") 
         ENDIF()
@@ -478,7 +485,7 @@ ELSEIF(PLATFORM_SYSTEM_DARWIN)
 
     # ASan diagnostic build drops jemalloc so the sanitizer's allocator
     # interceptors are in effect; default build links jemalloc as before.
-    IF(ENABLE_ASAN)
+    IF(ENABLE_ASAN OR ENABLE_UBSAN)
         SET(PPP_DARWIN_ALLOC_LIB "")
     ELSE()
         SET(PPP_DARWIN_ALLOC_LIB ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib/libjemalloc.a)
@@ -508,7 +515,6 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(PPP_CLANG_LINK_LIBS
         libssl.a
         libcrypto.a
-        libjemalloc.a
         atomic
         dl
         pthread
@@ -518,6 +524,9 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
         libboost_context.a
         libboost_regex.a
         libboost_filesystem.a)
+    IF(NOT ENABLE_ASAN AND NOT ENABLE_UBSAN)
+        LIST(APPEND PPP_CLANG_LINK_LIBS libjemalloc.a)
+    ENDIF()
     IF(ENABLE_IO_URING)
         LIST(APPEND PPP_CLANG_LINK_LIBS uring)
     ENDIF()
@@ -527,7 +536,7 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
     TARGET_LINK_LIBRARIES(openppp2_lib ${PPP_CLANG_LINK_LIBS})
     TARGET_LINK_LIBRARIES(${NAME} openppp2_lib)
 ELSEIF(NOT MSVC)
-    IF(ENABLE_ASAN)
+    IF(ENABLE_ASAN OR ENABLE_UBSAN)
         # ASan variant: drop libc.a (no full-static libc) and libjemalloc.a (let
         # ASan's allocator intercept malloc/free). Diagnostic build only.
         SET(PPP_LINUX_LINK_LIBS
@@ -574,6 +583,18 @@ ELSEIF(NOT MSVC)
     ENDIF()
     TARGET_LINK_LIBRARIES(openppp2_lib ${PPP_LINUX_LINK_LIBS})
     TARGET_LINK_LIBRARIES(${NAME} openppp2_lib)
+ENDIF()
+
+IF(ENABLE_VMUX_CHURN_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(vmux_net_churn_integration_test
+        tests/cpp/vmux_net_churn_integration_test.cpp)
+    TARGET_LINK_LIBRARIES(vmux_net_churn_integration_test openppp2_lib)
+    IF(PLATFORM_SYSTEM_LINUX)
+        TARGET_LINK_OPTIONS(vmux_net_churn_integration_test PRIVATE
+            "-Wl,--exclude-libs,ALL")
+    ENDIF()
+    ADD_TEST(NAME vmux_net_churn_integration_test COMMAND vmux_net_churn_integration_test)
 ENDIF()
 
 IF(ENABLE_TESTS)

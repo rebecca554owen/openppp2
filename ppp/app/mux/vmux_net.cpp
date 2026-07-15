@@ -1835,6 +1835,36 @@ namespace vmux {
     }
 
     /**
+     * @brief Attaches one validated carrier to the live link containers.
+     * @note Caller holds syncobj_. Handshake/forwarding starts in add_linklayer().
+     */
+    bool vmux_net::attach_linklayer_locked(
+        const IMuxTransportPtr& connection,
+        vmux_linklayer_ptr& linklayer) noexcept {
+        linklayer = ppp::make_shared_object<vmux_linklayer>();
+        if (NULLPTR == linklayer) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetAddLinklayerAllocFailed);
+            return false;
+        }
+
+        std::shared_ptr<Byte> buffer = make_byte_array(max_buffers_size);
+        if (NULLPTR == buffer) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetAddLinklayerBufferAllocFailed);
+            return false;
+        }
+
+        linklayer->connection = connection;
+        tx_links_.emplace_back(linklayer);
+        rx_links_.emplace_back(linklayer);
+        refresh_runtime_active_links();
+
+        ppp::telemetry::Log(Level::kInfo, "mux", "link open");
+        ppp::telemetry::Count("mux.link.open", 1);
+        ppp::telemetry::Log(Level::kDebug, "mux", "link count=%d", static_cast<int>(rx_links_.size()));
+        return true;
+    }
+
+    /**
      * @brief Adds a new transport linklayer and optionally starts full forwarding.
      */
     bool vmux_net::add_linklayer(const IMuxTransportPtr& connection, vmux_linklayer_ptr& linklayer, const vmux_native_add_linklayer_after_success_before_callback& cb) noexcept {
@@ -1859,26 +1889,9 @@ namespace vmux {
             return false;
         }
 
-        linklayer = ppp::make_shared_object<vmux_linklayer>();
-        if (NULLPTR == linklayer) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetAddLinklayerAllocFailed);
+        if (!attach_linklayer_locked(connection, linklayer)) {
             return false;
         }
-
-        std::shared_ptr<Byte> buffer = make_byte_array(max_buffers_size);
-        if (NULLPTR == buffer) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetAddLinklayerBufferAllocFailed);
-            return false;
-        }
-
-        linklayer->connection = connection;
-        tx_links_.emplace_back(linklayer);
-        rx_links_.emplace_back(linklayer);
-        refresh_runtime_active_links();
-
-        ppp::telemetry::Log(Level::kInfo, "mux", "link open");
-        ppp::telemetry::Count("mux.link.open", 1);
-        ppp::telemetry::Log(Level::kDebug, "mux", "link count=%d", static_cast<int>(rx_links_.size()));
 
         // Runtime addition: the session is already established (turbo dynamic pool
         // grow on either end). Attach exactly this one link and spawn exactly ONE

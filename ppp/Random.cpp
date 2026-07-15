@@ -8,6 +8,16 @@
  */
 
 namespace ppp {
+    namespace {
+        int SubtractInt32Unchecked(int left, int right) noexcept {
+            const uint32_t wrapped = static_cast<uint32_t>(left) -
+                static_cast<uint32_t>(right);
+            return wrapped <= static_cast<uint32_t>(INT_MAX)
+                ? static_cast<int>(wrapped)
+                : static_cast<int>(static_cast<int64_t>(wrapped) - (INT64_C(1) << 32));
+        }
+    }
+
     /**
      * @brief Constructs a random generator using tick count as seed.
      */
@@ -69,7 +79,7 @@ namespace ppp {
                 int num4 = 21 * i % 55;
                 SeedArray[num4] = num3;
 
-                num3 = num2 - num3;
+                num3 = SubtractInt32Unchecked(num2, num3);
                 if (num3 < 0) {
                     num3 += INT_MAX;
                 }
@@ -79,7 +89,8 @@ namespace ppp {
 
             for (int j = 1; j < 5; j++) {
                 for (int k = 1; k < 56; k++) {
-                    SeedArray[k] -= SeedArray[1 + (k + 30) % 55];
+                    SeedArray[k] = SubtractInt32Unchecked(
+                        SeedArray[k], SeedArray[1 + (k + 30) % 55]);
                     if (SeedArray[k] < 0) {
                         SeedArray[k] += INT_MAX;
                     }
