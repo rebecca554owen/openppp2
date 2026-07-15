@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 1598ea4
+> Last verified: 669d5be
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -338,7 +338,7 @@ No socket forwarding is enabled yet.
 - [x] **Step 1: Add disabled-by-default capability flag** (`463f137`)
 - [x] **Step 2: Protect socket before first probe** (`463f137`)
 - [x] **Step 3: Authenticate probe/ack before Direct transition** (`1598ea4`)
-- [ ] **Step 4: Forward data only while state is Direct**
+- [x] **Step 4: Forward data only while state is Direct** (`669d5be`)
 - [ ] **Step 5: Fall back to relay on timeout, auth failure, socket error, or migration failure**
 - [ ] **Step 6: Test UDP blocked, symmetric NAT, stale token, spoofed endpoint, and process restart**
 - [ ] **Step 7: Verify UI never reports Direct before authentication**
@@ -355,14 +355,21 @@ boolean ACK and recovery claims fail closed. `ProductionAuthenticatedControlV1Re
 remains `false`, so existing transports remain relay-only and the legacy
 bearer-token offer path is unreachable. Remaining work includes a real exporter
 override, pair-seed wrapping/control-v1 coordinator integration, Android
-`VpnService` and iOS socket protection injection, data forwarding,
-timeout/fallback integration, and device/NAT adversarial evidence.
+`VpnService` and iOS socket protection injection, timeout/fallback integration,
+and device/NAT adversarial evidence. Legacy Tier-2 handling permits Direct and
+Suspect to authenticate endpoint, AEAD, replay, and heartbeat control, but only
+the entry-state Direct path may demultiplex or publish payload frames. A Suspect
+heartbeat ACK may restore Direct without forwarding payload from that same
+packet. The real encrypted-packet/callback/replay combination test remains part
+of the Step 5 channel/fallback harness rather than adding test-only access to the
+currently unreachable legacy channel.
 
-Verification at `1598ea4`: production `openppp2_lib` build passed; C++ tests
-50/50, tooling tests 80/80, and MSVC source parity 202/202 passed. The six P2P
+Verification at `669d5be`: production `openppp2_lib` build passed; C++ tests
+50/50, tooling tests 81/81, and MSVC source parity 202/202 passed. The affected P2P
 ASan/UBSan tests passed with CTest retry; this WSL environment intermittently
 faults while initializing ASan before test code runs, and no sanitizer defect
 was reported after initialization. Independent review finished with Critical 0,
-Important 0, Minor 0. No Android or iOS device result is claimed. VMUX Task 4
+Important 0; the missing real encrypted-packet combination test is tracked above.
+No Android or iOS device result is claimed. VMUX Task 4
 Step 5 was completed separately at `ded25d6` with actual carrier-container churn
 coverage; it does not claim real network I/O.
