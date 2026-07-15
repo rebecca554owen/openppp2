@@ -170,7 +170,7 @@ namespace vmux {
         std::size_t active_links = 0;
         for (const vmux_linklayer_ptr& linklayer : rx_links_) {
             if (NULLPTR != linklayer && ppp::app::mux::IsMuxLinkActive(
-                    linklayer->handshake_complete_, linklayer->retiring_)) {
+                    linklayer->handshake_complete_, linklayer->drain_.retiring())) {
                 ++active_links;
             }
         }
@@ -454,20 +454,24 @@ namespace vmux {
      */
     static bool transmission_write(
         std::shared_ptr<vmux_net>                                           self,
-        const vmux_net::ITransmissionPtr&                                   transmission, 
-        const std::shared_ptr<Byte>&                                        packet, 
+        const vmux_net::ITransmissionPtr&                                   transmission,
+        const std::shared_ptr<Byte>&                                        packet,
         int                                                                 packet_length,
-        const ppp::transmissions::ITransmission::AsynchronousWriteCallback& ac) noexcept {
+        const ppp::transmissions::ITransmission::AsynchronousWriteCallback& ac,
+        const ppp::function<void()>&                                        accounting_fallback) noexcept {
 
         ContextPtr context = transmission->GetContext();
         StrandPtr strand = transmission->GetStrand();
 
-        const ppp::function<void(bool)> on_completely = 
-            [self, ac](bool successed) noexcept {
-                vmux_post_exec(self->get_context(), self->get_strand(), 
+        const ppp::function<void(bool)> on_completely =
+            [self, ac, accounting_fallback](bool successed) noexcept {
+                const bool posted = vmux_post_exec(self->get_context(), self->get_strand(),
                     [self, successed, ac]() noexcept {
                         ac(successed);
                     });
+                if (!posted && NULLPTR != accounting_fallback) {
+                    accounting_fallback();
+                }
             };
 
         bool posted = vmux_post_exec(context, strand,
@@ -522,13 +526,17 @@ namespace vmux {
         // (turbo dynamic pool) can retire a link only after its last write
         // completes — a late completion must never touch a freed/retired link's
         // scheduling state.
-        linklayer->inflight_++;
-        return transmission_write(self, transmission, packet, packet_length, 
-            [self, this, linklayer, posted_ac](bool ok) noexcept {
+        const ppp::app::mux::MuxLinkDrainState::WriteTicket write =
+            linklayer->drain_.BeginWrite();
+        if (!write) {
+            return false;
+        }
+        bool queued = transmission_write(self, transmission, packet, packet_length,
+            [self, this, linklayer, posted_ac, write](bool ok) noexcept {
                 // Decrement in-flight first; this completion is accounted regardless
                 // of what follows. Runtime removal checks inflight_ == 0 to retire.
-                if (linklayer->inflight_ > 0) {
-                    linklayer->inflight_--;
+                if (!linklayer->drain_.CompleteWrite(write)) {
+                    return;
                 }
 
                 if (NULLPTR != posted_ac) {
@@ -549,7 +557,7 @@ namespace vmux {
                 // do not re-credit it. Once its in-flight drains to 0 the periodic
                 // maintenance path removes it. Re-drive the scheduler so queued
                 // frames continue on the remaining links.
-                if (linklayer->retiring_) {
+                if (linklayer->drain_.retiring()) {
                     process_tx_all_packets();
                     return;
                 }
@@ -583,7 +591,14 @@ namespace vmux {
                 if (!ok) {
                     close_exec();
                 }
+            },
+            [linklayer, write]() noexcept {
+                (void)linklayer->drain_.AbortWrite(write);
             });
+        if (!queued) {
+            (void)linklayer->drain_.AbortWrite(write);
+        }
+        return queued;
     }
 
     /**
@@ -1015,23 +1030,20 @@ namespace vmux {
      *          that actually skips increments the mux.rx.flow.evict telemetry once.
      */
     void vmux_net::flow_force_advance(uint32_t connection_id, flow_rx_context& fx, uint64_t now) noexcept {
-        rx_packet_ssqueue::iterator it = fx.flow_reorder_.begin();
-        if (it == fx.flow_reorder_.end()) {
+        uint32_t first_sequence = 0;
+        if (!fx.flow_reorder_.FirstSequence(fx.flow_rx_next_, first_sequence)) {
             fx.oldest_buffered_tick_ = 0;
             return;
         }
 
-        fx.flow_rx_next_ = it->first; // jump over the missing gap to the next buffered DSN.
+        fx.flow_rx_next_ = first_sequence; // jump over the missing gap to the next buffered DSN.
         ppp::telemetry::Count("mux.rx.flow.evict", 1);
 
         for (;;) {
-            rx_packet_ssqueue::iterator j = fx.flow_reorder_.begin();
-            if (j != fx.flow_reorder_.end() && j->first == fx.flow_rx_next_) {
-                rx_packet pk = j->second;
+            rx_packet pk;
+            if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
                 vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                 Byte pcmd = ph->cmd;
-                fx.flow_reorder_.erase(j);
-                fx.buffered_bytes_ -= pk.length;
                 if (pcmd == cmd_fin) {
                     fx.fin_seen_ = true;
                 }
@@ -1103,13 +1115,10 @@ namespace vmux {
             fx.flow_rx_next_++;
 
             for (;;) {
-                rx_packet_ssqueue::iterator it = fx.flow_reorder_.begin();
-                if (it != fx.flow_reorder_.end() && it->first == fx.flow_rx_next_) {
-                    rx_packet pk = it->second;
+                rx_packet pk;
+                if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
                     vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                     Byte pcmd = ph->cmd;
-                    fx.flow_reorder_.erase(it);
-                    fx.buffered_bytes_ -= pk.length;
                     if (pcmd == cmd_fin) {
                         fx.fin_seen_ = true;
                     }
@@ -1147,13 +1156,10 @@ namespace vmux {
                     fx.flow_rx_next_ = seq + 1;
                     // Replay anything now contiguous.
                     for (;;) {
-                        rx_packet_ssqueue::iterator it = fx.flow_reorder_.begin();
-                        if (it != fx.flow_reorder_.end() && it->first == fx.flow_rx_next_) {
-                            rx_packet pk = it->second;
+                        rx_packet pk;
+                        if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
                             vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                             Byte pcmd = ph->cmd;
-                            fx.flow_reorder_.erase(it);
-                            fx.buffered_bytes_ -= pk.length;
                             if (pcmd == cmd_fin) {
                                 fx.fin_seen_ = true;
                             }
@@ -1174,7 +1180,7 @@ namespace vmux {
             }
 
             // Evict oldest gaps until this frame fits within the per-connection cap.
-            while (fx.buffered_bytes_ + (size_t)length > flow_reorder_cap_bytes_ && !fx.flow_reorder_.empty()) {
+            while (fx.flow_reorder_.buffered_bytes() + (size_t)length > flow_reorder_cap_bytes_ && !fx.flow_reorder_.empty()) {
                 flow_force_advance(cid, fx, now);
                 // If forcing advance made seq become the next expected, fall through is
                 // not needed; re-check below by comparing again on next loop iteration.
@@ -1193,13 +1199,10 @@ namespace vmux {
                 }
                 fx.flow_rx_next_++;
                 for (;;) {
-                    rx_packet_ssqueue::iterator it = fx.flow_reorder_.begin();
-                    if (it != fx.flow_reorder_.end() && it->first == fx.flow_rx_next_) {
-                        rx_packet pk = it->second;
+                    rx_packet pk;
+                    if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
                         vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                         Byte pcmd = ph->cmd;
-                        fx.flow_reorder_.erase(it);
-                        fx.buffered_bytes_ -= pk.length;
                         if (pcmd == cmd_fin) {
                             fx.fin_seen_ = true;
                         }
@@ -1234,9 +1237,16 @@ namespace vmux {
             rx_packet packet = { buf, length };
             memcpy(buf.get(), h, length);
 
-            bool inserted = fx.flow_reorder_.emplace(std::make_pair(seq, packet)).second;
+            const size_t entry_cap = std::max<size_t>(
+                1, flow_reorder_cap_bytes_ / sizeof(vmux_hdr));
+            bool inserted = fx.flow_reorder_.TryInsert(
+                seq,
+                fx.flow_rx_next_,
+                packet,
+                (size_t)length,
+                flow_reorder_cap_bytes_,
+                entry_cap);
             if (inserted) {
-                fx.buffered_bytes_ += length;
                 if (fx.oldest_buffered_tick_ == 0) {
                     fx.oldest_buffered_tick_ = now;
                 }
@@ -1471,7 +1481,7 @@ namespace vmux {
         }
 
         // A link being retired (turbo dynamic pool shrink) takes no new frames.
-        if (linklayer->retiring_) {
+        if (linklayer->drain_.retiring()) {
             return false;
         }
 
@@ -1921,7 +1931,7 @@ namespace vmux {
                     if (ok) {
                         ok = vmux_post_exec(context_, strand_,
                             [self, this, added]() noexcept {
-                                if (base_.disposed_.load(std::memory_order_acquire) || added->retiring_) {
+                                if (base_.disposed_.load(std::memory_order_acquire) || added->drain_.retiring()) {
                                     return false;
                                 }
 
@@ -2036,7 +2046,7 @@ namespace vmux {
         // Count links that are not already retiring.
         size_t live = 0;
         for (const vmux_linklayer_ptr& l : rx_links_) {
-            if (NULLPTR != l && !l->retiring_) {
+            if (NULLPTR != l && !l->drain_.retiring()) {
                 live++;
             }
         }
@@ -2050,7 +2060,7 @@ namespace vmux {
         vmux_linklayer_ptr victim;
         uint64_t oldest = 0;
         for (const vmux_linklayer_ptr& l : rx_links_) {
-            if (NULLPTR == l || l->retiring_) {
+            if (NULLPTR == l || l->drain_.retiring()) {
                 continue;
             }
 
@@ -2064,7 +2074,7 @@ namespace vmux {
             return false;
         }
 
-        victim->retiring_ = true;
+        victim->drain_.BeginRetire();
         refresh_runtime_active_links();
 
         // Stop sending new frames on the victim: remove it from the free-link list.
@@ -2078,7 +2088,7 @@ namespace vmux {
         }
 
         ppp::telemetry::Count("mux.link.retire.begin", 1);
-        ppp::telemetry::Log(Level::kInfo, "mux", "link retiring (runtime shrink), inflight=%d", (int)victim->inflight_);
+        ppp::telemetry::Log(Level::kInfo, "mux", "link retiring (runtime shrink), inflight=%d", (int)victim->drain_.inflight());
 
         // If it already has no in-flight writes, reap immediately.
         reap_retired_linklayers();
@@ -2091,7 +2101,7 @@ namespace vmux {
     void vmux_net::reap_retired_linklayers() noexcept {
         for (vmux_linklayer_vector::iterator it = rx_links_.begin(); it != rx_links_.end();) {
             vmux_linklayer_ptr linklayer = *it;
-            if (NULLPTR != linklayer && linklayer->retiring_ && linklayer->inflight_ <= 0) {
+            if (NULLPTR != linklayer && linklayer->drain_.reapable()) {
                 it = rx_links_.erase(it);
 
                 // Ensure it is not left in the free-link list, then dispose its transport.
@@ -2177,7 +2187,7 @@ namespace vmux {
         // Count live (non-retiring) links and any pending grow already requested.
         size_t live = 0;
         for (const vmux_linklayer_ptr& l : rx_links_) {
-            if (NULLPTR != l && !l->retiring_) {
+            if (NULLPTR != l && !l->drain_.retiring()) {
                 live++;
             }
         }

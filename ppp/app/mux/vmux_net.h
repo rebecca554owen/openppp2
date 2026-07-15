@@ -7,6 +7,8 @@
  */
 
 #include "vmux.h"
+#include <ppp/app/mux/MuxFlowReorderBuffer.h>
+#include <ppp/app/mux/MuxLinkDrainState.h>
 #include <ppp/app/mux/MuxRuntimeState.h>
 
 namespace ppp {
@@ -56,9 +58,8 @@ namespace vmux {
                 ppp::app::server::VirtualEthernetNetworkTcpipConnection>            server;
             uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Strand-affine.
             uint64_t                                                                last_active_ = 0; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Strand-affine.
-            int                                                                     inflight_ = 0;    ///< In-flight async writes issued on this link and not yet completed. Strand-affine. Used by runtime link removal (turbo dynamic pool): a link is only retired once inflight_ reaches 0 so a late write completion never touches a retired link's scheduling state.
+            ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
             bool                                                                    handshake_complete_ = false; ///< True only after the carrier handshake succeeds. Protected by syncobj_.
-            bool                                                                    retiring_ = false; ///< Set when this link is being drained for runtime removal; it stops receiving new frames and is removed once inflight_ hits 0. Strand-affine.
         }                                                                           vmux_linklayer;
 
         typedef std::shared_ptr<vmux_linklayer>                                     vmux_linklayer_ptr;
@@ -188,9 +189,8 @@ namespace vmux {
          */
         struct flow_rx_context {
             uint32_t                                                                flow_rx_next_         = 0;     ///< Next expected per-flow DSN.
-            rx_packet_ssqueue                                                       flow_reorder_;                ///< Bounded reorder buffer keyed by DSN (packet_less handles wraparound).
+            ppp::app::mux::MuxFlowReorderBuffer<rx_packet>                         flow_reorder_;                ///< Strictly bounded reorder buffer for this flow only.
             uint64_t                                                                oldest_buffered_tick_ = 0;     ///< Tick the oldest buffered frame was queued; 0 = no active gap timer.
-            size_t                                                                  buffered_bytes_       = 0;     ///< Sum of buffered frame lengths (memory bound).
             bool                                                                    primed_               = false; ///< True once flow_rx_next_ has been initialized from the first frame.
             bool                                                                    fin_seen_             = false; ///< True once a cmd_fin has been delivered for this connection.
         };
