@@ -515,6 +515,7 @@
     <ClCompile Include="ppp\net\asio\InternetControlMessageProtocol.cpp" />
     <ClCompile Include="ppp\Random.cpp" />
     <ClCompile Include="ppp\ssl\SSL.cpp" />
+    <ClCompile Include="ppp\ssl\TlsSessionExporter.cpp" />
     <ClCompile Include="ppp\threading\BufferblockAllocator.cpp" />
     <ClCompile Include="ppp\threading\BufferswapAllocator.cpp" />
     <ClCompile Include="ppp\threading\SpinLock.cpp" />

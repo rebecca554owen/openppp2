@@ -77,6 +77,8 @@ BOOST_AUTO_TEST_CASE(transmission_exporter_contract_is_explicit) {
     static_assert(std::is_same_v<decltype(&Transmission::ExportAuthenticatedSessionKey),
         bool (Transmission::*)(const char*, const std::uint8_t*, std::size_t,
             std::uint8_t*, std::size_t) noexcept>);
+    static_assert(std::is_same_v<decltype(&Transmission::IsHandshakeComplete),
+        bool (Transmission::*)() const noexcept>);
 }
 
 BOOST_AUTO_TEST_CASE(socket_protection_checks_readiness_before_protecting) {

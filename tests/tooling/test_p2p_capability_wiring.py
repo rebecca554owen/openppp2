@@ -242,6 +242,60 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("ProviderOwnedP2PDatagramTransport.swift", workflow)
         self.assertIn("swiftc -typecheck", workflow)
 
+    def test_authenticated_exporter_is_tls_websocket_only_and_disposal_safe(self) -> None:
+        base_header = self.source("ppp/transmissions/ITransmission.h")
+        websocket_header = self.source("ppp/transmissions/IWebsocketTransmission.h")
+        websocket_source = self.source("ppp/transmissions/IWebsocketTransmission.cpp")
+        tcp_header = self.source("ppp/transmissions/ITcpipTransmission.h")
+        tls_header = self.source("ppp/net/asio/websocket.h")
+        tls_close = self.source(
+            "ppp/net/asio/websocket/websocket_ssl_close_websocket.cpp"
+        )
+
+        self.assertIn("IsHandshakeComplete() const noexcept", base_header)
+        ssl_class = websocket_header[websocket_header.index("class ISslWebsocketTransmission") :]
+        plain_class = websocket_header[
+            websocket_header.index("class IWebsocketTransmission") :
+            websocket_header.index("class ISslWebsocketTransmission")
+        ]
+        self.assertIn("HasAuthenticatedSessionExporter() const noexcept override", ssl_class)
+        self.assertIn("ExportAuthenticatedSessionKey", ssl_class)
+        self.assertIn("void Dispose() noexcept override", ssl_class)
+        self.assertIn("exporter_disabled_", ssl_class)
+        self.assertNotIn("HasAuthenticatedSessionExporter", plain_class)
+        self.assertNotIn("HasAuthenticatedSessionExporter", tcp_header)
+        self.assertIn("IsHandshakeComplete()", websocket_source)
+        self.assertIn("socket->HasSessionExporter()", websocket_source)
+        self.assertIn("socket->ExportSessionKey(", websocket_source)
+        dispose = websocket_source[
+            websocket_source.index("void ISslWebsocketTransmission::Dispose()") :
+            websocket_source.index("bool ISslWebsocketTransmission::HasAuthenticatedSessionExporter")
+        ]
+        self.assertLess(
+            dispose.index("exporter_disabled_.store(true"),
+            dispose.index("WebSocket::Dispose()"),
+        )
+        self.assertIn("std::mutex", tls_header)
+        self.assertIn("exporter_mutex_", tls_header)
+        self.assertIn("tls_handshake_complete_", tls_header)
+        tls_export = self.source(
+            "ppp/net/asio/websocket/websocket_ssl_websocket.cpp"
+        )
+        has_exporter = tls_export[
+            tls_export.index("bool sslwebsocket::HasSessionExporter") :
+            tls_export.index("bool sslwebsocket::ExportSessionKey")
+        ]
+        export_key = tls_export[
+            tls_export.index("bool sslwebsocket::ExportSessionKey") :
+            tls_export.index("sslwebsocket::IPEndPoint sslwebsocket::GetLocalEndPoint")
+        ]
+        self.assertNotIn("native_handle()", has_exporter)
+        self.assertIn("tls_handshake_complete_", has_exporter)
+        self.assertIn("running_in_this_thread()", export_key)
+        self.assertIn("std::lock_guard<std::mutex>", tls_close)
+        shift = tls_close[tls_close.index("bool sslwebsocket::ShiftToScheduler") :]
+        self.assertIn("exporter_ready && ok && !disposed_", shift)
+
 
 if __name__ == "__main__":
     unittest.main()

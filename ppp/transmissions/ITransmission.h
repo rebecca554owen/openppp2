@@ -77,6 +77,8 @@ namespace ppp {
             ContextPtr&                                                                             GetContext() noexcept { return context_; }
             /** @brief Gets mutable shared strand reference. */
             StrandPtr&                                                                              GetStrand() noexcept { return strand_; }
+            /** @brief Reports whether the authenticated OpenPPP2 handshake completed. */
+            bool                                                                                    IsHandshakeComplete() const noexcept { return handshaked_.load(std::memory_order_acquire); }
 
         public:
             /** @brief Disposes transmission resources asynchronously. */

@@ -126,6 +126,13 @@ target_link_libraries(p2p_nat_classifier_test PRIVATE OpenSSL::SSL OpenSSL::Cryp
 openppp2_add_cpp_test(p2p_capability_gate_test SOURCES
     p2p_capability_gate_test.cpp)
 target_link_libraries(p2p_capability_gate_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(tls_session_exporter_test SOURCES
+    tls_session_exporter_test.cpp
+    "${OPENPPP2_ROOT}/ppp/ssl/TlsSessionExporter.cpp")
+target_compile_definitions(tls_session_exporter_test PRIVATE
+    OPENPPP2_TEST_CERTIFICATE="${OPENPPP2_ROOT}/starrylink.net.pem"
+    OPENPPP2_TEST_PRIVATE_KEY="${OPENPPP2_ROOT}/starrylink.net.key")
+target_link_libraries(tls_session_exporter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(dns_buffer_test SOURCES dns_buffer_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp")
 openppp2_add_cpp_test(dns_message_test SOURCES dns_message_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp" "${OPENPPP2_ROOT}/common/dnslib/message.cpp" "${OPENPPP2_ROOT}/common/dnslib/qs.cpp" "${OPENPPP2_ROOT}/common/dnslib/rr.cpp")
 openppp2_add_cpp_test(dns_server_validation_test SOURCES dns_server_validation_test.cpp)

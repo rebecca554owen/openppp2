@@ -285,6 +285,9 @@
     <ClCompile Include="ppp\ssl\SSL.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\ssl\TlsSessionExporter.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\transmissions\ITransmission.cpp">
       <Filter>源文件</Filter>
     </ClCompile>

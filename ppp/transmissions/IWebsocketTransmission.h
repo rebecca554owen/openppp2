@@ -87,6 +87,19 @@ namespace ppp {
             /** @brief Optional path override for websocket handshake. */
             ppp::string                                                 Path;
 
+        public:
+            void Dispose() noexcept override;
+            bool HasAuthenticatedSessionExporter() const noexcept override;
+            bool ExportAuthenticatedSessionKey(
+                const char* label,
+                const std::uint8_t* context,
+                std::size_t context_length,
+                std::uint8_t* output,
+                std::size_t output_length) noexcept override;
+
+        private:
+            std::atomic_bool exporter_disabled_{false};
+
         protected:
             /**
              * @brief Performs TLS websocket client/server handshake.

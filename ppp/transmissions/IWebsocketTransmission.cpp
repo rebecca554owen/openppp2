@@ -184,6 +184,35 @@ namespace ppp {
             ppp::telemetry::Log(Level::kInfo, "websocket", "wss close");
         }
 
+        void ISslWebsocketTransmission::Dispose() noexcept {
+            exporter_disabled_.store(true, std::memory_order_release);
+            WebSocket::Dispose();
+        }
+
+        bool ISslWebsocketTransmission::HasAuthenticatedSessionExporter() const noexcept {
+            if (exporter_disabled_.load(std::memory_order_acquire) || !IsHandshakeComplete()) {
+                return false;
+            }
+
+            auto socket = GetSocket();
+            return socket && socket->HasSessionExporter();
+        }
+
+        bool ISslWebsocketTransmission::ExportAuthenticatedSessionKey(
+            const char* label,
+            const std::uint8_t* context,
+            std::size_t context_length,
+            std::uint8_t* output,
+            std::size_t output_length) noexcept {
+            if (exporter_disabled_.load(std::memory_order_acquire) || !IsHandshakeComplete()) {
+                return false;
+            }
+
+            auto socket = GetSocket();
+            return socket && socket->ExportSessionKey(
+                label, context, context_length, output, output_length);
+        }
+
         /**
          * @brief Performs TLS websocket handshake using override or configuration endpoint.
          */
