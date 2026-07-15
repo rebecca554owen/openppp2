@@ -27,6 +27,14 @@ namespace ppp {
                     return state_.Snapshot();
                 }
 
+#if defined(OPENPPP2_ROUTE_TEST_MOBILE)
+                void RouteCoordinator::SetStopWaiterObserverForTesting(
+                    std::function<void()> observer) noexcept {
+                    std::lock_guard<std::mutex> stop_lock(stop_mutex_);
+                    stop_waiter_observer_ = std::move(observer);
+                }
+#endif
+
                 bool RouteCoordinator::SetPlatformLocked(
                     std::unique_ptr<IRoutePlatform> platform) noexcept {
                     const RouteStateSnapshot snapshot = state_.Snapshot();
@@ -120,10 +128,16 @@ namespace ppp {
                     std::promise<bool> completion;
                     std::shared_future<bool> attempt;
                     bool owner = false;
+#if defined(OPENPPP2_ROUTE_TEST_MOBILE)
+                    std::function<void()> waiter_observer;
+#endif
                     {
                         std::lock_guard<std::mutex> stop_lock(stop_mutex_);
                         if (stop_in_progress_) {
                             attempt = stop_attempt_;
+#if defined(OPENPPP2_ROUTE_TEST_MOBILE)
+                            waiter_observer = stop_waiter_observer_;
+#endif
                         }
                         else {
                             stop_in_progress_ = true;
@@ -133,6 +147,11 @@ namespace ppp {
                     }
 
                     if (!owner) {
+#if defined(OPENPPP2_ROUTE_TEST_MOBILE)
+                        if (waiter_observer) {
+                            waiter_observer();
+                        }
+#endif
                         return attempt.get();
                     }
 

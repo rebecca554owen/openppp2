@@ -388,6 +388,10 @@ BOOST_AUTO_TEST_CASE(concurrent_stop_waits_for_failed_rollback_result) {
 
     std::promise<void> second_started;
     std::future<void> second_started_future = second_started.get_future();
+    std::promise<void> second_joined;
+    std::future<void> second_joined_future = second_joined.get_future();
+    coordinator.SetStopWaiterObserverForTesting(
+        [&second_joined]() { second_joined.set_value(); });
     std::future<bool> first_stop = std::async(
         std::launch::async,
         [&coordinator]() { return coordinator.Stop(); });
@@ -410,6 +414,13 @@ BOOST_AUTO_TEST_CASE(concurrent_stop_waits_for_failed_rollback_result) {
     if (!second_did_start) {
         release_delete.set_value();
         BOOST_REQUIRE_MESSAGE(second_did_start, "second Stop thread did not start");
+    }
+    const bool second_did_join =
+        second_joined_future.wait_for(std::chrono::seconds(2)) ==
+        std::future_status::ready;
+    if (!second_did_join) {
+        release_delete.set_value();
+        BOOST_REQUIRE_MESSAGE(second_did_join, "second Stop did not join active attempt");
     }
     const bool second_is_waiting =
         second_stop.wait_for(std::chrono::milliseconds(0)) ==

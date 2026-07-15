@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <future>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -25,6 +26,10 @@ namespace ppp {
                     bool Apply(const std::vector<RouteSpec>& routes) noexcept;
                     bool Stop() noexcept;
                     RouteStateSnapshot Snapshot() const noexcept;
+#if defined(OPENPPP2_ROUTE_TEST_MOBILE)
+                    void SetStopWaiterObserverForTesting(
+                        std::function<void()> observer) noexcept;
+#endif
 
                     void ReplaceRib(RouteInformationTablePtr value) noexcept;
                     void ReplaceFib(ForwardInformationTablePtr value) noexcept;
@@ -87,6 +92,9 @@ namespace ppp {
                     std::mutex stop_mutex_;
                     std::shared_future<bool> stop_attempt_;
                     bool stop_in_progress_ = false;
+#if defined(OPENPPP2_ROUTE_TEST_MOBILE)
+                    std::function<void()> stop_waiter_observer_;
+#endif
                     std::atomic_bool stopped_{false};
                 };
 

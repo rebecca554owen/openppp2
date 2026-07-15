@@ -44,6 +44,7 @@ jobs:
       - name: Repository architecture checks
         run: |
           python3 -m unittest tests.tooling.test_repository_layout -v
+          python3 -m unittest tests.tooling.test_ci_workspace_permissions -v
           python3 tools/check_repository_layout.py
 
       - name: Documentation governance checks
@@ -52,7 +53,9 @@ jobs:
           python3 tools/check_docs.py
 
       - name: Linux namespace Route/DNS rollback
-        run: sudo OPENPPP2_NAMESPACE_ARTIFACT_DIR="$PWD/build/route-dns-rollback" bash tests/integration/linux/route_dns_rollback.sh
+        run: |
+          mkdir -p "$PWD/build/route-dns-rollback"
+          sudo OPENPPP2_NAMESPACE_ARTIFACT_DIR="$PWD/build/route-dns-rollback" bash tests/integration/linux/route_dns_rollback.sh
 
       - name: Upload Route/DNS rollback snapshots
         uses: actions/upload-artifact@v4
