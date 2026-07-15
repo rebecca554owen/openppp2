@@ -7,5 +7,5 @@
   "requested_mux_mode": "compat",
   "effective_mux_mode": "compat",
   "p2p_state": "disabled",
-  "effective_path": "none"
+  "effective_path": "relay"
 }

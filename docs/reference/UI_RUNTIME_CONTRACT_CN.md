@@ -18,7 +18,7 @@
 | `role`、`server`、`transport` | Runtime 身份与传输选择。 |
 | `requested_mux_mode`、`effective_mux_mode` | 请求及实际协商的 MUX 行为。 |
 | `mux_fallback_reason` | 实际 MUX 模式发生回退的原因。 |
-| `p2p_state`、`effective_path` | P2P 状态和 relay/direct 路径；未支持时为空。 |
+| `p2p_state`、`effective_path` | 类型化 P2P 状态和有效路径；路径始终为 `relay` 或 `direct`，且仅 `direct` 状态映射为 `direct`。 |
 | `last_error` | 错误码、严重度、可重试性、消息键和诊断详情。 |
 
 消费者忽略未知可选字段。必需排序字段或 phase 缺失、phase 字符串未知、

@@ -33,6 +33,37 @@ BOOST_AUTO_TEST_CASE(runtime_phase_round_trip) {
         static_cast<int>(runtime::RuntimePhase::Reconnecting));
 }
 
+BOOST_AUTO_TEST_CASE(p2p_state_mapping_is_stable_and_fail_closed) {
+    using ppp::p2p::P2PState;
+
+    const struct {
+        P2PState state;
+        const char* name;
+        const char* path;
+    } cases[] = {
+        {P2PState::Disabled, "disabled", "relay"},
+        {P2PState::Unavailable, "unavailable", "relay"},
+        {P2PState::Relay, "relay", "relay"},
+        {P2PState::Eligible, "eligible", "relay"},
+        {P2PState::Probing, "probing", "relay"},
+        {P2PState::Direct, "direct", "direct"},
+        {P2PState::Suspect, "suspect", "relay"},
+        {P2PState::FallingBack, "falling_back", "relay"},
+        {P2PState::Failed, "failed", "relay"},
+    };
+
+    for (const auto& item : cases) {
+        BOOST_TEST(std::string(ppp::p2p::ToString(item.state)) == item.name);
+        BOOST_TEST(
+            static_cast<int>(ppp::p2p::ParseP2PState(item.name)) ==
+            static_cast<int>(item.state));
+        BOOST_TEST(std::string(ppp::p2p::EffectivePath(item.state)) == item.path);
+    }
+    BOOST_TEST(
+        static_cast<int>(ppp::p2p::ParseP2PState("future_state")) ==
+        static_cast<int>(P2PState::Unavailable));
+}
+
 BOOST_AUTO_TEST_CASE(default_snapshot_is_idle_and_versioned) {
     runtime::RuntimeSnapshot snapshot;
     BOOST_TEST(snapshot.schema_version == 1u);
@@ -65,6 +96,60 @@ BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_phase_and_error) {
     BOOST_TEST(decoded.capabilities[1] == "mux.flow");
     BOOST_TEST(decoded.last_error.code == 42u);
     BOOST_TEST(decoded.last_error.retryable);
+}
+
+BOOST_AUTO_TEST_CASE(snapshot_json_derives_effective_path_from_typed_p2p_state) {
+    runtime::RuntimeSnapshot snapshot;
+    snapshot.generation = 8;
+    snapshot.phase = runtime::RuntimePhase::Connected;
+    snapshot.p2p_state = ppp::p2p::P2PState::Probing;
+
+    const std::string probing = runtime::SerializeRuntimeSnapshot(snapshot);
+    BOOST_TEST(probing.find("\"p2p_state\":\"probing\"") != std::string::npos);
+    BOOST_TEST(probing.find("\"effective_path\":\"relay\"") != std::string::npos);
+
+    snapshot.p2p_state = ppp::p2p::P2PState::Direct;
+    const std::string direct = runtime::SerializeRuntimeSnapshot(snapshot);
+    BOOST_TEST(direct.find("\"effective_path\":\"direct\"") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(unknown_p2p_state_parses_fail_closed_and_ignores_claimed_direct_path) {
+    runtime::RuntimeSnapshot snapshot;
+    BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(
+        "{\"schema_version\":1,\"generation\":1,\"monotonic_ms\":1,"
+        "\"phase\":\"connected\",\"p2p_state\":\"future_state\","
+        "\"effective_path\":\"direct\"}",
+        snapshot));
+    BOOST_TEST(
+        static_cast<int>(snapshot.p2p_state) ==
+        static_cast<int>(ppp::p2p::P2PState::Unavailable));
+    BOOST_TEST(std::string(ppp::p2p::EffectivePath(snapshot.p2p_state)) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(missing_optional_p2p_state_defaults_to_disabled_relay) {
+    runtime::RuntimeSnapshot snapshot;
+    BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(
+        "{\"schema_version\":1,\"generation\":1,\"monotonic_ms\":1,"
+        "\"phase\":\"connected\"}",
+        snapshot));
+    BOOST_TEST(
+        static_cast<int>(snapshot.p2p_state) ==
+        static_cast<int>(ppp::p2p::P2PState::Disabled));
+    BOOST_TEST(std::string(ppp::p2p::EffectivePath(snapshot.p2p_state)) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(p2p_failure_does_not_change_connected_runtime_phase) {
+    runtime::RuntimeSnapshot snapshot;
+    snapshot.phase = runtime::RuntimePhase::Connected;
+    snapshot.p2p_state = ppp::p2p::P2PState::Failed;
+
+    runtime::RuntimeSnapshot decoded;
+    BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(
+        runtime::SerializeRuntimeSnapshot(snapshot), decoded));
+    BOOST_TEST(
+        static_cast<int>(decoded.phase) ==
+        static_cast<int>(runtime::RuntimePhase::Connected));
+    BOOST_TEST(std::string(ppp::p2p::EffectivePath(decoded.p2p_state)) == "relay");
 }
 
 BOOST_AUTO_TEST_CASE(valid_contract_fixtures_parse) {

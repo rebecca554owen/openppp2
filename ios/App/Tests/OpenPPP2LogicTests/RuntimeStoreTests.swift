@@ -82,16 +82,19 @@ final class RuntimeStoreTests: XCTestCase {
     }
 
     func testInvalidOrUnavailableSnapshotIsPresentedAsUnknown() {
-        let store = RuntimeStore(initial: snapshot(
+        let store = RuntimeStore(initial: RuntimeSnapshot(
             generation: 8,
             monotonicMs: 200,
-            phase: .connected
+            phase: .connected,
+            p2pState: .direct
         ))
 
         store.markUnknown()
         XCTAssertEqual(store.state.generation, 8)
         XCTAssertEqual(store.state.monotonicMs, 200)
         XCTAssertEqual(store.state.phase, .unknown)
+        XCTAssertEqual(store.state.p2pState, .unavailable)
+        XCTAssertEqual(store.state.effectivePath, "relay")
         XCTAssertTrue(store.apply(snapshot(
             generation: 8,
             monotonicMs: 201,
@@ -112,6 +115,8 @@ final class RuntimeStoreTests: XCTestCase {
         XCTAssertTrue(store.applyUnknown(generation: 9, monotonicMs: 1))
         XCTAssertEqual(store.state.generation, 9)
         XCTAssertEqual(store.state.phase, .unknown)
+        XCTAssertEqual(store.state.p2pState, .unavailable)
+        XCTAssertEqual(store.state.effectivePath, "relay")
         XCTAssertFalse(store.apply(snapshot(
             generation: 8,
             monotonicMs: 400,

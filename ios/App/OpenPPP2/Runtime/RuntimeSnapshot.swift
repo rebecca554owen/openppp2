@@ -14,6 +14,36 @@ public enum RuntimePhase: String, Codable, Sendable {
     case unknown
 }
 
+public enum P2PState: String, CaseIterable, Sendable {
+    case disabled
+    case unavailable
+    case relay
+    case eligible
+    case probing
+    case direct
+    case suspect
+    case fallingBack = "falling_back"
+    case failed
+
+    public static func parse(_ value: String) -> P2PState {
+        P2PState(rawValue: value) ?? .unavailable
+    }
+
+    public var displayName: String {
+        switch self {
+        case .disabled: return "Disabled"
+        case .unavailable: return "Unavailable"
+        case .relay: return "Relay"
+        case .eligible: return "Eligible"
+        case .probing: return "Probing"
+        case .direct: return "Direct"
+        case .suspect: return "Suspect"
+        case .fallingBack: return "Falling back"
+        case .failed: return "Failed"
+        }
+    }
+}
+
 public struct RuntimeErrorSnapshot: Codable, Equatable, Sendable {
     public var code: UInt32
     public var severity: String
@@ -62,8 +92,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
     public var muxReceiverOrdering: String
     public var muxActiveLinks: UInt16
     public var muxFallbackReason: String
-    public var p2pState: String
-    public var effectivePath: String
+    public var p2pState: P2PState
+    public var effectivePath: String { p2pState == .direct ? "direct" : "relay" }
     public var lastError: RuntimeErrorSnapshot
 
     public init(
@@ -79,8 +109,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         muxReceiverOrdering: String = "",
         muxActiveLinks: UInt16 = 0,
         muxFallbackReason: String = "",
-        p2pState: String = "",
-        effectivePath: String = "",
+        p2pState: P2PState = .disabled,
         lastError: RuntimeErrorSnapshot = RuntimeErrorSnapshot()
     ) {
         self.generation = generation
@@ -96,7 +125,6 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         self.muxActiveLinks = muxActiveLinks
         self.muxFallbackReason = muxFallbackReason
         self.p2pState = p2pState
-        self.effectivePath = effectivePath
         self.lastError = lastError
     }
 
@@ -146,8 +174,9 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         muxReceiverOrdering = try container.decodeIfPresent(String.self, forKey: .muxReceiverOrdering) ?? ""
         muxActiveLinks = try container.decodeIfPresent(UInt16.self, forKey: .muxActiveLinks) ?? 0
         muxFallbackReason = try container.decodeIfPresent(String.self, forKey: .muxFallbackReason) ?? ""
-        p2pState = try container.decodeIfPresent(String.self, forKey: .p2pState) ?? ""
-        effectivePath = try container.decodeIfPresent(String.self, forKey: .effectivePath) ?? ""
+        p2pState = P2PState.parse(
+            try container.decodeIfPresent(String.self, forKey: .p2pState) ?? "disabled"
+        )
         lastError = try container.decodeIfPresent(RuntimeErrorSnapshot.self, forKey: .lastError) ?? RuntimeErrorSnapshot()
     }
 
@@ -166,7 +195,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         try container.encode(muxReceiverOrdering, forKey: .muxReceiverOrdering)
         try container.encode(muxActiveLinks, forKey: .muxActiveLinks)
         try container.encode(muxFallbackReason, forKey: .muxFallbackReason)
-        try container.encode(p2pState, forKey: .p2pState)
+        try container.encode(p2pState.rawValue, forKey: .p2pState)
         try container.encode(effectivePath, forKey: .effectivePath)
         try container.encode(lastError, forKey: .lastError)
     }
@@ -187,5 +216,13 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         if !effectiveMuxMode.isEmpty { lines.append("Effective VMUX: \(effectiveMuxDisplayName)") }
         if !muxFallbackReason.isEmpty { lines.append("Fallback reason: \(muxFallbackReason)") }
         return lines
+    }
+
+    public var effectivePathDisplayName: String {
+        effectivePath == "direct" ? "Direct" : "Relay"
+    }
+
+    public var p2pDiagnosticLines: [String] {
+        ["P2P: \(p2pState.displayName)", "Effective path: \(effectivePathDisplayName)"]
     }
 }

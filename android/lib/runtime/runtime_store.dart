@@ -43,8 +43,7 @@ class RuntimeStore extends ChangeNotifier {
       muxReceiverOrdering: _state.muxReceiverOrdering,
       muxActiveLinks: _state.muxActiveLinks,
       muxFallbackReason: _state.muxFallbackReason,
-      p2pState: _state.p2pState,
-      effectivePath: _state.effectivePath,
+      p2pState: P2PState.unavailable,
       lastError: _state.lastError,
     );
     notifyListeners();
@@ -60,6 +59,7 @@ class RuntimeStore extends ChangeNotifier {
       generation: generation,
       monotonicMs: monotonicMs,
       phase: RuntimePhase.unknown,
+      p2pState: P2PState.unavailable,
     );
     notifyListeners();
     return true;

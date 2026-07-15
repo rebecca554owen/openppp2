@@ -26,6 +26,36 @@ BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mux_state) {
     BOOST_TEST(ContainsLine(lines, "active mux links=2"));
 }
 
+BOOST_AUTO_TEST_CASE(p2p_renderer_covers_every_typed_state_without_inference) {
+    using ppp::p2p::P2PState;
+    const struct {
+        P2PState state;
+        const char* state_text;
+        const char* path_text;
+    } cases[] = {
+        {P2PState::Disabled, "P2P: Disabled", "Path: Relay"},
+        {P2PState::Unavailable, "P2P: Unavailable", "Path: Relay"},
+        {P2PState::Relay, "P2P: Relay", "Path: Relay"},
+        {P2PState::Eligible, "P2P: Eligible", "Path: Relay"},
+        {P2PState::Probing, "P2P: Probing", "Path: Relay"},
+        {P2PState::Direct, "P2P: Direct", "Path: Direct"},
+        {P2PState::Suspect, "P2P: Suspect", "Path: Relay"},
+        {P2PState::FallingBack, "P2P: Falling back", "Path: Relay"},
+        {P2PState::Failed, "P2P: Failed", "Path: Relay"},
+    };
+
+    for (const auto& item : cases) {
+        RuntimeSnapshot snapshot;
+        snapshot.phase = RuntimePhase::Connected;
+        snapshot.p2p_state = item.state;
+        const auto lines = BuildStatusLines(snapshot);
+        BOOST_TEST_CONTEXT(ppp::p2p::ToString(item.state)) {
+            BOOST_TEST(ContainsLine(lines, item.state_text));
+            BOOST_TEST(ContainsLine(lines, item.path_text));
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(stopping_is_not_rendered_as_idle) {
     RuntimeSnapshot snapshot;
     snapshot.phase = RuntimePhase::Stopping;

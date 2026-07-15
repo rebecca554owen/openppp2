@@ -40,6 +40,42 @@ final class RuntimeSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.effectiveMuxMode, "flow")
         XCTAssertEqual(snapshot.muxReceiverOrdering, "flow_v2")
         XCTAssertEqual(snapshot.muxActiveLinks, 2)
+        XCTAssertEqual(snapshot.p2pState, .relay)
+        XCTAssertEqual(snapshot.effectivePath, "relay")
+    }
+
+    func testP2PStateMappingIsStableCompleteAndFailClosed() {
+        let expected: [(String, P2PState)] = [
+            ("disabled", .disabled),
+            ("unavailable", .unavailable),
+            ("relay", .relay),
+            ("eligible", .eligible),
+            ("probing", .probing),
+            ("direct", .direct),
+            ("suspect", .suspect),
+            ("falling_back", .fallingBack),
+            ("failed", .failed),
+        ]
+        for (wireName, state) in expected {
+            XCTAssertEqual(P2PState.parse(wireName), state)
+            XCTAssertEqual(state.rawValue, wireName)
+        }
+        XCTAssertEqual(P2PState.parse("future_state"), .unavailable)
+    }
+
+    func testOnlyAuthenticatedDirectStateReportsDirectPath() throws {
+        for state in P2PState.allCases {
+            let snapshot = try TunnelRuntimeBridge.decodeSnapshot("""
+            {"schema_version":1,"generation":1,"monotonic_ms":1,
+             "phase":"connected","p2p_state":"\(state.rawValue)",
+             "effective_path":"direct"}
+            """)
+            XCTAssertEqual(snapshot.effectivePath, state == .direct ? "direct" : "relay")
+            XCTAssertTrue(snapshot.p2pDiagnosticLines.contains("P2P: \(state.displayName)"))
+            XCTAssertTrue(snapshot.p2pDiagnosticLines.contains(
+                "Effective path: \(snapshot.effectivePathDisplayName)"
+            ))
+        }
     }
 
     func testFailedFixtureDecodesStructuredError() throws {

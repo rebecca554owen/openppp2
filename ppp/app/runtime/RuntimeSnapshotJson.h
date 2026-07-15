@@ -94,8 +94,8 @@ namespace ppp {
                 root["mux_receiver_ordering"] = detail::ToRuntimeJsonString(snapshot.mux_receiver_ordering);
                 root["mux_active_links"] = snapshot.mux_active_links;
                 root["mux_fallback_reason"] = detail::ToRuntimeJsonString(snapshot.mux_fallback_reason);
-                root["p2p_state"] = detail::ToRuntimeJsonString(snapshot.p2p_state);
-                root["effective_path"] = detail::ToRuntimeJsonString(snapshot.effective_path);
+                root["p2p_state"] = ppp::p2p::ToString(snapshot.p2p_state);
+                root["effective_path"] = ppp::p2p::EffectivePath(snapshot.p2p_state);
                 detail::WriteRuntimeError(root, snapshot.last_error);
 
                 Json::FastWriter writer;
@@ -165,8 +165,10 @@ namespace ppp {
                         std::min<unsigned int>(root["mux_active_links"].asUInt(), UINT16_MAX));
                 }
                 parsed.mux_fallback_reason = detail::RuntimeJsonString(root, "mux_fallback_reason");
-                parsed.p2p_state = detail::RuntimeJsonString(root, "p2p_state");
-                parsed.effective_path = detail::RuntimeJsonString(root, "effective_path");
+                parsed.p2p_state = root.isMember("p2p_state")
+                    ? ppp::p2p::ParseP2PState(
+                        detail::RuntimeJsonString(root, "p2p_state"))
+                    : ppp::p2p::P2PState::Disabled;
                 detail::ReadRuntimeError(root, parsed.last_error);
 
                 snapshot = std::move(parsed);

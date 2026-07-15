@@ -173,6 +173,7 @@ final class HomeViewController: UIViewController {
             if !runtimeStore.state.effectiveMuxMode.isEmpty {
                 statusDetail += " · VMUX: \(runtimeStore.state.effectiveMuxDisplayName)"
             }
+            statusDetail += " · Path: \(runtimeStore.state.effectivePathDisplayName)"
             stopConnectWatchdog()
             startTimer()
         } else {
@@ -217,7 +218,8 @@ final class HomeViewController: UIViewController {
                 fallbackNetworkPath: vpn.networkPath
             )
             let muxText = runtimeStore.state.muxDiagnosticLines.joined(separator: "\n")
-            diagnosticLabel.text = [diagnosticText, muxText.isEmpty ? nil : muxText]
+            let p2pText = runtimeStore.state.p2pDiagnosticLines.joined(separator: "\n")
+            diagnosticLabel.text = [diagnosticText, muxText.isEmpty ? nil : muxText, p2pText]
                 .compactMap { $0 }
                 .joined(separator: "\n")
             diagnosticLabel.isHidden = diagnosticLabel.text?.isEmpty != false

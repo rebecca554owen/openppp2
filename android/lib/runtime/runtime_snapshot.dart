@@ -41,6 +41,30 @@ enum RuntimePhase {
   }
 }
 
+enum P2PState {
+  disabled('disabled', 'Disabled'),
+  unavailable('unavailable', 'Unavailable'),
+  relay('relay', 'Relay'),
+  eligible('eligible', 'Eligible'),
+  probing('probing', 'Probing'),
+  direct('direct', 'Direct'),
+  suspect('suspect', 'Suspect'),
+  fallingBack('falling_back', 'Falling back'),
+  failed('failed', 'Failed');
+
+  const P2PState(this.wireName, this.displayName);
+
+  final String wireName;
+  final String displayName;
+
+  static P2PState parse(String value) {
+    for (final state in values) {
+      if (state.wireName == value) return state;
+    }
+    return P2PState.unavailable;
+  }
+}
+
 class RuntimeErrorSnapshot {
   const RuntimeErrorSnapshot({
     this.code = 0,
@@ -89,8 +113,7 @@ class RuntimeSnapshot {
     this.muxReceiverOrdering = '',
     this.muxActiveLinks = 0,
     this.muxFallbackReason = '',
-    this.p2pState = '',
-    this.effectivePath = '',
+    this.p2pState = P2PState.disabled,
     this.lastError = const RuntimeErrorSnapshot(),
   });
 
@@ -108,8 +131,8 @@ class RuntimeSnapshot {
   final String muxReceiverOrdering;
   final int muxActiveLinks;
   final String muxFallbackReason;
-  final String p2pState;
-  final String effectivePath;
+  final P2PState p2pState;
+  String get effectivePath => p2pState == P2PState.direct ? 'direct' : 'relay';
   final RuntimeErrorSnapshot lastError;
 
   factory RuntimeSnapshot.fromJson(Map<String, dynamic> json) {
@@ -147,8 +170,7 @@ class RuntimeSnapshot {
       muxReceiverOrdering: json['mux_receiver_ordering'] as String? ?? '',
       muxActiveLinks: json['mux_active_links'] as int? ?? 0,
       muxFallbackReason: json['mux_fallback_reason'] as String? ?? '',
-      p2pState: json['p2p_state'] as String? ?? '',
-      effectivePath: json['effective_path'] as String? ?? '',
+      p2pState: P2PState.parse(json['p2p_state'] as String? ?? 'disabled'),
       lastError: RuntimeErrorSnapshot.fromJson(
         json['last_error'] as Map<String, dynamic>?,
       ),
@@ -172,5 +194,13 @@ class RuntimeSnapshot {
           'Effective VMUX: $effectiveMuxDisplayName',
         if (muxFallbackReason.isNotEmpty)
           'Fallback reason: $muxFallbackReason',
+      ];
+
+  String get effectivePathDisplayName =>
+      effectivePath == 'direct' ? 'Direct' : 'Relay';
+
+  List<String> get p2pDiagnosticLines => <String>[
+        'P2P: ${p2pState.displayName}',
+        'Effective path: $effectivePathDisplayName',
       ];
 }

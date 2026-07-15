@@ -32,6 +32,7 @@ public final class RuntimeStore: ObservableObject {
     public func markUnknown() {
         guard state.phase != .unknown else { return }
         state.phase = .unknown
+        state.p2pState = .unavailable
     }
 
     @discardableResult
@@ -43,7 +44,8 @@ public final class RuntimeStore: ObservableObject {
         state = RuntimeSnapshot(
             generation: generation,
             monotonicMs: monotonicMs,
-            phase: .unknown
+            phase: .unknown,
+            p2pState: .unavailable
         )
         return true
     }

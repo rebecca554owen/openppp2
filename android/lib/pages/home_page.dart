@@ -574,6 +574,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   textAlign: TextAlign.center,
                 ),
               ),
+            if (controls.isConnected)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Path: ${_runtimeStore.state.effectivePathDisplayName}',
+                  textAlign: TextAlign.center,
+                ),
+              ),
             const SizedBox(height: 16),
             Row(
               children: [

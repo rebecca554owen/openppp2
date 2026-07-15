@@ -45,11 +45,20 @@ void main() {
   });
 
   test('invalid or unavailable snapshot is presented as unknown', () {
-    final store = RuntimeStore(initial: snapshot(8, 200, RuntimePhase.connected));
+    final store = RuntimeStore(
+      initial: RuntimeSnapshot(
+        generation: 8,
+        monotonicMs: 200,
+        phase: RuntimePhase.connected,
+        p2pState: P2PState.direct,
+      ),
+    );
     store.markUnknown();
     expect(store.state.generation, 8);
     expect(store.state.monotonicMs, 200);
     expect(store.state.phase, RuntimePhase.unknown);
+    expect(store.state.p2pState, P2PState.unavailable);
+    expect(store.state.effectivePath, 'relay');
     expect(store.apply(snapshot(8, 201, RuntimePhase.reconnecting)), isTrue);
     expect(store.state.phase, RuntimePhase.reconnecting);
   });
@@ -62,6 +71,8 @@ void main() {
     expect(store.applyUnknown(generation: 9, monotonicMs: 1), isTrue);
     expect(store.state.generation, 9);
     expect(store.state.phase, RuntimePhase.unknown);
+    expect(store.state.p2pState, P2PState.unavailable);
+    expect(store.state.effectivePath, 'relay');
     expect(store.apply(snapshot(8, 400, RuntimePhase.connected)), isFalse);
   });
 }

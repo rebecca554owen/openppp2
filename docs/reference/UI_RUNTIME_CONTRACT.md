@@ -18,7 +18,7 @@ runtime and the desktop, Android, and iOS user interfaces.
 | `role`, `server`, `transport` | Runtime identity and selected transport. |
 | `requested_mux_mode`, `effective_mux_mode` | Requested and negotiated MUX behavior. |
 | `mux_fallback_reason` | Reason the effective MUX mode differs. |
-| `p2p_state`, `effective_path` | P2P state and relay/direct path; empty while unsupported. |
+| `p2p_state`, `effective_path` | Typed P2P state and effective path; the path is always `relay` or `direct`, and only the `direct` state maps to `direct`. |
 | `last_error` | Code, severity, retryability, message key, and diagnostic detail. |
 
 Consumers ignore unknown optional fields. Missing required ordering or phase

@@ -37,6 +37,46 @@ void main() {
       'mux.balance',
       'mux.stripe',
     ]));
+    expect(snapshot.p2pState, P2PState.relay);
+    expect(snapshot.effectivePath, 'relay');
+  });
+
+  test('P2P state mapping is typed, complete, and fail closed', () {
+    const states = <String, P2PState>{
+      'disabled': P2PState.disabled,
+      'unavailable': P2PState.unavailable,
+      'relay': P2PState.relay,
+      'eligible': P2PState.eligible,
+      'probing': P2PState.probing,
+      'direct': P2PState.direct,
+      'suspect': P2PState.suspect,
+      'falling_back': P2PState.fallingBack,
+      'failed': P2PState.failed,
+    };
+    for (final entry in states.entries) {
+      expect(P2PState.parse(entry.key), entry.value);
+      expect(entry.value.wireName, entry.key);
+    }
+    expect(P2PState.parse('future_state'), P2PState.unavailable);
+  });
+
+  test('only authenticated direct state reports direct path', () {
+    for (final state in P2PState.values) {
+      final snapshot = RuntimeSnapshot.fromJson(<String, dynamic>{
+        'schema_version': 1,
+        'generation': 1,
+        'monotonic_ms': 1,
+        'phase': 'connected',
+        'p2p_state': state.wireName,
+        'effective_path': 'direct',
+      });
+      expect(snapshot.effectivePath, state == P2PState.direct ? 'direct' : 'relay');
+      expect(snapshot.p2pDiagnosticLines, contains('P2P: ${state.displayName}'));
+      expect(
+        snapshot.p2pDiagnosticLines,
+        contains('Effective path: ${snapshot.effectivePathDisplayName}'),
+      );
+    }
   });
 
   test('VMUX selector is capability driven and hides stripe normally', () {

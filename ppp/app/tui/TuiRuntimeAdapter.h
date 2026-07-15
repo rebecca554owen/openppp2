@@ -23,6 +23,21 @@ inline const char* PhaseDisplayName(runtime::RuntimePhase phase) noexcept {
     }
 }
 
+inline const char* P2PDisplayName(ppp::p2p::P2PState state) noexcept {
+    switch (state) {
+    case ppp::p2p::P2PState::Disabled: return "Disabled";
+    case ppp::p2p::P2PState::Unavailable: return "Unavailable";
+    case ppp::p2p::P2PState::Relay: return "Relay";
+    case ppp::p2p::P2PState::Eligible: return "Eligible";
+    case ppp::p2p::P2PState::Probing: return "Probing";
+    case ppp::p2p::P2PState::Direct: return "Direct";
+    case ppp::p2p::P2PState::Suspect: return "Suspect";
+    case ppp::p2p::P2PState::FallingBack: return "Falling back";
+    case ppp::p2p::P2PState::Failed: return "Failed";
+    }
+    return "Unavailable";
+}
+
 inline std::vector<std::string> BuildStatusLines(
     const runtime::RuntimeSnapshot& snapshot) {
     std::vector<std::string> lines;
@@ -46,6 +61,12 @@ inline std::vector<std::string> BuildStatusLines(
     if (snapshot.mux_active_links > 0) {
         lines.emplace_back("active mux links=" + std::to_string(snapshot.mux_active_links));
     }
+
+    lines.emplace_back(std::string("Path: ") +
+        (ppp::p2p::EffectivePath(snapshot.p2p_state) == std::string("direct")
+            ? "Direct"
+            : "Relay"));
+    lines.emplace_back(std::string("P2P: ") + P2PDisplayName(snapshot.p2p_state));
 
     if (snapshot.phase == runtime::RuntimePhase::Failed) {
         std::string error = "error code=" + std::to_string(snapshot.last_error.code);

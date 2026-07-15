@@ -2,6 +2,7 @@
 
 #include <ppp/app/runtime/RuntimeError.h>
 #include <ppp/app/runtime/RuntimePhase.h>
+#include <ppp/p2p/P2PState.h>
 
 #include <cstdint>
 #include <string>
@@ -27,8 +28,7 @@ namespace ppp {
                 std::string mux_receiver_ordering;
                 std::uint16_t mux_active_links = 0;
                 std::string mux_fallback_reason;
-                std::string p2p_state;
-                std::string effective_path;
+                ppp::p2p::P2PState p2p_state = ppp::p2p::P2PState::Disabled;
                 RuntimeError last_error;
             };
 

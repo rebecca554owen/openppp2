@@ -102,6 +102,7 @@ class DebugPanel extends StatelessWidget {
             Text('状态: $stateText'),
             const SizedBox(height: 4),
             for (final line in runtimeSnapshot.muxDiagnosticLines) Text(line),
+            for (final line in runtimeSnapshot.p2pDiagnosticLines) Text(line),
             SelectableText(
               '日志文件: ${logPath.isEmpty ? '(未知)' : logPath}',
               style: theme.textTheme.bodySmall,
