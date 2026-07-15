@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 0e750bd
+> Last verified: f5919ab
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -408,8 +408,10 @@ cannot invalidate an in-flight call. Missing service, disabled bridge, lookup or
 Java exception, and `VpnService.protect` failure all remain fail-closed. Local
 evidence includes Flutter 68/68, debug APK assembly, C++ 52/52, tooling 83/83,
 production Linux library build, and MSVC source parity 202/202; independent
-review found Critical 0 and Important 0. Android NDK compilation still requires
-exact-SHA CI, and no device protection result is claimed.
+review found Critical 0 and Important 0. Exact-SHA CI at `f5919ab` passed 9/9,
+including the complete Android workflow and its arm64-v8a, armeabi-v7a, x86,
+and x86_64 native NDK builds. This is compilation and host-side test evidence;
+no Android device protection or no-loop result is claimed.
 
 Step 8 remains open. iOS still needs a provider-owned UDP transport/protection
 contract rather than claiming an ordinary native fd bypasses NetworkExtension.
