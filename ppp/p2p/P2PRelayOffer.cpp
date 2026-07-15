@@ -210,7 +210,10 @@ bool DeriveP2PWrapKey(
     }
 
     static constexpr char info[] = "openppp2 p2p v1 wrap key";
-    const std::uint8_t role = static_cast<std::uint8_t>(recipient_role);
+    // OpenSSL 3.0.13 replaces provider HKDF info on repeated add calls.
+    std::array<std::uint8_t, sizeof(info)> info_with_role{};
+    std::memcpy(info_with_role.data(), info, sizeof(info) - 1);
+    info_with_role.back() = static_cast<std::uint8_t>(recipient_role);
     P2PWrapKey derived{};
     std::size_t derived_size = derived.size();
     EVP_PKEY_CTX* context = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
@@ -225,9 +228,7 @@ bool DeriveP2PWrapKey(
         EVP_PKEY_CTX_set1_hkdf_key(
             context, exporter_key.data(), exporter_key.size()) > 0 &&
         EVP_PKEY_CTX_add1_hkdf_info(
-            context, reinterpret_cast<const std::uint8_t*>(info),
-            sizeof(info) - 1) > 0 &&
-        EVP_PKEY_CTX_add1_hkdf_info(context, &role, sizeof(role)) > 0 &&
+            context, info_with_role.data(), info_with_role.size()) > 0 &&
         EVP_PKEY_derive(context, derived.data(), &derived_size) > 0 &&
         derived_size == derived.size();
     EVP_PKEY_CTX_free(context);
