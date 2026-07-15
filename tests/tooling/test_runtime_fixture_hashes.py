@@ -14,7 +14,7 @@ class RuntimeFixtureHashTests(unittest.TestCase):
         for relative, contents in files.items():
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
+            path.write_bytes(contents.encode("utf-8"))
         return root
 
     def test_hash_mismatch_is_rejected(self) -> None:
