@@ -23,7 +23,8 @@ cmake -S bench -B build-bench -DCMAKE_BUILD_TYPE=Release
 cmake --build build-bench            # 服务器上建议 nice -n 19 ... -j1 护同机服务
 ```
 
-产出 `build-bench/bm_crypto`（BM1a，H4）与 `build-bench/bm_allocator`（BM2，H1）。
+产出 `bm_crypto`、`bm_crypto_chain`、`bm_allocator`、`bm_endpoint_serialize` 和
+`bm_packet_codec`。每个目标启动时先执行 round-trip/self-check。
 
 ## 跑 + A/B 对比
 
@@ -44,9 +45,9 @@ python3 tools/bench/compare.py tools/bench/baseline/bm_crypto.json tools/bench/r
 |---|---|---|
 | `bm_crypto`（BM1a） | H4：OpenSSL EVP vs AES-NI 加密（`simd-aes-*`） | ✅ 已完成 |
 | `bm_allocator`（BM2） | H1：`BufferswapAllocator` 锁争用随线程数放大 | ✅ 已完成 |
-| BM3 端点 ASCII 序列化 | H3 | ⏳ 后续增量 |
-| BM4 `UdpFrame::ToIp`/`IPFrame::ToArray`+校验和 | H5/H7 | ⏳ 后续增量 |
-| BM1b 完整加密链 allocs/iter | H2 | ⏳ 后续增量 |
+| `bm_endpoint_serialize`（BM3） | H3：端点 wire format encode/decode | ✅ 已完成 |
+| `bm_packet_codec`（BM4） | H5/H7：UDP/IP 完整编解码 | ✅ 已完成 |
+| `bm_crypto_chain`（BM1b） | H2：完整四层加密链与 allocs/iter | ✅ 已完成 |
 
 ## 关键结果（512B，median，见 COST_BREAKDOWN.md）
 
@@ -65,4 +66,9 @@ python3 tools/bench/compare.py tools/bench/baseline/bm_crypto.json tools/bench/r
 - `bench/support/bench_stubs.cpp` 等桩掉 ppp 深依赖雪球（内存池/Error/Executors/File）——
   仅编译期链接闭合，绝不改生产运行时逻辑。BM2 用真实内存池（buddy 实现由 `buddy_impl.cpp`
   提供，`File::Create/Delete` 由 `bench_pool_stub.cpp` 走轻量 POSIX）。
-- 端到端佐证（iperf3 过 UDP 映射 + `appsettings.bench.json` 冻结配置）为后续增量。
+- 端到端佐证：`run_e2e.sh` 使用冻结的 `appsettings.bench.json`，分别输出
+  64B/1400B iperf3 JSON。共享 CI 不执行 E2E，也不以噪声性能数字卡门。
+
+2026-07-15 本地 WSL2 验证：server/client 握手及 TCP/UDP FRP 注册成功；`--bitrate 0`
+饱和流量会使主 transmission 断开，`validate_e2e.py` 正确拒绝该结果。因此仓库只冻结
+micro baseline，E2E baseline 需在修复 FRP 饱和断链后由固定 Linux 主机生成。

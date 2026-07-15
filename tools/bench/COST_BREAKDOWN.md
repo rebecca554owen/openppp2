@@ -1,47 +1,35 @@
-# UDP 每包成本分解与 Amdahl 收益模型（Phase 0）
+# UDP 每包成本分解与 Amdahl 结果
 
-> 数据来源：本目录 `baseline/bm_crypto.json`（BM1a，H4）、`baseline/bm_allocator.json`（BM2，H1），
-> 采于 Linux x86-64 AMD EPYC @ 2595 MHz（见 `baseline/env.json`）。
-> **方法**：固定频率下 `ns/op` 是 `cycles/packet` 的等价代理（cycles = ns × 2.595）。
-> cost breakdown 用相对占比，故直接以 ns 计。
+> 数据源：`baseline/summary.json` 与 `baseline/env.json`。采样于
+> `c8342f3` 的 WSL2 Linux x86-64 Release 构建，15 次重复取中位数。
+> WSL2 未开放 PMU，因此本次 `cycles/packet` 明确记为 unavailable；权威阈值仍需在固定 Linux x86-64 主机复测。
 
-## 1. 每包路径（datagram-relay 出站，512B payload）
+## 已测路径
 
-依据源码路径（`VirtualEthernetLinklayer::DoSendTo` → `ITransmission` 加密链）：每个出站
-UDP 包经 **2 次加密**（protocol `aes-128-cfb` + transport `aes-256-cfb`）与 **~4 次内存池
-分配**（加密链四层 `Transmission_*_Encrypt` 各一次；`ITransmission.cpp:826/741/811`）。
+| 路径 | 64B ns/op | 1400B ns/op | allocations/op |
+|---|---:|---:|---:|
+| endpoint encode + decode | 12.0 | 12.0 | 0 |
+| UDP → IPv4 → wire → IPv4 → UDP | 361.6 | 489.6 | 9 |
+| 完整 crypto chain（OpenSSL） | 2019.8 | 7044.5 | 5 |
+| 完整 crypto chain（SIMD） | 380.3 | 4856.6 | 5 |
 
-## 2. 实测填充（512B，median）
+`bm_crypto_chain` 覆盖 transport cipher、payload mask/shuffle/delta、protocol header cipher 和最终 pack。
+它是 bench-only 的生产格式复刻，带 self-check，不进入生产目标。
 
-| 环节 | 热点 | 默认(OpenSSL/带锁) | 优化后(SIMD/去锁) |
-|---|---|---|---|
-| 加密 protocol (aes-128-cfb) | H4 | 1558 ns | 450 ns |
-| 加密 transport (aes-256-cfb) | H4 | 1742 ns | 613 ns |
-| **加密小计 (2 次)** | **H4** | **3300 ns** | **1063 ns** |
-| 内存池分配 ~4 次 @256B | H1 | 单线程 4×354=1416 ns；**服务端并发(2线程) 4×524=2096 ns** | 去锁后 ≈4×354=1416 ns |
+## Amdahl 加权
 
-## 3. 每包已测成本 + Amdahl 收益
+按当前已测三段求和：
 
-以服务端并发（≥2 线程，分配走锁争用路径）为基准：
+| 包长 | OpenSSL 总成本 | SIMD 总成本 | crypto 占比 | crypto 局部改善 | Amdahl 整体改善 |
+|---|---:|---:|---:|---:|---:|
+| 64B | 2393.3 ns | 753.9 ns | 84.4% | 81.2% | **68.5%** |
+| 1400B | 7546.1 ns | 5358.2 ns | 93.4% | 31.1% | **29.0%** |
 
-**每包已测成本（默认）= 加密 3300 + 分配 2096 = 5396 ns**
+公式：`整体改善 = 热点占比 × 局部改善`。这些百分比只代表已测 CPU 路径，不包含 syscall、调度、TAP、Route/DNS 或真实网络抖动，不能替代 E2E 结论。
 
-| 优化 | 动作 | 每包已测成本 | 相对默认 |
-|---|---|---|---|
-| 基线 | 默认 aes-cfb(OpenSSL) + 带锁分配 | 5396 ns | — |
-| **H4** | 切 `simd-aes-*`（改配置即可） | 3159 ns | **−41%** |
-| **H1** | 去/分片分配器锁 | 4716 ns | −13% |
-| **H4+H1** | 两者叠加 | 2479 ns | **−54%** |
+## 结论
 
-## 4. 结论（对 +10-15% 目标）
-
-- **H4 单项（切 SIMD 加密，仅改配置）即让每包已测成本降 41%**，远超 10-15% 目标。这是最高杠杆、最低风险的第一步。
-- **H1（去分配器锁）在服务端并发下再贡献 ~13%**，且属"解耦即降延迟"（拆锁同时完成模块解耦）。
-- **保守修正**：以上是"已测部分"（加密+分配）。整包还含未实测热点——端点 ASCII 序列化(H3)、`MemoryStream`/`IPFrame` 拷贝(H5/H7)、每包 syscall。设未测热点为已测的 50%（≈2700 ns），则整包 ≈8100 ns，H4 单项省 2237 ns → **整体仍 −28%**，稳超 15%。
-
-## 5. 待补（后续增量，非本闸门必需）
-
-- **BM3**（端点 ASCII 序列化，H3）、**BM4**（`UdpFrame::ToIp`/`IPFrame::ToArray` + 校验和，H5/H7）、
-  **BM1b**（完整加密链的 allocs/iter，H2）——补齐后可把上面"未测热点"从估算换成实测，
-  让整包分母精确、Amdahl 收益从下界收紧为区间。
-- **端到端佐证**（iperf3 过 UDP 映射）——验证微基准结论在整体吞吐上不被抵消。
+- 64B 小包仍最受每包 crypto 固定成本影响，SIMD 是最高杠杆项。
+- 1400B 大包的 crypto 占比更高，但 SIMD 局部收益较小，最终预测改善约 31%。
+- 完整链当前观测到 5 次分配，packet codec 为 9 次；后续优化应先用 profiler 证明分配削减不会把成本转移到共享池锁。
+- `run_e2e.sh` 只做方向性佐证；CI 仅运行 correctness/smoke，不设置性能阈值。

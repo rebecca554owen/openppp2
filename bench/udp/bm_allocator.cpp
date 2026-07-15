@@ -49,6 +49,7 @@ static void BM_AllocFree(benchmark::State& state) {
         }
     }
     state.SetItemsProcessed(state.iterations());
+    state.counters["allocations"] = 1;
 }
 
 BENCHMARK(BM_AllocFree)

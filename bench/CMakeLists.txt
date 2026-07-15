@@ -85,6 +85,18 @@ ppp_add_bench(bm_crypto SOURCES udp/bm_crypto.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
     ${PPP_CRYPTO_SRCS} ${PPP_AESNI_IMPL_SRCS})
 
+ppp_add_bench(bm_crypto_chain SOURCES udp/bm_crypto_chain.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    ${PPP_CRYPTO_SRCS} ${PPP_AESNI_IMPL_SRCS})
+
+ppp_add_bench(bm_endpoint_serialize SOURCES udp/bm_endpoint_serialize.cpp)
+
+ppp_add_bench(bm_packet_codec SOURCES udp/bm_packet_codec.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp support/packet_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/net/packet/IPFrame.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/packet/UdpFrame.cpp")
+
 ppp_add_bench(bm_allocator SOURCES udp/bm_allocator.cpp
     support/bench_stubs.cpp support/bench_pool_stub.cpp support/buddy_impl.cpp
     ${PPP_POOL_SRCS})
@@ -107,10 +119,16 @@ if(BUILD_TESTING)
     add_test(NAME bench_crypto_compatibility COMMAND compat_check)
     add_test(NAME bench_evp_simd_selection COMMAND evp_simd_test)
     add_test(NAME bench_allocator_stress COMMAND allocator_stress)
+    add_test(NAME bench_crypto_chain_smoke COMMAND bm_crypto_chain --benchmark_min_time=0.001)
+    add_test(NAME bench_endpoint_serialize_smoke COMMAND bm_endpoint_serialize --benchmark_min_time=0.001)
+    add_test(NAME bench_packet_codec_smoke COMMAND bm_packet_codec --benchmark_min_time=0.001)
 
     set_tests_properties(
         bench_crypto_compatibility
         bench_evp_simd_selection
+        bench_crypto_chain_smoke
+        bench_endpoint_serialize_smoke
+        bench_packet_codec_smoke
         PROPERTIES LABELS "crypto;correctness" TIMEOUT 30)
 
     set_tests_properties(

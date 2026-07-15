@@ -3,6 +3,10 @@
 # A/B 对比前应确认两侧指纹一致（尤其 governor / 编译 flag / benchmark 库）。
 set -euo pipefail
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+git_sha="${GIT_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
+
 mhz=$(lscpu 2>/dev/null | awk -F: '/CPU max MHz|CPU MHz/{gsub(/ /,"",$2);print $2;exit}')
 cat <<EOF
 {
@@ -11,6 +15,7 @@ cat <<EOF
   "nproc":        $(nproc),
   "virt":         "$(systemd-detect-virt 2>/dev/null || echo unknown)",
   "kernel":       "$(uname -r)",
+  "git_sha":      "$git_sha",
   "compiler":     "$(gcc --version 2>/dev/null | head -1)",
   "bench_flags":  "-O3 -DNDEBUG -maes -msse2 -mpclmul -D__SIMD__",
   "benchmark_lib":"$(dpkg -l libbenchmark-dev 2>/dev/null | awk '/ii  libbenchmark-dev/{print $3}')",

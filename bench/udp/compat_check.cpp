@@ -24,8 +24,8 @@ static bool cross(const char* enc_method,
                   bool expected_dec_hw,
                   bool* byte_identical) {
     EVP::SetSimdAuto(false);
-    EVP enc(ppp::string(enc_method), ppp::string(pw));
-    EVP dec(ppp::string(dec_method), ppp::string(pw));
+    EVP enc{ppp::string(enc_method), ppp::string(pw)};
+    EVP dec{ppp::string(dec_method), ppp::string(pw)};
     EVP::SetSimdAuto(true);
 
     if (enc.IsHardwareAccelerated() != expected_enc_hw) {

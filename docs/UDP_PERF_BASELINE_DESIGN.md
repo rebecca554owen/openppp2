@@ -1,7 +1,8 @@
 # UDP 性能基准闸门（Phase 0）设计
 
 - **日期**：2026-07-10
-- **状态**：待评审（draft）
+- **状态**：Phase 0 micro/runner/CI smoke 已实现；固定 Linux E2E 证据待采集
+- **Last verified**：2026-07-15，`c8342f3` + 当前 UDP benchmark 工作树
 - **作者**：HyacinthHaru
 - **关联工作**：接替原作者做 openppp2 的 UDP 性能优化 + 模块解耦，期望结果：基准性能 **+10-15%**、各模块解耦、各模块 CPP 不职责紊乱。
 - **本文范围**：仅 Phase 0（建立可复现的 UDP 性能基准）。Phase 1（性能优化）、Phase 2（解耦重构）另立 spec。
@@ -12,7 +13,9 @@
 
 openppp2 是一个跨平台 VPN/代理系统，UDP 数据面存在明确的每包开销热点（每包 8-12 次堆分配、4-6 次整包 memcpy、全局分配器单锁、默认加密走 OpenSSL EVP 每包取锁）。优化目标是把"基准性能"提升 10-15%。
 
-但项目**当前没有任何性能基准设施**——无 benchmark、无打流器、无 pps/延迟度量、CI 无性能任务；唯一的吞吐抓手是 `ITransmissionStatistics` 聚合字节计数 + 1Hz 状态行（`StrFormatByteSize` 圆整显示），既无法隔离 UDP，精度也不足以稳定分辨 10-15%。
+仓库现已具备独立 Google Benchmark 套件、冻结配置、micro/E2E runner、真实 micro baseline
+和 CI correctness smoke。共享 CI 不判断性能阈值；固定 Linux x86-64 主机仍是权威的
+cycles/packet 与 E2E 采集环境。
 
 **因此 Phase 0 的目标**：建立一套**可复现、可回归、能诚实验收"+10-15%"**的 UDP 性能基准，作为后续所有优化的立项与验收闸门。Phase 0 **不改一行生产逻辑**。
 

@@ -71,6 +71,7 @@ static void BM_Encrypt(benchmark::State& state, const char* method) {
     state.SetItemsProcessed(state.iterations());
     state.SetBytesProcessed((int64_t)state.iterations() * datalen);
     state.counters["payload_B"] = datalen;
+    state.counters["allocations"] = 1;
 }
 
 // 保留每次 repetition 原始样本，供 compare.py 做 bootstrap CI。
