@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 2566750
+> Last verified: 463f137
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -215,7 +215,7 @@ git add docs
 - Modify: `tests/cpp/p2p_replay_window_test.cpp`
 - Modify: `tests/red-manifest/p2p_replay_window.md`
 
-- [ ] **Step 1: Add failing zero-sequence test**
+- [x] **Step 1: Add failing zero-sequence test**
 
 ```cpp
 BOOST_AUTO_TEST_CASE(replay_rejects_duplicate_zero) {
@@ -225,11 +225,11 @@ BOOST_AUTO_TEST_CASE(replay_rejects_duplicate_zero) {
 }
 ```
 
-- [ ] **Step 2: Add wrap and boundary tests**
+- [x] **Step 2: Add wrap and boundary tests**
 
 Cover `UINT32_MAX`, reset followed by zero, exactly `REPLAY_WINDOW_SIZE - 1`, and exactly `REPLAY_WINDOW_SIZE` behind base.
 
-- [ ] **Step 3: Add explicit initialized state**
+- [x] **Step 3: Add explicit initialized state**
 
 ```cpp
 bool initialized_ = false;
@@ -238,7 +238,7 @@ uint64_t base_ = 0;
 
 Reset clears `initialized_`; first accepted sequence sets it.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit** (`df3c89c`)
 
 ```bash
 ctest --test-dir build/test -R p2p_replay_window_test --output-on-failure
@@ -254,16 +254,16 @@ git add ppp/p2p tests/cpp tests/red-manifest
 - Create: `docs/design/p2p-direct-channel/state-machine.md`
 - Create: `docs/design/p2p-direct-channel/threat-model.md`
 
-- [ ] **Step 1: Define transport-independent session exporter or TLS-only restriction**
+- [x] **Step 1: Define transport-independent session exporter or TLS-only restriction**
 
 The ADR must explicitly choose one. It must not assume a TLS master secret exists for raw TCP sessions.
 
-- [ ] **Step 2: Define wire version and downgrade behavior**
-- [ ] **Step 3: Define directional keys, nonce construction, replay window, token lifetime, and restart rules**
-- [ ] **Step 4: Define NAT candidate authentication and migration grace**
-- [ ] **Step 5: Define reflection/amplification and probe rate limits**
-- [ ] **Step 6: Define relay fallback as mandatory invariant**
-- [ ] **Step 7: Review and commit design only**
+- [x] **Step 2: Define wire version and downgrade behavior**
+- [x] **Step 3: Define directional keys, nonce construction, replay window, token lifetime, and restart rules**
+- [x] **Step 4: Define NAT candidate authentication and migration grace**
+- [x] **Step 5: Define reflection/amplification and probe rate limits**
+- [x] **Step 6: Define relay fallback as mandatory invariant**
+- [x] **Step 7: Review and commit design only** (`c66156b`)
 
 ```bash
 git add docs/adr docs/design/p2p-direct-channel
@@ -296,12 +296,12 @@ enum class P2PState {
 };
 ```
 
-- [ ] **Step 1: Add phase mapping tests**
-- [ ] **Step 2: Add effective path field: `relay` or `direct`**
-- [ ] **Step 3: Ensure Probing still reports relay as effective path**
-- [ ] **Step 4: Ensure P2P Failed leaves base RuntimePhase Connected when relay works**
-- [ ] **Step 5: Render user-facing path status and diagnostic detail**
-- [ ] **Step 6: Commit**
+- [x] **Step 1: Add phase mapping tests**
+- [x] **Step 2: Add effective path field: `relay` or `direct`**
+- [x] **Step 3: Ensure Probing still reports relay as effective path**
+- [x] **Step 4: Ensure P2P Failed leaves base RuntimePhase Connected when relay works**
+- [x] **Step 5: Render user-facing path status and diagnostic detail**
+- [x] **Step 6: Commit** (`0f84662`)
 
 ```bash
 git add ppp/p2p ppp/app/runtime android ios ppp/app/tui tests
@@ -314,12 +314,12 @@ git add ppp/p2p ppp/app/runtime android ios ppp/app/tui tests
 - Create focused files under `ppp/p2p/` for token validation, packet header parsing, key derivation, and state transitions
 - Create corresponding `tests/cpp/p2p_*_test.cpp`
 
-- [ ] **Step 1: Implement packet parser from test vectors only**
-- [ ] **Step 2: Implement key derivation from the accepted ADR**
-- [ ] **Step 3: Implement token expiry and peer binding tests**
-- [ ] **Step 4: Implement replay and endpoint spoof rejection tests**
-- [ ] **Step 5: Implement `Relay -> Probing -> Direct -> Suspect -> FallingBack -> Relay` as a pure state machine**
-- [ ] **Step 6: Run under ASan/UBSan and commit**
+- [x] **Step 1: Implement packet parser from test vectors only**
+- [x] **Step 2: Implement key derivation from the accepted ADR**
+- [x] **Step 3: Implement token expiry and peer binding tests**
+- [x] **Step 4: Implement replay and endpoint spoof rejection tests**
+- [x] **Step 5: Implement `Relay -> Probing -> Direct -> Suspect -> FallingBack -> Relay` as a pure state machine**
+- [x] **Step 6: Run under ASan/UBSan and commit** (`ea13340`)
 
 No socket forwarding is enabled yet.
 
@@ -331,8 +331,8 @@ No socket forwarding is enabled yet.
 - Modify exchangers only through an explicit P2P coordinator interface
 - Add integration and adversarial tests
 
-- [ ] **Step 1: Add disabled-by-default capability flag**
-- [ ] **Step 2: Protect socket before first probe**
+- [x] **Step 1: Add disabled-by-default capability flag** (`463f137`)
+- [x] **Step 2: Protect socket before first probe** (`463f137`)
 - [ ] **Step 3: Authenticate probe/ack before Direct transition**
 - [ ] **Step 4: Forward data only while state is Direct**
 - [ ] **Step 5: Fall back to relay on timeout, auth failure, socket error, or migration failure**
@@ -341,3 +341,18 @@ No socket forwarding is enabled yet.
 - [ ] **Step 8: Commit in platform-separated PRs**
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
+
+Task 10 currently completes only the fail-closed production gate and protection
+ordering. `ProductionAuthenticatedControlV1Ready` remains `false`, so existing
+transports remain relay-only and the legacy bearer-token offer path is
+unreachable. Remaining work includes a real exporter override, pair-seed
+wrapping/control-v1 coordinator integration, Android `VpnService` and iOS socket
+protection injection, authenticated ACK-driven Direct transition, data
+forwarding, timeout/fallback integration, and device/NAT adversarial evidence.
+
+Verification at `463f137`: production `openppp2_lib` build passed; C++ tests
+49/49 and tooling tests 75/75 passed; `p2p_capability_gate_test` passed 4/4
+under ASan/UBSan with WSL ASLR disabled via `setarch x86_64 -R`. No Android or
+iOS device result is claimed. VMUX Task 4 Step 5 also remains open because the
+existing sanitizer loop covers the pure drain state rather than real
+`vmux_net` carrier I/O.
