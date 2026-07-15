@@ -19,9 +19,9 @@ BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mux_state) {
 
     const auto lines = BuildStatusLines(snapshot);
     BOOST_TEST(ContainsLine(lines, "Connected"));
-    BOOST_TEST(ContainsLine(lines, "effective mux=compat"));
-    BOOST_TEST(ContainsLine(lines, "requested mux=balance"));
-    BOOST_TEST(ContainsLine(lines, "fallback=peer_missing_flow_v2"));
+    BOOST_TEST(ContainsLine(lines, "VMUX: Compatibility mode"));
+    BOOST_TEST(ContainsLine(lines, "requested VMUX: balance"));
+    BOOST_TEST(ContainsLine(lines, "fallback reason: peer_missing_flow_v2"));
     BOOST_TEST(ContainsLine(lines, "receiver ordering=compat"));
     BOOST_TEST(ContainsLine(lines, "active mux links=2"));
 }

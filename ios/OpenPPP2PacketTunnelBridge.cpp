@@ -120,8 +120,13 @@ namespace
                 runtime.generation,
                 ppp::app::runtime::RuntimePhase::Connecting,
                 runtime_now_ms());
+            return;
         }
-        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting)
+        tap->runtime_lifecycle.UpdateMuxState(
+            runtime.generation,
+            exchanger->GetMuxRuntimeState(),
+            runtime_now_ms());
+        if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting)
         {
             tap->runtime_lifecycle.Transition(
                 runtime.generation,
@@ -997,6 +1002,8 @@ int openppp2_ios_tap_start(
 
     ppp::app::runtime::RuntimeSnapshot runtime_seed;
     runtime_seed.role = "client";
+    runtime_seed.capabilities = {
+        "mux.compat", "mux.flow", "mux.balance", "mux.stripe"};
     const uint64_t runtime_generation = tap->runtime_lifecycle.Begin(
         std::move(runtime_seed),
         runtime_now_ms());

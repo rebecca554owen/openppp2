@@ -46,6 +46,9 @@ public struct RuntimeErrorSnapshot: Codable, Equatable, Sendable {
 
 public struct RuntimeSnapshot: Codable, Equatable, Sendable {
     public static let schemaVersion: UInt32 = 1
+    public static let bundledCapabilities = [
+        "mux.compat", "mux.flow", "mux.balance", "mux.stripe"
+    ]
 
     public var generation: UInt64
     public var monotonicMs: UInt64
@@ -53,6 +56,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
     public var role: String
     public var server: String
     public var transport: String
+    public var capabilities: [String]
     public var requestedMuxMode: String
     public var effectiveMuxMode: String
     public var muxReceiverOrdering: String
@@ -69,6 +73,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         role: String = "",
         server: String = "",
         transport: String = "",
+        capabilities: [String] = [],
         requestedMuxMode: String = "",
         effectiveMuxMode: String = "",
         muxReceiverOrdering: String = "",
@@ -84,6 +89,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         self.role = role
         self.server = server
         self.transport = transport
+        self.capabilities = capabilities
         self.requestedMuxMode = requestedMuxMode
         self.effectiveMuxMode = effectiveMuxMode
         self.muxReceiverOrdering = muxReceiverOrdering
@@ -102,6 +108,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         case role
         case server
         case transport
+        case capabilities
         case requestedMuxMode = "requested_mux_mode"
         case effectiveMuxMode = "effective_mux_mode"
         case muxReceiverOrdering = "mux_receiver_ordering"
@@ -129,6 +136,11 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         role = try container.decodeIfPresent(String.self, forKey: .role) ?? ""
         server = try container.decodeIfPresent(String.self, forKey: .server) ?? ""
         transport = try container.decodeIfPresent(String.self, forKey: .transport) ?? ""
+        if container.contains(.capabilities) {
+            capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
+        } else {
+            capabilities = Self.bundledCapabilities
+        }
         requestedMuxMode = try container.decodeIfPresent(String.self, forKey: .requestedMuxMode) ?? ""
         effectiveMuxMode = try container.decodeIfPresent(String.self, forKey: .effectiveMuxMode) ?? ""
         muxReceiverOrdering = try container.decodeIfPresent(String.self, forKey: .muxReceiverOrdering) ?? ""
@@ -148,6 +160,7 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         try container.encode(role, forKey: .role)
         try container.encode(server, forKey: .server)
         try container.encode(transport, forKey: .transport)
+        try container.encode(capabilities, forKey: .capabilities)
         try container.encode(requestedMuxMode, forKey: .requestedMuxMode)
         try container.encode(effectiveMuxMode, forKey: .effectiveMuxMode)
         try container.encode(muxReceiverOrdering, forKey: .muxReceiverOrdering)
@@ -156,5 +169,23 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         try container.encode(p2pState, forKey: .p2pState)
         try container.encode(effectivePath, forKey: .effectivePath)
         try container.encode(lastError, forKey: .lastError)
+    }
+
+    public func availableMuxModes(experimental: Bool = false) -> [String] {
+        ["compat", "flow", "balance", "stripe"].filter {
+            capabilities.contains("mux.\($0)") && ($0 != "stripe" || experimental)
+        }
+    }
+
+    public var effectiveMuxDisplayName: String {
+        effectiveMuxMode == "compat" ? "Compatibility mode" : effectiveMuxMode
+    }
+
+    public var muxDiagnosticLines: [String] {
+        var lines: [String] = []
+        if !requestedMuxMode.isEmpty { lines.append("Requested VMUX: \(requestedMuxMode)") }
+        if !effectiveMuxMode.isEmpty { lines.append("Effective VMUX: \(effectiveMuxDisplayName)") }
+        if !muxFallbackReason.isEmpty { lines.append("Fallback reason: \(muxFallbackReason)") }
+        return lines
     }
 }

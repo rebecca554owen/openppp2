@@ -84,6 +84,11 @@ namespace ppp {
                 root["role"] = detail::ToRuntimeJsonString(snapshot.role);
                 root["server"] = detail::ToRuntimeJsonString(snapshot.server);
                 root["transport"] = detail::ToRuntimeJsonString(snapshot.transport);
+                Json::Value capabilities(Json::arrayValue);
+                for (const std::string& capability : snapshot.capabilities) {
+                    capabilities.append(detail::ToRuntimeJsonString(capability));
+                }
+                root["capabilities"] = std::move(capabilities);
                 root["requested_mux_mode"] = detail::ToRuntimeJsonString(snapshot.requested_mux_mode);
                 root["effective_mux_mode"] = detail::ToRuntimeJsonString(snapshot.effective_mux_mode);
                 root["mux_receiver_ordering"] = detail::ToRuntimeJsonString(snapshot.mux_receiver_ordering);
@@ -144,6 +149,14 @@ namespace ppp {
                 parsed.role = detail::RuntimeJsonString(root, "role");
                 parsed.server = detail::RuntimeJsonString(root, "server");
                 parsed.transport = detail::RuntimeJsonString(root, "transport");
+                if (root.isMember("capabilities") && root["capabilities"].isArray()) {
+                    for (const Json::Value& capability : root["capabilities"]) {
+                        if (capability.isString()) {
+                            parsed.capabilities.emplace_back(
+                                detail::FromRuntimeJsonString(capability.asString()));
+                        }
+                    }
+                }
                 parsed.requested_mux_mode = detail::RuntimeJsonString(root, "requested_mux_mode");
                 parsed.effective_mux_mode = detail::RuntimeJsonString(root, "effective_mux_mode");
                 parsed.mux_receiver_ordering = detail::RuntimeJsonString(root, "mux_receiver_ordering");

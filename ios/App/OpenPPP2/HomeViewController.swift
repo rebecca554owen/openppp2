@@ -170,6 +170,9 @@ final class HomeViewController: UIViewController {
             connectedAt = connectedAt ?? Date()
             updateElapsedText()
             statusDetail = elapsedText
+            if !runtimeStore.state.effectiveMuxMode.isEmpty {
+                statusDetail += " · VMUX: \(runtimeStore.state.effectiveMuxDisplayName)"
+            }
             stopConnectWatchdog()
             startTimer()
         } else {
@@ -213,8 +216,11 @@ final class HomeViewController: UIViewController {
                 fallbackLinkState: linkState,
                 fallbackNetworkPath: vpn.networkPath
             )
-            diagnosticLabel.text = diagnosticText
-            diagnosticLabel.isHidden = diagnosticText == nil
+            let muxText = runtimeStore.state.muxDiagnosticLines.joined(separator: "\n")
+            diagnosticLabel.text = [diagnosticText, muxText.isEmpty ? nil : muxText]
+                .compactMap { $0 }
+                .joined(separator: "\n")
+            diagnosticLabel.isHidden = diagnosticLabel.text?.isEmpty != false
         } else {
             diagnosticLabel.text = nil
             diagnosticLabel.isHidden = true

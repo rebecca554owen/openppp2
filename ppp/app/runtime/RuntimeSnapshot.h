@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ppp {
     namespace app {
@@ -20,6 +21,7 @@ namespace ppp {
                 std::string role;
                 std::string server;
                 std::string transport;
+                std::vector<std::string> capabilities;
                 std::string requested_mux_mode;
                 std::string effective_mux_mode;
                 std::string mux_receiver_ordering;

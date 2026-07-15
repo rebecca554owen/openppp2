@@ -9,6 +9,7 @@ class RuntimeStore extends ChangeNotifier {
               generation: 0,
               monotonicMs: 0,
               phase: RuntimePhase.idle,
+              capabilities: RuntimeSnapshot.bundledCapabilities,
             );
 
   RuntimeSnapshot _state;
@@ -36,8 +37,11 @@ class RuntimeStore extends ChangeNotifier {
       role: _state.role,
       server: _state.server,
       transport: _state.transport,
+      capabilities: _state.capabilities,
       requestedMuxMode: _state.requestedMuxMode,
       effectiveMuxMode: _state.effectiveMuxMode,
+      muxReceiverOrdering: _state.muxReceiverOrdering,
+      muxActiveLinks: _state.muxActiveLinks,
       muxFallbackReason: _state.muxFallbackReason,
       p2pState: _state.p2pState,
       effectivePath: _state.effectivePath,

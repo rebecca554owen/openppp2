@@ -9,7 +9,8 @@ public final class RuntimeStore: ObservableObject {
         initial: RuntimeSnapshot = RuntimeSnapshot(
             generation: 0,
             monotonicMs: 0,
-            phase: .idle
+            phase: .idle,
+            capabilities: RuntimeSnapshot.bundledCapabilities
         )
     ) {
         state = initial

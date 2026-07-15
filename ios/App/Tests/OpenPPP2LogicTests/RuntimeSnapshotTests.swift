@@ -80,4 +80,18 @@ final class RuntimeSnapshotTests: XCTestCase {
         """
         XCTAssertThrowsError(try TunnelRuntimeBridge.decodeSnapshot(missingMonotonicTime))
     }
+
+    func testMissingCapabilitiesUsesBundledSchemaV1Fallback() throws {
+        let snapshot = try TunnelRuntimeBridge.decodeSnapshot("""
+        {"schema_version":1,"generation":1,"monotonic_ms":1,"phase":"idle"}
+        """)
+        XCTAssertEqual(snapshot.capabilities, RuntimeSnapshot.bundledCapabilities)
+    }
+
+    func testExplicitEmptyCapabilitiesDoesNotGuessSupport() throws {
+        let snapshot = try TunnelRuntimeBridge.decodeSnapshot("""
+        {"schema_version":1,"generation":1,"monotonic_ms":1,"phase":"idle","capabilities":[]}
+        """)
+        XCTAssertEqual(snapshot.capabilities, [])
+    }
 }

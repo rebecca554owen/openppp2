@@ -11,6 +11,10 @@ RuntimeSnapshot snapshot(int generation, int monotonicMs, RuntimePhase phase) {
 }
 
 void main() {
+  test('initial store exposes bundled VMUX capabilities', () {
+    expect(RuntimeStore().state.capabilities, RuntimeSnapshot.bundledCapabilities);
+  });
+
   test('older generation cannot overwrite current state', () {
     final store =
         RuntimeStore(initial: snapshot(8, 100, RuntimePhase.connected));

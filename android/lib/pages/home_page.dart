@@ -565,6 +565,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           ..addAll(next);
                       }),
             ),
+            if (controls.isConnected &&
+                _runtimeStore.state.effectiveMuxMode.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'VMUX: ${_runtimeStore.state.effectiveMuxDisplayName}',
+                  textAlign: TextAlign.center,
+                ),
+              ),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -634,6 +643,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 onCopy: _copyDebugInfo,
                 onClear: _clearDebugLog,
                 onStop: _stopVpnForDebug,
+                runtimeSnapshot: _runtimeStore.state,
               ),
             ],
           ],

@@ -141,6 +141,8 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
 
     ppp::app::runtime::RuntimeSnapshot runtime_seed;
     runtime_seed.role = proxy_mode_ ? "proxy" : (client_mode_ ? "client" : "server");
+    runtime_seed.capabilities = {
+        "mux.compat", "mux.flow", "mux.balance", "mux.stripe"};
     const std::uint64_t runtime_generation =
         runtime_lifecycle_.Begin(std::move(runtime_seed), Executors::GetTickCount());
     runtime_lifecycle_.Transition(

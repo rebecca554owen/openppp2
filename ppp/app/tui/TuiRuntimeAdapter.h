@@ -29,14 +29,16 @@ inline std::vector<std::string> BuildStatusLines(
     lines.emplace_back(PhaseDisplayName(snapshot.phase));
 
     if (!snapshot.effective_mux_mode.empty()) {
-        lines.emplace_back("effective mux=" + snapshot.effective_mux_mode);
+        lines.emplace_back(snapshot.effective_mux_mode == "compat"
+            ? "VMUX: Compatibility mode"
+            : "VMUX: " + snapshot.effective_mux_mode);
     }
     if (!snapshot.requested_mux_mode.empty() &&
         snapshot.requested_mux_mode != snapshot.effective_mux_mode) {
-        lines.emplace_back("requested mux=" + snapshot.requested_mux_mode);
+        lines.emplace_back("requested VMUX: " + snapshot.requested_mux_mode);
     }
     if (!snapshot.mux_fallback_reason.empty()) {
-        lines.emplace_back("fallback=" + snapshot.mux_fallback_reason);
+        lines.emplace_back("fallback reason: " + snapshot.mux_fallback_reason);
     }
     if (!snapshot.mux_receiver_ordering.empty()) {
         lines.emplace_back("receiver ordering=" + snapshot.mux_receiver_ordering);

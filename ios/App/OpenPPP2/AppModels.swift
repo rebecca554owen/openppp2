@@ -25,6 +25,7 @@ struct LaunchOptions: Codable, Equatable {
     var dns2: String = "1.1.1.1"
     var mtu: Int = 1400
     var mux: Int = 0
+    var muxMode: String = "compat"
     var vnet: Bool = false
     var lwip: Bool = false
     var blockQuic: Bool = true
@@ -63,6 +64,7 @@ struct LaunchOptions: Codable, Equatable {
         case dns2
         case mtu
         case mux
+        case muxMode
         case vnet
         case lwip
         case blockQuic
@@ -102,6 +104,7 @@ struct LaunchOptions: Codable, Equatable {
         dns2 = try container.decodeIfPresent(String.self, forKey: .dns2) ?? defaults.dns2
         mtu = try container.decodeIfPresent(Int.self, forKey: .mtu) ?? defaults.mtu
         mux = try container.decodeIfPresent(Int.self, forKey: .mux) ?? defaults.mux
+        muxMode = try container.decodeIfPresent(String.self, forKey: .muxMode) ?? defaults.muxMode
         vnet = try container.decodeIfPresent(Bool.self, forKey: .vnet) ?? defaults.vnet
         lwip = try container.decodeIfPresent(Bool.self, forKey: .lwip) ?? defaults.lwip
         blockQuic = try container.decodeIfPresent(Bool.self, forKey: .blockQuic) ?? defaults.blockQuic

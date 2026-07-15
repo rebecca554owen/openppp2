@@ -48,6 +48,7 @@ BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_phase_and_error) {
     source.effective_mux_mode = "compat";
     source.mux_receiver_ordering = "compat";
     source.mux_active_links = 2;
+    source.capabilities = {"mux.compat", "mux.flow", "mux.balance"};
     source.last_error.code = 42;
     source.last_error.retryable = true;
 
@@ -60,6 +61,8 @@ BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_phase_and_error) {
     BOOST_TEST(decoded.effective_mux_mode == "compat");
     BOOST_TEST(decoded.mux_receiver_ordering == "compat");
     BOOST_TEST(decoded.mux_active_links == 2u);
+    BOOST_TEST(decoded.capabilities.size() == 3u);
+    BOOST_TEST(decoded.capabilities[1] == "mux.flow");
     BOOST_TEST(decoded.last_error.code == 42u);
     BOOST_TEST(decoded.last_error.retryable);
 }
@@ -98,6 +101,8 @@ BOOST_AUTO_TEST_CASE(unknown_optional_fields_are_ignored) {
     BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(ReadFixture("connected.json"), snapshot));
     BOOST_TEST(snapshot.generation == 7u);
     BOOST_TEST(snapshot.effective_mux_mode == "flow");
+    BOOST_TEST(snapshot.capabilities.size() == 4u);
+    BOOST_TEST(snapshot.capabilities[3] == "mux.stripe");
 }
 
 BOOST_AUTO_TEST_CASE(unknown_phase_is_rejected) {

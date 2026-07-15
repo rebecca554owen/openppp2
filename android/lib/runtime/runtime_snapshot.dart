@@ -69,6 +69,13 @@ class RuntimeErrorSnapshot {
 }
 
 class RuntimeSnapshot {
+  static const bundledCapabilities = <String>[
+    'mux.compat',
+    'mux.flow',
+    'mux.balance',
+    'mux.stripe',
+  ];
+
   const RuntimeSnapshot({
     required this.generation,
     required this.monotonicMs,
@@ -76,6 +83,7 @@ class RuntimeSnapshot {
     this.role = '',
     this.server = '',
     this.transport = '',
+    this.capabilities = const <String>[],
     this.requestedMuxMode = '',
     this.effectiveMuxMode = '',
     this.muxReceiverOrdering = '',
@@ -94,6 +102,7 @@ class RuntimeSnapshot {
   final String role;
   final String server;
   final String transport;
+  final List<String> capabilities;
   final String requestedMuxMode;
   final String effectiveMuxMode;
   final String muxReceiverOrdering;
@@ -128,6 +137,11 @@ class RuntimeSnapshot {
       role: json['role'] as String? ?? '',
       server: json['server'] as String? ?? '',
       transport: json['transport'] as String? ?? '',
+      capabilities: json.containsKey('capabilities')
+          ? (json['capabilities'] as List<dynamic>? ?? const <dynamic>[])
+              .whereType<String>()
+              .toList(growable: false)
+          : bundledCapabilities,
       requestedMuxMode: json['requested_mux_mode'] as String? ?? '',
       effectiveMuxMode: json['effective_mux_mode'] as String? ?? '',
       muxReceiverOrdering: json['mux_receiver_ordering'] as String? ?? '',
@@ -140,4 +154,23 @@ class RuntimeSnapshot {
       ),
     );
   }
+
+  List<String> availableMuxModes({bool experimental = false}) {
+    const modes = <String>['compat', 'flow', 'balance', 'stripe'];
+    return modes
+        .where((mode) => capabilities.contains('mux.$mode'))
+        .where((mode) => mode != 'stripe' || experimental)
+        .toList(growable: false);
+  }
+
+  String get effectiveMuxDisplayName =>
+      effectiveMuxMode == 'compat' ? 'Compatibility mode' : effectiveMuxMode;
+
+  List<String> get muxDiagnosticLines => <String>[
+        if (requestedMuxMode.isNotEmpty) 'Requested VMUX: $requestedMuxMode',
+        if (effectiveMuxMode.isNotEmpty)
+          'Effective VMUX: $effectiveMuxDisplayName',
+        if (muxFallbackReason.isNotEmpty)
+          'Fallback reason: $muxFallbackReason',
+      ];
 }

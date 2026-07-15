@@ -149,6 +149,7 @@ cdnst.net          /cloudflare/tun''';
     'mtu': 1400,
     'mark': 0,
     'mux': 0,
+    'muxMode': 'compat',
     'vnet': false,
     'blockQuic': false,
     'staticMode': true,
@@ -336,6 +337,12 @@ cdnst.net          /cloudflare/tun''';
 
       root['geo-rules'] = gr;
     }
+
+    final mux = (root['mux'] is Map)
+        ? Map<String, dynamic>.from(root['mux'] as Map)
+        : <String, dynamic>{};
+    mux['mode'] = (options['muxMode'] ?? 'compat').toString();
+    root['mux'] = mux;
 
     // ---- LAN proxy bind override ----
     // When [allowLan] is true, force the local http/socks proxy listeners to

@@ -444,13 +444,19 @@ bool                                                                        libo
                 ppp::app::runtime::RuntimePhase::Connecting,
                 now);
         }
-        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting) {
+        else {
+            runtime_lifecycle_.UpdateMuxState(
+                runtime.generation,
+                exchanger->GetMuxRuntimeState(),
+                now);
+        }
+        if (NULLPTR != exchanger && exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting) {
             runtime_lifecycle_.Transition(
                 runtime.generation,
                 ppp::app::runtime::RuntimePhase::Reconnecting,
                 now);
         }
-        else if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established) {
+        else if (NULLPTR != exchanger && exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Established) {
             runtime_lifecycle_.UpdateReadiness(
                 runtime.generation,
                 client->GetRuntimeReadiness(),
@@ -460,7 +466,7 @@ bool                                                                        libo
                 ppp::app::runtime::RuntimePhase::Connected,
                 now);
         }
-        else {
+        else if (NULLPTR != exchanger) {
             runtime_lifecycle_.Transition(
                 runtime.generation,
                 ppp::app::runtime::RuntimePhase::Handshaking,
@@ -1793,6 +1799,8 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
 
                     ppp::app::runtime::RuntimeSnapshot runtime_seed;
                     runtime_seed.role = "client";
+                    runtime_seed.capabilities = {
+                        "mux.compat", "mux.flow", "mux.balance", "mux.stripe"};
                     const std::uint64_t runtime_generation = app->runtime_lifecycle_.Begin(
                         std::move(runtime_seed),
                         Executors::GetTickCount());

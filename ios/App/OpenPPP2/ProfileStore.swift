@@ -296,6 +296,10 @@ final class ProfileStore {
         geo["geosite-dat"] = options.geoSiteDat
         root["geo-rules"] = geo
 
+        var mux = root["mux"] as? [String: Any] ?? [:]
+        mux["mode"] = options.muxMode
+        root["mux"] = mux
+
         var client = root["client"] as? [String: Any] ?? [:]
         let bind = options.allowLan ? "0.0.0.0" : "127.0.0.1"
         var http = client["http-proxy"] as? [String: Any] ?? ["port": 8080]

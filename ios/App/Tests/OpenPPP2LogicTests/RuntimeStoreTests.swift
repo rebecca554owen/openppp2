@@ -3,6 +3,10 @@ import XCTest
 
 @MainActor
 final class RuntimeStoreTests: XCTestCase {
+    func testInitialStoreExposesBundledVMUXCapabilities() {
+        XCTAssertEqual(RuntimeStore().state.capabilities, RuntimeSnapshot.bundledCapabilities)
+    }
+
     private func snapshot(
         generation: UInt64,
         monotonicMs: UInt64,

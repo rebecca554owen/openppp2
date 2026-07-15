@@ -254,6 +254,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onCopy: _copyLog,
               onClear: _clearLog,
               onStop: _stopVpn,
+              runtimeSnapshot: _vpnService.runtimeStore.state,
             ),
           ],
           const SizedBox(height: 12),

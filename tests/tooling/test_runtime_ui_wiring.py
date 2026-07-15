@@ -96,6 +96,67 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("reference/UI_RUNTIME_CONTRACT.md", index)
         self.assertIn("reference/UI_RUNTIME_CONTRACT_CN.md", index)
 
+    def test_vmux_ui_uses_snapshot_capabilities_and_next_connection_config(self) -> None:
+        android_model = self.source("android/lib/runtime/runtime_snapshot.dart")
+        android_view = self.source("android/lib/pages/options_advanced_page.dart")
+        android_selector = self.source("android/lib/widgets/vmux_mode_selector.dart")
+        android_config = self.source("android/lib/services/profile_store.dart")
+        ios_model = self.source("ios/App/OpenPPP2/Runtime/RuntimeSnapshot.swift")
+        ios_view = self.source("ios/App/OpenPPP2/OptionsViewController.swift")
+        ios_config = self.source("ios/App/OpenPPP2/ProfileStore.swift")
+
+        for source in (android_model, ios_model):
+            self.assertIn("capabilities", source)
+            self.assertIn("stripe", source)
+            self.assertIn("Compatibility mode", source)
+        self.assertIn("capabilities.contains('mux.$mode')", android_model)
+        self.assertIn('capabilities.contains("mux.\\($0)")', ios_model)
+
+        self.assertIn("Takes effect on next connection", android_view)
+        self.assertIn("Takes effect on next connection", ios_view)
+        self.assertIn("VmuxModeSelector", android_view)
+        self.assertIn("availableMuxModes", android_selector)
+        self.assertIn("availableMuxModes", ios_view)
+        self.assertIn("muxMode", android_config)
+        self.assertIn('mux["mode"]', ios_config)
+        self.assertNotIn("setMuxMode", android_view)
+        self.assertNotIn("setMuxMode", ios_view)
+
+    def test_mobile_native_runtime_publishes_vmux_state(self) -> None:
+        for relative in ("android/libopenppp2.cpp", "ios/OpenPPP2PacketTunnelBridge.cpp"):
+            source = self.source(relative)
+            self.assertIn('"mux.compat", "mux.flow", "mux.balance", "mux.stripe"', source)
+            self.assertIn("GetMuxRuntimeState()", source)
+            self.assertIn("UpdateMuxState(", source)
+        ios = self.source("ios/OpenPPP2PacketTunnelBridge.cpp")
+        missing_exchanger = ios[ios.index("if (exchanger == nullptr)"):ios.index("UpdateMuxState(")]
+        self.assertIn("return;", missing_exchanger)
+
+    def test_vmux_selector_and_home_are_wired_for_normal_ui(self) -> None:
+        selector = self.source("android/lib/widgets/vmux_mode_selector.dart")
+        android_home = self.source("android/lib/pages/home_page.dart")
+        android_model = self.source("android/lib/runtime/runtime_snapshot.dart")
+        android_store = self.source("android/lib/runtime/runtime_store.dart")
+        ios_home = self.source("ios/App/OpenPPP2/HomeViewController.swift")
+        ios_model = self.source("ios/App/OpenPPP2/Runtime/RuntimeSnapshot.swift")
+        ios_store = self.source("ios/App/OpenPPP2/Runtime/RuntimeStore.swift")
+
+        self.assertIn("availableMuxModes", selector)
+        self.assertIn("Takes effect on next connection", selector)
+        self.assertIn("effectiveMuxDisplayName", selector)
+        self.assertIn("effectiveMuxDisplayName", android_home)
+        self.assertIn("effectiveMuxDisplayName", ios_home)
+        self.assertIn("bundledCapabilities", self.source("ios/App/OpenPPP2/OptionsViewController.swift"))
+        self.assertIn("bundledCapabilities", android_store)
+        self.assertIn("bundledCapabilities", ios_store)
+        self.assertIn("json.containsKey('capabilities')", android_model)
+        self.assertIn("container.contains(.capabilities)", ios_model)
+
+        swift_test = ROOT / "ios/App/Tests/OpenPPP2LogicTests/VMuxPresentationTests.swift"
+        self.assertTrue(swift_test.is_file())
+        self.assertIn("import OpenPPP2Logic", swift_test.read_text(encoding="utf-8"))
+        self.assertFalse((ROOT / "ios/App/OpenPPP2Tests").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
