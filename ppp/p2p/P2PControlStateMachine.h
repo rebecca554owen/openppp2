@@ -8,6 +8,7 @@ namespace ppp::p2p {
 class P2PControlStateMachine final {
 public:
     P2PState State() const noexcept { return state_; }
+    P2PFallbackReason FallbackReason() const noexcept { return fallback_reason_; }
     const char* EffectivePath() const noexcept { return EffectivePathFor(state_); }
 
     static const char* EffectivePathFor(P2PState state) noexcept {
@@ -21,6 +22,7 @@ public:
     bool MarkEligible() noexcept {
         if (state_ != P2PState::Relay && state_ != P2PState::Unavailable &&
             state_ != P2PState::Failed) return false;
+        fallback_reason_ = P2PFallbackReason::None;
         state_ = P2PState::Eligible;
         return true;
     }
@@ -43,9 +45,11 @@ public:
 
     bool AcceptRecoveryAck(bool) noexcept { return false; }
 
-    bool BeginFallback() noexcept {
+    bool BeginFallback(P2PFallbackReason reason) noexcept {
+        if (reason == P2PFallbackReason::None) return false;
         if (state_ != P2PState::Eligible && state_ != P2PState::Probing &&
             state_ != P2PState::Direct && state_ != P2PState::Suspect) return false;
+        fallback_reason_ = reason;
         state_ = P2PState::FallingBack;
         return true;
     }
@@ -74,6 +78,7 @@ private:
     }
 
     P2PState state_ = P2PState::Relay;
+    P2PFallbackReason fallback_reason_ = P2PFallbackReason::None;
 };
 
 }

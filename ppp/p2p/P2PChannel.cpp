@@ -7,6 +7,7 @@
 
 #include <ppp/p2p/P2PChannel.h>
 #include <ppp/Random.h>
+#include <openssl/crypto.h>
 #include <cstring>
 
 #if defined(_LINUX) && !defined(_ANDROID)
@@ -78,7 +79,46 @@ namespace ppp {
                 socket_->close(ec);
             }
 
+            ResetAttemptState();
             TransitionTo(P2PChannelState::Relay);
+        }
+
+        void P2PChannel::FallbackToRelay(P2PFallbackReason reason) noexcept {
+            P2PFallbackReason expected = P2PFallbackReason::None;
+            fallback_reason_.compare_exchange_strong(expected, reason,
+                std::memory_order_acq_rel, std::memory_order_acquire);
+            Close();
+        }
+
+        void P2PChannel::ResetAttemptState() noexcept {
+            if (probe_timer_) probe_timer_.reset();
+            if (heartbeat_timer_) heartbeat_timer_.reset();
+            if (suspect_timer_) suspect_timer_.reset();
+            socket_.reset();
+
+            OPENSSL_cleanse(base_session_key_, sizeof(base_session_key_));
+            OPENSSL_cleanse(tx_session_key_, sizeof(tx_session_key_));
+            OPENSSL_cleanse(rx_session_key_, sizeof(rx_session_key_));
+            OPENSSL_cleanse(token_key_, sizeof(token_key_));
+            if (!offer_token_.empty()) {
+                OPENSSL_cleanse(offer_token_.data(), offer_token_.size());
+            }
+            offer_token_.clear();
+            replay_window_.Reset();
+            candidates_.clear();
+            peer_session_id_ = 0;
+            peer_endpoint_ = {};
+            local_endpoint_ = {};
+            recv_sender_ = {};
+            nonce_counter_ = 0;
+            sequence_counter_ = 0;
+            probe_round_ = 0;
+            last_heartbeat_recv_ms_ = 0;
+            heartbeat_misses_ = 0;
+            suspect_enter_ms_ = 0;
+            pending_heartbeat_ack_ = false;
+            OPENSSL_cleanse(recv_buf_, sizeof(recv_buf_));
+            std::memset(coalesced_frames_, 0, sizeof(coalesced_frames_));
         }
 
         // -------------------------------------------------------------------------
@@ -137,7 +177,7 @@ namespace ppp {
             // C2: Fail closed — require a non-empty, non-oversized offer token.
             if (offer_token.empty() ||
                 static_cast<int>(offer_token.size()) > MAX_OFFER_TOKEN_SIZE) {
-                TransitionTo(P2PChannelState::Relay);
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
                 return;
             }
 
@@ -158,34 +198,34 @@ namespace ppp {
                 if (!HKDFDeriveDirectionalKeys(base_session_key_,
                                                local_id_bytes, peer_id_bytes,
                                                tx_session_key_, rx_session_key_)) {
-                    TransitionTo(P2PChannelState::Relay);
+                    FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
                     return;
                 }
             }
 
-            socket_ = std::make_unique<boost::asio::ip::udp::socket>(io_ctx_,
-                boost::asio::ip::udp::v4());
-            if (!socket_ || !socket_->is_open()) {
-                TransitionTo(P2PChannelState::Relay);
+            socket_ = std::make_unique<boost::asio::ip::udp::socket>(io_ctx_);
+            boost::system::error_code ec;
+            socket_->open(boost::asio::ip::udp::v4(), ec);
+            if (ec || !socket_->is_open()) {
+                FallbackToRelay(P2PFallbackReason::SocketError);
                 return;
             }
 
-            boost::system::error_code ec;
             socket_->bind(boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0), ec);
             if (ec) {
-                socket_->close(ec);
-                socket_.reset();
-                TransitionTo(P2PChannelState::Relay);
+                FallbackToRelay(P2PFallbackReason::SocketError);
                 return;
             }
 
             local_endpoint_ = socket_->local_endpoint(ec);
+            if (ec) {
+                FallbackToRelay(P2PFallbackReason::SocketError);
+                return;
+            }
 
             int fd = static_cast<int>(socket_->native_handle());
             if (!ProtectP2PSocket(protector_, fd)) {
-                socket_->close(ec);
-                socket_.reset();
-                TransitionTo(P2PChannelState::Relay);
+                FallbackToRelay(P2PFallbackReason::SocketError);
                 return;
             }
 
@@ -201,8 +241,9 @@ namespace ppp {
             StartReceive();
 
             for (const auto& cand : candidates) {
-                SendProbe(cand.endpoint);
+                if (!SendProbe(cand.endpoint)) return;
             }
+            if (closed_.load(std::memory_order_acquire)) return;
 
             probe_timer_ = std::make_shared<boost::asio::steady_timer>(io_ctx_);
             probe_timer_->expires_after(std::chrono::milliseconds(config_.probe_timeout_ms));
@@ -217,9 +258,9 @@ namespace ppp {
         // SendProbe: PROBE_REQ with unified token binding (C1)
         // -------------------------------------------------------------------------
 
-        void P2PChannel::SendProbe(const boost::asio::ip::udp::endpoint& ep) noexcept {
+        bool P2PChannel::SendProbe(const boost::asio::ip::udp::endpoint& ep) noexcept {
             if (!socket_ || closed_.load(std::memory_order_acquire)) {
-                return;
+                return false;
             }
 
             uint8_t buf[TIER1_HEADER_SIZE + AUTH_TAG_SIZE + MAX_OFFER_TOKEN_SIZE];
@@ -234,18 +275,31 @@ namespace ppp {
             if (!BuildTier1TokenInput(header, token_input,
                                        static_cast<int>(sizeof(token_input)),
                                        token_input_len)) {
-                return;  // C2: fail closed.
+                OPENSSL_cleanse(token_input, sizeof(token_input));
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
+                return false;
             }
 
-            TokenGenerate(token_key_, token_input, token_input_len, header.token);
+            if (!TokenGenerate(token_key_, token_input, token_input_len, header.token)) {
+                OPENSSL_cleanse(token_input, sizeof(token_input));
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
+                return false;
+            }
+            OPENSSL_cleanse(token_input, sizeof(token_input));
 
             int written = header.Serialize(buf, sizeof(buf));
             if (written != TIER1_HEADER_SIZE) {
-                return;
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
+                return false;
             }
 
             boost::system::error_code ec;
             socket_->send_to(boost::asio::buffer(buf, written), ep, 0, ec);
+            if (ec) {
+                FallbackToRelay(P2PFallbackReason::SocketError);
+                return false;
+            }
+            return true;
         }
 
         // -------------------------------------------------------------------------
@@ -269,18 +323,27 @@ namespace ppp {
             if (!BuildTier1TokenInput(ack, token_input,
                                        static_cast<int>(sizeof(token_input)),
                                        token_input_len)) {
-                return;  // C2: fail closed.
+                OPENSSL_cleanse(token_input, sizeof(token_input));
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
+                return;
             }
 
-            TokenGenerate(token_key_, token_input, token_input_len, ack.token);
+            if (!TokenGenerate(token_key_, token_input, token_input_len, ack.token)) {
+                OPENSSL_cleanse(token_input, sizeof(token_input));
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
+                return;
+            }
+            OPENSSL_cleanse(token_input, sizeof(token_input));
 
             int written = ack.Serialize(buf, sizeof(buf));
             if (written != TIER1_HEADER_SIZE) {
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
                 return;
             }
 
             boost::system::error_code ec;
             socket_->send_to(boost::asio::buffer(buf, written), ep, 0, ec);
+            if (ec) FallbackToRelay(P2PFallbackReason::SocketError);
         }
 
         // -------------------------------------------------------------------------
@@ -293,9 +356,12 @@ namespace ppp {
             if (!BuildTier1TokenInput(header, token_input,
                                        static_cast<int>(sizeof(token_input)),
                                        token_input_len)) {
+                OPENSSL_cleanse(token_input, sizeof(token_input));
                 return false;  // C2: fail closed — no unbound fallback.
             }
-            return TokenVerify(token_key_, token_input, token_input_len, header.token);
+            bool verified = TokenVerify(token_key_, token_input, token_input_len, header.token);
+            OPENSSL_cleanse(token_input, sizeof(token_input));
+            return verified;
         }
 
         // -------------------------------------------------------------------------
@@ -310,14 +376,14 @@ namespace ppp {
 
             probe_round_++;
             if (probe_round_ >= config_.max_probes) {
-                TransitionTo(P2PChannelState::Relay);
-                Close();
+                FallbackToRelay(P2PFallbackReason::Timeout);
                 return;
             }
 
             for (const auto& cand : candidates_) {
-                SendProbe(cand.endpoint);
+                if (!SendProbe(cand.endpoint)) return;
             }
+            if (closed_.load(std::memory_order_acquire)) return;
 
             if (probe_timer_) {
                 probe_timer_->expires_after(std::chrono::milliseconds(config_.probe_timeout_ms));
@@ -365,7 +431,13 @@ namespace ppp {
                 boost::asio::buffer(recv_buf_, sizeof(recv_buf_)),
                 recv_sender_,
                 [self = shared_from_this()](const boost::system::error_code& ec, std::size_t bytes) {
-                    if (ec || self->closed_.load(std::memory_order_acquire)) {
+                    if (self->closed_.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    if (ec) {
+                        if (ec != boost::asio::error::operation_aborted) {
+                            self->FallbackToRelay(P2PFallbackReason::SocketError);
+                        }
                         return;
                     }
                     self->OnReceive(self->recv_sender_, self->recv_buf_, static_cast<int>(bytes));
@@ -591,6 +663,7 @@ namespace ppp {
         bool P2PChannel::EncryptAndSendTier2(const uint8_t* payload, int payload_len,
                                               uint8_t flags) noexcept {
             if (!socket_) {
+                FallbackToRelay(P2PFallbackReason::SocketError);
                 return false;
             }
 
@@ -637,6 +710,7 @@ namespace ppp {
                                               header_buf, hdr_len,
                                               cipher_buf.Data(), auth_tag);
             if (!enc.success) {
+                FallbackToRelay(P2PFallbackReason::AuthenticationFailure);
                 return false;
             }
 
@@ -655,6 +729,7 @@ namespace ppp {
 
             boost::system::error_code ec;
             socket_->send_to(boost::asio::buffer(packet, packet_len), peer_endpoint_, 0, ec);
+            if (ec) FallbackToRelay(P2PFallbackReason::SocketError);
             return !ec;
         }
 
@@ -710,8 +785,7 @@ namespace ppp {
                 return;
             }
 
-            TransitionTo(P2PChannelState::Relay);
-            Close();
+            FallbackToRelay(P2PFallbackReason::Timeout);
         }
 
         // -------------------------------------------------------------------------

@@ -13,7 +13,7 @@ BOOST_AUTO_TEST_CASE(follows_the_bounded_probe_and_fallback_lifecycle) {
     BOOST_REQUIRE(machine.AcceptOffer());
     BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Probing));
     BOOST_TEST(std::string(machine.EffectivePath()) == "relay");
-    BOOST_REQUIRE(machine.BeginFallback());
+    BOOST_REQUIRE(machine.BeginFallback(P2PFallbackReason::Timeout));
     BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::FallingBack));
     BOOST_REQUIRE(machine.CompleteFallback(true));
     BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Relay));
@@ -67,7 +67,7 @@ BOOST_AUTO_TEST_CASE(rejects_out_of_order_transitions) {
 BOOST_AUTO_TEST_CASE(fallback_can_end_unavailable_or_disabled_without_losing_relay_path) {
     P2PControlStateMachine machine;
     BOOST_REQUIRE(machine.MarkEligible());
-    BOOST_REQUIRE(machine.BeginFallback());
+    BOOST_REQUIRE(machine.BeginFallback(P2PFallbackReason::AuthenticationFailure));
     BOOST_REQUIRE(machine.CompleteFallback(false));
     BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Unavailable));
     BOOST_TEST(std::string(machine.EffectivePath()) == "relay");
@@ -79,8 +79,38 @@ BOOST_AUTO_TEST_CASE(fallback_can_end_unavailable_or_disabled_without_losing_rel
 BOOST_AUTO_TEST_CASE(falling_back_can_complete_directly_to_disabled) {
     P2PControlStateMachine machine;
     BOOST_REQUIRE(machine.MarkEligible());
-    BOOST_REQUIRE(machine.BeginFallback());
+    BOOST_REQUIRE(machine.BeginFallback(P2PFallbackReason::SocketError));
     BOOST_REQUIRE(machine.Disable());
     BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Disabled));
     BOOST_TEST(std::string(machine.EffectivePath()) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(probing_failures_record_reason_and_fall_back_to_relay) {
+    for (const auto reason : {P2PFallbackReason::Timeout,
+             P2PFallbackReason::AuthenticationFailure}) {
+        P2PControlStateMachine machine;
+        BOOST_REQUIRE(machine.MarkEligible());
+        BOOST_REQUIRE(machine.AcceptOffer());
+        BOOST_REQUIRE(machine.BeginFallback(reason));
+        BOOST_TEST(static_cast<int>(machine.State()) ==
+            static_cast<int>(P2PState::FallingBack));
+        BOOST_TEST(static_cast<int>(machine.FallbackReason()) ==
+            static_cast<int>(reason));
+        BOOST_TEST(std::string(machine.EffectivePath()) == "relay");
+        BOOST_REQUIRE(machine.CompleteFallback(true));
+        BOOST_TEST(static_cast<int>(machine.State()) ==
+            static_cast<int>(P2PState::Relay));
+        BOOST_TEST(static_cast<int>(machine.FallbackReason()) ==
+            static_cast<int>(reason));
+        BOOST_REQUIRE(machine.MarkEligible());
+        BOOST_TEST(static_cast<int>(machine.FallbackReason()) ==
+            static_cast<int>(P2PFallbackReason::None));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fallback_rejects_missing_reason) {
+    P2PControlStateMachine machine;
+    BOOST_REQUIRE(machine.MarkEligible());
+    BOOST_TEST(!machine.BeginFallback(P2PFallbackReason::None));
+    BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Eligible));
 }

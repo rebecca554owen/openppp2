@@ -17,6 +17,25 @@ enum class P2PState : std::uint8_t {
     Failed,
 };
 
+enum class P2PFallbackReason : std::uint8_t {
+    None,
+    Timeout,
+    AuthenticationFailure,
+    SocketError,
+    MigrationFailure,
+};
+
+inline const char* ToString(P2PFallbackReason reason) noexcept {
+    switch (reason) {
+    case P2PFallbackReason::None: return "none";
+    case P2PFallbackReason::Timeout: return "timeout";
+    case P2PFallbackReason::AuthenticationFailure: return "authentication_failure";
+    case P2PFallbackReason::SocketError: return "socket_error";
+    case P2PFallbackReason::MigrationFailure: return "migration_failure";
+    }
+    return "none";
+}
+
 inline const char* ToString(P2PState state) noexcept {
     switch (state) {
     case P2PState::Disabled: return "disabled";

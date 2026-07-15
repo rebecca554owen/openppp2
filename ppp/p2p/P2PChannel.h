@@ -27,6 +27,7 @@
 #include <ppp/p2p/P2PBufferPool.h>
 #include <ppp/p2p/P2PCrypto.h>
 #include <ppp/p2p/P2PSocketProtector.h>
+#include <ppp/p2p/P2PState.h>
 #include <ppp/Int128.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/Timer.h>
@@ -86,9 +87,14 @@ namespace ppp {
             void SetFrameCallback(const P2PFrameReceivedCallback& cb) noexcept { frame_callback_ = cb; }
             void SetStateChangedCallback(const P2PStateChangedCallback& cb) noexcept { state_callback_ = cb; }
             bool IsClosed() const noexcept { return closed_.load(std::memory_order_acquire); }
+            P2PFallbackReason GetFallbackReason() const noexcept {
+                return fallback_reason_.load(std::memory_order_acquire);
+            }
 
         private:
             void TransitionTo(P2PChannelState new_state) noexcept;
+            void FallbackToRelay(P2PFallbackReason reason) noexcept;
+            void ResetAttemptState() noexcept;
             void StartReceive() noexcept;
             void OnReceive(const boost::asio::ip::udp::endpoint& sender,
                            const uint8_t* data, int data_len) noexcept;
@@ -98,7 +104,7 @@ namespace ppp {
             void HandleTier2(const uint8_t* data, int data_len,
                              const boost::asio::ip::udp::endpoint& sender) noexcept;
 
-            void SendProbe(const boost::asio::ip::udp::endpoint& ep) noexcept;
+            bool SendProbe(const boost::asio::ip::udp::endpoint& ep) noexcept;
             void SendProbeAck(const boost::asio::ip::udp::endpoint& ep) noexcept;
             void SendHeartbeat() noexcept;
             void OnProbeAck(const boost::asio::ip::udp::endpoint& sender) noexcept;
@@ -161,6 +167,7 @@ namespace ppp {
 
             std::atomic<P2PChannelState>                state_{P2PChannelState::Relay};
             std::atomic<bool>                           closed_{false};
+            std::atomic<P2PFallbackReason>              fallback_reason_{P2PFallbackReason::None};
             boost::asio::ip::udp::endpoint              peer_endpoint_;
             boost::asio::ip::udp::endpoint              local_endpoint_;
 

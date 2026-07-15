@@ -382,3 +382,34 @@ BOOST_AUTO_TEST_CASE(non_ack_control_rejects_probe_transcript_hash) {
     P2POfferToken token{};
     BOOST_TEST(!CreateP2POfferToken(key, probe, token));
 }
+
+BOOST_AUTO_TEST_CASE(direct_socket_and_suspect_migration_failures_fall_back) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+
+    P2PReplayWindow socket_replay;
+    auto socket_proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), socket_replay);
+    BOOST_REQUIRE(socket_proof.has_value());
+    P2PControlStateMachine socket_machine;
+    BOOST_REQUIRE(socket_machine.MarkEligible());
+    BOOST_REQUIRE(socket_machine.AcceptOffer());
+    BOOST_REQUIRE(socket_machine.AcceptProbeAck(std::move(*socket_proof)));
+    BOOST_REQUIRE(socket_machine.BeginFallback(P2PFallbackReason::SocketError));
+    BOOST_TEST(std::string(socket_machine.EffectivePath()) == "relay");
+
+    P2PReplayWindow migration_replay;
+    auto migration_proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), migration_replay);
+    BOOST_REQUIRE(migration_proof.has_value());
+    P2PControlStateMachine migration_machine;
+    BOOST_REQUIRE(migration_machine.MarkEligible());
+    BOOST_REQUIRE(migration_machine.AcceptOffer());
+    BOOST_REQUIRE(migration_machine.AcceptProbeAck(std::move(*migration_proof)));
+    BOOST_REQUIRE(migration_machine.MarkSuspect());
+    BOOST_REQUIRE(migration_machine.BeginFallback(P2PFallbackReason::MigrationFailure));
+    BOOST_TEST(std::string(migration_machine.EffectivePath()) == "relay");
+}
