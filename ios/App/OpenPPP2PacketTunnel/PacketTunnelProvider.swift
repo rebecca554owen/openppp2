@@ -118,7 +118,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
 
-            let adapter = OpenPPP2PacketTunnelAdapter(flow: self.packetFlow, telemetry: telemetry, debug: debug)
+            let adapter = OpenPPP2PacketTunnelAdapter(provider: self, flow: self.packetFlow, telemetry: telemetry, debug: debug)
             guard adapter.start(configJson: preparedConfigJson, options: launchOptions) else {
                 let lastError = openPPP2LastErrorText()
                 self.stopNetworkPathMonitor()

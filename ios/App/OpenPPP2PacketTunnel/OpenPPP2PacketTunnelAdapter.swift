@@ -9,6 +9,7 @@ final class OpenPPP2PacketTunnelAdapter {
     private let packetFlowDiagnostics: PacketFlowDiagnostics
     private let outputQueue: PacketFlowOutputQueue
     private let packetFlowConsoleLoggingEnabled: Bool
+    private let p2pDatagramProvider: ProviderOwnedP2PDatagramTransport
     private var tap: OpaquePointer?
     private var isRunning = false
     private let statsQueue = DispatchQueue(label: "io.github.openppp2.packet-tunnel.stats")
@@ -16,8 +17,9 @@ final class OpenPPP2PacketTunnelAdapter {
     private var heartbeatTimer: DispatchSourceTimer?
     private var dataplane = "ctcp"
 
-    init(flow: NEPacketTunnelFlow, telemetry: TelemetrySettings = .disabled, debug: DebugSettings = DebugSettings()) {
+    init(provider: NEPacketTunnelProvider, flow: NEPacketTunnelFlow, telemetry: TelemetrySettings = .disabled, debug: DebugSettings = DebugSettings()) {
         self.flow = flow
+        p2pDatagramProvider = ProviderOwnedP2PDatagramTransport(provider: provider)
         packetFlowConsoleLoggingEnabled = debug.packetFlowConsoleLoggingEnabled
         packetFlowDiagnostics = PacketFlowDiagnostics(telemetry: telemetry, debug: debug)
         outputQueue = PacketFlowOutputQueue(flow: flow, consoleLoggingEnabled: debug.packetFlowConsoleLoggingEnabled)
@@ -39,7 +41,13 @@ final class OpenPPP2PacketTunnelAdapter {
             return false
         }
 
+        guard p2pDatagramProvider.install(on: createdTap) else {
+            openppp2_ios_tap_destroy(createdTap)
+            return false
+        }
+
         guard startNativeTap(createdTap, configJson: configJson, options: options, userData: userData) else {
+            p2pDatagramProvider.uninstall(from: createdTap)
             openppp2_ios_tap_destroy(createdTap)
             return false
         }
@@ -64,6 +72,7 @@ final class OpenPPP2PacketTunnelAdapter {
             if let snapshot = readNativeRuntimeSnapshot() {
                 TunnelSharedState.writeRuntimeSnapshotJson(snapshot)
             }
+            p2pDatagramProvider.uninstall(from: tap)
             openppp2_ios_tap_destroy(tap)
             self.tap = nil
         }

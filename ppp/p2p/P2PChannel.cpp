@@ -30,9 +30,12 @@ namespace ppp {
                 const uint8_t base_session_key[SESSION_KEY_SIZE],
                 const uint8_t token_key[SESSION_KEY_SIZE],
                 const P2PConfig& config,
-                P2PCipher cipher) noexcept
+                P2PCipher cipher,
+                const std::shared_ptr<IP2PDatagramTransportFactory>&
+                    transport_factory) noexcept
             : io_ctx_(io_ctx)
             , protector_(protector)
+            , transport_factory_(transport_factory)
             , session_id_(session_id)
             , peer_session_id_(0)
             , cipher_(cipher)
@@ -74,9 +77,8 @@ namespace ppp {
             if (heartbeat_timer_) heartbeat_timer_->cancel();
             if (suspect_timer_) suspect_timer_->cancel();
 
-            if (socket_ && socket_->is_open()) {
-                boost::system::error_code ec;
-                socket_->close(ec);
+            if (transport_) {
+                transport_->Close();
             }
 
             ResetAttemptState();
@@ -94,7 +96,7 @@ namespace ppp {
             if (probe_timer_) probe_timer_.reset();
             if (heartbeat_timer_) heartbeat_timer_.reset();
             if (suspect_timer_) suspect_timer_.reset();
-            socket_.reset();
+            transport_.reset();
 
             OPENSSL_cleanse(base_session_key_, sizeof(base_session_key_));
             OPENSSL_cleanse(tx_session_key_, sizeof(tx_session_key_));
@@ -109,7 +111,6 @@ namespace ppp {
             peer_session_id_ = 0;
             peer_endpoint_ = {};
             local_endpoint_ = {};
-            recv_sender_ = {};
             nonce_counter_ = 0;
             sequence_counter_ = 0;
             probe_round_ = 0;
@@ -117,7 +118,6 @@ namespace ppp {
             heartbeat_misses_ = 0;
             suspect_enter_ms_ = 0;
             pending_heartbeat_ack_ = false;
-            OPENSSL_cleanse(recv_buf_, sizeof(recv_buf_));
             std::memset(coalesced_frames_, 0, sizeof(coalesced_frames_));
         }
 
@@ -203,42 +203,38 @@ namespace ppp {
                 }
             }
 
-            socket_ = std::make_unique<boost::asio::ip::udp::socket>(io_ctx_);
-            boost::system::error_code ec;
-            socket_->open(boost::asio::ip::udp::v4(), ec);
-            if (ec || !socket_->is_open()) {
+            auto factory = transport_factory_;
+            if (!factory) {
+                factory = CreateNativeSocketP2PDatagramTransportFactory(protector_);
+            }
+            transport_ = factory ? factory->Create(io_ctx_) : nullptr;
+            if (!transport_ || !transport_->IsReady()) {
                 FallbackToRelay(P2PFallbackReason::SocketError);
                 return;
             }
 
-            socket_->bind(boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 0), ec);
-            if (ec) {
+            std::weak_ptr<P2PChannel> weak = shared_from_this();
+            if (!transport_->Start(
+                    [weak](P2PDatagramReceiveStatus status,
+                           const boost::asio::ip::udp::endpoint& sender,
+                           const uint8_t* packet,
+                           int packet_size) noexcept {
+                        auto self = weak.lock();
+                        if (!self || self->closed_.load(std::memory_order_acquire)) {
+                            return;
+                        }
+                        if (status == P2PDatagramReceiveStatus::Error) {
+                            self->FallbackToRelay(P2PFallbackReason::SocketError);
+                            return;
+                        }
+                        self->OnReceive(sender, packet, packet_size);
+                    })) {
                 FallbackToRelay(P2PFallbackReason::SocketError);
                 return;
             }
-
-            local_endpoint_ = socket_->local_endpoint(ec);
-            if (ec) {
-                FallbackToRelay(P2PFallbackReason::SocketError);
-                return;
-            }
-
-            int fd = static_cast<int>(socket_->native_handle());
-            if (!ProtectP2PSocket(protector_, fd)) {
-                FallbackToRelay(P2PFallbackReason::SocketError);
-                return;
-            }
-
-#if defined(_LINUX) && !defined(_ANDROID) && defined(UDP_GRO)
-            {
-                int one = 1;
-                ::setsockopt(static_cast<int>(socket_->native_handle()),
-                             IPPROTO_UDP, UDP_GRO, &one, sizeof(one));
-            }
-#endif
+            local_endpoint_ = transport_->LocalEndpoint();
 
             TransitionTo(P2PChannelState::Probing);
-            StartReceive();
 
             for (const auto& cand : candidates) {
                 if (!SendProbe(cand.endpoint)) return;
@@ -259,7 +255,7 @@ namespace ppp {
         // -------------------------------------------------------------------------
 
         bool P2PChannel::SendProbe(const boost::asio::ip::udp::endpoint& ep) noexcept {
-            if (!socket_ || closed_.load(std::memory_order_acquire)) {
+            if (!transport_ || closed_.load(std::memory_order_acquire)) {
                 return false;
             }
 
@@ -293,9 +289,7 @@ namespace ppp {
                 return false;
             }
 
-            boost::system::error_code ec;
-            socket_->send_to(boost::asio::buffer(buf, written), ep, 0, ec);
-            if (ec) {
+            if (!transport_ || !transport_->SendTo(buf, written, ep)) {
                 FallbackToRelay(P2PFallbackReason::SocketError);
                 return false;
             }
@@ -307,7 +301,7 @@ namespace ppp {
         // -------------------------------------------------------------------------
 
         void P2PChannel::SendProbeAck(const boost::asio::ip::udp::endpoint& ep) noexcept {
-            if (!socket_ || closed_.load(std::memory_order_acquire)) {
+            if (!transport_ || closed_.load(std::memory_order_acquire)) {
                 return;
             }
 
@@ -341,9 +335,9 @@ namespace ppp {
                 return;
             }
 
-            boost::system::error_code ec;
-            socket_->send_to(boost::asio::buffer(buf, written), ep, 0, ec);
-            if (ec) FallbackToRelay(P2PFallbackReason::SocketError);
+            if (!transport_ || !transport_->SendTo(buf, written, ep)) {
+                FallbackToRelay(P2PFallbackReason::SocketError);
+            }
         }
 
         // -------------------------------------------------------------------------
@@ -421,29 +415,6 @@ namespace ppp {
         // -------------------------------------------------------------------------
         // Receive path
         // -------------------------------------------------------------------------
-
-        void P2PChannel::StartReceive() noexcept {
-            if (!socket_ || closed_.load(std::memory_order_acquire)) {
-                return;
-            }
-
-            socket_->async_receive_from(
-                boost::asio::buffer(recv_buf_, sizeof(recv_buf_)),
-                recv_sender_,
-                [self = shared_from_this()](const boost::system::error_code& ec, std::size_t bytes) {
-                    if (self->closed_.load(std::memory_order_acquire)) {
-                        return;
-                    }
-                    if (ec) {
-                        if (ec != boost::asio::error::operation_aborted) {
-                            self->FallbackToRelay(P2PFallbackReason::SocketError);
-                        }
-                        return;
-                    }
-                    self->OnReceive(self->recv_sender_, self->recv_buf_, static_cast<int>(bytes));
-                    self->StartReceive();
-                });
-        }
 
         void P2PChannel::OnReceive(const boost::asio::ip::udp::endpoint& sender,
                                     const uint8_t* data, int data_len) noexcept {
@@ -662,7 +633,7 @@ namespace ppp {
 
         bool P2PChannel::EncryptAndSendTier2(const uint8_t* payload, int payload_len,
                                               uint8_t flags) noexcept {
-            if (!socket_) {
+            if (!transport_) {
                 FallbackToRelay(P2PFallbackReason::SocketError);
                 return false;
             }
@@ -727,10 +698,11 @@ namespace ppp {
                 pending_heartbeat_ack_ = false;
             }
 
-            boost::system::error_code ec;
-            socket_->send_to(boost::asio::buffer(packet, packet_len), peer_endpoint_, 0, ec);
-            if (ec) FallbackToRelay(P2PFallbackReason::SocketError);
-            return !ec;
+            if (!transport_->SendTo(packet, packet_len, peer_endpoint_)) {
+                FallbackToRelay(P2PFallbackReason::SocketError);
+                return false;
+            }
+            return true;
         }
 
         // -------------------------------------------------------------------------

@@ -111,8 +111,14 @@ openppp2_add_cpp_test(p2p_control_state_machine_test SOURCES
 openppp2_add_cpp_test(p2p_channel_lifecycle_test SOURCES
     p2p_channel_lifecycle_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2PChannel.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PDatagramTransport.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PCrypto.cpp")
 target_link_libraries(p2p_channel_lifecycle_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_datagram_transport_test SOURCES
+    p2p_datagram_transport_test.cpp)
+openppp2_add_cpp_test(ios_p2p_datagram_transport_test SOURCES
+    ios_p2p_datagram_transport_test.cpp
+    "${OPENPPP2_ROOT}/ios/IosP2PDatagramTransport.cpp")
 openppp2_add_cpp_test(p2p_nat_classifier_test SOURCES
     p2p_nat_classifier_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2PNatClassifier.cpp")

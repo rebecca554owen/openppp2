@@ -1,4 +1,5 @@
 #include <ios/OpenPPP2PacketTunnelBridge.h>
+#include <ios/IosP2PDatagramTransport.h>
 #include <ios/ppp/tap/TapIos.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
@@ -40,6 +41,7 @@ struct openppp2_ios_tap
     std::shared_ptr<ppp::app::client::VEthernetNetworkSwitcher>                 client;
     std::shared_ptr<boost::asio::io_context>                                    context;
     std::shared_ptr<ppp::threading::BufferswapAllocator>                        allocator;
+    std::shared_ptr<ppp::p2p::IP2PDatagramTransportFactory>                    p2p_datagram_factory;
     ppp::transmissions::ITransmissionStatistics                                 statistics_reference;
     ppp::string                                                                 start_stage = "idle";
     std::thread                                                                 runtime_thread;
@@ -969,6 +971,58 @@ openppp2_ios_tap* openppp2_ios_tap_create(
     return bridge;
 }
 
+int openppp2_ios_tap_set_p2p_datagram_provider(
+    openppp2_ios_tap*                           tap,
+    const openppp2_ios_p2p_datagram_provider* provider,
+    void*                                       user_data)
+{
+    if (nullptr == tap || nullptr == provider || nullptr == user_data)
+    {
+        return 0;
+    }
+
+    auto factory = ppp::p2p::CreateIosProviderP2PDatagramTransportFactory(
+        *provider, user_data);
+    if (nullptr == factory)
+    {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> scope(tap->sync);
+    if (tap->running || nullptr != tap->p2p_datagram_factory)
+    {
+        return 0;
+    }
+    tap->p2p_datagram_factory = std::move(factory);
+    return 1;
+}
+
+void openppp2_ios_tap_clear_p2p_datagram_provider(openppp2_ios_tap* tap)
+{
+    if (nullptr == tap)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> scope(tap->sync);
+    tap->p2p_datagram_factory.reset();
+}
+
+namespace ppp {
+    namespace p2p {
+        std::shared_ptr<IP2PDatagramTransportFactory>
+        GetIosProviderP2PDatagramTransportFactory(
+                openppp2_ios_tap* tap) noexcept
+        {
+            if (nullptr == tap)
+            {
+                return nullptr;
+            }
+            std::lock_guard<std::mutex> scope(tap->sync);
+            return tap->p2p_datagram_factory;
+        }
+    }
+}
+
 void openppp2_ios_tap_destroy(openppp2_ios_tap* tap)
 {
     if (nullptr == tap)
@@ -976,6 +1030,7 @@ void openppp2_ios_tap_destroy(openppp2_ios_tap* tap)
         return;
     }
 
+    tap->p2p_datagram_factory.reset();
     delete tap;
 }
 

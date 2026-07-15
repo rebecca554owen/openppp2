@@ -36,9 +36,58 @@ private:
     bool result_;
 };
 
+class TestDatagramTransport final : public IP2PDatagramTransport {
+public:
+    bool IsReady() const noexcept override { return true; }
+
+    bool Start(const P2PDatagramReceiveCallback& callback) noexcept override {
+        ++start_calls;
+        callback_ = callback;
+        return true;
+    }
+
+    boost::asio::ip::udp::endpoint LocalEndpoint() const noexcept override {
+        return {boost::asio::ip::address_v4::loopback(), 41000};
+    }
+
+    bool SendTo(const uint8_t*, int packet_size,
+                const boost::asio::ip::udp::endpoint&) noexcept override {
+        ++send_calls;
+        return packet_size > 0;
+    }
+
+    void Close() noexcept override { ++close_calls; }
+
+    int start_calls = 0;
+    int send_calls = 0;
+    int close_calls = 0;
+
+private:
+    P2PDatagramReceiveCallback callback_;
+};
+
+class TestDatagramTransportFactory final : public IP2PDatagramTransportFactory {
+public:
+    explicit TestDatagramTransportFactory(
+            const std::shared_ptr<TestDatagramTransport>& transport) noexcept
+        : transport_(transport) {}
+
+    std::shared_ptr<IP2PDatagramTransport> Create(
+            boost::asio::io_context&) noexcept override {
+        ++create_calls;
+        return transport_;
+    }
+
+    int create_calls = 0;
+
+private:
+    std::shared_ptr<TestDatagramTransport> transport_;
+};
+
 std::shared_ptr<P2PChannel> MakeChannel(
         boost::asio::io_context& context,
-        const std::shared_ptr<ISocketProtector>& protector) {
+        const std::shared_ptr<ISocketProtector>& protector,
+        const std::shared_ptr<IP2PDatagramTransportFactory>& transport_factory = nullptr) {
     uint8_t session_key[SESSION_KEY_SIZE] = {};
     uint8_t token_key[SESSION_KEY_SIZE] = {};
     session_key[0] = 1;
@@ -47,7 +96,7 @@ std::shared_ptr<P2PChannel> MakeChannel(
     config.probe_timeout_ms = 1;
     return std::make_shared<P2PChannel>(
         context, protector, Int128(1), session_key, token_key, config,
-        P2PCipher::ChaCha20Poly1305);
+        P2PCipher::ChaCha20Poly1305, transport_factory);
 }
 
 ppp::vector<P2PCandidate> LoopbackCandidates() {
@@ -56,6 +105,26 @@ ppp::vector<P2PCandidate> LoopbackCandidates() {
 }
 
 } // namespace
+
+BOOST_AUTO_TEST_CASE(provider_transport_owns_socket_lifecycle_and_first_probe) {
+    boost::asio::io_context context;
+    auto protector = std::make_shared<TestProtector>(true);
+    auto transport = std::make_shared<TestDatagramTransport>();
+    auto factory = std::make_shared<TestDatagramTransportFactory>(transport);
+    auto channel = MakeChannel(context, protector, factory);
+
+    channel->StartProbing(LoopbackCandidates(), Int128(2), "offer-token");
+
+    BOOST_TEST(factory->create_calls == 1);
+    BOOST_TEST(transport->start_calls == 1);
+    BOOST_TEST(transport->send_calls == 1);
+    BOOST_TEST(protector->calls == 0);
+    BOOST_TEST(static_cast<int>(channel->GetState()) ==
+        static_cast<int>(P2PChannelState::Probing));
+
+    channel->Close();
+    BOOST_TEST(transport->close_calls == 1);
+}
 
 BOOST_AUTO_TEST_CASE(close_is_idempotent_and_cancelled_handlers_stay_on_relay) {
     boost::asio::io_context context;

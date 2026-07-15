@@ -549,6 +549,9 @@
     <ClCompile Include="ppp\p2p\P2PChannel.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\p2p\P2PDatagramTransport.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\p2p\P2PConfigHelper.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
