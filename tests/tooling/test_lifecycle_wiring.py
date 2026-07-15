@@ -150,6 +150,18 @@ class LifecycleWiringTests(unittest.TestCase):
         self.assertIn("connection->Dispose(child_complete)", source)
         self.assertIn("boost::asio::post(*tap_context, child_complete)", source)
 
+    def test_mobile_ui_coalesces_stop_per_generation(self) -> None:
+        dart = (ROOT / "android/lib/pages/home_page.dart").read_text(
+            encoding="utf-8"
+        )
+        swift = (ROOT / "ios/App/OpenPPP2/HomeViewController.swift").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("_pendingStopGeneration", dart)
+        self.assertIn("_pendingStopGeneration == generation", dart)
+        self.assertIn("pendingStopGeneration", swift)
+        self.assertIn("pendingStopGeneration != generation", swift)
+
 
 if __name__ == "__main__":
     unittest.main()

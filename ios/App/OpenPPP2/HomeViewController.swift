@@ -26,6 +26,7 @@ final class HomeViewController: UIViewController {
     private var stopPresentationTimer: Timer?
     private var stopStartedAt: Date?
     private var pendingStartGeneration: UInt64?
+    private var pendingStopGeneration: UInt64?
     private var runtimeDecodeError: String?
     private var elapsedText = ""
 
@@ -139,6 +140,14 @@ final class HomeViewController: UIViewController {
            runtimeStore.state.phase == .failed {
             pendingStartGeneration = nil
         }
+        if let generation = pendingStopGeneration,
+           runtimeStore.state.generation > generation ||
+           runtimeStore.state.phase == .idle ||
+           runtimeStore.state.phase == .failed ||
+           vpn.status == .disconnected ||
+           vpn.status == .invalid {
+            pendingStopGeneration = nil
+        }
         let debugPanelEnabled = store.debugPanelEnabled()
         let profile = store.activeProfile()
         let launchOptions = store.launchOptions()
@@ -150,7 +159,7 @@ final class HomeViewController: UIViewController {
             runtimeStore.state.phase,
             stopTakingTooLong: stopTakingTooLong
         )
-        if pendingStartGeneration != nil {
+        if pendingStartGeneration != nil || pendingStopGeneration != nil {
             controls.buttonEnabled = false
             controls.configEditable = false
         }
@@ -339,8 +348,12 @@ final class HomeViewController: UIViewController {
     @objc private func toggleConnection() {
         switch controlsFor(runtimeStore.state.phase).action {
         case .cancel, .stop, .forceStop:
+            let generation = runtimeStore.state.generation
+            guard pendingStopGeneration != generation else { return }
             pendingStartGeneration = nil
+            pendingStopGeneration = generation
             vpn.disconnect()
+            refreshUI()
             return
         case .none:
             return

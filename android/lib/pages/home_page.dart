@@ -38,6 +38,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _debugLog = '';
   String _logPath = '';
   int? _pendingStartGeneration;
+  int? _pendingStopGeneration;
 
   Timer? _durationTimer;
   Timer? _connectWatchdogTimer;
@@ -98,6 +99,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               phase == RuntimePhase.unknown ||
               phase == RuntimePhase.failed)) {
         _pendingStartGeneration = null;
+      }
+      final pendingStop = _pendingStopGeneration;
+      if (pendingStop != null &&
+          (_runtimeStore.state.generation > pendingStop ||
+              phase == RuntimePhase.idle ||
+              phase == RuntimePhase.failed)) {
+        _pendingStopGeneration = null;
       }
       if (phase == RuntimePhase.connected) {
         _connectedAt ??= DateTime.now();
@@ -188,6 +196,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       if (state == VpnState.disconnected) {
+        _pendingStopGeneration = null;
         _connectedAt = null;
         _connectWatchdogTimer?.cancel();
         _durationTimer?.cancel();
@@ -394,13 +403,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _stopVpnForDebug() async {
+    final generation = _runtimeStore.state.generation;
+    if (_pendingStopGeneration == generation) return;
+    final forceStop = _runtimeStore.state.phase == RuntimePhase.unknown;
     _connectWatchdogTimer?.cancel();
     if (mounted) {
-      setState(() => _pendingStartGeneration = null);
+      setState(() {
+        _pendingStartGeneration = null;
+        _pendingStopGeneration = generation;
+      });
     } else {
       _pendingStartGeneration = null;
+      _pendingStopGeneration = generation;
     }
-    await _vpnService.disconnect();
+    try {
+      final accepted = await _vpnService.disconnect();
+      if (!accepted) {
+        throw StateError('VPN stop command was rejected');
+      }
+      if (forceStop && mounted) {
+        setState(() => _pendingStopGeneration = null);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final error = e.toString();
+      setState(() {
+        _pendingStopGeneration = null;
+        _lastError = error;
+      });
+      await _showErrorDialog(error);
+    }
   }
 
   Future<void> _applyProfile(ConfigProfile profile) async {
@@ -483,7 +515,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _runtimeStore.state.phase,
       stopTakingTooLong: _stopTakingTooLong,
     );
-    final commandPending = _pendingStartGeneration != null;
+    final commandPending = _pendingStartGeneration != null ||
+        _pendingStopGeneration == _runtimeStore.state.generation;
     final configEditable = controls.configEditable && !commandPending;
     final statusTitle = controls.statusLabel;
     final statusDetail =
