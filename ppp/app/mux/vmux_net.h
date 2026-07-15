@@ -8,20 +8,9 @@
 
 #include "vmux.h"
 #include <ppp/app/mux/MuxFlowReorderBuffer.h>
+#include <ppp/app/mux/IMuxTransport.h>
 #include <ppp/app/mux/MuxLinkDrainState.h>
 #include <ppp/app/mux/MuxRuntimeState.h>
-
-namespace ppp {
-    namespace app {
-        namespace server {
-            class VirtualEthernetNetworkTcpipConnection;
-        }
-
-        namespace client {
-            class VEthernetNetworkTcpipConnection;
-        }
-    }
-}
 
 namespace vmux {
     class vmux_skt;
@@ -35,10 +24,9 @@ namespace vmux {
     public:
         /** @brief Callback used when an async connect attempt finishes. */
         typedef ppp::function<void(vmux_skt*, bool)>                                ConnectAsynchronousCallback;
-        /** @brief Underlying virtual-ethernet TCP/IP connection interface. */
-        typedef ppp::app::protocol::VirtualEthernetTcpipConnection                  VirtualEthernetTcpipConnection;
-        /** @brief Shared pointer wrapper for @ref VirtualEthernetTcpipConnection. */
-        typedef std::shared_ptr<VirtualEthernetTcpipConnection>                     VirtualEthernetTcpipConnectionPtr;
+        /** @brief Host-neutral carrier transport interface. */
+        typedef ppp::app::mux::IMuxTransport                                        IMuxTransport;
+        typedef ppp::app::mux::IMuxTransportPtr                                     IMuxTransportPtr;
         /** @brief Shared pointer to transmission metadata object. */
         typedef std::shared_ptr<ppp::transmissions::ITransmission>                  ITransmissionPtr;
 
@@ -53,9 +41,7 @@ namespace vmux {
          * @brief Pair of vmux protocol connection and server-side transport wrapper.
          */
         typedef struct vmux_linklayer {
-            VirtualEthernetTcpipConnectionPtr                                       connection;
-            std::shared_ptr<
-                ppp::app::server::VirtualEthernetNetworkTcpipConnection>            server;
+            IMuxTransportPtr                                                        connection;
             uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Strand-affine.
             uint64_t                                                                last_active_ = 0; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Strand-affine.
             ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
@@ -334,7 +320,7 @@ namespace vmux {
          * @param cb Callback executed before final commit.
          */
         bool                                                                        add_linklayer(
-            const VirtualEthernetTcpipConnectionPtr&                                connection, 
+            const IMuxTransportPtr&                                                 connection,
             vmux_linklayer_ptr&                                                     linklayer,
             const vmux_native_add_linklayer_after_success_before_callback&          cb) noexcept;
 
@@ -540,7 +526,7 @@ namespace vmux {
         void                                                                        finalize() noexcept;
 
         /** @brief Get one active underlying virtual-ethernet connection. */
-        VirtualEthernetTcpipConnectionPtr                                           get_linklayer() noexcept;
+        IMuxTransportPtr                                                            get_linklayer() noexcept;
         /** @brief Remove one link-layer endpoint from scheduling tables. */
         void                                                                        remove_linklayer(const vmux_linklayer_ptr& linklayer) noexcept;
 

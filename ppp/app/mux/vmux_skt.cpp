@@ -705,7 +705,7 @@ namespace vmux {
                 // Record log.
                 std::shared_ptr<ppp::app::protocol::VirtualEthernetLogger> logger = mux_->Logger;
                 if (NULLPTR != logger) {
-                    vmux_net::VirtualEthernetTcpipConnectionPtr connection = mux_->get_linklayer();
+                    vmux_net::IMuxTransportPtr connection = mux_->get_linklayer();
                     if (NULLPTR != connection) {
                         vmux_net::ITransmissionPtr transmission = connection->GetTransmission();
                         if (NULLPTR != transmission) {

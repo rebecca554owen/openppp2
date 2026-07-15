@@ -21,7 +21,6 @@ namespace ppp::configurations { class AppConfiguration; }
 #include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
-#include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 
 #if defined(_WIN32)
 #include <windows/ppp/net/QoSS.h>

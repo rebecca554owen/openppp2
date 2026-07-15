@@ -1277,6 +1277,12 @@
     <ClInclude Include="ppp\p2p\P2PDefs.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\mux\IMuxTransport.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\mux\MuxTransportAdapter.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\p2p\P2PCapabilityGate.h">
       <Filter>头文件</Filter>
     </ClInclude>

@@ -7,8 +7,6 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
-#include "ppp/app/client/VEthernetNetworkTcpipConnection.h"
-#include "ppp/app/server/VirtualEthernetNetworkTcpipConnection.h"
 #include "ppp/collections/Dictionary.h"
 
 /**
@@ -347,12 +345,8 @@ namespace vmux {
             ppp::telemetry::Log(Level::kInfo, "mux", "link close");
             ppp::telemetry::Count("mux.link.close", 1);
 
-            VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
+            IMuxTransportPtr& connection = linklayer->connection;
             connection->Dispose();
-
-            if (auto server = std::move(linklayer->server); NULLPTR != server) {
-                server->Dispose();
-            }
         }
 
         if (NULLPTR != tx_resolver) {
@@ -364,7 +358,7 @@ namespace vmux {
     }
 
     /** @brief Returns the first active linklayer connection, if available. */
-    vmux_net::VirtualEthernetTcpipConnectionPtr vmux_net::get_linklayer() noexcept {
+    vmux_net::IMuxTransportPtr vmux_net::get_linklayer() noexcept {
         vmux_linklayer_vector::iterator tail = rx_links_.begin();
         vmux_linklayer_vector::iterator endl = rx_links_.end();
         return tail != endl ? (*tail)->connection : NULLPTR;
@@ -508,7 +502,7 @@ namespace vmux {
             return false;
         }
 
-        VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
+        IMuxTransportPtr& connection = linklayer->connection;
         if (!connection->IsLinked()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
@@ -1485,7 +1479,7 @@ namespace vmux {
             return false;
         }
 
-        const VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
+        const IMuxTransportPtr& connection = linklayer->connection;
         return NULLPTR != connection && connection->IsLinked();
     }
 
@@ -1843,7 +1837,7 @@ namespace vmux {
     /**
      * @brief Adds a new transport linklayer and optionally starts full forwarding.
      */
-    bool vmux_net::add_linklayer(const VirtualEthernetTcpipConnectionPtr& connection, vmux_linklayer_ptr& linklayer, const vmux_native_add_linklayer_after_success_before_callback& cb) noexcept {
+    bool vmux_net::add_linklayer(const IMuxTransportPtr& connection, vmux_linklayer_ptr& linklayer, const vmux_native_add_linklayer_after_success_before_callback& cb) noexcept {
         if (NULLPTR == connection) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetAddLinklayerNullConnection);
             return false;
@@ -1959,9 +1953,6 @@ namespace vmux {
                                 added->connection->Dispose();
                             }
 
-                            if (auto server = std::move(added->server); NULLPTR != server) {
-                                server->Dispose();
-                            }
                             return true;
                         });
                 };
@@ -2118,10 +2109,6 @@ namespace vmux {
                     linklayer->connection->Dispose();
                 }
 
-                if (auto server = std::move(linklayer->server); NULLPTR != server) {
-                    server->Dispose();
-                }
-
                 ppp::telemetry::Count("mux.link.retire.done", 1);
                 ppp::telemetry::Log(Level::kInfo, "mux", "link retired (runtime shrink), links=%d", (int)rx_links_.size());
                 refresh_runtime_active_links();
@@ -2225,7 +2212,7 @@ namespace vmux {
             return false;
         }
 
-        VirtualEthernetTcpipConnectionPtr& linklayer_socket = linklayer->connection;
+        IMuxTransportPtr& linklayer_socket = linklayer->connection;
         if (!linklayer_socket->IsLinked()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
@@ -2330,7 +2317,7 @@ namespace vmux {
             return false;
         }
 
-        VirtualEthernetTcpipConnectionPtr& linklayer_socket = linklayer->connection;
+        IMuxTransportPtr& linklayer_socket = linklayer->connection;
         if (!linklayer_socket->IsLinked()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
@@ -2406,7 +2393,7 @@ namespace vmux {
             linklayer->last_active_ = now_tick();
         }
 
-        VirtualEthernetTcpipConnectionPtr& connection = linklayer->connection;
+        IMuxTransportPtr& connection = linklayer->connection;
         if (connection->IsLinked()) {
             connection->Update();
         }

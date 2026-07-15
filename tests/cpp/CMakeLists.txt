@@ -86,6 +86,9 @@ openppp2_add_cpp_test(vmux_flow_reorder_test SOURCES
     vmux_flow_reorder_test.cpp)
 openppp2_add_cpp_test(vmux_link_churn_test SOURCES
     vmux_link_churn_test.cpp)
+openppp2_add_cpp_test(mux_transport_adapter_test SOURCES
+    mux_transport_adapter_test.cpp)
+target_link_libraries(mux_transport_adapter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(runtime_readiness_test SOURCES
     runtime_readiness_test.cpp)
 openppp2_add_cpp_test(runtime_lifecycle_test SOURCES

@@ -3,6 +3,7 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetExchanger.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/app/mux/MuxTransportAdapter.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
 #include <ppp/diagnostics/Error.h>
 
@@ -238,8 +239,9 @@ namespace ppp {
                                 ppp::coroutines::YieldContext& y_null = nullof<ppp::coroutines::YieldContext>();
                                 return exchanger->DoMuxON(connection->GetTransmission(), vlan, seq, ack, y_null);
                             };
-                        if (mux->add_linklayer(connection, linklayer, handling)) {
-                            linklayer->server = self;
+                        auto transport = ppp::app::mux::MakeMuxTransport(
+                            connection, [self]() noexcept { self->Dispose(); });
+                        if (mux->add_linklayer(transport, linklayer, handling)) {
                             return true;
                         }
 

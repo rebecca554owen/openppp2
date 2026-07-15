@@ -6,6 +6,7 @@
 #include <ppp/app/client/udp/ClientDatagramPortManager.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/app/mux/MuxTransportAdapter.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/collections/Dictionary.h>
@@ -1298,7 +1299,8 @@ namespace ppp {
                                 [self, mux, connection]() noexcept -> bool {
                                     vmux::vmux_net::vmux_linklayer_ptr linklayer;
                                     vmux::vmux_net::vmux_native_add_linklayer_after_success_before_callback handling;
-                                    return mux->add_linklayer(connection, linklayer, handling);
+                                    auto transport = ppp::app::mux::MakeMuxTransport(connection);
+                                    return mux->add_linklayer(transport, linklayer, handling);
                                 });
 
                             if (!bok) {
@@ -1377,7 +1379,8 @@ namespace ppp {
                                     // add_linklayer detects the established session and
                                     // attaches this as a single runtime link (one
                                     // forwarding coroutine; no batch re-spawn).
-                                    return mux->add_linklayer(connection, linklayer, handling);
+                                    auto transport = ppp::app::mux::MakeMuxTransport(connection);
+                                    return mux->add_linklayer(transport, linklayer, handling);
                                 });
 
                             if (!bok) {

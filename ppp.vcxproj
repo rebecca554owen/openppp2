@@ -844,6 +844,8 @@
     <ClInclude Include="ppp\configurations\AppConfiguration.h" />
     <ClInclude Include="ppp\configurations\MappingConfiguration.h" />
     <ClInclude Include="ppp\p2p\P2PDefs.h" />
+    <ClInclude Include="ppp\app\mux\IMuxTransport.h" />
+    <ClInclude Include="ppp\app\mux\MuxTransportAdapter.h" />
     <ClInclude Include="ppp\p2p\P2PCapabilityGate.h" />
     <ClInclude Include="ppp\p2p\P2PControlPacket.h" />
     <ClInclude Include="ppp\p2p\P2PControlStateMachine.h" />
