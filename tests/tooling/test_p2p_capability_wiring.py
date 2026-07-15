@@ -243,6 +243,7 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("swiftc -typecheck", workflow)
 
     def test_authenticated_exporter_is_tls_websocket_only_and_disposal_safe(self) -> None:
+        exporter_header = self.source("ppp/ssl/TlsSessionExporter.h")
         base_header = self.source("ppp/transmissions/ITransmission.h")
         websocket_header = self.source("ppp/transmissions/IWebsocketTransmission.h")
         websocket_source = self.source("ppp/transmissions/IWebsocketTransmission.cpp")
@@ -295,6 +296,9 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("std::lock_guard<std::mutex>", tls_close)
         shift = tls_close[tls_close.index("bool sslwebsocket::ShiftToScheduler") :]
         self.assertIn("exporter_ready && ok && !disposed_", shift)
+        self.assertIn("struct ssl_st;", exporter_header)
+        self.assertIn("::ssl_st*", exporter_header)
+        self.assertNotIn("openssl/types.h", exporter_header)
 
 
 if __name__ == "__main__":

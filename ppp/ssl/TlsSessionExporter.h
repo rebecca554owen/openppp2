@@ -2,17 +2,18 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <openssl/types.h>
+
+struct ssl_st;
 
 namespace ppp::ssl {
-    bool IsTlsSessionExporterAvailable(::SSL* ssl) noexcept;
+    bool IsTlsSessionExporterAvailable(::ssl_st* ssl) noexcept;
 
     bool IsAuthenticatedTlsSessionExporterAvailable(
         bool application_handshake_complete,
-        ::SSL* ssl) noexcept;
+        ::ssl_st* ssl) noexcept;
 
     bool ExportTlsSessionKey(
-        ::SSL* ssl,
+        ::ssl_st* ssl,
         const char* label,
         const std::uint8_t* context,
         std::size_t context_length,
@@ -21,7 +22,7 @@ namespace ppp::ssl {
 
     bool ExportAuthenticatedTlsSessionKey(
         bool application_handshake_complete,
-        ::SSL* ssl,
+        ::ssl_st* ssl,
         const char* label,
         const std::uint8_t* context,
         std::size_t context_length,

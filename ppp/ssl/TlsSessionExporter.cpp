@@ -5,18 +5,18 @@
 #include <cstring>
 
 namespace ppp::ssl {
-    bool IsTlsSessionExporterAvailable(::SSL* ssl) noexcept {
+    bool IsTlsSessionExporterAvailable(::ssl_st* ssl) noexcept {
         return ssl != nullptr && SSL_is_init_finished(ssl) == 1 && SSL_get_session(ssl) != nullptr;
     }
 
     bool IsAuthenticatedTlsSessionExporterAvailable(
         bool application_handshake_complete,
-        ::SSL* ssl) noexcept {
+        ::ssl_st* ssl) noexcept {
         return application_handshake_complete && IsTlsSessionExporterAvailable(ssl);
     }
 
     bool ExportTlsSessionKey(
-        ::SSL* ssl,
+        ::ssl_st* ssl,
         const char* label,
         const std::uint8_t* context,
         std::size_t context_length,
@@ -41,7 +41,7 @@ namespace ppp::ssl {
 
     bool ExportAuthenticatedTlsSessionKey(
         bool application_handshake_complete,
-        ::SSL* ssl,
+        ::ssl_st* ssl,
         const char* label,
         const std::uint8_t* context,
         std::size_t context_length,
