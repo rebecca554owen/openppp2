@@ -341,7 +341,7 @@ No socket forwarding is enabled yet.
 - [x] **Step 4: Forward data only while state is Direct** (`669d5be`)
 - [x] **Step 5: Fall back to relay on timeout, auth failure, socket error, or migration failure** (`1c5cd39`)
 - [x] **Step 6: Test UDP blocked, symmetric NAT, stale token, spoofed endpoint, and process restart** (`1c9fa59`)
-- [ ] **Step 7: Verify UI never reports Direct before authentication**
+- [x] **Step 7: Verify UI never reports Direct before authentication** (`bb52e04`)
 - [ ] **Step 8: Commit in platform-separated PRs**
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
@@ -382,6 +382,19 @@ process restart. This WSL environment intermittently faults while initializing
 ASan before test code runs; all tests passed on retry and no sanitizer diagnostic
 was reported. Independent review finished with Critical 0, Important 0. The
 real encrypted-packet/callback/replay combination and platform evidence remain
-in Steps 7-8; no Android or iOS device result is claimed. VMUX Task 4
+in Step 8; no Android or iOS device result is claimed. VMUX Task 4
 Step 5 was completed separately at `ded25d6` with actual carrier-container churn
 coverage; it does not claim real network I/O.
+
+Step 7 verification at `bb52e04`: C++ runtime snapshot, TUI, and authenticated
+proof tests passed 3/3; UI wiring/schema tooling passed 13/13. The exact-SHA
+`Test · Unit` workflow also passed its Flutter, iOS simulator, C++, Go, and
+lifecycle sanitizer jobs. Android and Swift derive the displayed path only from
+typed `p2p_state`, ignore a claimed wire `effective_path`, reject stale runtime
+generations, and downgrade unknown snapshots to Unavailable/Relay. Suspect and
+every pre-authentication state remain Relay; only Direct renders Direct.
+Independent review found no Critical, Important, or Minor issue. Flutter and
+Swift were not available on the local PATH, so their fresh evidence is CI, not a
+local tool run. Production snapshots still default to Disabled because the P2P
+coordinator is not wired; any future coordinator must publish typed Direct only
+after its authenticated transition.
