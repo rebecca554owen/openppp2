@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: f5919ab
+> Last verified: 06127c2
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -413,11 +413,25 @@ including the complete Android workflow and its arm64-v8a, armeabi-v7a, x86,
 and x86_64 native NDK builds. This is compilation and host-side test evidence;
 no Android device protection or no-loop result is claimed.
 
-Step 8 remains open. iOS still needs a provider-owned UDP transport/protection
-contract rather than claiming an ordinary native fd bypasses NetworkExtension.
-All production transmissions still return no authenticated session exporter,
-and control-v1 primitives are not connected to a production coordinator,
-`P2PChannel`, or `RuntimeSnapshot`. Real Android/iOS device protection, network
+Step 8 iOS progress at `06127c2`: `P2PChannel` now depends on an injected
+`IP2PDatagramTransportFactory` and no longer owns a concrete UDP socket. Native
+Linux/Android transport still protects before receiving or sending; `_IPHONE`
+has no native-socket fallback. The PacketTunnel bridge accepts a provider-owned
+callback table, while Swift uses `NEPacketTunnelProvider.createUDPSession` for
+endpoint-specific UDP sessions. Close waits for in-flight sends before consuming
+the retained Swift handle, late callbacks are dropped, and incomplete providers
+fail closed. Local evidence includes C++ 54/54, tooling 84/84, focused
+ASan/UBSan 3/3, MSVC source parity 203/203, and production compilation of the
+new transport object. Independent review finished with Critical 0 and Important
+0. Exact-SHA CI passed 9/9; its iOS simulator job typechecked the provider
+adapter against the real SDK before running Swift tests. This is host/simulator
+evidence only, not an iOS device protection or no-loop result.
+
+Step 8 remains open. The iOS factory is installed on the native tap but the
+production P2P coordinator does not yet exist to consume it and construct
+`P2PChannel`. All production transmissions still return no authenticated
+session exporter, and control-v1 primitives are not connected to a production
+coordinator or `RuntimeSnapshot`. Real Android/iOS device protection, network
 switch/background behavior, real NAT/UDP-blocked evidence, and cross-platform
 control-v1 interoperability are also outstanding. Consequently
 `ProductionAuthenticatedControlV1Ready` remains `false` and production traffic
