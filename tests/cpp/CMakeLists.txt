@@ -93,6 +93,18 @@ openppp2_add_cpp_test(runtime_lifecycle_test SOURCES
 openppp2_add_cpp_test(tui_runtime_adapter_test SOURCES
     tui_runtime_adapter_test.cpp)
 openppp2_add_cpp_test(p2p_replay_window_test SOURCES p2p_replay_window_test.cpp)
+openppp2_add_cpp_test(p2p_control_packet_test SOURCES p2p_control_packet_test.cpp)
+openppp2_add_cpp_test(p2p_key_derivation_test SOURCES
+    p2p_key_derivation_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PKeyDerivation.cpp")
+target_link_libraries(p2p_key_derivation_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_offer_token_test SOURCES
+    p2p_offer_token_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2POfferToken.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PCrypto.cpp")
+target_link_libraries(p2p_offer_token_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_control_state_machine_test SOURCES
+    p2p_control_state_machine_test.cpp)
 openppp2_add_cpp_test(dns_buffer_test SOURCES dns_buffer_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp")
 openppp2_add_cpp_test(dns_message_test SOURCES dns_message_test.cpp "${OPENPPP2_ROOT}/common/dnslib/buffer.cpp" "${OPENPPP2_ROOT}/common/dnslib/message.cpp" "${OPENPPP2_ROOT}/common/dnslib/qs.cpp" "${OPENPPP2_ROOT}/common/dnslib/rr.cpp")
 openppp2_add_cpp_test(dns_server_validation_test SOURCES dns_server_validation_test.cpp)
