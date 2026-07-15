@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 1c9fa59
+> Last verified: 0e750bd
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -398,3 +398,25 @@ Swift were not available on the local PATH, so their fresh evidence is CI, not a
 local tool run. Production snapshots still default to Disabled because the P2P
 coordinator is not wired; any future coordinator must publish typed Direct only
 after its authenticated transition.
+
+Step 8 Android progress at `0e750bd`: `AndroidSocketProtector` now reuses the
+existing native-thread-safe `OpenPPP2VpnProtectBridge` instead of maintaining a
+second placeholder JNI state. The bridge caches both `protect(I)Z` and an active
+`PppVpnService` readiness method, the Kotlin service reference is volatile, and
+socket protection pins a JNI local class reference so concurrent bridge shutdown
+cannot invalidate an in-flight call. Missing service, disabled bridge, lookup or
+Java exception, and `VpnService.protect` failure all remain fail-closed. Local
+evidence includes Flutter 68/68, debug APK assembly, C++ 52/52, tooling 83/83,
+production Linux library build, and MSVC source parity 202/202; independent
+review found Critical 0 and Important 0. Android NDK compilation still requires
+exact-SHA CI, and no device protection result is claimed.
+
+Step 8 remains open. iOS still needs a provider-owned UDP transport/protection
+contract rather than claiming an ordinary native fd bypasses NetworkExtension.
+All production transmissions still return no authenticated session exporter,
+and control-v1 primitives are not connected to a production coordinator,
+`P2PChannel`, or `RuntimeSnapshot`. Real Android/iOS device protection, network
+switch/background behavior, real NAT/UDP-blocked evidence, and cross-platform
+control-v1 interoperability are also outstanding. Consequently
+`ProductionAuthenticatedControlV1Ready` remains `false` and production traffic
+remains relay-only.
