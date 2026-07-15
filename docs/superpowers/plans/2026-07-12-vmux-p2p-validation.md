@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: ded25d6
+> Last verified: 1598ea4
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -337,7 +337,7 @@ No socket forwarding is enabled yet.
 
 - [x] **Step 1: Add disabled-by-default capability flag** (`463f137`)
 - [x] **Step 2: Protect socket before first probe** (`463f137`)
-- [ ] **Step 3: Authenticate probe/ack before Direct transition**
+- [x] **Step 3: Authenticate probe/ack before Direct transition** (`1598ea4`)
 - [ ] **Step 4: Forward data only while state is Direct**
 - [ ] **Step 5: Fall back to relay on timeout, auth failure, socket error, or migration failure**
 - [ ] **Step 6: Test UDP blocked, symmetric NAT, stale token, spoofed endpoint, and process restart**
@@ -346,17 +346,23 @@ No socket forwarding is enabled yet.
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
 
-Task 10 currently completes only the fail-closed production gate and protection
-ordering. `ProductionAuthenticatedControlV1Ready` remains `false`, so existing
-transports remain relay-only and the legacy bearer-token offer path is
-unreachable. Remaining work includes a real exporter override, pair-seed
-wrapping/control-v1 coordinator integration, Android `VpnService` and iOS socket
-protection injection, authenticated ACK-driven Direct transition, data
-forwarding, timeout/fallback integration, and device/NAT adversarial evidence.
+Task 10 now has a pure control-v1 authentication boundary: only a move-only,
+single-use proof minted after validating an ACK against the canonical SHA-256
+transcript of the locally outstanding Probe may move `Probing` to `Direct`.
+Offer/session/peer/epoch/role/endpoint/TTL bindings, ACK token authentication,
+nonce prefix, and replay checks all complete before the proof is minted. Bare
+boolean ACK and recovery claims fail closed. `ProductionAuthenticatedControlV1Ready`
+remains `false`, so existing transports remain relay-only and the legacy
+bearer-token offer path is unreachable. Remaining work includes a real exporter
+override, pair-seed wrapping/control-v1 coordinator integration, Android
+`VpnService` and iOS socket protection injection, data forwarding,
+timeout/fallback integration, and device/NAT adversarial evidence.
 
-Verification at `463f137`: production `openppp2_lib` build passed; C++ tests
-49/49 and tooling tests 75/75 passed; `p2p_capability_gate_test` passed 4/4
-under ASan/UBSan with WSL ASLR disabled via `setarch x86_64 -R`. No Android or
-iOS device result is claimed. VMUX Task 4 Step 5 also remains open because the
-existing sanitizer loop covers the pure drain state rather than real
-`vmux_net` carrier I/O.
+Verification at `1598ea4`: production `openppp2_lib` build passed; C++ tests
+50/50, tooling tests 80/80, and MSVC source parity 202/202 passed. The six P2P
+ASan/UBSan tests passed with CTest retry; this WSL environment intermittently
+faults while initializing ASan before test code runs, and no sanitizer defect
+was reported after initialization. Independent review finished with Critical 0,
+Important 0, Minor 0. No Android or iOS device result is claimed. VMUX Task 4
+Step 5 was completed separately at `ded25d6` with actual carrier-container churn
+coverage; it does not claim real network I/O.
