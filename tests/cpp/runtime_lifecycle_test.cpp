@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/app/runtime/RuntimeLifecycle.h>
+#include <ppp/app/mux/MuxRuntimeState.h>
 
 using ppp::app::runtime::RuntimeError;
 using ppp::app::runtime::RuntimeLifecycle;
@@ -92,6 +93,20 @@ BOOST_AUTO_TEST_CASE(stop_completion_publishes_idle_or_failed) {
     BOOST_TEST(lifecycle.GetSnapshot().last_error.code == 91u);
 }
 
+BOOST_AUTO_TEST_CASE(stop_completion_clears_active_mux_links) {
+    RuntimeLifecycle lifecycle;
+    const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 1);
+    ppp::app::mux::MuxRuntimeState state;
+    state.requested_mode = "flow";
+    state.effective_mode = "flow";
+    state.receiver_ordering = "flow_v2";
+    state.active_links = 3;
+    BOOST_REQUIRE(lifecycle.UpdateMuxState(generation, state, 2));
+    BOOST_REQUIRE(lifecycle.TryBeginStop(generation, 3));
+    BOOST_REQUIRE(lifecycle.CompleteStop(generation, true, RuntimeError(), 4));
+    BOOST_TEST(lifecycle.GetSnapshot().mux_active_links == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(stopping_or_completed_generation_cannot_be_revived) {
     RuntimeLifecycle lifecycle;
     const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 1);
@@ -103,6 +118,38 @@ BOOST_AUTO_TEST_CASE(stopping_or_completed_generation_cannot_be_revived) {
     BOOST_TEST(!lifecycle.UpdateReadiness(generation, FullyReady(), 7));
     BOOST_TEST(static_cast<int>(lifecycle.GetSnapshot().phase) ==
                static_cast<int>(RuntimePhase::Idle));
+}
+
+BOOST_AUTO_TEST_CASE(mux_state_publishes_only_when_current_generation_changes) {
+    RuntimeLifecycle lifecycle;
+    std::size_t publications = 0;
+    const std::uint64_t subscription = lifecycle.Subscribe(
+        [&publications](const RuntimeSnapshot&) { ++publications; });
+    BOOST_REQUIRE_NE(subscription, 0u);
+
+    const std::uint64_t old_generation = lifecycle.Begin(RuntimeSnapshot(), 1);
+    const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 2);
+    ppp::app::mux::MuxRuntimeState state;
+    state.requested_mode = "balance";
+    state.effective_mode = "compat";
+    state.receiver_ordering = "compat";
+    state.active_links = 2;
+    state.fallback_reason = "peer_missing_flow_v2";
+
+    BOOST_TEST(!lifecycle.UpdateMuxState(old_generation, state, 3));
+    BOOST_TEST(publications == 2u);
+    BOOST_REQUIRE(lifecycle.UpdateMuxState(generation, state, 4));
+    BOOST_TEST(publications == 3u);
+    BOOST_REQUIRE(lifecycle.UpdateMuxState(generation, state, 5));
+    BOOST_TEST(publications == 3u);
+
+    const RuntimeSnapshot snapshot = lifecycle.GetSnapshot();
+    BOOST_TEST(snapshot.requested_mux_mode == "balance");
+    BOOST_TEST(snapshot.effective_mux_mode == "compat");
+    BOOST_TEST(snapshot.mux_receiver_ordering == "compat");
+    BOOST_TEST(snapshot.mux_active_links == 2u);
+    BOOST_TEST(snapshot.mux_fallback_reason == "peer_missing_flow_v2");
+    lifecycle.Unsubscribe(subscription);
 }
 
 BOOST_AUTO_TEST_CASE(one_hundred_generations_cancel_from_every_startup_phase) {

@@ -8,6 +8,8 @@
   "transport": "wss",
   "requested_mux_mode": "flow",
   "effective_mux_mode": "flow",
+  "mux_receiver_ordering": "flow_v2",
+  "mux_active_links": 2,
   "mux_fallback_reason": "",
   "p2p_state": "relay",
   "effective_path": "relay",

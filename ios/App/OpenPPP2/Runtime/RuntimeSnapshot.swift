@@ -55,6 +55,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
     public var transport: String
     public var requestedMuxMode: String
     public var effectiveMuxMode: String
+    public var muxReceiverOrdering: String
+    public var muxActiveLinks: UInt16
     public var muxFallbackReason: String
     public var p2pState: String
     public var effectivePath: String
@@ -69,6 +71,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         transport: String = "",
         requestedMuxMode: String = "",
         effectiveMuxMode: String = "",
+        muxReceiverOrdering: String = "",
+        muxActiveLinks: UInt16 = 0,
         muxFallbackReason: String = "",
         p2pState: String = "",
         effectivePath: String = "",
@@ -82,6 +86,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         self.transport = transport
         self.requestedMuxMode = requestedMuxMode
         self.effectiveMuxMode = effectiveMuxMode
+        self.muxReceiverOrdering = muxReceiverOrdering
+        self.muxActiveLinks = muxActiveLinks
         self.muxFallbackReason = muxFallbackReason
         self.p2pState = p2pState
         self.effectivePath = effectivePath
@@ -98,6 +104,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         case transport
         case requestedMuxMode = "requested_mux_mode"
         case effectiveMuxMode = "effective_mux_mode"
+        case muxReceiverOrdering = "mux_receiver_ordering"
+        case muxActiveLinks = "mux_active_links"
         case muxFallbackReason = "mux_fallback_reason"
         case p2pState = "p2p_state"
         case effectivePath = "effective_path"
@@ -123,6 +131,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         transport = try container.decodeIfPresent(String.self, forKey: .transport) ?? ""
         requestedMuxMode = try container.decodeIfPresent(String.self, forKey: .requestedMuxMode) ?? ""
         effectiveMuxMode = try container.decodeIfPresent(String.self, forKey: .effectiveMuxMode) ?? ""
+        muxReceiverOrdering = try container.decodeIfPresent(String.self, forKey: .muxReceiverOrdering) ?? ""
+        muxActiveLinks = try container.decodeIfPresent(UInt16.self, forKey: .muxActiveLinks) ?? 0
         muxFallbackReason = try container.decodeIfPresent(String.self, forKey: .muxFallbackReason) ?? ""
         p2pState = try container.decodeIfPresent(String.self, forKey: .p2pState) ?? ""
         effectivePath = try container.decodeIfPresent(String.self, forKey: .effectivePath) ?? ""
@@ -140,6 +150,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         try container.encode(transport, forKey: .transport)
         try container.encode(requestedMuxMode, forKey: .requestedMuxMode)
         try container.encode(effectiveMuxMode, forKey: .effectiveMuxMode)
+        try container.encode(muxReceiverOrdering, forKey: .muxReceiverOrdering)
+        try container.encode(muxActiveLinks, forKey: .muxActiveLinks)
         try container.encode(muxFallbackReason, forKey: .muxFallbackReason)
         try container.encode(p2pState, forKey: .p2pState)
         try container.encode(effectivePath, forKey: .effectivePath)

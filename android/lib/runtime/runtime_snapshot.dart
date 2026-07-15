@@ -78,6 +78,8 @@ class RuntimeSnapshot {
     this.transport = '',
     this.requestedMuxMode = '',
     this.effectiveMuxMode = '',
+    this.muxReceiverOrdering = '',
+    this.muxActiveLinks = 0,
     this.muxFallbackReason = '',
     this.p2pState = '',
     this.effectivePath = '',
@@ -94,6 +96,8 @@ class RuntimeSnapshot {
   final String transport;
   final String requestedMuxMode;
   final String effectiveMuxMode;
+  final String muxReceiverOrdering;
+  final int muxActiveLinks;
   final String muxFallbackReason;
   final String p2pState;
   final String effectivePath;
@@ -126,6 +130,8 @@ class RuntimeSnapshot {
       transport: json['transport'] as String? ?? '',
       requestedMuxMode: json['requested_mux_mode'] as String? ?? '',
       effectiveMuxMode: json['effective_mux_mode'] as String? ?? '',
+      muxReceiverOrdering: json['mux_receiver_ordering'] as String? ?? '',
+      muxActiveLinks: json['mux_active_links'] as int? ?? 0,
       muxFallbackReason: json['mux_fallback_reason'] as String? ?? '',
       p2pState: json['p2p_state'] as String? ?? '',
       effectivePath: json['effective_path'] as String? ?? '',

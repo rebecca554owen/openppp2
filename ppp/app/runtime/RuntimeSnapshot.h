@@ -22,6 +22,8 @@ namespace ppp {
                 std::string transport;
                 std::string requested_mux_mode;
                 std::string effective_mux_mode;
+                std::string mux_receiver_ordering;
+                std::uint16_t mux_active_links = 0;
                 std::string mux_fallback_reason;
                 std::string p2p_state;
                 std::string effective_path;

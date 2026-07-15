@@ -78,6 +78,8 @@ openppp2_add_cpp_test(client_lifecycle_stress_test SOURCES
     client_lifecycle_stress_test.cpp)
 openppp2_add_cpp_test(runtime_snapshot_publisher_test SOURCES
     runtime_snapshot_publisher_test.cpp)
+openppp2_add_cpp_test(vmux_runtime_state_test SOURCES
+    vmux_runtime_state_test.cpp)
 openppp2_add_cpp_test(runtime_readiness_test SOURCES
     runtime_readiness_test.cpp)
 openppp2_add_cpp_test(runtime_lifecycle_test SOURCES

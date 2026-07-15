@@ -4,6 +4,8 @@
 
 #include <json/json.h>
 
+#include <algorithm>
+#include <climits>
 #include <string>
 #include <utility>
 
@@ -84,6 +86,8 @@ namespace ppp {
                 root["transport"] = detail::ToRuntimeJsonString(snapshot.transport);
                 root["requested_mux_mode"] = detail::ToRuntimeJsonString(snapshot.requested_mux_mode);
                 root["effective_mux_mode"] = detail::ToRuntimeJsonString(snapshot.effective_mux_mode);
+                root["mux_receiver_ordering"] = detail::ToRuntimeJsonString(snapshot.mux_receiver_ordering);
+                root["mux_active_links"] = snapshot.mux_active_links;
                 root["mux_fallback_reason"] = detail::ToRuntimeJsonString(snapshot.mux_fallback_reason);
                 root["p2p_state"] = detail::ToRuntimeJsonString(snapshot.p2p_state);
                 root["effective_path"] = detail::ToRuntimeJsonString(snapshot.effective_path);
@@ -142,6 +146,11 @@ namespace ppp {
                 parsed.transport = detail::RuntimeJsonString(root, "transport");
                 parsed.requested_mux_mode = detail::RuntimeJsonString(root, "requested_mux_mode");
                 parsed.effective_mux_mode = detail::RuntimeJsonString(root, "effective_mux_mode");
+                parsed.mux_receiver_ordering = detail::RuntimeJsonString(root, "mux_receiver_ordering");
+                if (root.isMember("mux_active_links") && root["mux_active_links"].isUInt()) {
+                    parsed.mux_active_links = static_cast<std::uint16_t>(
+                        std::min<unsigned int>(root["mux_active_links"].asUInt(), UINT16_MAX));
+                }
                 parsed.mux_fallback_reason = detail::RuntimeJsonString(root, "mux_fallback_reason");
                 parsed.p2p_state = detail::RuntimeJsonString(root, "p2p_state");
                 parsed.effective_path = detail::RuntimeJsonString(root, "effective_path");

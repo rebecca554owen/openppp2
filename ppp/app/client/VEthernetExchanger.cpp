@@ -1147,13 +1147,12 @@ namespace ppp {
                             bool ok = false;
                             if (!disposed_.load(std::memory_order_acquire)) {
                                 uint16_t max_connections = mux->get_max_connections();
-                                // Advertise per-flow (flow v2) receiver ordering when the active
-                                // scheduler configuration needs it (balance/stripe, or flow+turbo).
+                                // Advertise per-flow (flow v2) receiver ordering for every
+                                // non-compat scheduler mode.
                                 // The server echoes the agreed result in its MUX reply (see OnMux);
                                 // negotiation is an intersection, so an older peer transparently
                                 // falls back to compat.
-                                bool advertise_flow_v2 = vmux::vmux_net::mode_requires_flow_v2(
-                                    mux->get_mode(), NULLPTR != configuration && configuration->mux.turbo);
+                                bool advertise_flow_v2 = mux->get_mode() != vmux::vmux_net::mux_mode_compat;
                                 Byte ordering_caps = advertise_flow_v2
                                     ? (Byte)vmux::vmux_net::ordering_caps_flow_v2 : (Byte)0;
                                 ok = DoMux(vnet_transmission, mux->Vlan, max_connections, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_REMOTE) != 0, ordering_caps, y);
@@ -1196,6 +1195,27 @@ namespace ppp {
                 }
 
                 return NetworkState_Connecting;
+            }
+
+            ppp::app::mux::MuxRuntimeState VEthernetExchanger::GetMuxRuntimeState() noexcept {
+                if (std::shared_ptr<vmux::vmux_net> mux = mux_; NULLPTR != mux) {
+                    return mux->get_runtime_state();
+                }
+
+                ppp::app::mux::MuxRuntimeState state;
+                if (auto configuration = GetConfiguration(); NULLPTR != configuration) {
+                    const ppp::string requested = configuration->GetEffectiveMuxMode();
+                    state.requested_mode.assign(requested.data(), requested.size());
+                }
+                if (state.requested_mode.empty()) {
+                    state.requested_mode = "compat";
+                }
+                state.effective_mode = "compat";
+                state.receiver_ordering = "compat";
+                if (state.requested_mode != "compat") {
+                    state.fallback_reason = "mux_inactive";
+                }
+                return state;
             }
 
             /** @brief Establishes all required vmux child linklayers. */
@@ -1513,13 +1533,12 @@ namespace ppp {
                             // Apply the negotiated receiver ordering mode (flow v2) before linking.
                             // The server echoes the agreed capability in its MUX reply; agreed
                             // FLOW_V2 requires this end to also need it — i.e. an active scheduler
-                            // configuration that uses per-flow ordering (balance/stripe, or
-                            // flow+turbo). Fail-safe: any mismatch or older peer falls back to
+                            // configuration that uses per-flow ordering. Fail-safe: any mismatch
+                            // or older peer falls back to
                             // compat global ordering.
-                            bool local_supports_flow_v2 = vmux::vmux_net::mode_requires_flow_v2(
-                                mux->get_mode(), NULLPTR != configuration && configuration->mux.turbo);
-                            bool agreed_flow_v2 = local_supports_flow_v2 && ((ordering_caps & vmux::vmux_net::ordering_caps_flow_v2) != 0);
-                            mux->set_ordering_mode(agreed_flow_v2 ? vmux::vmux_net::ordering_flow_v2 : vmux::vmux_net::ordering_compat);
+                            bool local_supports_flow_v2 = mux->get_mode() != vmux::vmux_net::mux_mode_compat;
+                            bool peer_supports_flow_v2 = (ordering_caps & vmux::vmux_net::ordering_caps_flow_v2) != 0;
+                            mux->apply_negotiation(local_supports_flow_v2, peer_supports_flow_v2);
 
                             successed = MuxConnectAllLinklayers(allocator, mux);
                         }

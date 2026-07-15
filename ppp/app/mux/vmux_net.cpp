@@ -94,6 +94,10 @@ namespace vmux {
         }
 
         mode_ = normalized;
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            runtime_state_.effective_mode = mode_name(mode_);
+        }
         primary_linklayer_.reset();
         affinity_links_.clear();
         stripe_cursor_ = 0;
@@ -113,6 +117,10 @@ namespace vmux {
 
         receiver_ordering_mode normalized = (m == ordering_flow_v2) ? ordering_flow_v2 : ordering_compat;
         ordering_mode_ = normalized;
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            runtime_state_.receiver_ordering = normalized == ordering_flow_v2 ? "flow_v2" : "compat";
+        }
 
         // Latch send-side backpressure / watchdog bounds from config (applies to
         // all modes; AppConfiguration is set by the exchanger before establishment).
@@ -136,6 +144,39 @@ namespace vmux {
 
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "ordering mode=%s",
             normalized == ordering_flow_v2 ? "flow-v2" : "compat");
+    }
+
+    void vmux_net::apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2) noexcept {
+        ppp::app::mux::MuxRuntimeState state;
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            state = ppp::app::mux::NegotiateMuxRuntimeState(
+                runtime_state_.requested_mode,
+                local_supports_flow_v2,
+                peer_supports_flow_v2,
+                runtime_state_.active_links);
+            runtime_state_ = state;
+        }
+        set_mode(parse_mode(ppp::string(state.effective_mode.data(), state.effective_mode.size())));
+        set_ordering_mode(state.receiver_ordering == "flow_v2" ? ordering_flow_v2 : ordering_compat);
+    }
+
+    ppp::app::mux::MuxRuntimeState vmux_net::get_runtime_state() const noexcept {
+        std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+        return runtime_state_;
+    }
+
+    void vmux_net::refresh_runtime_active_links() noexcept {
+        std::size_t active_links = 0;
+        for (const vmux_linklayer_ptr& linklayer : rx_links_) {
+            if (NULLPTR != linklayer && ppp::app::mux::IsMuxLinkActive(
+                    linklayer->handshake_complete_, linklayer->retiring_)) {
+                ++active_links;
+            }
+        }
+        std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+        runtime_state_.active_links = static_cast<std::uint16_t>(
+            std::min<std::size_t>(active_links, UINT16_MAX));
     }
 
     /**
@@ -235,6 +276,9 @@ namespace vmux {
             m->mode_                  = mux_mode_compat;
             break;
         }
+        m->runtime_state_.requested_mode = mode_name(m->mode_);
+        m->runtime_state_.effective_mode = mode_name(m->mode_);
+        m->runtime_state_.receiver_ordering = "compat";
 
         ppp::telemetry::Log(Level::kInfo, "mux", "mode=%s", mode_name(m->mode_));
         uint64_t now                  = now_tick();
@@ -284,6 +328,7 @@ namespace vmux {
             tx_ctrl_queue_.clear();
             rx_queue_.clear();
             rx_links_.clear();
+            refresh_runtime_active_links();
             tx_links_.clear();
             primary_linklayer_.reset();
             affinity_links_.clear();
@@ -339,6 +384,7 @@ namespace vmux {
                 ++it;
             }
         }
+        refresh_runtime_active_links();
 
         for (vmux_linklayer_list::iterator it = tx_links_.begin(); it != tx_links_.end();) {
             if (*it == linklayer) {
@@ -1824,6 +1870,7 @@ namespace vmux {
         linklayer->connection = connection;
         tx_links_.emplace_back(linklayer);
         rx_links_.emplace_back(linklayer);
+        refresh_runtime_active_links();
 
         ppp::telemetry::Log(Level::kInfo, "mux", "link open");
         ppp::telemetry::Count("mux.link.open", 1);
@@ -2018,6 +2065,7 @@ namespace vmux {
         }
 
         victim->retiring_ = true;
+        refresh_runtime_active_links();
 
         // Stop sending new frames on the victim: remove it from the free-link list.
         // (If it is currently busy it is not in tx_links_; its completion sees
@@ -2066,6 +2114,7 @@ namespace vmux {
 
                 ppp::telemetry::Count("mux.link.retire.done", 1);
                 ppp::telemetry::Log(Level::kInfo, "mux", "link retired (runtime shrink), links=%d", (int)rx_links_.size());
+                refresh_runtime_active_links();
             }
             else {
                 ++it;
@@ -2232,9 +2281,11 @@ namespace vmux {
 
         {
             SynchronizationObjectScope __SCOPE__(syncobj_);
+            linklayer->handshake_complete_ = true;
             if (!base_.established_ && status_.opened_connections < status_.max_connections) {
                 status_.opened_connections++;
             }
+            refresh_runtime_active_links();
         }
 
         linklayer_established();

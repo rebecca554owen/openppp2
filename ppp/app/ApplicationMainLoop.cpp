@@ -608,6 +608,12 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
 
     ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
     if (runtime.generation != 0 && runtime.phase != ppp::app::runtime::RuntimePhase::Stopping) {
+        if (NULLPTR != exchanger) {
+            runtime_lifecycle_.UpdateMuxState(
+                runtime.generation,
+                exchanger->GetMuxRuntimeState(),
+                now);
+        }
         if (NULLPTR == client) {
             if (NULLPTR != server_ && !server_->IsDisposed()) {
                 const ppp::app::runtime::RuntimeReadiness readiness =

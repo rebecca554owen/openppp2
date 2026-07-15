@@ -3,6 +3,7 @@
 #include <ppp/app/runtime/RuntimeReadiness.h>
 #include <ppp/app/runtime/RuntimeSnapshotPublisher.h>
 #include <ppp/app/runtime/RuntimeStopCoordinator.h>
+#include <ppp/app/mux/MuxRuntimeState.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -79,6 +80,36 @@ public:
         return publisher_.Publish(std::move(snapshot));
     }
 
+    bool UpdateMuxState(
+        std::uint64_t generation,
+        const ppp::app::mux::MuxRuntimeState& state,
+        std::uint64_t now) noexcept {
+        RuntimeSnapshot snapshot;
+        {
+            std::lock_guard<std::mutex> scope(mutex_);
+            if (generation == 0 || generation != generation_ ||
+                stop_coordinator_.IsStopping(generation) ||
+                stop_coordinator_.IsCompleted(generation)) {
+                return false;
+            }
+            if (current_.requested_mux_mode == state.requested_mode &&
+                current_.effective_mux_mode == state.effective_mode &&
+                current_.mux_receiver_ordering == state.receiver_ordering &&
+                current_.mux_active_links == state.active_links &&
+                current_.mux_fallback_reason == state.fallback_reason) {
+                return true;
+            }
+            current_.requested_mux_mode = state.requested_mode;
+            current_.effective_mux_mode = state.effective_mode;
+            current_.mux_receiver_ordering = state.receiver_ordering;
+            current_.mux_active_links = state.active_links;
+            current_.mux_fallback_reason = state.fallback_reason;
+            current_.monotonic_ms = NextTimestamp(now);
+            snapshot = current_;
+        }
+        return publisher_.Publish(std::move(snapshot));
+    }
+
     bool TryBeginStop(std::uint64_t generation, std::uint64_t now) noexcept {
         RuntimeSnapshot snapshot;
         {
@@ -110,6 +141,7 @@ public:
             stop_coordinator_.CompleteStop(generation, success);
             requested_phase_ = success ? RuntimePhase::Idle : RuntimePhase::Failed;
             current_.phase = requested_phase_;
+            current_.mux_active_links = 0;
             current_.last_error = success ? RuntimeError() : std::move(error);
             current_.monotonic_ms = NextTimestamp(now);
             snapshot = current_;

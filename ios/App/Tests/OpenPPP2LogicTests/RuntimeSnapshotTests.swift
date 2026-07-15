@@ -38,6 +38,8 @@ final class RuntimeSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.phase, .connected)
         XCTAssertEqual(snapshot.requestedMuxMode, "flow")
         XCTAssertEqual(snapshot.effectiveMuxMode, "flow")
+        XCTAssertEqual(snapshot.muxReceiverOrdering, "flow_v2")
+        XCTAssertEqual(snapshot.muxActiveLinks, 2)
     }
 
     func testFailedFixtureDecodesStructuredError() throws {

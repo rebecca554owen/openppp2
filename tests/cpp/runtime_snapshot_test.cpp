@@ -46,6 +46,8 @@ BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_phase_and_error) {
     source.phase = runtime::RuntimePhase::Connected;
     source.requested_mux_mode = "balance";
     source.effective_mux_mode = "compat";
+    source.mux_receiver_ordering = "compat";
+    source.mux_active_links = 2;
     source.last_error.code = 42;
     source.last_error.retryable = true;
 
@@ -56,6 +58,8 @@ BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_phase_and_error) {
     BOOST_TEST(static_cast<int>(decoded.phase) == static_cast<int>(runtime::RuntimePhase::Connected));
     BOOST_TEST(decoded.requested_mux_mode == "balance");
     BOOST_TEST(decoded.effective_mux_mode == "compat");
+    BOOST_TEST(decoded.mux_receiver_ordering == "compat");
+    BOOST_TEST(decoded.mux_active_links == 2u);
     BOOST_TEST(decoded.last_error.code == 42u);
     BOOST_TEST(decoded.last_error.retryable);
 }

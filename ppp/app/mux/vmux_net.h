@@ -7,6 +7,7 @@
  */
 
 #include "vmux.h"
+#include <ppp/app/mux/MuxRuntimeState.h>
 
 namespace ppp {
     namespace app {
@@ -56,6 +57,7 @@ namespace vmux {
             uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Strand-affine.
             uint64_t                                                                last_active_ = 0; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Strand-affine.
             int                                                                     inflight_ = 0;    ///< In-flight async writes issued on this link and not yet completed. Strand-affine. Used by runtime link removal (turbo dynamic pool): a link is only retired once inflight_ reaches 0 so a late write completion never touches a retired link's scheduling state.
+            bool                                                                    handshake_complete_ = false; ///< True only after the carrier handshake succeeds. Protected by syncobj_.
             bool                                                                    retiring_ = false; ///< Set when this link is being drained for runtime removal; it stops receiving new frames and is removed once inflight_ hits 0. Strand-affine.
         }                                                                           vmux_linklayer;
 
@@ -271,6 +273,10 @@ namespace vmux {
          *       after establishment is a no-op (no hot compat<->flow-v2 switch).
          */
         void                                                                        set_ordering_mode(receiver_ordering_mode m) noexcept;
+        /** @brief Applies peer capability negotiation before establishment. */
+        void                                                                        apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2) noexcept;
+        /** @brief Returns the latest observable scheduler/link state. */
+        ppp::app::mux::MuxRuntimeState                                               get_runtime_state() const noexcept;
         /** @brief True for session-level control frames (keep-alive / mux-mode-set). */
         static bool                                                                 is_session_control(Byte cmd) noexcept {
             return cmd == cmd_keep_alived || cmd == cmd_mux_mode_set;
@@ -555,6 +561,7 @@ namespace vmux {
         void                                                                        linklayer_established() noexcept;
         /** @brief Touch/update link-layer usage order for load balancing. */
         void                                                                        linklayer_update(const vmux_linklayer_ptr& linklayer) noexcept;
+        void                                                                        refresh_runtime_active_links() noexcept;
 
         /** @brief Connect helper that reports result through callback. */
         bool                                                                        connect(const ContextPtr& context, const StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& sk, const template_string& host, int port, const ConnectAsynchronousCallback& ac) noexcept;
@@ -596,6 +603,8 @@ namespace vmux {
         }                                                                           status_;
 
         SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map.
+        mutable std::mutex                                                          runtime_state_mutex_;
+        ppp::app::mux::MuxRuntimeState                                               runtime_state_;
 
         vmux_skt_map                                                                skts_;              ///< Active logical socket map keyed by connection_id.
         StrandPtr                                                                   strand_;            ///< Serialized strand for vmux event loop.

@@ -14,12 +14,16 @@ BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mux_state) {
     snapshot.requested_mux_mode = "balance";
     snapshot.effective_mux_mode = "compat";
     snapshot.mux_fallback_reason = "peer_missing_flow_v2";
+    snapshot.mux_receiver_ordering = "compat";
+    snapshot.mux_active_links = 2;
 
     const auto lines = BuildStatusLines(snapshot);
     BOOST_TEST(ContainsLine(lines, "Connected"));
     BOOST_TEST(ContainsLine(lines, "effective mux=compat"));
     BOOST_TEST(ContainsLine(lines, "requested mux=balance"));
     BOOST_TEST(ContainsLine(lines, "fallback=peer_missing_flow_v2"));
+    BOOST_TEST(ContainsLine(lines, "receiver ordering=compat"));
+    BOOST_TEST(ContainsLine(lines, "active mux links=2"));
 }
 
 BOOST_AUTO_TEST_CASE(stopping_is_not_rendered_as_idle) {

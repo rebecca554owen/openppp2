@@ -247,6 +247,7 @@ namespace ppp {
                  * @return NetworkState based on vmux connectivity; NetworkState_Connecting if mux is null.
                  */
                 NetworkState                                                            GetMuxNetworkState()    noexcept;
+                ppp::app::mux::MuxRuntimeState                                           GetMuxRuntimeState()    noexcept;
 
                 /**
                  * @brief Starts the asynchronous connect-handshake-reconnect coroutine loop.

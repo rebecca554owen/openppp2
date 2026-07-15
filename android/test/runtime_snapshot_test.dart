@@ -29,6 +29,8 @@ void main() {
     expect(snapshot.phase, RuntimePhase.connected);
     expect(snapshot.requestedMuxMode, 'flow');
     expect(snapshot.effectiveMuxMode, 'flow');
+    expect(snapshot.muxReceiverOrdering, 'flow_v2');
+    expect(snapshot.muxActiveLinks, 2);
   });
 
   test('failed fixture decodes structured error', () {

@@ -38,6 +38,12 @@ inline std::vector<std::string> BuildStatusLines(
     if (!snapshot.mux_fallback_reason.empty()) {
         lines.emplace_back("fallback=" + snapshot.mux_fallback_reason);
     }
+    if (!snapshot.mux_receiver_ordering.empty()) {
+        lines.emplace_back("receiver ordering=" + snapshot.mux_receiver_ordering);
+    }
+    if (snapshot.mux_active_links > 0) {
+        lines.emplace_back("active mux links=" + std::to_string(snapshot.mux_active_links));
+    }
 
     if (snapshot.phase == runtime::RuntimePhase::Failed) {
         std::string error = "error code=" + std::to_string(snapshot.last_error.code);
