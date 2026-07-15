@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Roadmap
-> Last verified: a9cfec7
+> Last verified: 3d3a179
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -43,27 +43,27 @@
 
 ### Gate A: Runtime Contract Ready
 
-- [ ] C++ produces schema-valid snapshots.
-- [ ] Dart and Swift parse all fixtures.
-- [ ] TUI renders from snapshots instead of direct runtime object reads.
-- [ ] Unknown optional fields are ignored safely.
-- [ ] Unsupported schema versions fail explicitly.
+- [x] C++ produces schema-valid snapshots.
+- [x] Dart and Swift parse all fixtures.
+- [x] TUI renders from snapshots instead of direct runtime object reads.
+- [x] Unknown optional fields are ignored safely.
+- [x] Unsupported schema versions fail explicitly.
 
 ### Gate B: Lifecycle Safe
 
-- [ ] Desktop teardown has no recursive lock path.
-- [ ] DNS host callbacks do not retain the switcher strongly.
-- [ ] Stop is idempotent in Idle, Starting, Connected, Reconnecting, and Stopping.
-- [ ] 100 connect/disconnect cycles pass.
-- [ ] ASan/UBSan lifecycle suite passes.
+- [x] Desktop teardown has no recursive lock path.
+- [x] DNS host callbacks do not retain the switcher strongly.
+- [x] Stop is idempotent in Idle, Starting, Connected, Reconnecting, and Stopping.
+- [x] 100 connect/disconnect cycles pass.
+- [x] ASan/UBSan lifecycle suite passes.
 
 ### Gate C: Architecture Enforced
 
-- [ ] Core-to-platform dependency rules run in CI.
-- [ ] Contract fixtures run in C++, Dart, and Swift jobs.
-- [ ] Documentation status metadata is checked.
-- [ ] RouteHostPorts callback count cannot increase.
-- [ ] No new `.inc` files are accepted.
+- [x] Core-to-platform dependency rules run in CI.
+- [x] Contract fixtures run in C++, Dart, and Swift jobs.
+- [x] Documentation status metadata is checked.
+- [x] RouteHostPorts has been removed; repository checks reject reintroduction.
+- [x] No new `.inc` files are accepted.
 
 ### Gate D: VMUX Verified
 

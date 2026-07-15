@@ -139,3 +139,14 @@ sudo bash tests/integration/linux/route_dns_rollback.sh
 
 It compares the namespace route table and namespace-local resolver file with their baselines after both a normal
 stop and a partial apply failure. CI uploads the before/after snapshots for inspection.
+
+## Lifecycle Sanitizers
+
+```bash
+bash scripts/run-lifecycle-sanitizers.sh
+```
+
+The sanitizer gate builds the runtime lifecycle, ordered stop pipeline, 100-cycle client lifecycle stress,
+Route coordinator, and DNS controller tests with ASan/UBSan. The stress target covers every startup phase,
+concurrent duplicate Stop ownership, stale-generation completion, rollback failure, and deterministic resource
+release. Platform handle and namespace evidence remains the responsibility of the platform CI and device jobs.

@@ -2,7 +2,7 @@
 
 > Status: Implemented
 > Type: Plan
-> Last verified: 1175bf4
+> Last verified: 3d3a179
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -209,7 +209,7 @@ void CompleteStop(uint64_t generation, bool success) noexcept;
 bool IsStopping(uint64_t generation) const noexcept;
 ```
 
-- [ ] **Step 1: Test first caller wins**
+- [x] **Step 1: Test first caller wins**
 
 ```cpp
 BOOST_AUTO_TEST_CASE(stop_is_claimed_once_per_generation) {
@@ -219,19 +219,19 @@ BOOST_AUTO_TEST_CASE(stop_is_claimed_once_per_generation) {
 }
 ```
 
-- [ ] **Step 2: Test old generation cannot stop new session**
+- [x] **Step 2: Test old generation cannot stop new session**
 
 After generation 8 starts, a stop command for generation 7 must be rejected.
 
-- [ ] **Step 3: Integrate shutdown entry points**
+- [x] **Step 3: Integrate shutdown entry points**
 
 Signal handlers, TUI commands, Android, and iOS all call the same coordinator path.
 
-- [ ] **Step 4: Emit phase changes**
+- [x] **Step 4: Emit phase changes**
 
 First accepted stop emits `Stopping`; completion emits `Idle`; cleanup failure emits `Failed` with a cleanup error.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 ctest --test-dir build/test -R runtime_stop_coordinator_test --output-on-failure
@@ -247,15 +247,15 @@ git add ppp/app/runtime ppp/app tests/cpp
 - Modify: `.github/workflows/test.yml`
 - Modify: `docs/TESTING.md`
 
-- [ ] **Step 1: Add 100-cycle deterministic stress test**
+- [x] **Step 1: Add 100-cycle deterministic stress test**
 
 Use fakes for platform effects. For each cycle: begin generation, enter start phases, publish connected, request stop twice, complete cleanup, assert Idle and no retained callbacks.
 
-- [ ] **Step 2: Add cancellation points**
+- [x] **Step 2: Add cancellation points**
 
 Repeat stop during `PreparingHost`, `Connecting`, `Handshaking`, `ApplyingPolicy`, `Connected`, and `Reconnecting`.
 
-- [ ] **Step 3: Add ASan/UBSan script**
+- [x] **Step 3: Add ASan/UBSan script**
 
 ```bash
 cmake -S . -B build-asan -G Ninja \
@@ -264,11 +264,11 @@ cmake --build build-asan
 ctest --test-dir build-asan -R "lifecycle|teardown|dns_host" --output-on-failure
 ```
 
-- [ ] **Step 4: Add CI job**
+- [x] **Step 4: Add CI job**
 
 Run the sanitizer subset on pull requests touching `ppp/app/client/**`, `ppp/app/runtime/**`, or lifecycle tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests scripts .github docs/TESTING.md
@@ -283,19 +283,19 @@ git add tests scripts .github docs/TESTING.md
 - Modify: TUI command handler
 - Test: Dart, Swift, and C++ UI reducer tests
 
-- [ ] **Step 1: Test duplicate stop commands**
+- [x] **Step 1: Test duplicate stop commands**
 
 Each UI sends at most one active stop command for a generation and remains in `Stopping` until the runtime responds.
 
-- [ ] **Step 2: Test stale completion**
+- [x] **Step 2: Test stale completion**
 
 A completion event for generation 7 must not change UI state for generation 8.
 
-- [ ] **Step 3: Implement timeout presentation**
+- [x] **Step 3: Implement timeout presentation**
 
 A UI-side timeout does not force Idle. It displays `Stopping is taking longer than expected` with diagnostics/force-stop actions while retaining the true runtime phase.
 
-- [ ] **Step 4: Run all UI tests**
+- [ ] **Step 4: Run all UI tests** — Dart/Swift timeout cases await CI because the local SDKs are unavailable.
 
 ```bash
 cd android && flutter test
@@ -304,7 +304,7 @@ cd ../..
 ctest --test-dir build/test -R tui_runtime_adapter_test --output-on-failure
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add android ios ppp/app/tui
