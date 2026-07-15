@@ -30,6 +30,9 @@ class libopenppp2 {
             return ok
         }
 
+        @JvmStatic
+        fun isProtectReady(): Boolean = PppVpnService.instance != null
+
         /**
          * Called from native code to report traffic statistics.
          * json format: {"tx":"...", "rx":"...", "in":"...", "out":"..."}

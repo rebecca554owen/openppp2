@@ -37,6 +37,7 @@ class PppVpnService : VpnService() {
         const val EXTRA_VPN_OPTIONS = "vpn_options_json"
         private const val IPV6_BLOCK_ADDRESS = "fd00:6f70:656e:7070::2"
 
+        @Volatile
         var instance: PppVpnService? = null
             private set
 

@@ -81,26 +81,8 @@ namespace ppp {
         class AndroidSocketProtector final : public ISocketProtector {
         public:
             AndroidSocketProtector() noexcept = default;
-
-            /**
-             * @brief Initializes the JNI references for VpnService.protect().
-             *
-             * Must be called from the JNI thread with a valid JNIEnv.
-             *
-             * @param env         JNI environment pointer.
-             * @param vpn_service VpnService Java object reference (global ref).
-             */
-            void Initialize(void* env, void* vpn_service) noexcept;
-
-            bool IsReady() const noexcept override {
-                return jni_env_ && vpn_service_ && protect_method_;
-            }
+            bool IsReady() const noexcept override;
             bool Protect(int fd) noexcept override;
-
-        private:
-            void* jni_env_       = nullptr;
-            void* vpn_service_   = nullptr;
-            void* protect_method_ = nullptr;
         };
 #endif
 

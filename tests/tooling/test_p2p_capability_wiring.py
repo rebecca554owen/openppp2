@@ -171,6 +171,34 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         ]
         self.assertIn("OPENSSL_cleanse(token_input, sizeof(token_input))", verify_token)
 
+    def test_android_protector_reuses_the_vpn_service_bridge(self) -> None:
+        bridge_header = self.source("android/OpenPPP2VpnProtectBridge.h")
+        bridge_source = self.source("android/OpenPPP2VpnProtectBridge.cpp")
+        kotlin = self.source(
+            "android/android/app/src/main/kotlin/"
+            "supersocksr/ppp/android/c/libopenppp2.kt"
+        )
+        protector_header = self.source("ppp/p2p/P2PSocketProtector.h")
+        protector_source = self.source("ppp/p2p/P2PSocketProtector.cpp")
+
+        self.assertIn("IsProtectBridgeReady()", bridge_header)
+        self.assertIn('GetStaticMethodID(local_clazz, "isProtectReady", "()Z")', bridge_source)
+        self.assertIn("fun isProtectReady(): Boolean", kotlin)
+        self.assertIn("PppVpnService.instance != null", kotlin)
+        service = self.source(
+            "android/android/app/src/main/kotlin/"
+            "supersocksr/ppp/android/PppVpnService.kt"
+        )
+        self.assertIn("@Volatile\n        var instance: PppVpnService?", service)
+        self.assertIn("bool IsReady() const noexcept override", protector_header)
+        self.assertNotIn("void Initialize(void* env, void* vpn_service)", protector_header)
+        self.assertIn("<android/OpenPPP2VpnProtectBridge.h>", protector_source)
+        self.assertIn("ppp::android::IsProtectBridgeReady()", protector_source)
+        self.assertIn("ppp::android::ProtectSocketFd(fd)", protector_source)
+        protect_call = bridge_source[bridge_source.index("bool ProtectSocketFd(int fd)") :]
+        self.assertIn("NewLocalRef(state.clazz)", protect_call)
+        self.assertIn("DeleteLocalRef(clazz)", protect_call)
+
 
 if __name__ == "__main__":
     unittest.main()
