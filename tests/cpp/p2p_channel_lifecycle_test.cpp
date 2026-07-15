@@ -108,3 +108,38 @@ BOOST_AUTO_TEST_CASE(socket_protection_failure_falls_back_and_cleans_up) {
     BOOST_TEST(static_cast<int>(channel->GetFallbackReason()) ==
         static_cast<int>(P2PFallbackReason::SocketError));
 }
+
+BOOST_AUTO_TEST_CASE(udp_blocked_probe_timeout_falls_back_to_relay) {
+    boost::asio::io_context context;
+    boost::asio::ip::udp::socket blackhole(context,
+        boost::asio::ip::udp::endpoint(
+            boost::asio::ip::address_v4::loopback(), 0));
+    auto channel = MakeChannel(context, std::make_shared<TestProtector>(true));
+    ppp::vector<P2PCandidate> candidates = {{blackhole.local_endpoint(), "blackhole"}};
+
+    channel->StartProbing(candidates, Int128(2), "offer-token");
+    context.run();
+
+    BOOST_TEST(channel->IsClosed());
+    BOOST_TEST(static_cast<int>(channel->GetState()) ==
+        static_cast<int>(P2PChannelState::Relay));
+    BOOST_TEST(static_cast<int>(channel->GetFallbackReason()) ==
+        static_cast<int>(P2PFallbackReason::Timeout));
+}
+
+BOOST_AUTO_TEST_CASE(fresh_channel_does_not_restore_previous_attempt_state) {
+    boost::asio::io_context first_context;
+    auto first = MakeChannel(first_context, std::make_shared<TestProtector>(true));
+    first->StartProbing(LoopbackCandidates(), Int128(2), "");
+    BOOST_REQUIRE(first->IsClosed());
+
+    boost::asio::io_context restarted_context;
+    auto restarted = MakeChannel(
+        restarted_context, std::make_shared<TestProtector>(true));
+
+    BOOST_TEST(!restarted->IsClosed());
+    BOOST_TEST(static_cast<int>(restarted->GetState()) ==
+        static_cast<int>(P2PChannelState::Relay));
+    BOOST_TEST(static_cast<int>(restarted->GetFallbackReason()) ==
+        static_cast<int>(P2PFallbackReason::None));
+}

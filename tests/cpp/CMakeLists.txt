@@ -113,6 +113,10 @@ openppp2_add_cpp_test(p2p_channel_lifecycle_test SOURCES
     "${OPENPPP2_ROOT}/ppp/p2p/P2PChannel.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PCrypto.cpp")
 target_link_libraries(p2p_channel_lifecycle_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_nat_classifier_test SOURCES
+    p2p_nat_classifier_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PNatClassifier.cpp")
+target_link_libraries(p2p_nat_classifier_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_capability_gate_test SOURCES
     p2p_capability_gate_test.cpp)
 target_link_libraries(p2p_capability_gate_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
