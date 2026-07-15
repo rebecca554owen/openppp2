@@ -166,6 +166,14 @@ jobs:
         working-directory: ios/App
     steps:
       - uses: actions/checkout@v4
+      - name: Typecheck PacketTunnel P2P provider transport
+        run: |
+          sdk_root="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          swiftc -typecheck \
+            -sdk "$sdk_root" \
+            -target "$(uname -m)-apple-ios15.0-simulator" \
+            -I .. \
+            OpenPPP2PacketTunnel/ProviderOwnedP2PDatagramTransport.swift
       - name: Run XCTest
         run: |
           chmod +x run-tests.sh

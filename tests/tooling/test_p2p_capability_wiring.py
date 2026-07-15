@@ -237,6 +237,11 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         iphone_factory = native_transport[native_transport.index("#if defined(_IPHONE)") :]
         self.assertIn("return nullptr", iphone_factory)
 
+        workflow = self.source(".github/workflows/test.yml")
+        self.assertIn("Typecheck PacketTunnel P2P provider transport", workflow)
+        self.assertIn("ProviderOwnedP2PDatagramTransport.swift", workflow)
+        self.assertIn("swiftc -typecheck", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
