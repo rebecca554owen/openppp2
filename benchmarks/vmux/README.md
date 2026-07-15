@@ -1,0 +1,107 @@
+# VMUX benchmark harness
+
+This harness records repeatable VMUX scheduler evidence without changing the
+wire protocol or the default mode. `compat` remains the production default.
+
+## Scenario matrix
+
+| Scenario | Mode / load | Fault or action |
+| --- | --- | --- |
+| `off-one-flow` | mux off, one flow | none; valid only when `active_links == 0` |
+| `compat-one-flow` | compat, one flow | none |
+| `flow-one-flow` | flow, one flow | none |
+| `compat-eight-flows` | compat, eight flows | none |
+| `flow-eight-flows` | flow, eight flows | none |
+| `balance-eight-flows` | balance, eight flows | none |
+| `carrier-delay` | balance, eight flows | one carrier: delay 40 ms, rate 100 Mbit/s |
+| `carrier-loss` | balance, eight flows | one carrier: random loss 2%, correlation 0%, rate 100 Mbit/s, seed 71214 |
+| `carrier-removal` | balance, eight flows | remove one carrier at runtime |
+| `turbo-churn` | flow, eight flows | repeated grow/shrink action hook |
+
+`one-flow` is a convenience alias for `compat-one-flow`.
+
+## Safe local validation
+
+The default is a dry-run. It validates the scenario and duration, prints the
+resolved plan, does not require root, does not touch an interface, and does not
+write a result:
+
+```bash
+benchmarks/vmux/run.sh --scenario one-flow --duration 10
+benchmarks/vmux/run.sh --list-scenarios
+benchmarks/vmux/netem.sh profiles
+python3 benchmarks/vmux/parse_results.py build/benchmarks/vmux/*.json
+```
+
+CI runs only correctness/smoke checks. Performance thresholds are evaluated
+only on the fixed Linux x86-64 benchmark host; laptop, VM, WSL, and shared CI
+measurements are diagnostic evidence, not rollout gates.
+
+## Real runs
+
+Use `--execute`, an iperf3 server, an executable `--prepare-hook`, and a
+telemetry file captured from the same run. Before touching netem or starting
+iperf3, the harness calls the prepare hook with `scenario mode flows`; the hook
+must configure and verify the real tunnel or return non-zero. The telemetry
+file supplies measurements iperf3 cannot report:
+
+```json
+{
+  "metrics": {
+    "p50_latency_ms": 1.2,
+    "p99_latency_ms": 2.7,
+    "reorder_depth": 0,
+    "buffered_bytes": 0,
+    "active_links": 2,
+    "disconnects": 0
+  },
+  "runtime_state": {
+    "requested_mode": "flow",
+    "effective_mode": "flow",
+    "fallback_reason": ""
+  }
+}
+```
+
+```bash
+benchmarks/vmux/run.sh --execute --scenario flow-one-flow --duration 10 \
+  --server 192.0.2.10 --prepare-hook ./prepare-vmux.sh \
+  --telemetry build/vmux-telemetry.json
+```
+
+Fault scenarios additionally require root, `ip`, `tc`, `iperf3`, and an
+explicit non-loopback `--interface`. `carrier-removal` and `turbo-churn`
+require an executable `--hook`; the harness invokes it midway through the run
+with the action name. Missing tools, unsafe interfaces, iperf errors, missing
+telemetry, and hook failures stop with a non-zero status and no benchmark
+result. Do not use the control interface or an interface carrying SSH.
+
+For every non-off matrix result, telemetry `requested_mode` and `effective_mode`
+must both equal the scenario mode and `fallback_reason` must be empty. A
+negotiated fallback is compatibility evidence, not a result for the requested
+scheduler, and is rejected. `off-one-flow` instead requires only
+`active_links == 0`; its runtime modes may remain `compat`, and its fallback
+reason may be empty or `mux_inactive`.
+
+`netem.sh` applies only to the exact interface argument. It rejects empty,
+loopback, option-like, and shell-metacharacter names. Its fixed profiles are:
+
+```text
+carrier-delay: delay 40ms 0ms rate 100mbit
+carrier-loss: loss random 2% 0% rate 100mbit seed 71214
+```
+
+Both `run.sh` and `netem.sh run` install cleanup traps so their qdisc is
+removed on success, failure, interruption, or termination. Never run real
+fault injection against an interface whose ownership is unclear.
+
+## Result contract
+
+`result.schema.json` defines the versioned JSON contract. The environment fingerprint
+hashes architecture, kernel, CPU, and Git commit. The separate configuration fingerprint
+hashes the resolved mode, flow count, netem profile,
+scenario, and duration. Every result also contains throughput; p50/p99 latency;
+reorder depth; buffered bytes; active links; disconnects; and requested,
+effective, and fallback runtime state. `parse_results.py` validates every input
+before printing per-scenario min/mean/max summaries. Invalid JSON, missing or
+wrong-typed fields, and iperf error objects return non-zero.
