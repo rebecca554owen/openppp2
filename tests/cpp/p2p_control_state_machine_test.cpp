@@ -46,6 +46,15 @@ BOOST_AUTO_TEST_CASE(relay_path_is_invariant_for_every_non_direct_state) {
     BOOST_TEST(std::string(P2PControlStateMachine::EffectivePathFor(P2PState::Direct)) == "direct");
 }
 
+BOOST_AUTO_TEST_CASE(data_forwarding_is_allowed_only_in_direct) {
+    for (const auto state : {P2PState::Disabled, P2PState::Unavailable,
+             P2PState::Relay, P2PState::Eligible, P2PState::Probing,
+             P2PState::Suspect, P2PState::FallingBack, P2PState::Failed}) {
+        BOOST_TEST(!P2PControlStateMachine::CanForwardDataFor(state));
+    }
+    BOOST_TEST(P2PControlStateMachine::CanForwardDataFor(P2PState::Direct));
+}
+
 BOOST_AUTO_TEST_CASE(rejects_out_of_order_transitions) {
     P2PControlStateMachine machine;
     BOOST_TEST(!machine.AcceptOffer());

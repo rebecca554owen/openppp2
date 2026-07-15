@@ -14,6 +14,10 @@ public:
         return state == P2PState::Direct ? "direct" : "relay";
     }
 
+    static bool CanForwardDataFor(P2PState state) noexcept {
+        return state == P2PState::Direct;
+    }
+
     bool MarkEligible() noexcept {
         if (state_ != P2PState::Relay && state_ != P2PState::Unavailable &&
             state_ != P2PState::Failed) return false;

@@ -458,8 +458,7 @@ namespace ppp {
 
             P2PChannelState current_state = state_.load(std::memory_order_acquire);
 
-            if (current_state != P2PChannelState::Direct &&
-                current_state != P2PChannelState::Suspect) {
+            if (!CanProcessAuthenticatedP2PTier2(current_state)) {
                 return;
             }
 
@@ -514,6 +513,10 @@ namespace ppp {
                         suspect_timer_->cancel();
                     }
                 }
+            }
+
+            if (!CanForwardP2PPayload(current_state)) {
+                return;
             }
 
             if (IsCoalesced(header.flags)) {

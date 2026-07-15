@@ -49,6 +49,30 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertLess(protection, probing.index("StartReceive()"))
         self.assertLess(protection, probing.index("SendProbe("))
 
+    def test_channel_forwards_data_only_while_direct(self) -> None:
+        source = self.source("ppp/p2p/P2PChannel.cpp")
+        receive = source[
+            source.index("void P2PChannel::HandleTier2") :
+            source.index("bool P2PChannel::SendFrame")
+        ]
+        receive_gate = receive[: receive.index("if (sender != peer_endpoint_)")]
+        self.assertIn("CanProcessAuthenticatedP2PTier2(current_state)", receive_gate)
+
+        payload_gate = receive[
+            receive.index("if (IsHeartbeatAck(header.flags))") :
+            receive.index("if (IsCoalesced(header.flags))")
+        ]
+        self.assertIn("if (!CanForwardP2PPayload(current_state))", payload_gate)
+
+        send = source[
+            source.index("bool P2PChannel::SendFrame") :
+            source.index("void P2PChannel::OnHeartbeatTimer")
+        ]
+        self.assertGreaterEqual(
+            send.count("state_.load(std::memory_order_acquire) != P2PChannelState::Direct"),
+            2,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

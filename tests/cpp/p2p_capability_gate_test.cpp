@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/p2p/P2PCapabilityGate.h>
+#include <ppp/p2p/P2PDefs.h>
 #include <ppp/p2p/P2PSocketProtector.h>
 #include <ppp/transmissions/ITransmission.h>
 
@@ -93,4 +94,16 @@ BOOST_AUTO_TEST_CASE(socket_protection_checks_readiness_before_protecting) {
     BOOST_TEST(ProtectP2PSocket(success, 7));
     BOOST_TEST(success->ready_calls == 1);
     BOOST_TEST(success->protect_calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(suspect_processes_authenticated_control_without_forwarding_payload) {
+    BOOST_TEST(CanProcessAuthenticatedP2PTier2(P2PChannelState::Direct));
+    BOOST_TEST(CanProcessAuthenticatedP2PTier2(P2PChannelState::Suspect));
+    BOOST_TEST(!CanProcessAuthenticatedP2PTier2(P2PChannelState::Probing));
+    BOOST_TEST(!CanProcessAuthenticatedP2PTier2(P2PChannelState::Relay));
+
+    BOOST_TEST(CanForwardP2PPayload(P2PChannelState::Direct));
+    BOOST_TEST(!CanForwardP2PPayload(P2PChannelState::Suspect));
+    BOOST_TEST(!CanForwardP2PPayload(P2PChannelState::Probing));
+    BOOST_TEST(!CanForwardP2PPayload(P2PChannelState::Relay));
 }
