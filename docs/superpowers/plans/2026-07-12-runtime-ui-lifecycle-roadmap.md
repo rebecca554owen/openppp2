@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Roadmap
-> Last verified: 3d3a179
+> Last verified: 2566750
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -67,11 +67,11 @@
 
 ### Gate D: VMUX Verified
 
-- [ ] UI displays requested and effective modes separately.
-- [ ] Capability and fallback reasons are exposed.
+- [x] UI displays requested and effective modes separately.
+- [x] Capability and fallback reasons are exposed.
 - [ ] Equal-link, slow-link, loss, and link-churn benchmarks are stored as artifacts.
 - [ ] Flow mode meets documented throughput and latency criteria.
-- [ ] Old peers fall back safely.
+- [x] Old peers fall back safely.
 
 ### Gate E: P2P Allowed
 

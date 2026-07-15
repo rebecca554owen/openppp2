@@ -1,8 +1,8 @@
 # VMUX and P2P Validation Implementation Plan
 
-> Status: Planned
+> Status: In progress
 > Type: Plan
-> Last verified: a9cfec7
+> Last verified: 2566750
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -45,11 +45,11 @@ struct MuxRuntimeState {
 };
 ```
 
-- [ ] **Step 1: Test compatible negotiation**
+- [x] **Step 1: Test compatible negotiation**
 
 Request `flow`, advertise FLOW_V2 on both peers, and assert effective mode/order are reported correctly.
 
-- [ ] **Step 2: Test fallback**
+- [x] **Step 2: Test fallback**
 
 Request `balance`, simulate a peer without FLOW_V2, and assert:
 
@@ -59,11 +59,11 @@ receiver_ordering = compat
 fallback_reason = peer_missing_flow_v2
 ```
 
-- [ ] **Step 3: Publish state after handshake and link changes**
+- [x] **Step 3: Publish state after handshake and link changes**
 
 Update active link count on add, retire, and reap. Do not emit one snapshot per packet.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit** (`7719c5f`)
 
 ```bash
 ctest --test-dir build/test -R vmux_runtime_state_test --output-on-failure
@@ -79,19 +79,19 @@ git add ppp/app/mux ppp/app/runtime ppp/app/client ppp/app/server tests/cpp
 - Modify: TUI runtime adapter
 - Test: Dart widget, Swift view-model, and C++ renderer tests
 
-- [ ] **Step 1: Add capability-driven selector tests**
+- [x] **Step 1: Add capability-driven selector tests**
 
 Modes unavailable in `snapshot.capabilities` are disabled or hidden. `stripe` is visible only in developer/experimental mode.
 
-- [ ] **Step 2: Add fallback presentation**
+- [x] **Step 2: Add fallback presentation**
 
 The normal UI shows `Compatibility mode` while diagnostics show requested mode and fallback reason.
 
-- [ ] **Step 3: Mark restart-required changes**
+- [x] **Step 3: Mark restart-required changes**
 
 Changing negotiated mode updates configuration but displays `Takes effect on next connection`; do not hot-switch production sessions.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit** (`b991cd1`)
 
 ```bash
 cd android && flutter test
@@ -111,7 +111,7 @@ git add android ios ppp/app/tui
 - Create: `benchmarks/vmux/result.schema.json`
 - Create: `benchmarks/vmux/parse_results.py`
 
-- [ ] **Step 1: Define benchmark matrix**
+- [x] **Step 1: Define benchmark matrix**
 
 Required scenarios:
 
@@ -128,22 +128,22 @@ runtime carrier removal
 turbo grow/shrink churn
 ```
 
-- [ ] **Step 2: Capture metrics**
+- [x] **Step 2: Capture metrics**
 
 Write JSON containing throughput, p50/p99 latency, reorder depth, buffered bytes, active links, disconnects, and fallback state.
 
-- [ ] **Step 3: Add deterministic netem profiles**
+- [x] **Step 3: Add deterministic netem profiles**
 
 Profiles must include exact delay/loss/rate parameters and clean themselves up on exit.
 
-- [ ] **Step 4: Run local smoke benchmark**
+- [x] **Step 4: Run local smoke benchmark**
 
 ```bash
 sudo benchmarks/vmux/run.sh --scenario one-flow --duration 10
 python3 benchmarks/vmux/parse_results.py build/benchmarks/vmux/*.json
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** (`62c7441`)
 
 ```bash
 git add benchmarks
@@ -158,12 +158,15 @@ git add benchmarks
 - Create: `tests/cpp/vmux_flow_reorder_test.cpp`
 - Modify: `tests/cpp/CMakeLists.txt`
 
-- [ ] **Step 1: Test old peer fallback**
-- [ ] **Step 2: Test reordered per-flow frames remain isolated**
-- [ ] **Step 3: Test bounded reorder memory**
-- [ ] **Step 4: Test retiring link with in-flight writes**
-- [ ] **Step 5: Test repeated grow/shrink under ASan**
-- [ ] **Step 6: Commit**
+- [x] **Step 1: Test old peer fallback**
+- [x] **Step 2: Test reordered per-flow frames remain isolated**
+- [x] **Step 3: Test bounded reorder memory**
+- [x] **Step 4: Test retiring link with in-flight writes**
+- [ ] **Step 5: Test actual `vmux_net` repeated grow/shrink under ASan**
+
+  The 100-cycle `MuxLinkDrainState` unit loop passed local ASan/UBSan on
+  2026-07-15 (4 cases), but it does not exercise real carrier add/remove or I/O.
+- [x] **Step 6: Commit** (`2566750`)
 
 ```bash
 ctest --test-dir build/test -R "vmux_(negotiation|link_churn|flow_reorder)_test" --output-on-failure
@@ -178,27 +181,27 @@ git add tests/cpp
 - Modify: `docs/MUX_PERFLOW_DELIVERY_DESIGN_CN.md`
 - Modify: configuration docs
 
-- [ ] **Step 1: Record exact acceptance thresholds**
+- [x] **Step 1: Record exact acceptance thresholds**
 
 Initial thresholds:
 
 ```text
 flow single-stream throughput >= 95% of mux-off baseline
-flow p99 latency regression <= 10% on equal links
+flow-one-flow p99 <= 110% of off-one-flow p99 on equal links
 reorder memory never exceeds configured bound
-old peer always falls back to compat
+old peer always falls back to compatible receiver ordering; balance/stripe fall back to compat mode
 no sanitizer failure during 100 grow/shrink cycles
 ```
 
-- [ ] **Step 2: Require two-platform evidence before default change**
+- [x] **Step 2: Require two-platform evidence before default change**
 
 At minimum Linux desktop and one mobile platform.
 
-- [ ] **Step 3: Keep compat default until evidence is attached**
+- [x] **Step 3: Keep compat default until evidence is attached**
 
 A default change requires a separate PR containing benchmark artifacts and compatibility results.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Documentation completed against evidence baseline `2566750`**
 
 ```bash
 git add docs

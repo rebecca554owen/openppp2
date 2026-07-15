@@ -70,6 +70,7 @@ The set is intentionally code-first. Each page is written from actual implementa
 | Runtime | [`SERVER_ARCHITECTURE.md`](SERVER_ARCHITECTURE.md) | [`SERVER_ARCHITECTURE_CN.md`](SERVER_ARCHITECTURE_CN.md) |
 | Runtime | [`ROUTING_AND_DNS.md`](ROUTING_AND_DNS.md) | [`ROUTING_AND_DNS_CN.md`](ROUTING_AND_DNS_CN.md) |
 | Runtime | [`reference/UI_RUNTIME_CONTRACT.md`](reference/UI_RUNTIME_CONTRACT.md) | [`reference/UI_RUNTIME_CONTRACT_CN.md`](reference/UI_RUNTIME_CONTRACT_CN.md) |
+| Runtime | [`reference/VMUX_VALIDATION.md`](reference/VMUX_VALIDATION.md) | [`reference/VMUX_VALIDATION_CN.md`](reference/VMUX_VALIDATION_CN.md) |
 | Runtime | [`PEER_PREFIX_ROUTING.md`](PEER_PREFIX_ROUTING.md) | [`PEER_PREFIX_ROUTING_CN.md`](PEER_PREFIX_ROUTING_CN.md) |
 | Platform | [`PLATFORMS.md`](PLATFORMS.md) | [`PLATFORMS_CN.md`](PLATFORMS_CN.md) |
 | Configuration | [`CONFIGURATION.md`](CONFIGURATION.md) | [`CONFIGURATION_CN.md`](CONFIGURATION_CN.md) |

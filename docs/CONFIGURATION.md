@@ -192,6 +192,7 @@ Controls multiplexing channel behavior:
 - `mux.turbo` — flow-mode turbo (default false): best-link-first first packet plus prewarmed carrier links to widen the competition pool, with negotiated per-flow DSN when both peers support flow v2. Only meaningful under `mux.mode=flow`. CLI: `--mux-mode-turbo=[yes|no]`.
 - `mux.flow.reorder.bytes` — per-connection reorder buffer byte cap under flow v2 (strictly > 0; default 1048576). Bounds receiver memory: when a connection's buffered out-of-order bytes would exceed this, the oldest gap is skipped (the lost bytes are recovered by the tunneled TCP).
 - `mux.flow.reorder.timeout` — per-connection gap wait timeout in milliseconds under flow v2 (strictly > 0; default 400, near link RTT). If a missing frame does not arrive within this window, the gap is skipped so delivery does not stall.
+
 - `mux.tx.queue.max` — data transmit-queue high-water depth in frames (strictly > 0; default 4096). At/above it the acceleration read-pump is throttled (re-coupled to send completion) so the queue cannot grow unbounded when the carrier stalls. Control frames (SYN/heartbeat) use a separate priority queue and are never throttled.
 - `mux.tx.queue.stall` — milliseconds the data transmit-queue may stay backlogged (at/over high-water) before the session is torn down and rebuilt (strictly > 0; default 8000). Recovers a wedged session that cannot self-heal instead of hanging dead to new connections.
 - `mux.debug.key` — optional shared secret for debug-only remote scheduler control. When non-empty and identical on both peers, a peer may push a mode change via the `--mux-mode-set` CLI flag. Empty (default) disables remote control. The `--mux-mode-set` request is CLI-only and is never persisted to JSON.
@@ -199,6 +200,12 @@ Controls multiplexing channel behavior:
 - `mux.congestions` — MUX congestion window budget.
 
 The number of parallel MUX sub-connections is still selected by the runtime `--tun-mux=<connections>` flag, not by a `mux.max-connections` JSON key.
+
+`compat` remains the production default. `stripe` is experimental. A change to
+the default must satisfy the two-platform benchmark, compatibility, bounded
+memory, and sanitizer requirements in
+[`VMUX_VALIDATION.md`](reference/VMUX_VALIDATION.md) through a separate pull
+request with the raw evidence attached.
 
 ### `websocket`
 

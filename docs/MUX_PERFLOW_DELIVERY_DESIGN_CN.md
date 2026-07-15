@@ -1,6 +1,11 @@
 # MUX 按流交付设计说明（mux-perflow-delivery / flow v2）
 
-> 状态：设计 + 首版实现已落地（接收端 per-flow 定序能力）。本文件是仓库内的稳定设计参考，配合 spec `.kiro/specs/mux-perflow-delivery/`（design / requirements / tasks）。技术术语保留英文。
+> Status: Implemented
+> Type: Design
+> Last verified: 2566750
+
+首版接收端 per-flow 定序能力已经落地。本文件是仓库内的设计参考，配合 spec
+`.kiro/specs/mux-perflow-delivery/`（design / requirements / tasks）。技术术语保留英文。
 
 ## 定位
 
@@ -93,9 +98,9 @@ struct flow_rx_context {
 | 键 | 类型 | 默认 | 作用 |
 |---|---|---|---|
 | `mux.flow.reorder.bytes` | int (>0) | 1048576 | 每连接 reorder 缓冲字节上界 |
-| `mux.flow.reorder.timeout` | int (>0, ms) | 2000 | 缺口等待超时 |
+| `mux.flow.reorder.timeout` | int (>0, ms) | 400 | 缺口等待超时 |
 
-不再有独立 `mux.flow-v2` 配置项；`balance` / `stripe` 自动声明 flow v2，`compat` / `flow` 不声明。两端都处于需要 flow v2 的模式且都支持能力字节时才会启用；任一端不支持或当前模式不需要则回退 compat。
+不再有独立 `mux.flow-v2` 配置项；所有非 `compat` 模式（`flow` / `balance` / `stripe`）都会声明 flow v2，`compat` 不声明。双方都支持能力字节时启用 flow v2；`balance` / `stripe` 遇到旧 peer 会回退到 `compat`，而 `flow` 保持其调度模式并使用兼容接收顺序。
 
 ## 第一版明确不保证
 
@@ -105,6 +110,15 @@ struct flow_rx_context {
 - 内存换吞吐：最坏 `max_connections × flow.reorder.bytes`。
 - `stripe` 仍实验性；本特性只为其提供接收端定序基础。
 - 协商是会话级一次性，建链后不热切换。
+
+## 验证与默认值门槛
+
+`compat` 保持生产默认值，`stripe` 保持实验性。当前代码和测试已经覆盖协商状态、
+旧 peer 回退、每 flow 字节与条目数双上限、in-flight retire，以及 100-cycle
+drain-state 单元回归；真实 `vmux_net` grow/shrink sanitizer 测试仍待补齐。benchmark harness 也已落地，但仓库中尚无真实 Linux + mobile
+性能 baseline。吞吐、p99、sanitizer 与双平台证据要求见稳定参考
+[`VMUX_VALIDATION_CN.md`](reference/VMUX_VALIDATION_CN.md)。只有独立 PR 附上完整
+benchmark artifacts 与 compatibility results 并满足该参考，才允许讨论修改默认值。
 
 ## 代码触点
 
