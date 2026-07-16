@@ -2,7 +2,7 @@
 
 > Status: Implemented
 > Type: Plan
-> Last verified: 6108e4b
+> Last verified: ef97c8c
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -34,7 +34,7 @@
 **Interfaces:**
 - Produces: `enum class RuntimePhase`, `struct RuntimeError`, `struct RuntimeSnapshot`.
 
-- [ ] **Step 1: Write a failing enum/string conversion test**
+- [x] **Step 1: Write a failing enum/string conversion test**
 
 ```cpp
 #define BOOST_TEST_MODULE runtime_snapshot_test
@@ -48,7 +48,7 @@ BOOST_AUTO_TEST_CASE(runtime_phase_round_trip) {
 }
 ```
 
-- [ ] **Step 2: Register and run the test**
+- [x] **Step 2: Register and run the test**
 
 Run:
 
@@ -60,7 +60,7 @@ ctest --test-dir build/test -R runtime_snapshot_test --output-on-failure
 
 Expected: compilation fails because `RuntimePhase.h` does not exist.
 
-- [ ] **Step 3: Implement the phase type**
+- [x] **Step 3: Implement the phase type**
 
 ```cpp
 #pragma once
@@ -88,7 +88,7 @@ RuntimePhase ParseRuntimePhase(const ppp::string& value) noexcept;
 
 Add the definitions in `RuntimePhase.cpp` if non-inline implementation is preferred; register it in both CMake and MSVC project parity lists.
 
-- [ ] **Step 4: Add snapshot invariants test**
+- [x] **Step 4: Add snapshot invariants test**
 
 ```cpp
 BOOST_AUTO_TEST_CASE(default_snapshot_is_idle_and_versioned) {
@@ -99,7 +99,7 @@ BOOST_AUTO_TEST_CASE(default_snapshot_is_idle_and_versioned) {
 }
 ```
 
-- [ ] **Step 5: Implement minimal snapshot and error DTOs**
+- [x] **Step 5: Implement minimal snapshot and error DTOs**
 
 Required fields:
 
@@ -129,7 +129,7 @@ struct RuntimeSnapshot {
 };
 ```
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```bash
 ctest --test-dir build/test -R runtime_snapshot_test --output-on-failure
@@ -152,7 +152,7 @@ git add ppp/app/runtime tests/cpp
 **Interfaces:**
 - Produces: `ppp::string SerializeRuntimeSnapshot(const RuntimeSnapshot&)` and `bool ParseRuntimeSnapshot(const ppp::string&, RuntimeSnapshot&)`.
 
-- [ ] **Step 1: Add failing serialization test**
+- [x] **Step 1: Add failing serialization test**
 
 ```cpp
 BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_and_phase) {
@@ -167,7 +167,7 @@ BOOST_AUTO_TEST_CASE(snapshot_json_preserves_generation_and_phase) {
 }
 ```
 
-- [ ] **Step 2: Implement serializer/parser using the repository JSON library**
+- [x] **Step 2: Implement serializer/parser using the repository JSON library**
 
 Reject input when:
 
@@ -179,11 +179,11 @@ phase is unknown
 
 Ignore unknown optional properties.
 
-- [ ] **Step 3: Add fixture tests**
+- [x] **Step 3: Add fixture tests**
 
 Read all files under `tests/contracts/runtime-snapshot/` and assert they parse successfully. Add one invalid fixture with `schema_version: 99` and assert rejection.
 
-- [ ] **Step 4: Validate JSON schema locally**
+- [x] **Step 4: Validate JSON schema locally**
 
 Run:
 
@@ -194,7 +194,7 @@ python3 -m json.tool tests/contracts/runtime-snapshot/connected.json >/dev/null
 
 Expected: both commands exit `0`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ppp/app/runtime schemas tests/contracts tests/cpp
@@ -221,7 +221,7 @@ RuntimeSnapshot GetSnapshot() const noexcept;
 void Subscribe(RuntimeSnapshotHandler handler);
 ```
 
-- [ ] **Step 1: Test monotonic generations**
+- [x] **Step 1: Test monotonic generations**
 
 ```cpp
 BOOST_AUTO_TEST_CASE(begin_generation_is_monotonic) {
@@ -231,11 +231,11 @@ BOOST_AUTO_TEST_CASE(begin_generation_is_monotonic) {
 }
 ```
 
-- [ ] **Step 2: Test subscriber receives immutable copy**
+- [x] **Step 2: Test subscriber receives immutable copy**
 
 The handler must receive a value snapshot after each state transition and must not execute while the publisher mutex is held.
 
-- [ ] **Step 3: Integrate lifecycle transitions**
+- [x] **Step 3: Integrate lifecycle transitions**
 
 Map existing runtime points to phases:
 
@@ -252,11 +252,11 @@ cleanup complete -> Idle
 non-recoverable error -> Failed
 ```
 
-- [ ] **Step 4: Add negative test**
+- [x] **Step 4: Add negative test**
 
 Assert `Connected` cannot be published when required readiness flags are false. Implement a single `RuntimeReadiness` value rather than scattering checks through UI code.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 ctest --test-dir build/test -R "runtime_(snapshot|state_publisher)_test" --output-on-failure
@@ -277,7 +277,7 @@ git add ppp/app/runtime ppp/app tests/cpp
 - Consumes: `RuntimeSnapshot`.
 - Produces: `ppp::vector<ppp::string> BuildStatusLines(const RuntimeSnapshot&)`.
 
-- [ ] **Step 1: Add failing renderer test**
+- [x] **Step 1: Add failing renderer test**
 
 ```cpp
 BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mode) {
@@ -293,15 +293,15 @@ BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mode) {
 }
 ```
 
-- [ ] **Step 2: Implement adapter and replace direct runtime reads**
+- [x] **Step 2: Implement adapter and replace direct runtime reads**
 
 The TUI may still render traffic detail, but lifecycle labels and negotiated modes must come from the snapshot.
 
-- [ ] **Step 3: Add failed/stopping renderer cases**
+- [x] **Step 3: Add failed/stopping renderer cases**
 
 Ensure `Stopping` does not render as disconnected and `Failed` includes the error triplet.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 ```bash
 ctest --test-dir build/test -R tui_runtime_adapter_test --output-on-failure
@@ -321,11 +321,11 @@ git commit -am "refactor(tui): render runtime snapshots"
 **Interfaces:**
 - Produces: `RuntimeSnapshot.fromJson(Map<String, dynamic>)` and `RuntimeStore.apply(RuntimeSnapshot)`.
 
-- [ ] **Step 1: Parse shared fixtures in Dart tests**
+- [x] **Step 1: Parse shared fixtures in Dart tests**
 
 Load copied fixtures from `tests/contracts/runtime-snapshot/` through a test helper. Assert schema version, generation, phase, requested/effective mode.
 
-- [ ] **Step 2: Reject unsupported schema**
+- [x] **Step 2: Reject unsupported schema**
 
 ```dart
 expect(
@@ -334,7 +334,7 @@ expect(
 );
 ```
 
-- [ ] **Step 3: Implement stale-generation reducer**
+- [x] **Step 3: Implement stale-generation reducer**
 
 ```dart
 void apply(RuntimeSnapshot incoming) {
@@ -344,11 +344,11 @@ void apply(RuntimeSnapshot incoming) {
 }
 ```
 
-- [ ] **Step 4: Replace optimistic UI state changes**
+- [x] **Step 4: Replace optimistic UI state changes**
 
 The connect button sends a command and waits for `Starting`. The stop button sends a command and waits for `Stopping`/`Idle`. Do not set `connected = true/false` directly in widgets.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 cd android
@@ -372,7 +372,7 @@ git add android
 **Interfaces:**
 - Produces: `Codable RuntimeSnapshot` and `@MainActor final class RuntimeStore: ObservableObject`.
 
-- [ ] **Step 1: Decode shared fixtures**
+- [x] **Step 1: Decode shared fixtures**
 
 ```swift
 func testConnectedFixtureDecodesEffectiveMode() throws {
@@ -382,19 +382,19 @@ func testConnectedFixtureDecodesEffectiveMode() throws {
 }
 ```
 
-- [ ] **Step 2: Implement generation filtering**
+- [x] **Step 2: Implement generation filtering**
 
 Apply snapshots on the main actor and ignore lower generations.
 
-- [ ] **Step 3: Replace integer-only heartbeat state**
+- [x] **Step 3: Replace integer-only heartbeat state**
 
 Keep heartbeat freshness for extension liveness, but store/read the latest contract JSON as the authoritative detailed state.
 
-- [ ] **Step 4: Add stale-state handling**
+- [x] **Step 4: Add stale-state handling**
 
 When heartbeat is older than the configured deadline, expose `.unknown` presentation state instead of leaving `.connected` visible.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 cd ios/App
@@ -413,11 +413,11 @@ git add ios/App
 - Create: `docs/reference/UI_RUNTIME_CONTRACT.md`
 - Create: `docs/adr/0001-runtime-ui-contract.md`
 
-- [ ] **Step 1: Define presentation mapping table in the ADR**
+- [x] **Step 1: Define presentation mapping table in the ADR**
 
 Include exact button behavior for every phase and specify that `Reconnecting` retains Stop while disabling configuration edits.
 
-- [ ] **Step 2: Implement phase-driven controls**
+- [x] **Step 2: Implement phase-driven controls**
 
 Required behavior:
 
@@ -430,11 +430,11 @@ Failed -> Retry enabled and configuration editable
 Unknown -> diagnostics and force-stop available
 ```
 
-- [ ] **Step 3: Add widget/view tests**
+- [x] **Step 3: Add widget/view tests**
 
 Cover at least `Idle`, `Connected`, `Reconnecting`, `Stopping`, `Failed`, and stale/unknown.
 
-- [ ] **Step 4: Run complete UI suites**
+- [x] **Step 4: Run complete UI suites**
 
 ```bash
 cd android && flutter test
@@ -443,7 +443,7 @@ cd ../ios/App && ./run-tests.sh
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add android ios ppp/app/tui docs/reference docs/adr

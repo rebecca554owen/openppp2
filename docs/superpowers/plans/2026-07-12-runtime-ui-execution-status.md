@@ -1,32 +1,23 @@
 # Runtime/UI Execution Status
 
 > Type: Status report
-> Last verified: a9cfec7
+> Last verified: ef97c8c
 
-> Branch: `codex/runtime-ui-lifecycle-foundation`
-> Integration branch: `codex/runtime-ui-lifecycle-integration`
-> Pull request: #39
-> Head: `c4e1820`
-> Status: Draft; native matrix green on latest head; awaiting explicit Ready conversion
+> Branch: `main`
+> Head: `ef97c8c`
+> Status: Implemented and merged; runtime, lifecycle, Route/DNS, VMUX state, and guarded P2P integration are on main
 
-## Completed in the foundation batch
+## Completed scope
 
-- Runtime Contract v1 C++ DTOs and JSON schema.
-- Shared runtime fixtures for C++, Dart, and Swift.
-- Android and iOS generation-aware runtime stores.
-- Generation-scoped stop coordinator.
-- Desktop teardown DNS-cache recursive-lock fix.
-- P2P replay-window sequence-zero regression fix.
-- PeerPrefix incomplete-type include fix.
-- Switcher non-movable type made explicit (`= delete`).
-- RouteHost `get_dns_interceptor` returns a non-owning `shared_ptr` view over `unique_ptr` ownership.
-- Windows proxy TUs include `AppConfiguration.h` after exchanger header slim.
-- Unit-test switcher stub provides `GetProtectorNetwork()` on Linux.
-- `BuildRouteHostPorts` platform-guards desktop-only and desktop-Linux-only members (Android defines `_LINUX` too).
-- Restored `.github/workflows/test.yml` to normal build steps.
-- Build/Unit workflows trigger for PRs targeting the integration branch.
+- Runtime Contract v1 DTOs, JSON schema, shared C++/Dart/Swift fixtures, ordered publisher, and readiness gate.
+- TUI, Android, and iOS generation-aware stores and phase-driven controls.
+- Generation-scoped stop ownership, ordered teardown, 100-cycle lifecycle stress, and sanitizer coverage.
+- RouteCoordinator-owned state, platform route adapters, DnsController-owned policy/session state, and namespace rollback evidence.
+- Repository layout, include boundary, documentation metadata/link, and cross-language fixture gates.
+- VMUX requested/effective state, fallback diagnostics, transport boundary, benchmark harness, and carrier churn sanitizer test.
+- P2P ADR, authenticated exporter/offer/data wiring, fail-closed capability gate, and Android emulator socket-protection evidence.
 
-## Validation state (head `c4e1820`)
+## Validation state (head `ef97c8c`)
 
 - focused C++: pass
 - full C++ unit suite: pass
@@ -39,20 +30,12 @@
 - Android arm64-v8a: pass
 - macOS arm64: pass
 - Windows x64 Release: pass
-- Runtime UI PR Diagnostics focused-cpp + full-linux: pass
+- Android API 34 P2P socket-protection instrumentation: pass
+- Main branch workflows: 9/9 pass
 
-## Remaining process notes
+## Remaining release evidence
 
-- PR body could not be updated by this agent token (HTTP 403). Paste `/opt/cursor/artifacts/pr39-body.md` manually if needed.
-- `Runtime UI PR Diagnostics` still lives on the **integration base** branch; remove it there in a follow-up. It is not part of long-term delivery.
-- Keep Draft until the user explicitly asks to mark Ready for Review.
-- Do not merge to `main` from this PR.
-
-## Deferred to later batches
-
-- Runtime snapshot publisher integration with `PppApplication`.
-- TUI rendering from snapshots.
-- Android/iOS presentation wiring.
-- Immutable shared DNS host-port snapshots and weak callback ownership.
-- Lifecycle stress and sanitizer gates.
-- VMUX effective-mode presentation and P2P direct-path UI.
+- Fixed Linux x86-64 UDP micro/E2E performance baseline with readable PMU cycles.
+- VMUX fixed Linux plus real Android/iOS netem and throughput/p99 artifacts.
+- P2P physical-device NAT, UDP-blocked, backgrounding, roaming, restart, and forced-relay scenarios.
+- `ProductionAuthenticatedControlV1Ready` remains `false` until the P2P evidence gate passes.

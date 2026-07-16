@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 06127c2
+> Last verified: ef97c8c
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -342,7 +342,7 @@ No socket forwarding is enabled yet.
 - [x] **Step 5: Fall back to relay on timeout, auth failure, socket error, or migration failure** (`1c5cd39`)
 - [x] **Step 6: Test UDP blocked, symmetric NAT, stale token, spoofed endpoint, and process restart** (`1c9fa59`)
 - [x] **Step 7: Verify UI never reports Direct before authentication** (`bb52e04`)
-- [ ] **Step 8: Commit in platform-separated PRs**
+- [x] **Step 8: Commit platform-separated integration slices**
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
 

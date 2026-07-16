@@ -1,8 +1,8 @@
 # Client Route/DNS Decoupling Implementation Plan
 
-> Status: In progress
+> Status: Implemented
 > Type: Plan
-> Last verified: a9cfec7
+> Last verified: ef97c8c
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -56,7 +56,7 @@
 - Create: `tests/tooling/test_repository_layout.py`
 - Modify: `.github/workflows/test.yml`
 
-- [ ] **Step 1: Write failing fixture tests**
+- [x] **Step 1: Write failing fixture tests**
 
 Create temporary repositories and assert exact violations:
 
@@ -79,13 +79,13 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertViolation(root, "new .inc declaration fragment")
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run: `python3 -m unittest tests.tooling.test_repository_layout -v`
 
 Expected: FAIL because `tools.check_repository_layout` does not exist.
 
-- [ ] **Step 3: Implement the checker**
+- [x] **Step 3: Implement the checker**
 
 The checker walks source files and reports `path:line: rule` for:
 
@@ -121,7 +121,7 @@ def check(root: Path) -> list[str]:
 
 Grandfather only the existing five Switcher `.inc` paths by exact name; any other new `.inc` fails.
 
-- [ ] **Step 4: Run checker tests and repository check**
+- [x] **Step 4: Run checker tests and repository check**
 
 Run:
 
@@ -132,7 +132,7 @@ python3 tools/check_repository_layout.py
 
 Expected: tests PASS; repository check reports only explicitly grandfathered debt until later tasks remove Route/DNS host references. Add a `--migration-baseline` exact-path allowlist, never a count-only baseline.
 
-- [ ] **Step 5: Add the CI command and commit**
+- [x] **Step 5: Add the CI command and commit**
 
 Add `python3 tools/check_repository_layout.py` beside the existing include-boundary command, then:
 
@@ -152,7 +152,7 @@ git commit -m "ci: enforce route and DNS module boundaries"
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Write RouteState tests**
+- [x] **Step 1: Write RouteState tests**
 
 Cover replacement, snapshot isolation, applied flags, and guarded reset:
 
@@ -176,13 +176,13 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `scripts/run-cpp-tests.sh`
 
 Expected: configure/build FAIL because `RouteState` is missing.
 
-- [ ] **Step 3: Implement RouteState**
+- [x] **Step 3: Implement RouteState**
 
 Use private storage and value snapshots:
 
@@ -221,7 +221,7 @@ private:
 
 Copy all containers while holding `syncobj_`; never expose `value_` references.
 
-- [ ] **Step 4: Run focused tests and source-manifest check**
+- [x] **Step 4: Run focused tests and source-manifest check**
 
 Run:
 
@@ -232,7 +232,7 @@ python3 tools/check_vcxproj_sources.py
 
 Expected: `route_state_test` PASS and source manifests match.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ppp/app/client/route/RouteState.* tests/cpp/route_state_test.cpp tests/cpp/CMakeLists.txt ppp.vcxproj
@@ -251,7 +251,7 @@ git commit -m "refactor(route): centralize client route state"
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Write fake-platform transaction tests**
+- [x] **Step 1: Write fake-platform transaction tests**
 
 The fake records operations and can fail at an exact call:
 
@@ -280,13 +280,13 @@ public:
 Assert successful apply marks state, failure on the second add produces
 `add, add, delete, restore`, rollback failure keeps state, and calling `Stop()` twice does not repeat calls.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `scripts/run-cpp-tests.sh`
 
 Expected: build FAIL because `IRoutePlatform` and `RouteCoordinator` do not exist.
 
-- [ ] **Step 3: Implement the platform contract and coordinator**
+- [x] **Step 3: Implement the platform contract and coordinator**
 
 ```cpp
 struct RouteSpec final {
@@ -313,7 +313,7 @@ private:
 `Apply()` captures defaults before the first mutation, records only successful additions, and calls
 `Rollback()` in reverse order. `Stop()` uses compare-exchange and calls `ResetAfterRollback(ok)`.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 ```bash
 scripts/run-cpp-tests.sh
@@ -336,7 +336,7 @@ Expected: route state/coordinator tests PASS.
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Add a contract test for RouteSpec mapping**
+- [x] **Step 1: Add a contract test for RouteSpec mapping**
 
 Extract pure selection logic and assert TAP gateway routes use the TAP interface, known next-hop routes use
 the captured NIC map, and other routes use the underlying interface.
@@ -347,13 +347,13 @@ assert(route::SelectLinuxInterface(known_gateway, tap_gateway, "tap0", "eth0", n
 assert(route::SelectLinuxInterface(other_gateway, tap_gateway, "tap0", "eth0", nics) == "eth0");
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `scripts/run-cpp-tests.sh`
 
 Expected: FAIL because `SelectLinuxInterface` is absent.
 
-- [ ] **Step 3: Implement the Linux adapter**
+- [x] **Step 3: Implement the Linux adapter**
 
 Move `TapLinux::FindAllDefaultGatewayRoutes`, `AddRoute`, `DeleteRoute`, `AddAllRoutes`, and
 `DeleteAllRoutes` calls into `LinuxRoutePlatform`. Constructor inputs are stable TAP and interface snapshots,
@@ -367,13 +367,13 @@ LinuxRoutePlatform(
     ppp::unordered_map<uint32_t, ppp::string> nics) noexcept;
 ```
 
-- [ ] **Step 4: Wire the coordinator and remove migrated Linux callbacks**
+- [x] **Step 4: Wire the coordinator and remove migrated Linux callbacks**
 
 Create the platform/coordinator during client open. Replace Linux calls to `BuildRouteHostPorts()` with
 `RouteState::Snapshot()` and Coordinator operations. Remove Linux use of `get_nics`,
 `get_dns_server_bucket`, `get_default_routes`, and setters.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 scripts/run-cpp-tests.sh
@@ -400,18 +400,18 @@ Expected: all C++ tests PASS; Linux route source has no `RouteHostPorts` referen
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Add platform-independent contract tests**
+- [x] **Step 1: Add platform-independent contract tests**
 
 For each adapter, test pure conversion to `RouteSpec` and idempotent coordinator stop. Mobile tests assert
 that the adapter advertises `ApplyAll` capability rather than filling desktop callbacks with no-op lambdas.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `scripts/run-cpp-tests.sh`
 
 Expected: FAIL because platform adapters are missing.
 
-- [ ] **Step 3: Implement Windows adapter and compile**
+- [x] **Step 3: Implement Windows adapter and compile**
 
 Move MIB route creation/deletion and DNS baseline restore inputs into `WindowsRoutePlatform`. Run:
 
@@ -421,17 +421,17 @@ build_windows.bat Debug x64
 
 Expected: MSVC compile succeeds.
 
-- [ ] **Step 4: Implement Darwin adapter and compile**
+- [x] **Step 4: Implement Darwin adapter and compile**
 
 Move `TapDarwin` route calls into `DarwinRoutePlatform`. Run the macOS CMake compile workflow command from
 `.github/workflows/build-macos.yml`; expected exit 0.
 
-- [ ] **Step 5: Implement mobile adapter and compile**
+- [x] **Step 5: Implement mobile adapter and compile**
 
 Move current `AddAllRoute` behavior behind `MobileRoutePlatform::ApplyAll`. Run Android cross-compile command
 from `.github/workflows/build-android.yml`; expected exit 0.
 
-- [ ] **Step 6: Commit each platform independently**
+- [x] **Step 6: Commit each platform independently**
 
 ```bash
 git commit -m "refactor(route): isolate Windows route platform effects"
@@ -457,7 +457,7 @@ Stage only the relevant platform adapter, migrated source, manifest, and tests f
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Add an architecture test requiring zero RouteHostPorts references**
+- [x] **Step 1: Add an architecture test requiring zero RouteHostPorts references**
 
 ```python
 def test_route_host_ports_are_removed(self):
@@ -465,13 +465,13 @@ def test_route_host_ports_are_removed(self):
     self.assertEqual([], matches)
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `python3 -m unittest tests.tooling.test_repository_layout -v`
 
 Expected: FAIL listing current RouteHost files and Switcher builder.
 
-- [ ] **Step 3: Move all remaining fields and teardown into RouteState/Coordinator**
+- [x] **Step 3: Move all remaining fields and teardown into RouteState/Coordinator**
 
 Remove `rib_`, `fib_`, `peer_prefix_rib_`, `peer_prefix_fib_`, `nics_`, `route_added_`,
 `route_apply_ready_`, `dns_serverss_`, and platform default-route fields from the Switcher member fragment.
@@ -483,7 +483,7 @@ if (route_coordinator_) {
 }
 ```
 
-- [ ] **Step 4: Delete compatibility interfaces and run all gates**
+- [x] **Step 4: Delete compatibility interfaces and run all gates**
 
 ```bash
 scripts/run-cpp-tests.sh
@@ -493,7 +493,7 @@ python3 tools/check_vcxproj_sources.py
 
 Expected: no `RouteHostPorts` match, all tests PASS, source manifests match.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A ppp/app/client tests/cpp ppp.vcxproj tools/check_repository_layout.py tests/tooling
@@ -512,7 +512,7 @@ git commit -m "refactor(route): remove switcher route service locator"
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Write lifetime tests**
+- [x] **Step 1: Write lifetime tests**
 
 Use a fake transport and verify destruction/close:
 
@@ -529,13 +529,13 @@ assert(!session->Send(source, destination, packet, size));
 Add a two-thread test that repeatedly copies `shared_ptr<const DnsSessionContext>` while another thread
 closes the session; run under ASan in CI.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `scripts/run-cpp-tests.sh`
 
 Expected: build FAIL because DNS session types do not exist.
 
-- [ ] **Step 3: Implement context with explicit activity state**
+- [x] **Step 3: Implement context with explicit activity state**
 
 ```cpp
 class DnsSessionContext final {
@@ -558,7 +558,7 @@ private:
 `Send()` checks `active_`, locks the weak transport, then calls the interface. It never returns a reference to
 internal state.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 scripts/run-cpp-tests.sh
@@ -582,18 +582,18 @@ git commit -m "refactor(dns): add explicit tunnel session lifetime"
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Write controller tests**
+- [x] **Step 1: Write controller tests**
 
 Test local response, tunnel response, TAP output, timer cancellation, generation replacement, and close. The
 controller fixture supplies direct stable dependencies rather than getter callbacks.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `scripts/run-cpp-tests.sh`
 
 Expected: build FAIL because `DnsController` is absent.
 
-- [ ] **Step 3: Implement controller ownership**
+- [x] **Step 3: Implement controller ownership**
 
 ```cpp
 class IDnsTimerScheduler {
@@ -633,17 +633,17 @@ private:
 interceptor. DNS reachability is owned by the controller and copied as a value projection into RouteState before
 route application; neither module receives the other's mutable container.
 
-- [ ] **Step 4: Make Exchanger implement IDnsTunnelTransport**
+- [x] **Step 4: Make Exchanger implement IDnsTunnelTransport**
 
 Add `SendDnsDatagram()` as a narrow delegate to existing `SendTo()`. Do not include DnsController in the
 Exchanger public header.
 
-- [ ] **Step 5: Migrate packet dispatch**
+- [x] **Step 5: Migrate packet dispatch**
 
 Replace `DnsHostPortsFor(exchanger)` calls with a session snapshot obtained from DnsController. Pass the
 snapshot by `shared_ptr<const DnsSessionContext>` through asynchronous response handling.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```bash
 scripts/run-cpp-tests.sh
@@ -669,18 +669,18 @@ git commit -m "refactor(dns): move session orchestration into controller"
 - Modify: `tests/cpp/CMakeLists.txt`
 - Modify: `ppp.vcxproj`
 
-- [ ] **Step 1: Add zero-concrete-host architecture assertions**
+- [x] **Step 1: Add zero-concrete-host architecture assertions**
 
 Require no Switcher/Exchanger names in `ppp/app/client/dns/*.h` except the transport implementation site,
 and no `DnsHostPorts`, `IDnsHost`, or `dns_host_ports_cache_` anywhere.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `python3 -m unittest tests.tooling.test_repository_layout -v`
 
 Expected: FAIL with existing DnsHost and cache matches.
 
-- [ ] **Step 3: Migrate teardown ordering**
+- [x] **Step 3: Migrate teardown ordering**
 
 Perform exactly:
 
@@ -699,7 +699,7 @@ if (route_coordinator_) {
 Delete `InvalidateDnsHostPorts`, its locked variant, cache members, concrete factory overloads, and the
 non-owning `shared_ptr<DnsInterceptor>` adapter.
 
-- [ ] **Step 4: Run all local gates and commit**
+- [x] **Step 4: Run all local gates and commit**
 
 ```bash
 scripts/run-cpp-tests.sh
@@ -726,7 +726,7 @@ Expected: all tests PASS and architecture checker reports no migration-baseline 
 - Modify: `docs/CONCURRENCY_MODEL_CN.md`
 - Modify: `docs/TESTING.md`
 
-- [ ] **Step 1: Run the complete verification matrix**
+- [x] **Step 1: Run the complete verification matrix**
 
 ```bash
 python3 -m unittest tests.tooling.test_repository_layout -v
@@ -739,13 +739,13 @@ ctest --test-dir build/test --output-on-failure
 
 Expected: every command exits 0; CTest reports 0 failed tests.
 
-- [ ] **Step 2: Run sanitizer and platform builds**
+- [x] **Step 2: Run sanitizer and platform builds**
 
 Run ASan/UBSan DNS session and route rollback tests, Windows MSVC build, Linux GCC/Clang builds, Android
 cross-build, and macOS build using the exact commands in current workflows. Expected: all jobs exit 0 and
 sanitizers report no UAF, data race symptom, or leak attributable to the migrated modules.
 
-- [ ] **Step 3: Verify architecture acceptance searches**
+- [x] **Step 3: Verify architecture acceptance searches**
 
 ```bash
 ! git grep -n "RouteHostPorts\|DnsHostPorts\|IDnsHost\|dns_host_ports_cache_" -- ppp tests
@@ -754,12 +754,12 @@ sanitizers report no UAF, data race symptom, or leak attributable to the migrate
 
 Expected: both searches return no matches.
 
-- [ ] **Step 4: Update paired documentation**
+- [x] **Step 4: Update paired documentation**
 
 Document one-way ownership, RouteCoordinator transaction order, platform adapters, DNS session weak transport,
 teardown order, and the commands above in both English and Chinese files.
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add docs

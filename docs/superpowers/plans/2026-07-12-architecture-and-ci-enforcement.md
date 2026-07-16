@@ -1,8 +1,8 @@
 # Architecture and CI Enforcement Implementation Plan
 
-> Status: In progress
+> Status: Implemented
 > Type: Plan
-> Last verified: a9cfec7
+> Last verified: ef97c8c
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -270,13 +270,13 @@ git add scripts .github android ios tests/contracts
 - Create or modify: Windows workflow
 - Modify: `docs/TESTING.md`
 
-- [ ] **Step 1: Add Linux GCC Release job**
-- [ ] **Step 2: Add Linux Clang Debug job**
-- [ ] **Step 3: Add ASan/UBSan lifecycle subset**
-- [ ] **Step 4: Add Windows MSVC compile/test job**
-- [ ] **Step 5: Preserve Flutter and iOS jobs**
-- [ ] **Step 6: Upload coverage and sanitizer artifacts**
-- [ ] **Step 7: Commit**
+- [x] **Step 1: Add Linux GCC Release job**
+- [x] **Step 2: Add Linux Clang Debug job**
+- [x] **Step 3: Add ASan/UBSan lifecycle subset**
+- [x] **Step 4: Add Windows MSVC compile/test job**
+- [x] **Step 5: Preserve Flutter and iOS jobs**
+- [x] **Step 6: Upload coverage and sanitizer artifacts**
+- [x] **Step 7: Commit**
 
 ```bash
 git add .github docs/TESTING.md

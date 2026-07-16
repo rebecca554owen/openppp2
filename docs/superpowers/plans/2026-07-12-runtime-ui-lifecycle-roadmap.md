@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Roadmap
-> Last verified: 2566750
+> Last verified: ef97c8c
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -75,11 +75,11 @@
 
 ### Gate E: P2P Allowed
 
-- [ ] Wire protocol and key derivation ADR accepted.
-- [ ] Replay window zero and wraparound cases pass.
-- [ ] Direct path never becomes a prerequisite for base VPN connectivity.
-- [ ] Android/iOS socket protection is verified.
-- [ ] UI distinguishes Relay, Probing, Direct, Suspect, and FallingBack.
+- [x] Wire protocol and key derivation ADR accepted.
+- [x] Replay window zero and wraparound cases pass.
+- [x] Direct path never becomes a prerequisite for base VPN connectivity.
+- [ ] Android/iOS socket protection is verified. Android API 34 emulator evidence is green; iOS physical-device evidence remains open.
+- [x] UI distinguishes Relay, Probing, Direct, Suspect, and FallingBack.
 
 ## Recommended PR Sequence
 

@@ -2,7 +2,7 @@
 
 > Status: Implemented
 > Type: Plan
-> Last verified: 3d3a179
+> Last verified: ef97c8c
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -29,7 +29,7 @@
 - Modify: `tests/cpp/CMakeLists.txt`
 - Test support: reuse or extend `tests/cpp/support/dns_host_wiring_switcher_stub.cpp`
 
-- [ ] **Step 1: Write a bounded teardown test**
+- [x] **Step 1: Write a bounded teardown test**
 
 Create a switcher test owner that builds `DnsHostPortsFor`, then invokes `ClientConnectionTeardown::ReleaseAllObjects()` on a worker and waits with `std::future::wait_for(std::chrono::seconds(2))`.
 
@@ -39,7 +39,7 @@ Expected assertion:
 BOOST_TEST(future.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
 ```
 
-- [ ] **Step 2: Run and verify failure or timeout**
+- [x] **Step 2: Run and verify failure or timeout**
 
 ```bash
 cmake -S tests/cpp -B build/test -G Ninja
@@ -49,7 +49,7 @@ ctest --test-dir build/test -R client_teardown_deadlock_test --output-on-failure
 
 Expected before fix: timeout/failure on desktop path.
 
-- [ ] **Step 3: Commit the red test**
+- [x] **Step 3: Commit the red test**
 
 ```bash
 git add tests/cpp
@@ -71,7 +71,7 @@ void InvalidateDnsHostPorts() noexcept;
 void InvalidateDnsHostPortsLocked() noexcept;
 ```
 
-- [ ] **Step 1: Add private locked helper**
+- [x] **Step 1: Add private locked helper**
 
 ```cpp
 void VEthernetNetworkSwitcher::InvalidateDnsHostPortsLocked() noexcept {
@@ -80,7 +80,7 @@ void VEthernetNetworkSwitcher::InvalidateDnsHostPortsLocked() noexcept {
 }
 ```
 
-- [ ] **Step 2: Keep lock acquisition in the public function**
+- [x] **Step 2: Keep lock acquisition in the public function**
 
 ```cpp
 void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {
@@ -89,11 +89,11 @@ void VEthernetNetworkSwitcher::InvalidateDnsHostPorts() noexcept {
 }
 ```
 
-- [ ] **Step 3: Call locked helper from teardown**
+- [x] **Step 3: Call locked helper from teardown**
 
 Because teardown already holds `prdr_` on desktop, call `InvalidateDnsHostPortsLocked()` there.
 
-- [ ] **Step 4: Run deadlock and existing DNS tests**
+- [x] **Step 4: Run deadlock and existing DNS tests**
 
 ```bash
 ctest --test-dir build/test -R "client_teardown_deadlock_test|dns_host_wiring_test" --output-on-failure
@@ -101,7 +101,7 @@ ctest --test-dir build/test -R "client_teardown_deadlock_test|dns_host_wiring_te
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ppp/app/client tests/cpp
@@ -130,11 +130,11 @@ const dns::DnsHostPorts& DnsHostPortsFor(...)
 std::shared_ptr<const dns::DnsHostPorts> DnsHostPortsFor(...)
 ```
 
-- [ ] **Step 1: Add lifetime regression test**
+- [x] **Step 1: Add lifetime regression test**
 
 Obtain a snapshot, invalidate the owner cache, then assert the retained snapshot remains valid and callable.
 
-- [ ] **Step 2: Change cache storage**
+- [x] **Step 2: Change cache storage**
 
 ```cpp
 std::shared_ptr<const dns::DnsHostPorts> dns_host_ports_cache_;
@@ -142,17 +142,17 @@ std::shared_ptr<const dns::DnsHostPorts> dns_host_ports_cache_;
 
 Build a new mutable value locally, then publish it as `shared_ptr<const ...>` while holding the lock.
 
-- [ ] **Step 3: Update callers**
+- [x] **Step 3: Update callers**
 
 Copy the shared pointer under lock and use it after the lock is released. Return false when the snapshot is null or invalid.
 
-- [ ] **Step 4: Run DNS and dispatch tests**
+- [x] **Step 4: Run DNS and dispatch tests**
 
 ```bash
 ctest --test-dir build/test -R "dns_host|dispatch" --output-on-failure
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ppp/app/client tests/cpp
@@ -165,11 +165,11 @@ git add ppp/app/client tests/cpp
 - Modify: `ppp/app/client/VEthernetNetworkSwitcher.cpp`
 - Test: `tests/cpp/dns_host_wiring_test.cpp`
 
-- [ ] **Step 1: Add destruction regression test**
+- [x] **Step 1: Add destruction regression test**
 
 Hold only the returned `DnsHostPorts` snapshot, release the switcher, and assert a `weak_ptr<VEthernetNetworkSwitcher>` expires.
 
-- [ ] **Step 2: Capture weak switcher in stored callbacks**
+- [x] **Step 2: Capture weak switcher in stored callbacks**
 
 ```cpp
 std::weak_ptr<VEthernetNetworkSwitcher> weak_self = self;
@@ -181,11 +181,11 @@ host.get_tap = [weak_self]() noexcept {
 
 Apply the same rule to every callback retained by the switcher.
 
-- [ ] **Step 3: Define safe fallback behavior**
+- [x] **Step 3: Define safe fallback behavior**
 
 Callbacks return false, null, or no-op after owner expiry. They must not dereference an expired weak pointer.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 ```bash
 ctest --test-dir build/test -R dns_host_wiring_test --output-on-failure
@@ -295,7 +295,7 @@ A completion event for generation 7 must not change UI state for generation 8.
 
 A UI-side timeout does not force Idle. It displays `Stopping is taking longer than expected` with diagnostics/force-stop actions while retaining the true runtime phase.
 
-- [ ] **Step 4: Run all UI tests** — Dart/Swift timeout cases await CI because the local SDKs are unavailable.
+- [x] **Step 4: Run all UI tests** — Dart, Swift, and TUI suites passed on the `ef97c8c` evidence baseline.
 
 ```bash
 cd android && flutter test
