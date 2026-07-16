@@ -7,7 +7,13 @@ CONFIG="$HERE/appsettings.bench.json"
 PPP_BIN="${PPP_BIN:-$ROOT/bin/ppp}"
 OUT="${1:-$HERE/results/e2e-latest}"
 DURATION="${BENCH_DURATION:-30}"
+BITRATE="${BENCH_BITRATE:-10M}"
 CLIENT_MODE="${BENCH_CLIENT_MODE:-proxy}"
+
+[[ "$BITRATE" =~ ^[1-9][0-9]*([KMG])?$ ]] || {
+    echo "BENCH_BITRATE must be a positive integer with optional K, M, or G suffix" >&2
+    exit 2
+}
 
 for command in "$PPP_BIN" iperf3; do
     command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }
@@ -48,9 +54,9 @@ done
 for size in 64 1400; do
     timeout "$((DURATION + 15))" iperf3 -s -1 -p 10002 > "$OUT/iperf-server-$size.log" 2>&1 & pids+=("$!")
     sleep 1
-    iperf3 -c 127.0.0.1 -p 7000 --connect-timeout 5000 -u --bitrate 0 --length "$size" --time "$DURATION" --json \
+    iperf3 -c 127.0.0.1 -p 7000 --connect-timeout 5000 -u --bitrate "$BITRATE" --length "$size" --time "$DURATION" --json \
         > "$OUT/e2e-$size.json"
-    python3 "$HERE/validate_e2e.py" "$OUT/e2e-$size.json" > "$OUT/e2e-$size.summary.json"
+    python3 "$HERE/validate_e2e.py" "$OUT/e2e-$size.json" "$BITRATE" > "$OUT/e2e-$size.summary.json"
     wait "${pids[-1]}"
     unset 'pids[-1]'
 done

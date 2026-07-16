@@ -69,22 +69,44 @@ class UdpBenchmarkContractTests(unittest.TestCase):
         self.assertIn("BENCH_SERVER_WAIT", script)
         self.assertIn('timeout "$((DURATION + 15))" iperf3 -s', script)
         self.assertIn("validate_e2e.py", script)
+        self.assertIn('BITRATE="${BENCH_BITRATE:-10M}"', script)
+        self.assertIn('--bitrate "$BITRATE"', script)
+        self.assertNotIn("--bitrate 0", script)
+        self.assertIn('"$BITRATE" > "$OUT/e2e-$size.summary.json"', script)
+        self.assertIn("BENCH_BITRATE must be a positive integer", script)
 
     def test_e2e_validator_rejects_iperf_errors_and_reports_pps(self):
         validator = ROOT / "tools" / "bench" / "validate_e2e.py"
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "result.json"
             result.write_text(json.dumps({"error": "mapping failed"}), encoding="utf-8")
-            failed = subprocess.run([sys.executable, validator, result], capture_output=True, text=True)
+            failed = subprocess.run(
+                [sys.executable, validator, result, "100M"],
+                capture_output=True,
+                text=True,
+            )
             self.assertNotEqual(0, failed.returncode)
 
             result.write_text(
                 json.dumps({"end": {"sum": {"seconds": 2, "packets": 100, "lost_packets": 1}}}),
                 encoding="utf-8",
             )
-            passed = subprocess.run([sys.executable, validator, result], capture_output=True, text=True)
+            passed = subprocess.run(
+                [sys.executable, validator, result, "100M"],
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(0, passed.returncode, passed.stderr)
-            self.assertEqual(50, json.loads(passed.stdout)["pps"])
+            summary = json.loads(passed.stdout)
+            self.assertEqual(50, summary["pps"])
+            self.assertEqual("100M", summary["offered_bitrate"])
+
+            invalid_bitrate = subprocess.run(
+                [sys.executable, validator, result, "0"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, invalid_bitrate.returncode)
 
 
 if __name__ == "__main__":
