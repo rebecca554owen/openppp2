@@ -243,3 +243,108 @@ BOOST_AUTO_TEST_CASE(pair_seed_round_trips_only_for_its_offer_and_recipient) {
         key, offer_hash, offer.initiator_peer_id,
         static_cast<P2PPeerRole>(2), nonce, pair_seed, envelope));
 }
+
+BOOST_AUTO_TEST_CASE(recipient_wire_round_trips_both_roles) {
+    const auto offer = Offer();
+    const auto offer_hash = Bytes<32>(61);
+    const auto pair_seed = Bytes<32>(93);
+    P2PWrappedPairSeed initiator;
+    P2PWrappedPairSeed responder;
+    BOOST_REQUIRE(WrapP2PPairSeed(
+        Bytes<32>(3), offer_hash, offer.initiator_peer_id,
+        P2PPeerRole::Initiator, Bytes<12>(125), pair_seed, initiator));
+    BOOST_REQUIRE(WrapP2PPairSeed(
+        Bytes<32>(35), offer_hash, offer.responder_peer_id,
+        P2PPeerRole::Responder, Bytes<12>(145), pair_seed, responder));
+
+    for (const auto& envelope : {initiator, responder}) {
+        P2PRelayOfferRecipientBytes wire{};
+        BOOST_REQUIRE(SerializeP2PRelayOfferRecipient(offer, envelope, wire));
+        P2PRelayOfferV1 parsed_offer;
+        P2PWrappedPairSeed parsed_envelope;
+        BOOST_REQUIRE(ParseP2PRelayOfferRecipient(
+            wire.data(), wire.size(), parsed_offer, parsed_envelope));
+        BOOST_TEST(parsed_offer.offer_id == offer.offer_id);
+        BOOST_TEST(parsed_offer.candidate_set_hash == offer.candidate_set_hash);
+        BOOST_TEST(parsed_envelope.recipient_peer_id == envelope.recipient_peer_id);
+        BOOST_TEST(static_cast<int>(parsed_envelope.recipient_role) ==
+            static_cast<int>(envelope.recipient_role));
+        BOOST_TEST(parsed_envelope.wrap_nonce == envelope.wrap_nonce);
+        BOOST_TEST(parsed_envelope.ciphertext == envelope.ciphertext);
+        BOOST_TEST(parsed_envelope.auth_tag == envelope.auth_tag);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(recipient_wire_rejects_malformed_input_without_output) {
+    const auto offer = Offer();
+    P2PWrappedPairSeed envelope;
+    BOOST_REQUIRE(WrapP2PPairSeed(
+        Bytes<32>(3), Bytes<32>(61), offer.initiator_peer_id,
+        P2PPeerRole::Initiator, Bytes<12>(125), Bytes<32>(93), envelope));
+    P2PRelayOfferRecipientBytes wire{};
+    BOOST_REQUIRE(SerializeP2PRelayOfferRecipient(offer, envelope, wire));
+
+    P2PRelayOfferV1 parsed_offer;
+    parsed_offer.offer_id = Bytes<16>(231);
+    P2PWrappedPairSeed parsed_envelope;
+    parsed_envelope.recipient_peer_id = Bytes<16>(211);
+    const auto offer_baseline = parsed_offer.offer_id;
+    const auto envelope_baseline = parsed_envelope.recipient_peer_id;
+
+    BOOST_TEST(!ParseP2PRelayOfferRecipient(
+        wire.data(), wire.size() - 1, parsed_offer, parsed_envelope));
+    BOOST_TEST(parsed_offer.offer_id == offer_baseline);
+    BOOST_TEST(parsed_envelope.recipient_peer_id == envelope_baseline);
+
+    auto tampered = wire;
+    tampered[P2PRelayOfferBytes{}.size() + P2PId{}.size()] = 2;
+    BOOST_TEST(!ParseP2PRelayOfferRecipient(
+        tampered.data(), tampered.size(), parsed_offer, parsed_envelope));
+    BOOST_TEST(parsed_offer.offer_id == offer_baseline);
+    BOOST_TEST(parsed_envelope.recipient_peer_id == envelope_baseline);
+
+    tampered = wire;
+    tampered[P2PRelayOfferBytes{}.size()] ^= 0x80;
+    BOOST_TEST(!ParseP2PRelayOfferRecipient(
+        tampered.data(), tampered.size(), parsed_offer, parsed_envelope));
+    BOOST_TEST(parsed_offer.offer_id == offer_baseline);
+    BOOST_TEST(parsed_envelope.recipient_peer_id == envelope_baseline);
+}
+
+BOOST_AUTO_TEST_CASE(recipient_wire_hex_is_canonical_and_strict) {
+    const auto offer = Offer();
+    P2PWrappedPairSeed envelope;
+    BOOST_REQUIRE(WrapP2PPairSeed(
+        Bytes<32>(3), Bytes<32>(61), offer.initiator_peer_id,
+        P2PPeerRole::Initiator, Bytes<12>(125), Bytes<32>(93), envelope));
+
+    std::string encoded;
+    BOOST_REQUIRE(EncodeP2PRelayOfferRecipientHex(offer, envelope, encoded));
+    BOOST_TEST(encoded.size() == P2PRelayOfferRecipientBytes{}.size() * 2);
+    BOOST_TEST(std::all_of(encoded.begin(), encoded.end(), [](char value) {
+        return (value >= '0' && value <= '9') ||
+            (value >= 'a' && value <= 'f');
+    }));
+
+    P2PRelayOfferV1 parsed_offer;
+    P2PWrappedPairSeed parsed_envelope;
+    BOOST_REQUIRE(ParseP2PRelayOfferRecipientHex(
+        encoded, parsed_offer, parsed_envelope));
+    BOOST_TEST(parsed_offer.offer_id == offer.offer_id);
+    BOOST_TEST(parsed_envelope.ciphertext == envelope.ciphertext);
+
+    parsed_offer.offer_id = Bytes<16>(231);
+    parsed_envelope.recipient_peer_id = Bytes<16>(211);
+    const auto offer_baseline = parsed_offer.offer_id;
+    const auto envelope_baseline = parsed_envelope.recipient_peer_id;
+    encoded[17] = 'g';
+    BOOST_TEST(!ParseP2PRelayOfferRecipientHex(
+        encoded, parsed_offer, parsed_envelope));
+    BOOST_TEST(parsed_offer.offer_id == offer_baseline);
+    BOOST_TEST(parsed_envelope.recipient_peer_id == envelope_baseline);
+    encoded.pop_back();
+    BOOST_TEST(!ParseP2PRelayOfferRecipientHex(
+        encoded, parsed_offer, parsed_envelope));
+    BOOST_TEST(parsed_offer.offer_id == offer_baseline);
+    BOOST_TEST(parsed_envelope.recipient_peer_id == envelope_baseline);
+}

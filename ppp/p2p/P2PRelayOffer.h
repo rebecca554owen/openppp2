@@ -3,7 +3,9 @@
 #include <ppp/p2p/P2PKeyDerivation.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace ppp::p2p {
 
@@ -18,6 +20,7 @@ using P2PWrapNonce = std::array<std::uint8_t, 12>;
 using P2PWrapTag = std::array<std::uint8_t, 16>;
 using P2PRelayOfferBytes = std::array<std::uint8_t, 131>;
 using P2PExporterContext = std::array<std::uint8_t, 113>;
+using P2PRelayOfferRecipientBytes = std::array<std::uint8_t, 208>;
 
 struct P2PRelayOfferV1 {
     std::uint8_t version = 1;
@@ -75,5 +78,26 @@ bool UnwrapP2PPairSeed(
     P2PPeerRole recipient_role,
     const P2PWrappedPairSeed& envelope,
     P2PPairSeed& output) noexcept;
+
+bool SerializeP2PRelayOfferRecipient(
+    const P2PRelayOfferV1& offer,
+    const P2PWrappedPairSeed& envelope,
+    P2PRelayOfferRecipientBytes& output) noexcept;
+
+bool ParseP2PRelayOfferRecipient(
+    const std::uint8_t* data,
+    std::size_t length,
+    P2PRelayOfferV1& offer,
+    P2PWrappedPairSeed& envelope) noexcept;
+
+bool EncodeP2PRelayOfferRecipientHex(
+    const P2PRelayOfferV1& offer,
+    const P2PWrappedPairSeed& envelope,
+    std::string& output) noexcept;
+
+bool ParseP2PRelayOfferRecipientHex(
+    const std::string& encoded,
+    P2PRelayOfferV1& offer,
+    P2PWrappedPairSeed& envelope) noexcept;
 
 }

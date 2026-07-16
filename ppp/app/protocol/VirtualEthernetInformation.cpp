@@ -391,6 +391,7 @@ namespace ppp {
                 virtual_ip = 0;
                 peer_virtual_ip = 0;
                 token.clear();
+                authenticated_offer_v1.clear();
                 reason.clear();
                 candidates.clear();
             }
@@ -402,6 +403,7 @@ namespace ppp {
                     virtual_ip != 0 ||
                     peer_virtual_ip != 0 ||
                     !token.empty() ||
+                    !authenticated_offer_v1.empty() ||
                     !reason.empty() ||
                     !candidates.empty();
             }
@@ -424,6 +426,10 @@ namespace ppp {
                 }
                 if (!token.empty()) {
                     json["token"] = Json::Value(token.c_str());
+                }
+                if (!authenticated_offer_v1.empty()) {
+                    json["authenticated-offer-v1"] =
+                        Json::Value(authenticated_offer_v1.c_str());
                 }
                 if (!reason.empty()) {
                     json["reason"] = Json::Value(reason.c_str());
@@ -460,6 +466,8 @@ namespace ppp {
                 value.virtual_ip = P2PStringToIPv4(JsonAuxiliary::AsString(json["virtual-ip"]));
                 value.peer_virtual_ip = P2PStringToIPv4(JsonAuxiliary::AsString(json["peer-virtual-ip"]));
                 value.token = JsonAuxiliary::AsString(json["token"]);
+                value.authenticated_offer_v1 =
+                    JsonAuxiliary::AsString(json["authenticated-offer-v1"]);
                 value.reason = JsonAuxiliary::AsString(json["reason"]);
 
                 const Json::Value& candidates_json = json["candidates"];

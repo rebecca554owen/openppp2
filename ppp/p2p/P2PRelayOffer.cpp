@@ -38,9 +38,22 @@ bool ValidRole(P2PPeerRole role) noexcept {
         role == P2PPeerRole::Responder;
 }
 
+int HexValue(char value) noexcept {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
 template <std::size_t N>
 void Append(std::uint8_t*& cursor, const std::array<std::uint8_t, N>& value) noexcept {
     std::memcpy(cursor, value.data(), value.size());
+    cursor += value.size();
+}
+
+template <std::size_t N>
+void Read(const std::uint8_t*& cursor, std::array<std::uint8_t, N>& value) noexcept {
+    std::memcpy(value.data(), cursor, value.size());
     cursor += value.size();
 }
 
@@ -291,6 +304,125 @@ bool UnwrapP2PPairSeed(
     }
     OPENSSL_cleanse(pair_seed.data(), pair_seed.size());
     return ok;
+}
+
+bool SerializeP2PRelayOfferRecipient(
+    const P2PRelayOfferV1& offer,
+    const P2PWrappedPairSeed& envelope,
+    P2PRelayOfferRecipientBytes& output) noexcept {
+    const bool initiator = envelope.recipient_role == P2PPeerRole::Initiator;
+    const bool responder = envelope.recipient_role == P2PPeerRole::Responder;
+    if ((!initiator && !responder) || IsZero(envelope.wrap_nonce) ||
+        envelope.recipient_peer_id != (initiator
+            ? offer.initiator_peer_id
+            : offer.responder_peer_id)) {
+        return false;
+    }
+
+    P2PRelayOfferBytes common{};
+    if (!SerializeP2PRelayOffer(offer, common)) {
+        return false;
+    }
+
+    P2PRelayOfferRecipientBytes wire{};
+    std::uint8_t* cursor = wire.data();
+    Append(cursor, common);
+    Append(cursor, envelope.recipient_peer_id);
+    *cursor++ = static_cast<std::uint8_t>(envelope.recipient_role);
+    Append(cursor, envelope.wrap_nonce);
+    Append(cursor, envelope.ciphertext);
+    Append(cursor, envelope.auth_tag);
+    if (cursor != wire.data() + wire.size()) {
+        return false;
+    }
+    output = wire;
+    return true;
+}
+
+bool ParseP2PRelayOfferRecipient(
+    const std::uint8_t* data,
+    std::size_t length,
+    P2PRelayOfferV1& offer,
+    P2PWrappedPairSeed& envelope) noexcept {
+    if (!data || length != P2PRelayOfferRecipientBytes{}.size()) {
+        return false;
+    }
+
+    const std::uint8_t* cursor = data;
+    P2PRelayOfferV1 parsed_offer;
+    parsed_offer.version = *cursor++;
+    Read(cursor, parsed_offer.offer_id);
+    Read(cursor, parsed_offer.initiator_session_id);
+    Read(cursor, parsed_offer.responder_session_id);
+    Read(cursor, parsed_offer.initiator_peer_id);
+    Read(cursor, parsed_offer.responder_peer_id);
+    Read(cursor, parsed_offer.connection_epoch);
+    parsed_offer.ttl_seconds = *cursor++;
+    parsed_offer.cipher = *cursor++;
+    Read(cursor, parsed_offer.candidate_set_hash);
+
+    P2PWrappedPairSeed parsed_envelope;
+    Read(cursor, parsed_envelope.recipient_peer_id);
+    parsed_envelope.recipient_role = static_cast<P2PPeerRole>(*cursor++);
+    Read(cursor, parsed_envelope.wrap_nonce);
+    Read(cursor, parsed_envelope.ciphertext);
+    Read(cursor, parsed_envelope.auth_tag);
+    if (cursor != data + length || !ValidOffer(parsed_offer) ||
+        !ValidRole(parsed_envelope.recipient_role) ||
+        IsZero(parsed_envelope.wrap_nonce)) {
+        return false;
+    }
+    const auto& expected_peer =
+        parsed_envelope.recipient_role == P2PPeerRole::Initiator
+            ? parsed_offer.initiator_peer_id
+            : parsed_offer.responder_peer_id;
+    if (parsed_envelope.recipient_peer_id != expected_peer) {
+        return false;
+    }
+
+    offer = parsed_offer;
+    envelope = parsed_envelope;
+    return true;
+}
+
+bool EncodeP2PRelayOfferRecipientHex(
+    const P2PRelayOfferV1& offer,
+    const P2PWrappedPairSeed& envelope,
+    std::string& output) noexcept {
+    P2PRelayOfferRecipientBytes wire{};
+    if (!SerializeP2PRelayOfferRecipient(offer, envelope, wire)) {
+        return false;
+    }
+
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string encoded;
+    encoded.resize(wire.size() * 2);
+    for (std::size_t i = 0; i < wire.size(); ++i) {
+        encoded[i * 2] = hex[wire[i] >> 4];
+        encoded[i * 2 + 1] = hex[wire[i] & 0x0f];
+    }
+    output = std::move(encoded);
+    return true;
+}
+
+bool ParseP2PRelayOfferRecipientHex(
+    const std::string& encoded,
+    P2PRelayOfferV1& offer,
+    P2PWrappedPairSeed& envelope) noexcept {
+    P2PRelayOfferRecipientBytes wire{};
+    if (encoded.size() != wire.size() * 2) {
+        return false;
+    }
+    for (std::size_t i = 0; i < wire.size(); ++i) {
+        const int high = HexValue(encoded[i * 2]);
+        const int low = HexValue(encoded[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            return false;
+        }
+        wire[i] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    return ParseP2PRelayOfferRecipient(
+        wire.data(), wire.size(), offer, envelope);
 }
 
 }

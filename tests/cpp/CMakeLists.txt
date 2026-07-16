@@ -110,6 +110,16 @@ openppp2_add_cpp_test(p2p_relay_offer_coordinator_test SOURCES
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp")
 target_link_libraries(p2p_relay_offer_coordinator_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_information_message_test SOURCES
+    p2p_information_message_test.cpp
+    support/peer_prefix_route_test_stubs.cpp
+    support/peer_prefix_json_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/app/protocol/VirtualEthernetInformation.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_link_libraries(p2p_information_message_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_offer_token_test SOURCES
     p2p_offer_token_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2POfferToken.cpp"

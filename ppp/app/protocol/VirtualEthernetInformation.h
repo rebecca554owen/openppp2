@@ -203,6 +203,7 @@ namespace ppp {
                 uint32_t                                            virtual_ip = 0;      ///< Sender virtual IPv4 in network byte order.
                 uint32_t                                            peer_virtual_ip = 0; ///< Peer virtual IPv4 in network byte order.
                 ppp::string                                         token;               ///< Short-lived coordinator token.
+                ppp::string                                         authenticated_offer_v1; ///< Hex-encoded authenticated relay offer for this recipient.
                 ppp::string                                         reason;              ///< Rejection or status reason.
                 ppp::vector<P2PEndpointCandidate>                   candidates;          ///< Candidate endpoints for the peer.
 
