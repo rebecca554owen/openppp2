@@ -146,7 +146,7 @@ jobs:
         if: always()
         run: |
           mkdir -p device-evidence
-          adb logcat -d > device-evidence/logcat.txt || true
+          timeout 15s adb logcat -d > device-evidence/logcat.txt || true
 
       - name: Upload emulator evidence
         if: always()

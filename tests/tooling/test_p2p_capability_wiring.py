@@ -448,6 +448,7 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("api-level: 34", workflow)
         self.assertIn("arch: x86_64", workflow)
         self.assertIn(":app:connectedDebugAndroidTest", workflow)
+        self.assertIn("timeout 15s adb logcat -d", workflow)
 
     def test_ios_uses_provider_owned_udp_transport(self) -> None:
         header = self.source("ios/OpenPPP2PacketTunnelBridge.h")
