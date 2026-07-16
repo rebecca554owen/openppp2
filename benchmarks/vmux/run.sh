@@ -18,6 +18,7 @@ Options:
   --output DIRECTORY    Result directory (default: build/benchmarks/vmux)
   --server HOST         iperf3 server for --execute
   --telemetry FILE      Real VMUX telemetry captured during the run
+  --endpoint-manifest FILE  Client/server platform, device, and commit attestation
   --prepare-hook FILE   Required executable that configures/verifies the tunnel
   --interface NAME      Interface used only by fault scenarios
   --hook FILE           Executable carrier control hook for churn scenarios
@@ -46,6 +47,7 @@ DURATION=10
 OUTPUT="$ROOT/build/benchmarks/vmux"
 SERVER=
 TELEMETRY=
+ENDPOINT_MANIFEST=
 PREPARE_HOOK=
 INTERFACE=
 HOOK=
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
         --output) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; OUTPUT="$2"; shift 2 ;;
         --server) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; SERVER="$2"; shift 2 ;;
         --telemetry) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; TELEMETRY="$2"; shift 2 ;;
+        --endpoint-manifest) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; ENDPOINT_MANIFEST="$2"; shift 2 ;;
         --prepare-hook) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; PREPARE_HOOK="$2"; shift 2 ;;
         --interface) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; INTERFACE="$2"; shift 2 ;;
         --hook) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; HOOK="$2"; shift 2 ;;
@@ -102,11 +105,44 @@ fi
     echo "--execute requires an executable --prepare-hook" >&2
     exit 2
 }
+[[ -n "$ENDPOINT_MANIFEST" && -f "$ENDPOINT_MANIFEST" ]] || {
+    echo "--execute requires an existing --endpoint-manifest file" >&2
+    exit 2
+}
 if [[ "$ACTION" != none ]]; then
     [[ -n "$HOOK" && -x "$HOOK" ]] || { echo "$SCENARIO requires an executable --hook" >&2; exit 2; }
 fi
-command -v iperf3 >/dev/null || { echo "--execute requires iperf3" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "--execute requires python3" >&2; exit 1; }
+
+python3 - "$ENDPOINT_MANIFEST" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+try:
+    manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or set(manifest) != {"client", "server"}:
+        raise ValueError("must contain exactly client and server")
+    for role in ("client", "server"):
+        endpoint = manifest[role]
+        fields = {"platform", "device_class", "device_id", "git_commit"}
+        if not isinstance(endpoint, dict) or set(endpoint) != fields:
+            raise ValueError(f"{role} fields are invalid")
+        if endpoint["platform"] not in {"linux", "android", "ios"}:
+            raise ValueError(f"{role} platform is invalid")
+        if endpoint["device_class"] not in {"physical", "virtual"}:
+            raise ValueError(f"{role} device_class is invalid")
+        if not isinstance(endpoint["device_id"], str) or not endpoint["device_id"]:
+            raise ValueError(f"{role} device_id is invalid")
+        if not isinstance(endpoint["git_commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", endpoint["git_commit"]):
+            raise ValueError(f"{role} git_commit is invalid")
+except (OSError, json.JSONDecodeError, ValueError) as error:
+    print(f"invalid endpoint manifest: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+command -v iperf3 >/dev/null || { echo "--execute requires iperf3" >&2; exit 1; }
 
 "$PREPARE_HOOK" "$SCENARIO" "$MODE" "$FLOWS" || {
     echo "prepare hook rejected scenario; no result written" >&2
@@ -163,7 +199,7 @@ if [[ -n "$HOOK_PID" ]]; then
 fi
 
 GIT_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
-python3 - "$RAW" "$TELEMETRY" "$RESULT_TMP" "$SCENARIO" "$DURATION" "$MODE" "$FLOWS" "$PROFILE" "$GIT_COMMIT" <<'PY'
+python3 - "$RAW" "$TELEMETRY" "$ENDPOINT_MANIFEST" "$RESULT_TMP" "$SCENARIO" "$DURATION" "$MODE" "$FLOWS" "$PROFILE" "$GIT_COMMIT" <<'PY'
 import hashlib
 import json
 import math
@@ -171,8 +207,8 @@ from pathlib import Path
 import platform
 import sys
 
-raw_path, telemetry_path, output_path = map(Path, sys.argv[1:4])
-scenario, duration, mode, flows, profile, commit = sys.argv[4:10]
+raw_path, telemetry_path, endpoint_path, output_path = map(Path, sys.argv[1:5])
+scenario, duration, mode, flows, profile, commit = sys.argv[5:11]
 def reject_constant(value):
     raise ValueError(f"invalid number {value}")
 
@@ -185,27 +221,38 @@ if iperf.get("error"):
     raise SystemExit(f"iperf error: {iperf['error']}")
 with telemetry_path.open(encoding="utf-8") as stream:
     telemetry = json.load(stream, parse_constant=reject_constant)
+with endpoint_path.open(encoding="utf-8") as stream:
+    endpoints = json.load(stream, parse_constant=reject_constant)
 if not isinstance(telemetry, dict):
     raise SystemExit("telemetry must be an object")
 metrics = telemetry.get("metrics", {})
 runtime_state = telemetry.get("runtime_state", {})
 required_metrics = {
     "p50_latency_ms", "p99_latency_ms", "reorder_depth", "buffered_bytes",
-    "active_links", "disconnects",
+    "active_links", "disconnects", "reorder_entries",
 }
 if not isinstance(metrics, dict) or metrics.keys() != required_metrics:
     raise SystemExit("telemetry metrics must contain exactly: " + ", ".join(sorted(required_metrics)))
 runtime_fields = {"requested_mode", "effective_mode", "fallback_reason"}
 if not isinstance(runtime_state, dict) or runtime_state.keys() != runtime_fields:
     raise SystemExit("telemetry runtime_state must contain exactly: " + ", ".join(sorted(runtime_fields)))
+reorder_limits = telemetry.get("reorder_limits")
+if not isinstance(reorder_limits, dict) or reorder_limits.keys() != {"bytes", "entries"}:
+    raise SystemExit("telemetry reorder_limits must contain exactly: bytes, entries")
+if not isinstance(endpoints, dict) or endpoints.keys() != {"client", "server"}:
+    raise SystemExit("endpoint manifest must contain exactly: client, server")
 for name in ("p50_latency_ms", "p99_latency_ms"):
     value = metrics[name]
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise SystemExit(f"telemetry {name} must be a finite non-negative number")
-for name in ("reorder_depth", "buffered_bytes", "active_links", "disconnects"):
+for name in ("reorder_depth", "buffered_bytes", "active_links", "disconnects", "reorder_entries"):
     value = metrics[name]
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise SystemExit(f"telemetry {name} must be a non-negative integer")
+for name in ("bytes", "entries"):
+    value = reorder_limits[name]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise SystemExit(f"telemetry reorder_limits.{name} must be a positive integer")
 for name in runtime_fields:
     if not isinstance(runtime_state[name], str):
         raise SystemExit(f"telemetry {name} must be a string")
@@ -256,6 +303,8 @@ result = {
     "config": config,
     "metrics": {"throughput_mbps": bps / 1_000_000, **{name: metrics[name] for name in required_metrics}},
     "runtime_state": {name: runtime_state[name] for name in ("requested_mode", "effective_mode", "fallback_reason")},
+    "endpoints": endpoints,
+    "reorder_limits": reorder_limits,
     "iperf": iperf,
 }
 with output_path.open("w", encoding="utf-8") as stream:

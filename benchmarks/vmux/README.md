@@ -39,11 +39,32 @@ measurements are diagnostic evidence, not rollout gates.
 
 ## Real runs
 
-Use `--execute`, an iperf3 server, an executable `--prepare-hook`, and a
-telemetry file captured from the same run. Before touching netem or starting
-iperf3, the harness calls the prepare hook with `scenario mode flows`; the hook
-must configure and verify the real tunnel or return non-zero. The telemetry
-file supplies measurements iperf3 cannot report:
+Use `--execute`, an iperf3 server, an executable `--prepare-hook`, an endpoint
+manifest, and telemetry captured from the same run. The manifest identifies
+both tested endpoints; use a stable, non-secret device ID and the full 40-hex
+commit actually installed on each endpoint:
+
+```json
+{
+  "client": {
+    "platform": "android",
+    "device_class": "physical",
+    "device_id": "pixel-lab-01",
+    "git_commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "server": {
+    "platform": "linux",
+    "device_class": "physical",
+    "device_id": "fixed-bench-01",
+    "git_commit": "89abcdef0123456789abcdef0123456789abcdef"
+  }
+}
+```
+
+The manifest is validated before the prepare hook can change tunnel or network
+state. The hook receives `scenario mode flows`; it must configure and verify the
+real tunnel or return non-zero. The telemetry file supplies measurements iperf3
+cannot report, including the configured reorder bounds:
 
 ```json
 {
@@ -52,8 +73,13 @@ file supplies measurements iperf3 cannot report:
     "p99_latency_ms": 2.7,
     "reorder_depth": 0,
     "buffered_bytes": 0,
+    "reorder_entries": 0,
     "active_links": 2,
     "disconnects": 0
+  },
+  "reorder_limits": {
+    "bytes": 4194304,
+    "entries": 2048
   },
   "runtime_state": {
     "requested_mode": "flow",
@@ -66,7 +92,8 @@ file supplies measurements iperf3 cannot report:
 ```bash
 benchmarks/vmux/run.sh --execute --scenario flow-one-flow --duration 10 \
   --server 192.0.2.10 --prepare-hook ./prepare-vmux.sh \
-  --telemetry build/vmux-telemetry.json
+  --telemetry build/vmux-telemetry.json \
+  --endpoint-manifest build/vmux-endpoints.json
 ```
 
 Fault scenarios additionally require root, `ip`, `tc`, `iperf3`, and an
@@ -105,3 +132,15 @@ reorder depth; buffered bytes; active links; disconnects; and requested,
 effective, and fallback runtime state. `parse_results.py` validates every input
 before printing per-scenario min/mean/max summaries. Invalid JSON, missing or
 wrong-typed fields, and iperf error objects return non-zero.
+
+Old diagnostic schema-v1 results without endpoint attestation remain readable.
+Rollout evidence must include physical Linux-client and Android/iOS-client
+`off-one-flow` + `flow-one-flow` pairs captured with matching environments and
+durations. The rollout gate enforces the 95% throughput and 110% p99 thresholds,
+zero disconnects, both reorder limits, Linux x86-64/non-WSL execution, and a
+Linux client commit matching the runner checkout:
+
+```bash
+python3 benchmarks/vmux/parse_results.py --rollout-gate \
+  build/benchmarks/vmux/*.json
+```

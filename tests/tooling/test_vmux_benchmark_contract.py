@@ -41,7 +41,7 @@ def valid_result(scenario="compat-one-flow", throughput=100.0):
         "architecture": "x86_64",
         "kernel": "Linux 6.8",
         "cpu": "test cpu",
-        "git_commit": "0123456789abcdef",
+        "git_commit": "1" * 40,
     }
     environment["fingerprint"] = "sha256:" + hashlib.sha256(
         json.dumps(environment, sort_keys=True, separators=(",", ":")).encode()
@@ -74,7 +74,53 @@ def valid_result(scenario="compat-one-flow", throughput=100.0):
     }
 
 
+def rollout_result(platform, device_id, scenario, throughput, p99):
+    result = valid_result(scenario, throughput)
+    mode = "off" if scenario == "off-one-flow" else "flow"
+    result["config"].update(mux_mode=mode, flows=1)
+    result["runtime_state"].update(
+        requested_mode=mode,
+        effective_mode=mode,
+        fallback_reason="mux_inactive" if mode == "off" else "",
+    )
+    result["metrics"].update(
+        p99_latency_ms=p99,
+        active_links=0 if mode == "off" else 2,
+        reorder_entries=8,
+    )
+    result["reorder_limits"] = {"bytes": 4096, "entries": 64}
+    result["endpoints"] = {
+        "client": {
+            "platform": platform,
+            "device_class": "physical",
+            "device_id": device_id,
+            "git_commit": "1" * 40,
+        },
+        "server": {
+            "platform": "linux",
+            "device_class": "physical",
+            "device_id": "fixed-server-01",
+            "git_commit": "2" * 40,
+        },
+    }
+    return result
+
+
 class VmuxBenchmarkContractTests(unittest.TestCase):
+    def run_rollout_gate(self, payloads):
+        parser = VMUX / "parse_results.py"
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index, payload in enumerate(payloads):
+                path = Path(directory) / f"result-{index}.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                paths.append(path)
+            return subprocess.run(
+                [sys.executable, parser, "--rollout-gate", *paths],
+                capture_output=True,
+                text=True,
+            )
+
     def test_matrix_and_metrics_are_declared(self):
         runner = (VMUX / "run.sh").read_text(encoding="utf-8")
         readme = (VMUX / "README.md").read_text(encoding="utf-8")
@@ -113,6 +159,11 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
         self.assertIn("fingerprint", schema["properties"]["environment"]["required"])
         self.assertIn("config", schema["required"])
         self.assertIn("runtime_state", schema["required"])
+        self.assertIn("endpoints", schema["properties"])
+        self.assertIn("reorder_limits", schema["properties"])
+        self.assertIn(
+            "reorder_entries", schema["properties"]["metrics"]["properties"]
+        )
         self.assertIn("allOf", schema)
 
     def test_default_smoke_is_dry_run_and_rejects_bad_arguments(self):
@@ -135,7 +186,7 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
         )
         self.assertNotEqual(0, invalid.returncode)
 
-    def test_failed_embedded_validation_is_nonzero_and_leaves_no_result(self):
+    def test_execute_embeds_attestation_and_rejects_mode_mismatch(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             directory = Path(directory)
             fakebin = directory / "bin"
@@ -143,11 +194,12 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
             fakebin.mkdir()
             output.mkdir()
             iperf = fakebin / "iperf3"
-            iperf.write_text(
-                '#!/bin/sh\nprintf \'%s\\n\' \'{"end":{"sum_received":{"bits_per_second":1000000}}}\'\n',
-                encoding="utf-8",
+            fake_iperf = (
+                "#!/bin/sh\n"
+                "printf '%s\\n' '{\"end\":{\"sum_received\":{\"bits_per_second\":1000000}}}'\n"
             )
             telemetry = directory / "telemetry.json"
+            manifest = directory / "endpoints.json"
             telemetry.write_text(
                 json.dumps({
                     "metrics": {
@@ -157,7 +209,9 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
                         "buffered_bytes": 0,
                         "active_links": 1,
                         "disconnects": 0,
+                        "reorder_entries": 0,
                     },
+                    "reorder_limits": {"bytes": 4096, "entries": 64},
                     "runtime_state": {
                         "requested_mode": "compat",
                         "effective_mode": "compat",
@@ -166,21 +220,44 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
+            manifest.write_text(
+                json.dumps(rollout_result(
+                    "linux", "fixed-linux-01", "flow-one-flow", 100, 2.5
+                )["endpoints"]),
+                encoding="utf-8",
+            )
             rel_bin = fakebin.relative_to(ROOT).as_posix()
             rel_output = output.relative_to(ROOT).as_posix()
             rel_telemetry = telemetry.relative_to(ROOT).as_posix()
+            rel_manifest = manifest.relative_to(ROOT).as_posix()
             command = (
+                f"printf %s {shlex.quote(fake_iperf)} > {shlex.quote(rel_bin + '/iperf3')} && "
                 f"chmod +x {shlex.quote(rel_bin + '/iperf3')} && "
-                f"PATH={shlex.quote(rel_bin)}:$PATH benchmarks/vmux/run.sh --execute "
+                f"PATH=\"{rel_bin}:$PATH\" benchmarks/vmux/run.sh --execute "
                 f"--scenario flow-one-flow --duration 1 --server 127.0.0.1 "
                 f"--telemetry {shlex.quote(rel_telemetry)} --prepare-hook /bin/true "
+                f"--endpoint-manifest {shlex.quote(rel_manifest)} "
                 f"--output {shlex.quote(rel_output)}"
             )
-            result = run_wsl(command)
-            leftovers = list(output.iterdir())
+            failed = run_wsl(command)
+            failed_leftovers = list(output.iterdir())
+            telemetry_payload = json.loads(telemetry.read_text(encoding="utf-8"))
+            telemetry_payload["runtime_state"].update(
+                requested_mode="flow", effective_mode="flow"
+            )
+            telemetry.write_text(json.dumps(telemetry_payload), encoding="utf-8")
+            passed = run_wsl(command)
+            result_files = list(output.glob("*.json"))
+            payload = json.loads(result_files[0].read_text(encoding="utf-8")) if result_files else {}
 
-        self.assertNotEqual(0, result.returncode, result.stdout)
-        self.assertEqual([], leftovers)
+        self.assertNotEqual(0, failed.returncode, failed.stdout)
+        self.assertIn("requested/effective mode does not match scenario", failed.stderr)
+        self.assertEqual([], failed_leftovers)
+        self.assertEqual(0, passed.returncode, passed.stderr)
+        self.assertEqual(1, len(result_files))
+        self.assertEqual("fixed-linux-01", payload["endpoints"]["client"]["device_id"])
+        self.assertEqual({"bytes": 4096, "entries": 64}, payload["reorder_limits"])
+        self.assertEqual(0, payload["metrics"]["reorder_entries"])
 
     def test_execute_requires_prepare_hook_before_tools_or_network(self):
         runner = VMUX / "run.sh"
@@ -197,6 +274,134 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
             )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("--prepare-hook", result.stderr)
+
+    def test_execute_requires_endpoint_manifest_before_tools_or_network(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            telemetry = Path(directory) / "telemetry.json"
+            telemetry.write_text("{}", encoding="utf-8")
+            relative = telemetry.relative_to(ROOT).as_posix()
+            result = subprocess.run(
+                [
+                    "bash", "benchmarks/vmux/run.sh", "--execute",
+                    "--server", "127.0.0.1", "--telemetry", relative,
+                    "--prepare-hook", "benchmarks/vmux/netem.sh",
+                ],
+                cwd=ROOT, capture_output=True, text=True,
+            )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("--endpoint-manifest", result.stderr)
+
+    def test_invalid_endpoint_manifest_is_rejected_before_prepare_hook(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            directory = Path(directory)
+            telemetry = directory / "telemetry.json"
+            manifest = directory / "endpoints.json"
+            hook = directory / "prepare.sh"
+            marker = directory / "prepare-ran"
+            telemetry.write_text("{}", encoding="utf-8")
+            manifest.write_text("{}", encoding="utf-8")
+            hook.write_text(f"#!/bin/sh\ntouch '{marker.as_posix()}'\n", encoding="utf-8")
+            command = (
+                f"chmod +x {shlex.quote(hook.relative_to(ROOT).as_posix())} && "
+                "benchmarks/vmux/run.sh --execute --server 127.0.0.1 "
+                f"--telemetry {shlex.quote(telemetry.relative_to(ROOT).as_posix())} "
+                f"--endpoint-manifest {shlex.quote(manifest.relative_to(ROOT).as_posix())} "
+                f"--prepare-hook {shlex.quote(hook.relative_to(ROOT).as_posix())}"
+            )
+            result = run_wsl(command)
+            hook_ran = marker.exists()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("endpoint manifest", result.stderr)
+        self.assertFalse(hook_ran)
+
+    def test_rollout_gate_accepts_physical_linux_and_mobile_pairs(self):
+        payloads = (
+            rollout_result("linux", "fixed-linux-01", "off-one-flow", 100, 2.5),
+            rollout_result("linux", "fixed-linux-01", "flow-one-flow", 96, 2.6),
+            rollout_result("android", "pixel-physical-01", "off-one-flow", 80, 4.0),
+            rollout_result("android", "pixel-physical-01", "flow-one-flow", 78, 4.2),
+        )
+        result = self.run_rollout_gate(payloads)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        summary = json.loads(result.stdout)
+        self.assertTrue(summary["rollout_gate"]["passed"])
+
+    def test_rollout_gate_rejects_unqualified_evidence(self):
+        baseline = [
+            rollout_result("linux", "fixed-linux-01", "off-one-flow", 100, 2.5),
+            rollout_result("linux", "fixed-linux-01", "flow-one-flow", 96, 2.6),
+            rollout_result("android", "pixel-physical-01", "off-one-flow", 80, 4.0),
+            rollout_result("android", "pixel-physical-01", "flow-one-flow", 78, 4.2),
+        ]
+
+        cases = []
+        virtual_mobile = json.loads(json.dumps(baseline))
+        for item in virtual_mobile[2:]:
+            item["endpoints"]["client"]["device_class"] = "virtual"
+        cases.append(virtual_mobile)
+        cases.append(baseline[:2])
+
+        slow_flow = json.loads(json.dumps(baseline))
+        slow_flow[1]["metrics"]["throughput_mbps"] = 90
+        cases.append(slow_flow)
+        latent_flow = json.loads(json.dumps(baseline))
+        latent_flow[1]["metrics"]["p99_latency_ms"] = 3.0
+        cases.append(latent_flow)
+        bytes_over = json.loads(json.dumps(baseline))
+        bytes_over[1]["metrics"]["buffered_bytes"] = 4097
+        cases.append(bytes_over)
+        entries_over = json.loads(json.dumps(baseline))
+        entries_over[1]["metrics"]["reorder_entries"] = 65
+        cases.append(entries_over)
+        disconnected = json.loads(json.dumps(baseline))
+        disconnected[1]["metrics"]["disconnects"] = 1
+        cases.append(disconnected)
+        cases.append([baseline[0], *baseline[2:]])
+        changed_environment = json.loads(json.dumps(baseline))
+        changed_environment[1]["environment"]["cpu"] = "different cpu"
+        environment = changed_environment[1]["environment"]
+        environment["fingerprint"] = "sha256:" + hashlib.sha256(
+            json.dumps(
+                {name: environment[name] for name in ("architecture", "kernel", "cpu", "git_commit")},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        cases.append(changed_environment)
+        arm_linux = json.loads(json.dumps(baseline))
+        for item in arm_linux[:2]:
+            item["environment"]["architecture"] = "aarch64"
+            environment = item["environment"]
+            environment["fingerprint"] = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    {name: environment[name] for name in ("architecture", "kernel", "cpu", "git_commit")},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        cases.append(arm_linux)
+        wsl_linux = json.loads(json.dumps(baseline))
+        for item in wsl_linux[:2]:
+            item["environment"]["kernel"] = "Linux 6.6-microsoft-standard-WSL2"
+            environment = item["environment"]
+            environment["fingerprint"] = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    {name: environment[name] for name in ("architecture", "kernel", "cpu", "git_commit")},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        cases.append(wsl_linux)
+        mismatched_commit = json.loads(json.dumps(baseline))
+        for item in mismatched_commit[:2]:
+            item["endpoints"]["client"]["git_commit"] = "3" * 40
+        cases.append(mismatched_commit)
+
+        for payloads in cases:
+            result = self.run_rollout_gate(payloads)
+            self.assertNotEqual(0, result.returncode, payloads)
 
     def test_parser_rejects_mode_mismatch_fallback_and_off_links(self):
         parser = VMUX / "parse_results.py"
@@ -340,8 +545,11 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
         self.assertIn("environment fingerprint", readme)
         self.assertIn("configuration fingerprint", readme)
         self.assertIn("active_links == 0", readme)
+        self.assertIn("--endpoint-manifest", readme)
+        self.assertIn("--rollout-gate", readme)
         for document in (reference, reference_cn):
             self.assertIn("ded25d6", document)
+            self.assertIn("--rollout-gate", document)
         self.assertNotIn("actual churn sanitizer gate remains open", reference)
 
 

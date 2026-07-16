@@ -41,6 +41,20 @@ compatibility results, and the tested commits for both endpoints. Shared CI,
 WSL, virtual machines, dry-runs, and synthetic telemetry may be used for
 correctness diagnostics but do not satisfy this gate.
 
+Each real result must carry the `--endpoint-manifest` attestation described by
+the benchmark README. Before promotion, validate the complete physical Linux
+and Android/iOS result bundle with:
+
+```bash
+python3 benchmarks/vmux/parse_results.py --rollout-gate <results...>
+```
+
+This executable gate checks endpoint class and commits, paired environments and
+durations, throughput/p99 thresholds, zero disconnects, and configured reorder
+byte/entry bounds. Linux client evidence must be x86-64, non-WSL, and use the
+same commit as the runner checkout. The gate does not replace the sanitizer and
+old-peer artifacts.
+
 ## Default-change rule
 
 `compat` stays the production default until every gate above has qualifying

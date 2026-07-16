@@ -57,6 +57,7 @@
         "p50_latency_ms": { "type": "number", "minimum": 0 },
         "p99_latency_ms": { "type": "number", "minimum": 0 },
         "reorder_depth": { "type": "integer", "minimum": 0 },
+        "reorder_entries": { "type": "integer", "minimum": 0 },
         "buffered_bytes": { "type": "integer", "minimum": 0 },
         "active_links": { "type": "integer", "minimum": 0 },
         "disconnects": { "type": "integer", "minimum": 0 }
@@ -72,7 +73,38 @@
         "fallback_reason": { "type": "string" }
       }
     },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client", "server"],
+      "properties": {
+        "client": { "$ref": "#/$defs/endpoint" },
+        "server": { "$ref": "#/$defs/endpoint" }
+      }
+    },
+    "reorder_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "entries"],
+      "properties": {
+        "bytes": { "type": "integer", "minimum": 1 },
+        "entries": { "type": "integer", "minimum": 1 }
+      }
+    },
     "iperf": { "type": "object" }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "device_class", "device_id", "git_commit"],
+      "properties": {
+        "platform": { "enum": ["linux", "android", "ios"] },
+        "device_class": { "enum": ["physical", "virtual"] },
+        "device_id": { "type": "string", "minLength": 1 },
+        "git_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    }
   },
   "allOf": [
     {
