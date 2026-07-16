@@ -167,12 +167,23 @@ bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
     P2PControlPacket& output) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_ || generation_ != generation || now_ms < received_at_ms_ ||
-        now_ms >= deadline_ms_ || received_probe_rounds_ >= MaxProbeRounds) {
+        now_ms >= deadline_ms_) {
+        return false;
+    }
+
+    const auto received = BuildBinding(offer_, probe);
+    if (has_cached_probe_ack_ && received == cached_received_probe_ &&
+        probe.token == cached_received_probe_token_ &&
+        received.source == observed_source &&
+        received.destination == observed_destination) {
+        output = cached_probe_ack_;
+        return true;
+    }
+    if (received_probe_rounds_ >= MaxProbeRounds) {
         return false;
     }
 
     auto directional = SelectP2PV1Direction(key_material_, local_role_);
-    const auto received = BuildBinding(offer_, probe);
     auto expected_packet = probe;
     expected_packet.version = 1;
     expected_packet.type = P2PControlType::Probe;
@@ -225,6 +236,10 @@ bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
     }
 
     rx_replay_window_ = replay;
+    cached_received_probe_ = received;
+    cached_received_probe_token_ = probe.token;
+    cached_probe_ack_ = ack;
+    has_cached_probe_ack_ = true;
     ++received_probe_rounds_;
     ++next_tx_sequence_;
     output = ack;
@@ -366,11 +381,15 @@ void P2PClientOfferSession::ClearActiveLocked() noexcept {
     deadline_ms_ = 0;
     generation_ = 0;
     outstanding_probe_ = {};
+    cached_received_probe_ = {};
+    cached_received_probe_token_ = {};
+    cached_probe_ack_ = {};
     rx_replay_window_.Reset();
     next_tx_sequence_ = 0;
     probe_rounds_ = 0;
     received_probe_rounds_ = 0;
     has_outstanding_probe_ = false;
+    has_cached_probe_ack_ = false;
 }
 
 }

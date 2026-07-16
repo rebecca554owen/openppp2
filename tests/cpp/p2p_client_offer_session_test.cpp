@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/p2p/P2PClientOfferSession.h>
+#include <ppp/p2p/P2PControlDatagram.h>
 #include <ppp/p2p/P2PControlStateMachine.h>
 #include <ppp/p2p/P2POfferToken.h>
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
@@ -465,10 +466,12 @@ BOOST_AUTO_TEST_CASE(invalid_probe_does_not_consume_replay_or_mutate_ack_output)
     BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
         probe, probe.source, probe.destination, 1002, 7, output));
     const auto baseline = output;
-    BOOST_TEST(!responder.CreateAuthenticatedProbeAck(
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
         probe, probe.source, probe.destination, 1003, 7, output));
     BOOST_TEST(output.version == baseline.version);
     BOOST_TEST(output.token == baseline.token);
+    BOOST_TEST(output.nonce == baseline.nonce);
+    BOOST_TEST(output.sequence == baseline.sequence);
 }
 
 BOOST_AUTO_TEST_CASE(probe_ack_creation_is_generation_and_deadline_fenced) {
@@ -533,4 +536,60 @@ BOOST_AUTO_TEST_CASE(rx_replay_is_shared_across_probe_and_probe_ack_types) {
     BOOST_TEST(responder.AuthenticateProbeAck(
         fresh_sequence_ack, fresh_sequence_ack.source,
         fresh_sequence_ack.destination, 1004, 7).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(control_datagram_boundary_completes_authenticated_round_trip) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    const auto initiator_endpoint = Endpoint(10, 4000);
+    const auto responder_endpoint = Endpoint(40, 5000);
+    std::vector<std::uint8_t> probe_bytes;
+    BOOST_REQUIRE(CreateAuthenticatedProbeDatagram(
+        initiator, initiator_endpoint, responder_endpoint,
+        1001, 7, probe_bytes));
+    BOOST_TEST(probe_bytes.size() == P2PControlPacket::WireSize);
+
+    P2PControlDatagramResult responder_result;
+    BOOST_REQUIRE(HandleAuthenticatedControlDatagram(
+        responder, probe_bytes, initiator_endpoint, responder_endpoint,
+        1002, 7, responder_result));
+    BOOST_TEST(static_cast<int>(responder_result.action) ==
+        static_cast<int>(P2PControlDatagramAction::Reply));
+    BOOST_TEST(responder_result.reply.size() ==
+        P2PControlPacket::ProbeAckWireSize);
+
+    P2PControlDatagramResult initiator_result;
+    BOOST_REQUIRE(HandleAuthenticatedControlDatagram(
+        initiator, responder_result.reply,
+        responder_endpoint, initiator_endpoint,
+        1003, 7, initiator_result));
+    BOOST_TEST(static_cast<int>(initiator_result.action) ==
+        static_cast<int>(P2PControlDatagramAction::AuthenticatedAck));
+    BOOST_TEST(initiator_result.authenticated_ack.has_value());
+    BOOST_TEST(std::string(initiator.Snapshot().effective_path) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(control_datagram_boundary_rejects_malformed_input_atomically) {
+    P2PClientOfferSession session;
+    P2PControlDatagramResult result;
+    result.action = P2PControlDatagramAction::Reply;
+    result.reply = {9, 8, 7};
+    const std::vector<std::uint8_t> truncated(
+        P2PControlPacket::WireSize - 1, 0);
+
+    BOOST_TEST(!HandleAuthenticatedControlDatagram(
+        session, truncated, Endpoint(10, 4000), Endpoint(40, 5000),
+        1000, 7, result));
+    BOOST_TEST(static_cast<int>(result.action) ==
+        static_cast<int>(P2PControlDatagramAction::Reply));
+    BOOST_TEST(result.reply == std::vector<std::uint8_t>({9, 8, 7}));
 }

@@ -92,11 +92,15 @@ private:
     std::uint64_t generation_ = 0;
     std::uint64_t generation_floor_ = 0;
     P2POfferBinding outstanding_probe_{};
+    P2POfferBinding cached_received_probe_{};
+    P2POfferToken cached_received_probe_token_{};
+    P2PControlPacket cached_probe_ack_{};
     P2PReplayWindow rx_replay_window_{};
     std::uint32_t next_tx_sequence_ = 0;
     std::uint8_t probe_rounds_ = 0;
     std::uint8_t received_probe_rounds_ = 0;
     bool has_outstanding_probe_ = false;
+    bool has_cached_probe_ack_ = false;
     std::array<P2PId, ReplayCapacity> seen_offer_ids_{};
     std::size_t seen_count_ = 0;
     std::size_t seen_next_ = 0;

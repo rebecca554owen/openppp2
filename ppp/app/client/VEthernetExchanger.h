@@ -1014,6 +1014,7 @@ namespace ppp {
 
             private:
                 void                                                                    HandleP2PRelayOffer(const ITransmissionPtr& transmission, const ppp::app::protocol::P2PControlMessage& message) noexcept;
+                void                                                                    HandleP2PControlDatagram(const ITransmissionPtr& transmission, uint64_t generation, uint64_t transport_registration, ppp::p2p::P2PDatagramReceiveStatus status, const boost::asio::ip::udp::endpoint& sender, const std::uint8_t* packet, int packet_size) noexcept;
                 void                                                                    ResetP2PCandidateTransport() noexcept;
                 /** @brief Guards datagrams_, datagram_handlers_, and deadline_timers_ tables. */
                 SynchronizedObject                                                      syncobj_;
@@ -1054,9 +1055,13 @@ namespace ppp {
                 ppp::vector<ppp::app::protocol::P2PEndpointCandidate>                   p2p_registered_candidates_;
                 std::weak_ptr<ppp::transmissions::ITransmission>                       p2p_registered_transmission_;
                 std::shared_ptr<ppp::p2p::IP2PDatagramTransport>                       p2p_candidate_transport_;
+                boost::asio::ip::udp::endpoint                                          p2p_local_candidate_;
+                std::optional<ppp::p2p::P2PAuthenticatedProbeAck>                       p2p_authenticated_probe_ack_;
+                uint64_t                                                                p2p_transport_registration_id_ = 0;
                 uint32_t                                                                p2p_registered_virtual_ip_ = 0;
                 /** @brief Invalidates queued offer work across reconnect and teardown. */
                 std::atomic<uint64_t>                                                   p2p_offer_generation_{1};
+                std::atomic<uint64_t>                                                   p2p_transport_registration_sequence_{1};
                 /** @brief FRP port mapping table. */
                 VirtualEthernetMappingPortTable                                         mappings_;
                 /** @brief Pending deadline timers (guarded by syncobj_). */
