@@ -404,6 +404,51 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("NewLocalRef(state.clazz)", protect_call)
         self.assertIn("DeleteLocalRef(clazz)", protect_call)
 
+    def test_android_app_exposes_native_protection_smoke_entrypoints(self) -> None:
+        kotlin = self.source(
+            "android/android/app/src/main/kotlin/"
+            "supersocksr/ppp/android/c/libopenppp2.kt"
+        )
+        self.assertIn(
+            "external fun set_protect_enabled(enabled: Boolean): Boolean", kotlin
+        )
+        self.assertIn("external fun protect_socket_fd(fd: Int): Boolean", kotlin)
+
+    def test_android_debug_variant_runs_vpn_protect_instrumentation(self) -> None:
+        gradle = self.source("android/android/app/build.gradle")
+        debug_manifest = self.source(
+            "android/android/app/src/debug/AndroidManifest.xml"
+        )
+        instrumentation = self.source(
+            "android/android/app/src/androidTest/kotlin/supersocksr/ppp/android/"
+            "P2PSocketProtectionTest.kt"
+        )
+        workflow = self.source(".github/workflows/build-android.yml")
+
+        self.assertIn(
+            'testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"',
+            gradle,
+        )
+        self.assertIn(
+            'androidTestImplementation "androidx.test.ext:junit:1.2.1"', gradle
+        )
+        self.assertIn('debug {\n            ndk {\n                abiFilters "x86_64"', gradle)
+        self.assertIn('release {\n            ndk {\n                abiFilters "arm64-v8a"', gradle)
+        self.assertNotIn('"lib/x86_64/**"', gradle)
+        self.assertIn('tools:remove="android:process"', debug_manifest)
+        self.assertIn("DatagramSocket()", instrumentation)
+        self.assertIn("@RunWith(AndroidJUnit4::class)", instrumentation)
+        self.assertIn("ParcelFileDescriptor.fromDatagramSocket(socket)", instrumentation)
+        self.assertIn("assertFalse(libopenppp2.protect_socket_fd(fd))", instrumentation)
+        self.assertIn("assertTrue(libopenppp2.protect_socket_fd(fd))", instrumentation)
+        self.assertIn("assertFalse(libopenppp2.isProtectReady())", instrumentation)
+        self.assertIn("device-test:", workflow)
+        self.assertIn("openppp2-android-x86_64.zip", workflow)
+        self.assertIn("reactivecircus/android-emulator-runner@v2", workflow)
+        self.assertIn("api-level: 34", workflow)
+        self.assertIn("arch: x86_64", workflow)
+        self.assertIn(":app:connectedDebugAndroidTest", workflow)
+
     def test_ios_uses_provider_owned_udp_transport(self) -> None:
         header = self.source("ios/OpenPPP2PacketTunnelBridge.h")
         bridge = self.source("ios/OpenPPP2PacketTunnelBridge.cpp")

@@ -79,6 +79,12 @@ class libopenppp2 {
         external fun clearNativeTelemetryResourceAttributes()
 
         @JvmStatic
+        external fun set_protect_enabled(enabled: Boolean): Boolean
+
+        @JvmStatic
+        external fun protect_socket_fd(fd: Int): Boolean
+
+        @JvmStatic
         external fun get_default_ciphersuites(): String?
 
         @JvmStatic
