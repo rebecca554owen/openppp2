@@ -18,6 +18,35 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("ProductionAuthenticatedControlV1Ready", register)
         self.assertIn("if (p2p_capability.allowed)", register)
 
+    def test_client_capability_state_reaches_the_runtime_snapshot(self) -> None:
+        header = self.source("ppp/app/client/VEthernetExchanger.h")
+        exchanger = self.source("ppp/app/client/VEthernetExchanger.cpp")
+        main_loop = self.source("ppp/app/ApplicationMainLoop.cpp")
+
+        self.assertIn("GetRuntimeState()", header)
+        self.assertIn("runtime_state_mutex_", header)
+        self.assertIn("std::atomic<ppp::p2p::P2PState>", header)
+        capability_store = exchanger[
+            exchanger.index("const auto p2p_capability") :
+            exchanger.index("if (p2p_capability.allowed)")
+        ]
+        self.assertIn("runtime_state_mutex_", capability_store)
+        self.assertIn("disposed_.load", capability_store)
+        self.assertIn("p2p_state_.store(p2p_capability.state", capability_store)
+        self.assertIn(
+            "runtime_lifecycle_.UpdateP2PState(", main_loop
+        )
+        p2p_update = main_loop[main_loop.index("runtime_lifecycle_.UpdateP2PState(") :]
+        self.assertIn("exchanger_runtime.p2p_state", p2p_update)
+        self.assertIn("exchanger_runtime.network_state", p2p_update)
+        reconnect = exchanger[
+            exchanger.index("void VEthernetExchanger::ExchangeToConnectingState") :
+            exchanger.index("bool VEthernetExchanger::RegisterAllMappingPorts")
+        ]
+        self.assertGreaterEqual(
+            reconnect.count("p2p_state_.store(configured_p2p_state_"), 2
+        )
+
     def test_server_registration_and_offers_are_guarded(self) -> None:
         source = self.source("ppp/app/server/VirtualEthernetSwitcher.cpp")
         registration = source[

@@ -7,6 +7,7 @@
 #include <ppp/app/ApplicationClientBootstrap.h>
 #include <ppp/app/ApplicationServerBootstrap.h>
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/p2p/P2PCapabilityGate.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/diagnostics/Error.h>
 #if defined(_WIN32)
@@ -143,6 +144,14 @@ int PppApplication::Main(int argc, const char* argv[]) noexcept {
     runtime_seed.role = proxy_mode_ ? "proxy" : (client_mode_ ? "client" : "server");
     runtime_seed.capabilities = {
         "mux.compat", "mux.flow", "mux.balance", "mux.stripe"};
+    if (configuration_) {
+        runtime_seed.p2p_state = ppp::p2p::P2PCapabilityGate::Evaluate(
+            configuration_->p2p.enabled,
+            configuration_->p2p.mode.c_str(),
+            false,
+            false,
+            ppp::p2p::ProductionAuthenticatedControlV1Ready).state;
+    }
     const std::uint64_t runtime_generation =
         runtime_lifecycle_.Begin(std::move(runtime_seed), Executors::GetTickCount());
     runtime_lifecycle_.Transition(

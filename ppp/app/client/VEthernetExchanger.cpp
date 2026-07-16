@@ -98,6 +98,19 @@ namespace ppp {
             /** @brief Reserved ACK identifier used for static-echo keepalive signaling. */
             static constexpr int STATIC_ECHO_KEEP_ALIVED_ID              = IPEndPoint::NoneAddress - 1;
 
+            static ppp::p2p::P2PState ConfiguredP2PState(
+                const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept {
+                if (!configuration) {
+                    return ppp::p2p::P2PState::Unavailable;
+                }
+                return ppp::p2p::P2PCapabilityGate::Evaluate(
+                    configuration->p2p.enabled,
+                    configuration->p2p.mode.c_str(),
+                    false,
+                    false,
+                    ppp::p2p::ProductionAuthenticatedControlV1Ready).state;
+            }
+
             /** @brief Constructs exchanger and initializes optional static-echo ciphers. */
             VEthernetExchanger::VEthernetExchanger(
                 const VEthernetNetworkSwitcherPtr&      switcher,
@@ -110,6 +123,8 @@ namespace ppp {
                 , sekap_next_(0)
                 , switcher_(switcher)
                 , network_state_(NetworkState_Connecting)
+                , configured_p2p_state_(ConfiguredP2PState(configuration))
+                , p2p_state_(ConfiguredP2PState(configuration))
                 , static_echo_input_(false)
                 , static_echo_timeout_(UINT64_MAX)
                 , static_echo_session_id_(0)
@@ -239,6 +254,12 @@ namespace ppp {
                     transmission->HasAuthenticatedSessionExporter(),
                     protector && protector->IsReady(),
                     ppp::p2p::ProductionAuthenticatedControlV1Ready);
+                {
+                    std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                    if (!disposed_.load(std::memory_order_acquire)) {
+                        p2p_state_.store(p2p_capability.state, std::memory_order_relaxed);
+                    }
+                }
                 if (p2p_capability.allowed) {
                     request.P2P.enabled = true;
                     request.P2P.mode = configuration->p2p.mode;
@@ -281,6 +302,10 @@ namespace ppp {
                 /** @brief One-shot guard: only the first caller proceeds with cleanup. */
                 if (disposed_.exchange(true, std::memory_order_acq_rel)) {
                     return;
+                }
+                {
+                    std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                    p2p_state_.store(ppp::p2p::P2PState::Disabled, std::memory_order_relaxed);
                 }
 
                 VirtualEthernetMappingPortTable mappings;
@@ -1452,7 +1477,10 @@ namespace ppp {
                 uint64_t now = Executors::GetTickCount();
                 sekap_last_ = now;
                 sekap_next_ = now + RandomNext(SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT, SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT);
-                network_state_.exchange(NetworkState_Established);
+                {
+                    std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                    network_state_.store(NetworkState_Established, std::memory_order_relaxed);
+                }
                 reconnection_count_ = 0;
             }
 
@@ -1460,18 +1488,42 @@ namespace ppp {
             void VEthernetExchanger::ExchangeToConnectingState() noexcept {
                 sekap_last_ = 0;
                 sekap_next_ = 0;
-                network_state_.exchange(NetworkState_Connecting);
+                {
+                    std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                    network_state_.store(NetworkState_Connecting, std::memory_order_relaxed);
+                    p2p_state_.store(configured_p2p_state_, std::memory_order_relaxed);
+                }
             }
 
             /** @brief Transitions state to reconnecting and increments retry count. */
             void VEthernetExchanger::ExchangeToReconnectingState() noexcept {
                 sekap_last_ = 0;
                 sekap_next_ = 0;
-                network_state_.exchange(NetworkState_Reconnecting);
+                {
+                    std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                    network_state_.store(NetworkState_Reconnecting, std::memory_order_relaxed);
+                    p2p_state_.store(configured_p2p_state_, std::memory_order_relaxed);
+                }
                 reconnection_count_++;
 #if defined(_IPHONE)
                 ResetIosChildTransmissionSlots("reconnecting");
 #endif
+            }
+
+            VEthernetExchanger::RuntimeStateSnapshot VEthernetExchanger::GetRuntimeState() const noexcept {
+                std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                RuntimeStateSnapshot snapshot;
+                snapshot.network_state = network_state_.load(std::memory_order_relaxed);
+                if (disposed_.load(std::memory_order_acquire)) {
+                    snapshot.p2p_state = ppp::p2p::P2PState::Disabled;
+                }
+                else if (snapshot.network_state != NetworkState_Established) {
+                    snapshot.p2p_state = configured_p2p_state_;
+                }
+                else {
+                    snapshot.p2p_state = p2p_state_.load(std::memory_order_relaxed);
+                }
+                return snapshot;
             }
 
             /** @brief Registers all configured FRP mapping ports. */

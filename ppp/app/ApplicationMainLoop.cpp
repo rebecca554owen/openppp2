@@ -608,10 +608,16 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
 
     ppp::app::runtime::RuntimeSnapshot runtime = runtime_lifecycle_.GetSnapshot();
     if (runtime.generation != 0 && runtime.phase != ppp::app::runtime::RuntimePhase::Stopping) {
+        VEthernetExchanger::RuntimeStateSnapshot exchanger_runtime;
         if (NULLPTR != exchanger) {
+            exchanger_runtime = exchanger->GetRuntimeState();
             runtime_lifecycle_.UpdateMuxState(
                 runtime.generation,
                 exchanger->GetMuxRuntimeState(),
+                now);
+            runtime_lifecycle_.UpdateP2PState(
+                runtime.generation,
+                exchanger_runtime.p2p_state,
                 now);
         }
         if (NULLPTR == client) {
@@ -631,13 +637,13 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
                 ppp::app::runtime::RuntimePhase::Connecting,
                 now);
         }
-        else if (exchanger->GetNetworkState() == NetworkState::NetworkState_Reconnecting) {
+        else if (exchanger_runtime.network_state == NetworkState::NetworkState_Reconnecting) {
             runtime_lifecycle_.Transition(
                 runtime.generation,
                 ppp::app::runtime::RuntimePhase::Reconnecting,
                 now);
         }
-        else if (exchanger->GetNetworkState() == NetworkState::NetworkState_Established) {
+        else if (exchanger_runtime.network_state == NetworkState::NetworkState_Established) {
             if (runtime.phase != ppp::app::runtime::RuntimePhase::Connected &&
                 runtime.phase != ppp::app::runtime::RuntimePhase::ApplyingPolicy) {
                 runtime_lifecycle_.Transition(

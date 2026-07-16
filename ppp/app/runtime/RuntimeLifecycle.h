@@ -110,6 +110,28 @@ public:
         return publisher_.Publish(std::move(snapshot));
     }
 
+    bool UpdateP2PState(
+        std::uint64_t generation,
+        ppp::p2p::P2PState state,
+        std::uint64_t now) noexcept {
+        RuntimeSnapshot snapshot;
+        {
+            std::lock_guard<std::mutex> scope(mutex_);
+            if (generation == 0 || generation != generation_ ||
+                stop_coordinator_.IsStopping(generation) ||
+                stop_coordinator_.IsCompleted(generation)) {
+                return false;
+            }
+            if (current_.p2p_state == state) {
+                return true;
+            }
+            current_.p2p_state = state;
+            current_.monotonic_ms = NextTimestamp(now);
+            snapshot = current_;
+        }
+        return publisher_.Publish(std::move(snapshot));
+    }
+
     bool TryBeginStop(std::uint64_t generation, std::uint64_t now) noexcept {
         RuntimeSnapshot snapshot;
         {
@@ -120,6 +142,12 @@ public:
             }
             requested_phase_ = RuntimePhase::Stopping;
             current_.phase = RuntimePhase::Stopping;
+            if (current_.p2p_state == ppp::p2p::P2PState::Eligible ||
+                current_.p2p_state == ppp::p2p::P2PState::Probing ||
+                current_.p2p_state == ppp::p2p::P2PState::Direct ||
+                current_.p2p_state == ppp::p2p::P2PState::Suspect) {
+                current_.p2p_state = ppp::p2p::P2PState::FallingBack;
+            }
             current_.monotonic_ms = NextTimestamp(now);
             snapshot = current_;
         }
@@ -142,6 +170,7 @@ public:
             requested_phase_ = success ? RuntimePhase::Idle : RuntimePhase::Failed;
             current_.phase = requested_phase_;
             current_.mux_active_links = 0;
+            current_.p2p_state = ppp::p2p::P2PState::Disabled;
             current_.last_error = success ? RuntimeError() : std::move(error);
             current_.monotonic_ms = NextTimestamp(now);
             snapshot = current_;

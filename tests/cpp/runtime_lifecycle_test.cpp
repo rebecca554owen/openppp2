@@ -152,6 +152,43 @@ BOOST_AUTO_TEST_CASE(mux_state_publishes_only_when_current_generation_changes) {
     lifecycle.Unsubscribe(subscription);
 }
 
+BOOST_AUTO_TEST_CASE(p2p_state_publishes_only_for_the_live_generation) {
+    RuntimeLifecycle lifecycle;
+    std::size_t publications = 0;
+    const std::uint64_t subscription = lifecycle.Subscribe(
+        [&publications](const RuntimeSnapshot&) { ++publications; });
+    BOOST_REQUIRE_NE(subscription, 0u);
+
+    const std::uint64_t old_generation = lifecycle.Begin(RuntimeSnapshot(), 1);
+    const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 2);
+    BOOST_TEST(!lifecycle.UpdateP2PState(
+        old_generation, ppp::p2p::P2PState::Eligible, 3));
+    BOOST_TEST(publications == 2u);
+    BOOST_REQUIRE(lifecycle.UpdateP2PState(
+        generation, ppp::p2p::P2PState::Eligible, 4));
+    BOOST_TEST(publications == 3u);
+    BOOST_REQUIRE(lifecycle.UpdateP2PState(
+        generation, ppp::p2p::P2PState::Eligible, 5));
+    BOOST_TEST(publications == 3u);
+    BOOST_TEST(static_cast<int>(lifecycle.GetSnapshot().p2p_state) ==
+        static_cast<int>(ppp::p2p::P2PState::Eligible));
+
+    BOOST_REQUIRE(lifecycle.TryBeginStop(generation, 6));
+    BOOST_TEST(static_cast<int>(lifecycle.GetSnapshot().p2p_state) ==
+        static_cast<int>(ppp::p2p::P2PState::FallingBack));
+    BOOST_TEST(std::string(ppp::p2p::EffectivePath(
+        lifecycle.GetSnapshot().p2p_state)) == "relay");
+    BOOST_TEST(!lifecycle.UpdateP2PState(
+        generation, ppp::p2p::P2PState::Direct, 7));
+    BOOST_REQUIRE(lifecycle.CompleteStop(
+        generation, true, RuntimeError(), 8));
+    BOOST_TEST(static_cast<int>(lifecycle.GetSnapshot().p2p_state) ==
+        static_cast<int>(ppp::p2p::P2PState::Disabled));
+    BOOST_TEST(std::string(ppp::p2p::EffectivePath(
+        lifecycle.GetSnapshot().p2p_state)) == "relay");
+    lifecycle.Unsubscribe(subscription);
+}
+
 BOOST_AUTO_TEST_CASE(one_hundred_generations_cancel_from_every_startup_phase) {
     const RuntimePhase phases[] = {
         RuntimePhase::Starting,

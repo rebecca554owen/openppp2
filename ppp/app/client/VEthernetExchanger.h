@@ -22,8 +22,9 @@
  * All state transitions and protocol callbacks are executed on the
  * Boost.Asio `io_context` owned by the parent VEthernetNetworkSwitcher.
  * The internal `syncobj_` mutex guards only the datagram port table and
- * the deadline-timer table; all other state is accessed exclusively from
- * the IO thread.
+ * the deadline-timer table. `runtime_state_mutex_` commits the network/P2P
+ * projection consumed outside the exchanger strand; remaining mutable state
+ * is accessed exclusively from the IO thread.
  *
  * ### Lifecycle
  * 1. Construct with switcher, configuration, context, and session id.
@@ -51,6 +52,7 @@
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
+#include <ppp/p2p/P2PState.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
@@ -190,6 +192,11 @@ namespace ppp {
                     NetworkState_Reconnecting,  ///< Link lost; waiting before next reconnect attempt.
                 }                                                                       NetworkState;
 
+                struct RuntimeStateSnapshot final {
+                    NetworkState network_state = NetworkState_Connecting;
+                    ppp::p2p::P2PState p2p_state = ppp::p2p::P2PState::Disabled;
+                };
+
             public:
                 /**
                  * @brief Gets the current logical network state.
@@ -197,6 +204,7 @@ namespace ppp {
                  * @note Thread-safe due to std::atomic<NetworkState>.
                  */
                 NetworkState                                                            GetNetworkState()       noexcept { return network_state_.load(); }
+                RuntimeStateSnapshot                                                    GetRuntimeState() const noexcept;
 
                 /**
                  * @brief Gets the shared receive buffer used by async IO paths.
@@ -1005,6 +1013,8 @@ namespace ppp {
             private:
                 /** @brief Guards datagrams_, datagram_handlers_, and deadline_timers_ tables. */
                 SynchronizedObject                                                      syncobj_;
+                /** @brief Commits network and P2P projection as one runtime snapshot. */
+                mutable std::mutex                                                      runtime_state_mutex_;
 
                 /** @brief Atomic one-shot disposed flag; safe for cross-strand reads. */
                 std::atomic_bool                                                        disposed_{false};
@@ -1029,6 +1039,10 @@ namespace ppp {
                 ITransmissionPtr                                                        transmission_;
                 /** @brief Atomic network state for safe cross-thread reads. */
                 std::atomic<NetworkState>                                               network_state_      = NetworkState_Connecting;
+                /** @brief P2P state when no authenticated relay session is established. */
+                const ppp::p2p::P2PState                                                configured_p2p_state_;
+                /** @brief Fail-closed P2P capability state published to RuntimeSnapshot. */
+                std::atomic<ppp::p2p::P2PState>                                         p2p_state_{ppp::p2p::P2PState::Disabled};
                 /** @brief FRP port mapping table. */
                 VirtualEthernetMappingPortTable                                         mappings_;
                 /** @brief Pending deadline timers (guarded by syncobj_). */
