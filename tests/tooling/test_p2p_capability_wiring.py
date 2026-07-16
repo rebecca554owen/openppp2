@@ -432,6 +432,9 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn(
             'androidTestImplementation "androidx.test.ext:junit:1.2.1"', gradle
         )
+        self.assertIn(
+            'androidTestImplementation "androidx.test:runner:1.6.2"', gradle
+        )
         self.assertIn('debug {\n            ndk {\n                abiFilters "x86_64"', gradle)
         self.assertIn('release {\n            ndk {\n                abiFilters "arm64-v8a"', gradle)
         self.assertNotIn('"lib/x86_64/**"', gradle)
