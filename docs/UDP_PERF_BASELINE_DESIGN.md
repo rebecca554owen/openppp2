@@ -2,7 +2,7 @@
 
 - **日期**：2026-07-10
 - **状态**：Phase 0 micro/runner/CI smoke 与 WSL E2E 诊断已实现；固定 Linux E2E 证据待采集
-- **Last verified**：2026-07-17，`725da2b`
+- **Last verified**：2026-07-17，`59e2c0e`
 - **作者**：HyacinthHaru
 - **关联工作**：接替原作者做 openppp2 的 UDP 性能优化 + 模块解耦，期望结果：基准性能 **+10-15%**、各模块解耦、各模块 CPP 不职责紊乱。
 - **本文范围**：仅 Phase 0（建立可复现的 UDP 性能基准）。Phase 1（性能优化）、Phase 2（解耦重构）另立 spec。

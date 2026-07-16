@@ -2,11 +2,17 @@
 
 > Status: In progress
 > Type: Roadmap
-> Last verified: ef97c8c
+> Last verified: 59e2c0e
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish one runtime truth model shared by C++ core, TUI, Android, and iOS; stabilize lifecycle and teardown; enforce architecture and CI boundaries; then validate VMUX and design P2P safely.
+
+Repository implementation and correctness gates were reverified on 2026-07-17 at
+`main@59e2c0e` with all 9 GitHub Actions workflows successful. The remaining
+release gates require authoritative fixed-host or physical-device evidence:
+the UDP baseline bundle, VMUX Linux/mobile netem artifacts, and the P2P
+Android/iOS device and real-NAT matrix. They are intentionally left unchecked.
 
 **Architecture:** Core runtime publishes versioned snapshots and events. Platform bridges translate those facts without inventing state. UI stores reduce snapshots/events into presentation state. Route, DNS, VMUX, and P2P remain domain subsystems behind explicit interfaces. Work is split into four independently executable plans.
 
