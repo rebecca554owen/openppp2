@@ -37,6 +37,16 @@ using P2PSessionExporter = std::function<bool(
     std::uint8_t* output,
     std::size_t output_length)>;
 
+using P2PExportCompletion = std::function<void(bool)>;
+using P2PAsyncSessionExporter = std::function<void(
+    const char* label,
+    const P2PExporterContext& context,
+    P2PExporterKey& output,
+    const P2PExportCompletion& completion)>;
+using P2PRelayOfferCompletion = std::function<void(
+    bool ok,
+    const P2PRelayOfferBundle& bundle)>;
+
 bool BuildP2PRelayOfferBundle(
     const P2PRelayOfferInput& input,
     const P2PExporterKey& initiator_exporter,
@@ -49,5 +59,11 @@ bool CreateP2PRelayOfferBundle(
     const P2PSessionExporter& initiator_exporter,
     const P2PSessionExporter& responder_exporter,
     P2PRelayOfferBundle& output) noexcept;
+
+bool CreateP2PRelayOfferBundleAsync(
+    const P2PRelayOfferInput& input,
+    const P2PAsyncSessionExporter& initiator_exporter,
+    const P2PAsyncSessionExporter& responder_exporter,
+    const P2PRelayOfferCompletion& completion) noexcept;
 
 }

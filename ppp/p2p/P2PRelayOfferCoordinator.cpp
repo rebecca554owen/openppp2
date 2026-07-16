@@ -3,6 +3,9 @@
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
 
+#include <atomic>
+#include <memory>
+
 namespace ppp::p2p {
 namespace {
 
@@ -56,6 +59,129 @@ bool Export(
         return false;
     }
 }
+
+class AsyncRelayOffer final
+    : public std::enable_shared_from_this<AsyncRelayOffer> {
+public:
+    AsyncRelayOffer(
+        const P2PRelayOfferInput& input,
+        const P2PAsyncSessionExporter& initiator_exporter,
+        const P2PAsyncSessionExporter& responder_exporter,
+        const P2PRelayOfferCompletion& completion)
+        : input_(input),
+          initiator_exporter_(initiator_exporter),
+          responder_exporter_(responder_exporter),
+          completion_(completion) {}
+
+    ~AsyncRelayOffer() noexcept {
+        Clean();
+    }
+
+    void Start() noexcept {
+        const bool random_ready = Random(secrets_.offer_id) &&
+            Random(secrets_.connection_epoch) &&
+            Random(secrets_.pair_seed) &&
+            Random(secrets_.initiator_wrap_nonce) &&
+            Random(secrets_.responder_wrap_nonce);
+        const auto offer = MakeOffer(input_, secrets_);
+        if (!random_ready ||
+            !BuildP2PExporterContext(
+                offer, P2PPeerRole::Initiator, initiator_context_) ||
+            !BuildP2PExporterContext(
+                offer, P2PPeerRole::Responder, responder_context_)) {
+            Complete(false, {});
+            return;
+        }
+
+        auto self = shared_from_this();
+        auto exporter = initiator_exporter_;
+        try {
+            exporter(
+                P2PWrapExporterLabel, initiator_context_, initiator_key_,
+                [self](bool ok) noexcept { self->OnInitiator(ok); });
+        }
+        catch (...) {
+            OnInitiator(false);
+        }
+    }
+
+private:
+    void OnInitiator(bool ok) noexcept {
+        int expected = 0;
+        if (completed_.load(std::memory_order_acquire) ||
+            !stage_.compare_exchange_strong(
+                expected, 1, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (!ok) {
+            Complete(false, {});
+            return;
+        }
+
+        auto self = shared_from_this();
+        auto exporter = responder_exporter_;
+        try {
+            exporter(
+                P2PWrapExporterLabel, responder_context_, responder_key_,
+                [self](bool exported) noexcept {
+                    self->OnResponder(exported);
+                });
+        }
+        catch (...) {
+            OnResponder(false);
+        }
+    }
+
+    void OnResponder(bool ok) noexcept {
+        int expected = 1;
+        if (completed_.load(std::memory_order_acquire) ||
+            !stage_.compare_exchange_strong(
+                expected, 2, std::memory_order_acq_rel)) {
+            return;
+        }
+
+        P2PRelayOfferBundle bundle;
+        const bool built = ok && BuildP2PRelayOfferBundle(
+            input_, initiator_key_, responder_key_, secrets_, bundle);
+        Complete(built, bundle);
+    }
+
+    void Complete(bool ok, const P2PRelayOfferBundle& bundle) noexcept {
+        if (completed_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        auto completion = std::move(completion_);
+        initiator_exporter_ = {};
+        responder_exporter_ = {};
+        Clean();
+        if (completion) {
+            try {
+                completion(ok, bundle);
+            }
+            catch (...) {
+            }
+        }
+    }
+
+    void Clean() noexcept {
+        OPENSSL_cleanse(initiator_key_.data(), initiator_key_.size());
+        OPENSSL_cleanse(responder_key_.data(), responder_key_.size());
+        Cleanse(secrets_);
+    }
+
+private:
+    P2PRelayOfferInput input_;
+    P2PAsyncSessionExporter initiator_exporter_;
+    P2PAsyncSessionExporter responder_exporter_;
+    P2PRelayOfferCompletion completion_;
+    P2PRelayOfferSecrets secrets_;
+    P2PExporterContext initiator_context_{};
+    P2PExporterContext responder_context_{};
+    P2PExporterKey initiator_key_{};
+    P2PExporterKey responder_key_{};
+    std::atomic<int> stage_{0};
+    std::atomic_bool completed_{false};
+};
 
 }
 
@@ -125,6 +251,25 @@ bool CreateP2PRelayOfferBundle(
     OPENSSL_cleanse(responder_key.data(), responder_key.size());
     Cleanse(secrets);
     return ok;
+}
+
+bool CreateP2PRelayOfferBundleAsync(
+    const P2PRelayOfferInput& input,
+    const P2PAsyncSessionExporter& initiator_exporter,
+    const P2PAsyncSessionExporter& responder_exporter,
+    const P2PRelayOfferCompletion& completion) noexcept {
+    if (!initiator_exporter || !responder_exporter || !completion) {
+        return false;
+    }
+    try {
+        auto operation = std::make_shared<AsyncRelayOffer>(
+            input, initiator_exporter, responder_exporter, completion);
+        operation->Start();
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
 }
 
 }

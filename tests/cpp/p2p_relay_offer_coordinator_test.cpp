@@ -209,3 +209,100 @@ BOOST_AUTO_TEST_CASE(exporter_failure_is_fail_closed) {
     BOOST_TEST(responder_calls == 0);
     BOOST_TEST(output.offer.offer_id == baseline);
 }
+
+BOOST_AUTO_TEST_CASE(async_exporters_run_in_order_and_complete_once) {
+    const auto input = Input();
+    const auto initiator_key = Bytes<32>(7);
+    const auto responder_key = Bytes<32>(47);
+    P2PExporterContext initiator_context{};
+    P2PExporterContext responder_context{};
+    P2PExportCompletion initiator_done;
+    P2PExportCompletion responder_done;
+    P2PExporterKey* initiator_output = nullptr;
+    P2PExporterKey* responder_output = nullptr;
+    int initiator_calls = 0;
+    int responder_calls = 0;
+    int completion_calls = 0;
+    bool completion_ok = false;
+    P2PRelayOfferBundle completed_bundle;
+
+    const P2PAsyncSessionExporter initiator =
+        [&](const char* label, const P2PExporterContext& context,
+            P2PExporterKey& output, const P2PExportCompletion& completion) {
+        BOOST_TEST(std::string(label) == P2PWrapExporterLabel);
+        ++initiator_calls;
+        initiator_context = context;
+        initiator_output = &output;
+        initiator_done = completion;
+    };
+    const P2PAsyncSessionExporter responder =
+        [&](const char* label, const P2PExporterContext& context,
+            P2PExporterKey& output, const P2PExportCompletion& completion) {
+        BOOST_TEST(std::string(label) == P2PWrapExporterLabel);
+        ++responder_calls;
+        responder_context = context;
+        responder_output = &output;
+        responder_done = completion;
+    };
+
+    BOOST_REQUIRE(CreateP2PRelayOfferBundleAsync(
+        input, initiator, responder,
+        [&](bool ok, const P2PRelayOfferBundle& bundle) {
+            ++completion_calls;
+            completion_ok = ok;
+            completed_bundle = bundle;
+        }));
+    BOOST_TEST(initiator_calls == 1);
+    BOOST_TEST(responder_calls == 0);
+    BOOST_TEST(completion_calls == 0);
+    BOOST_REQUIRE(initiator_output);
+    *initiator_output = initiator_key;
+    const auto duplicate_initiator_done = initiator_done;
+    initiator_done(true);
+    BOOST_TEST(responder_calls == 1);
+    duplicate_initiator_done(true);
+    BOOST_TEST(responder_calls == 1);
+    BOOST_TEST(completion_calls == 0);
+
+    BOOST_REQUIRE(responder_output);
+    *responder_output = responder_key;
+    const auto duplicate_responder_done = responder_done;
+    responder_done(true);
+    duplicate_responder_done(true);
+    BOOST_TEST(completion_calls == 1);
+    BOOST_TEST(completion_ok);
+
+    P2PExporterContext expected_initiator{};
+    P2PExporterContext expected_responder{};
+    BOOST_REQUIRE(BuildP2PExporterContext(
+        completed_bundle.offer, P2PPeerRole::Initiator, expected_initiator));
+    BOOST_REQUIRE(BuildP2PExporterContext(
+        completed_bundle.offer, P2PPeerRole::Responder, expected_responder));
+    BOOST_TEST(initiator_context == expected_initiator);
+    BOOST_TEST(responder_context == expected_responder);
+}
+
+BOOST_AUTO_TEST_CASE(async_initiator_failure_skips_responder) {
+    const auto input = Input();
+    int responder_calls = 0;
+    int completion_calls = 0;
+    const P2PAsyncSessionExporter initiator =
+        [](const char*, const P2PExporterContext&, P2PExporterKey&,
+           const P2PExportCompletion& completion) {
+        completion(false);
+    };
+    const P2PAsyncSessionExporter responder =
+        [&](const char*, const P2PExporterContext&, P2PExporterKey&,
+            const P2PExportCompletion&) {
+        ++responder_calls;
+    };
+
+    BOOST_REQUIRE(CreateP2PRelayOfferBundleAsync(
+        input, initiator, responder,
+        [&](bool ok, const P2PRelayOfferBundle&) {
+            BOOST_TEST(!ok);
+            ++completion_calls;
+        }));
+    BOOST_TEST(responder_calls == 0);
+    BOOST_TEST(completion_calls == 1);
+}
