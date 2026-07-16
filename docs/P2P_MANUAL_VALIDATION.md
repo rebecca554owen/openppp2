@@ -1,33 +1,71 @@
 # P2P Networking — Manual Validation Scenarios
 
-This document describes manual test scenarios for validating the P2P direct-path
-networking feature. Each scenario includes setup, steps, and expected results.
+**Status:** authenticated offer/data integration is implemented but production
+direct mode remains fail-closed pending protocol approval and physical-network evidence.
 
-Since there is no automated test harness for the C++ core, these scenarios serve
-as the primary validation gate for P2P correctness.
+**Last verified:** 2026-07-17, `ef97c8c`.
+
+This document describes manual test scenarios for validating the P2P direct-path
+networking feature. Automated C++ and tooling tests cover protocol components and
+production wiring; these scenarios remain the validation gate for real NAT,
+backgrounding, roaming, and physical-device behavior.
 
 ---
 
 ## Integration Status
 
-The P2P module (`ppp/p2p/`) implements the core data-plane components as a
-self-contained subsystem. The following production integration hooks remain
-TODO and must be wired before P2P direct path can carry live traffic:
+The production integration is intentionally guarded by:
 
-1. **TLS master secret → HKDF**: `HKDFDeriveSessionKey()` requires the TLS
-   handshake master secret. Wiring to the ITransmission SSL layer is pending.
-2. **Channel ID assignment**: Tier-2 `channel_id` field must be assigned by the
-   server in the P2P hint offer and communicated to both peers.
-3. **TAP/TUN injection**: The `P2PFrameReceivedCallback` must be connected to
-   the VEthernetExchanger's virtual Ethernet adapter injection path.
-4. **UDP NAT observation**: Actual UDP relay traffic (static-echo, UDP sendto)
-   must feed the NAT classifier. TCP control endpoints are intentionally NOT
-   used for NAT classification.
+```cpp
+ProductionAuthenticatedControlV1Ready = false;
+```
 
-When these hooks are not wired, `p2p.enabled=false` produces byte-identical
-behavior to the current release.  When `p2p.enabled=true`, the server sends
-P2P offer hints, but the client P2PChannel remains in Relay state and all
-traffic uses the existing `DoNat()` relay forwarding path.
+Consequently, `p2p.enabled=true` with `direct-preferred` currently evaluates to
+`Unavailable`; clients do not register direct capability and the server does not
+issue production offers. Raw TCP and plain WebSocket transports also remain
+relay-only because their base `ITransmission` has no authenticated exporter.
+The existing `DoNat()` relay path remains authoritative.
+
+The following integration is already wired behind that gate:
+
+1. **Authenticated exporter:** SSL WebSocket transmissions implement the
+   asynchronous session-key exporter. Server and client offer paths require it;
+   unauthenticated transports fail closed.
+2. **Authenticated offer/ACK:** the server creates paired `offer-v1` envelopes;
+   the client verifies the offer, sends an authenticated probe, and cannot
+   activate the direct path before an authenticated ACK.
+3. **Direct data/fallback:** `P2PDirectDataPath` owns sequencing, replay checks,
+   peer/generation policy, send/open, timeout, socket-error fallback, and relay
+   fallback. Accepted inbound frames re-enter the existing NAT forwarding path.
+4. **Platform datagram ownership:** Android uses the VPN socket-protection bridge;
+   iOS uses a Packet Tunnel provider-owned UDP session.
+5. **Runtime projection:** requested capability, effective P2P state, network
+   state, and fallback reason reach the runtime snapshot.
+
+Remaining enablement work is evidence-driven: approve authenticated control v1,
+feed the NAT classifier from actual UDP relay observations, and complete the
+physical device/NAT matrix below. The production gate must not be changed until
+those checks pass.
+
+## Automated Evidence
+
+- C++ tests cover capability gating, key derivation, offer/token binding,
+  authenticated control ACK, data AEAD/replay, direct activation/fallback,
+  channel lifecycle, datagram transport, and NAT classification.
+- `tests/tooling/test_p2p_capability_wiring.py` checks the production exporter,
+  offer/data wiring, relay fallback, Android protection, iOS provider transport,
+  and the fail-closed production gate.
+- Android API 34 x86-64 instrumentation uses a real UDP descriptor and an
+  established `VpnService` TUN. It verifies protect failure before activation,
+  success while the VPN is active, and readiness cleanup after teardown.
+  GitHub Actions run [29526592987](https://github.com/Miaocchi/openppp2/actions/runs/29526592987)
+  completed successfully at `ef97c8c`.
+- The same `ef97c8c` main SHA completed all nine repository workflows.
+
+The emulator result proves the JNI/VPN protection path, not full P2P traffic or
+physical device behavior. Android/iOS backgrounding, UDP-blocked networks,
+full-cone and symmetric NAT, rebind, restart, and forced relay fallback still
+require the scenarios below.
 
 ## NAT Classifier Behavior (H2)
 
@@ -38,7 +76,8 @@ endpoints are intentionally NOT used because they reflect TCP NAT mapping,
 which does not predict UDP NAT behavior.
 
 **Current state:** No actual UDP observation sources are wired to the
-classifier yet.  All peers classify as `Unknown`.
+classifier yet. All peers classify as `Unknown`; production offers are also
+suppressed by the capability gate described above.
 
 **Conservative behavior:**
 - `Unknown` → probing is allowed (server sends offers, clients attempt
@@ -48,8 +87,9 @@ classifier yet.  All peers classify as `Unknown`.
 - `UdpBlocked` → skip (only when positively classified).
 - `Unknown + Unknown` → allow (conservative: let probes decide).
 
-This ensures that the classifier never blocks P2P attempts based on
-absence of data — only based on positively observed incompatibility.
+Once the production gate is enabled, this ensures that the classifier never
+blocks P2P attempts based on absence of data — only based on positively observed
+incompatibility.
 
 ---
 
@@ -286,10 +326,13 @@ Both clients on the same subnet (e.g., 192.168.1.x).
 
 ## Build Verification Notes
 
-Since automated tests are not run, manual build verification should include:
+Automated verification must include:
 
-1. **cmake configure** succeeds with all new files in `ppp/p2p/`.
-2. **cmake build** compiles all new `.cpp` files without errors.
-3. **Link check** verifies all new symbols are resolved.
-4. **Runtime check** verifies `p2p.enabled=false` produces no behavioral change.
-5. **Runtime check** verifies `p2p.enabled=true` with server mode starts without errors.
+1. `python tests/tooling/test_p2p_capability_wiring.py`.
+2. The C++ P2P targets in `tests/cpp/CMakeLists.txt`.
+3. Android API 34 `connectedDebugAndroidTest` for socket protection.
+4. Repository main-branch CI across all nine workflows.
+
+Manual validation must still verify that `p2p.enabled=false` preserves relay
+behavior and must execute Scenarios 2–12 on the stated physical/NAT environments
+before changing `ProductionAuthenticatedControlV1Ready`.

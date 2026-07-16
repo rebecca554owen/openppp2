@@ -9,6 +9,17 @@ class P2PCapabilityWiringTests(unittest.TestCase):
     def source(self, relative: str) -> str:
         return (ROOT / relative).read_text(encoding="utf-8")
 
+    def test_manual_validation_tracks_gate_and_device_evidence(self) -> None:
+        manual = self.source("docs/P2P_MANUAL_VALIDATION.md")
+        plan = self.source("docs/P2P_NETWORKING_PLAN.md")
+
+        self.assertIn("ProductionAuthenticatedControlV1Ready = false", manual)
+        self.assertIn("29526592987", manual)
+        self.assertIn("physical device", manual)
+        self.assertNotIn("Since there is no automated test harness", manual)
+        self.assertIn("ProductionAuthenticatedControlV1Ready = false", plan)
+        self.assertIn("29526592987", plan)
+
     def test_client_register_is_guarded_by_authenticated_capabilities(self) -> None:
         source = self.source("ppp/app/client/VEthernetExchanger.cpp")
         register = source[source.index("const auto p2p_capability") :]

@@ -4,15 +4,24 @@
 
 OpenPPP2 already supports server-relayed virtual-subnet traffic via `LAN`/`NAT` and `server.subnet`. Add a direct-preferred P2P path on top of that baseline: clients keep using server relay by default, register P2P capability with the server, try UDP hole punching when both peers are eligible, and fall back to relay on any failure.
 
+**Implementation status (2026-07-17):** authenticated offer/ACK, encrypted data,
+fallback, runtime projection, Android socket protection, and iOS provider-owned
+UDP transport are integrated behind a fail-closed capability gate. Production
+direct mode remains disabled by `ProductionAuthenticatedControlV1Ready = false`
+until authenticated control v1 is approved and the physical NAT/device matrix
+passes. Android API 34 socket-protection evidence is green in Actions run
+[29526592987](https://github.com/Miaocchi/openppp2/actions/runs/29526592987)
+at `ef97c8c`; this does not constitute end-to-end direct-path evidence.
+
 ## Current Baseline
 
 OpenPPP2 already has Phase 0 server-relay virtual networking. Clients announce their virtual IPv4 LAN with `PacketAction_LAN`, the server stores ownership in `VirtualEthernetSwitcher::nats_`, and `VirtualEthernetExchanger::ForwardNatPacketToDestination()` relays `PacketAction_NAT` frames between clients when `server.subnet` is enabled.
 
-## Implemented Scaffold
+## Implemented Behind The Gate
 
 - Added `p2p` configuration with `enabled`, `mode`, `punch-timeout`, `keep-alived`, and `stun.servers`.
 - Extended the `INFO` JSON envelope with a `p2p` control message instead of reusing `LAN` in the client direction.
-- Clients register P2P intent after the existing LAN announcement and IPv4/IPv6 request flow.
+- Eligible clients register P2P intent after the existing LAN announcement and IPv4/IPv6 request flow.
 - The C++ server records peer virtual IPs, client mode, client candidates, and a coordinator-observed endpoint.
 - When server-relayed NAT traffic identifies two P2P-capable peers, the server sends throttled `offer` hints to both clients while preserving the existing relay path.
 
@@ -364,7 +373,7 @@ On Android, all sockets created inside the VPN service MUST call `VpnService.pro
 - [ ] With both peers on the same LAN, direct path establishes within **200 ms**.
 - [ ] With both peers behind symmetric NAT, hole punching is skipped and relay is used without added latency.
 - [ ] Stale or forged tokens are rejected; replayed packets are dropped.
-- [ ] P2P UDP sockets on Android are protected and do not loop traffic into the VPN tunnel.
+- [ ] P2P UDP sockets on Android are protected and do not loop traffic into the VPN tunnel. The real-fd emulator bridge test is green; full direct-path and physical-device evidence remain required.
 - [ ] Direct→Suspect→Relay fallback completes within **4 s**.
 - [ ] Server-side P2P peer table is cleaned up within 1 s of session disconnect.
 - [ ] Coalesced packets are correctly demuxed and all frames are injected.
