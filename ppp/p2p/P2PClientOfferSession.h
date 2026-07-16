@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/p2p/P2PKeyDerivation.h>
+#include <ppp/p2p/P2PDataDatagram.h>
 #include <ppp/p2p/P2POfferToken.h>
 #include <ppp/p2p/P2PRelayOfferConsumer.h>
 #include <ppp/p2p/P2PState.h>
@@ -69,6 +70,16 @@ public:
         const P2PCandidateEndpoint& observed_destination,
         std::uint64_t now_ms,
         std::uint64_t generation) noexcept;
+    bool SealData(
+        const std::vector<std::uint8_t>& payload,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        std::vector<std::uint8_t>& output) noexcept;
+    bool OpenData(
+        const std::vector<std::uint8_t>& datagram,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        std::vector<std::uint8_t>& output) noexcept;
 
 private:
     static constexpr std::size_t ReplayCapacity = 256;
@@ -101,6 +112,7 @@ private:
     std::uint8_t received_probe_rounds_ = 0;
     bool has_outstanding_probe_ = false;
     bool has_cached_probe_ack_ = false;
+    bool data_authorized_ = false;
     std::array<P2PId, ReplayCapacity> seen_offer_ids_{};
     std::size_t seen_count_ = 0;
     std::size_t seen_next_ = 0;

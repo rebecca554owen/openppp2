@@ -121,6 +121,7 @@ openppp2_add_cpp_test(p2p_client_offer_session_test SOURCES
     p2p_client_offer_session_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2PClientOfferSession.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PControlDatagram.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PDataDatagram.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferConsumer.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp"
@@ -146,6 +147,10 @@ openppp2_add_cpp_test(p2p_offer_token_test SOURCES
 target_link_libraries(p2p_offer_token_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_control_state_machine_test SOURCES
     p2p_control_state_machine_test.cpp)
+openppp2_add_cpp_test(p2p_data_datagram_test SOURCES
+    p2p_data_datagram_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PDataDatagram.cpp")
+target_link_libraries(p2p_data_datagram_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_channel_lifecycle_test SOURCES
     p2p_channel_lifecycle_test.cpp
     "${OPENPPP2_ROOT}/ppp/p2p/P2PChannel.cpp"

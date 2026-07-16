@@ -121,6 +121,7 @@ bool P2PClientOfferSession::CreateAuthenticatedProbe(
     if (!active_ || has_outstanding_probe_ || generation_ != generation ||
         now_ms < received_at_ms_ || now_ms >= deadline_ms_ ||
         probe_rounds_ >= MaxProbeRounds ||
+        next_tx_sequence_ == std::numeric_limits<std::uint32_t>::max() ||
         !IsCanonicalP2PCandidate(source) ||
         !IsCanonicalP2PCandidate(destination)) {
         return false;
@@ -167,7 +168,8 @@ bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
     P2PControlPacket& output) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_ || generation_ != generation || now_ms < received_at_ms_ ||
-        now_ms >= deadline_ms_) {
+        now_ms >= deadline_ms_ ||
+        next_tx_sequence_ == std::numeric_limits<std::uint32_t>::max()) {
         return false;
     }
 
@@ -242,6 +244,7 @@ bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
     has_cached_probe_ack_ = true;
     ++received_probe_rounds_;
     ++next_tx_sequence_;
+    data_authorized_ = true;
     output = ack;
     Cleanse(directional);
     return true;
@@ -272,9 +275,76 @@ P2PClientOfferSession::AuthenticateProbeAck(
         rx_replay_window_ = replay;
         outstanding_probe_ = {};
         has_outstanding_probe_ = false;
+        data_authorized_ = true;
     }
     Cleanse(directional);
     return proof;
+}
+
+bool P2PClientOfferSession::SealData(
+    const std::vector<std::uint8_t>& payload,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    std::vector<std::uint8_t>& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !data_authorized_ || generation_ != generation ||
+        now_ms < received_at_ms_ || now_ms >= deadline_ms_ ||
+        next_tx_sequence_ == std::numeric_limits<std::uint32_t>::max() ||
+        payload.empty() ||
+        payload.size() > P2PDataPacketHeader::MaxPayloadSize) {
+        return false;
+    }
+
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    P2PDataPacketHeader header;
+    header.offer_hash = offer_hash_;
+    header.sender_role = static_cast<std::uint8_t>(local_role_);
+    header.receiver_role = header.sender_role == 0 ? 1 : 0;
+    header.direction = header.sender_role;
+    header.connection_epoch = offer_.connection_epoch;
+    header.sequence = next_tx_sequence_;
+    const auto nonce = BuildP2PV1Nonce(
+        directional.tx_nonce_prefix, header.sequence);
+    const bool sealed = SealP2PDataDatagram(
+        header, directional.tx_key, nonce,
+        payload.data(), payload.size(), output);
+    if (sealed) ++next_tx_sequence_;
+    Cleanse(directional);
+    return sealed;
+}
+
+bool P2PClientOfferSession::OpenData(
+    const std::vector<std::uint8_t>& datagram,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    std::vector<std::uint8_t>& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !data_authorized_ || generation_ != generation ||
+        now_ms < received_at_ms_ || now_ms >= deadline_ms_) {
+        return false;
+    }
+
+    P2PDataPacketHeader parsed;
+    if (!ParseP2PDataPacketHeader(datagram, parsed)) return false;
+
+    P2PDataPacketHeader expected;
+    expected.offer_hash = offer_hash_;
+    expected.sender_role = local_role_ == P2PPeerRole::Initiator ? 1 : 0;
+    expected.receiver_role = static_cast<std::uint8_t>(local_role_);
+    expected.direction = expected.sender_role;
+    expected.connection_epoch = offer_.connection_epoch;
+    expected.sequence = parsed.sequence;
+
+    auto replay = rx_replay_window_;
+    if (!replay.Accept(parsed.sequence)) return false;
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    const auto nonce = BuildP2PV1Nonce(
+        directional.rx_nonce_prefix, parsed.sequence);
+    const bool opened = OpenP2PDataDatagram(
+        datagram, expected, directional.rx_key, nonce, output);
+    if (opened) rx_replay_window_ = replay;
+    Cleanse(directional);
+    return opened;
 }
 
 bool P2PClientOfferSession::Expire(
@@ -390,6 +460,7 @@ void P2PClientOfferSession::ClearActiveLocked() noexcept {
     received_probe_rounds_ = 0;
     has_outstanding_probe_ = false;
     has_cached_probe_ack_ = false;
+    data_authorized_ = false;
 }
 
 }

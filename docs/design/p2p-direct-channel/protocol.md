@@ -61,6 +61,26 @@ same offer, epoch, direction, and endpoint pair. Unknown versions or required
 features produce a local relay fallback; no negative response is sent to an
 unauthenticated source.
 
+The offer-v1 data codec uses this fixed authenticated header. The entire header
+is AEAD additional data, followed by `payload_length` bytes of ciphertext and a
+16-byte ChaCha20-Poly1305 tag:
+
+```text
+version u8 (1), type u8 (5), flags u8 (0), reserved u8 (0),
+offer_hash 32B, sender_role u8, receiver_role u8,
+direction u8 (equal to sender_role), reserved u8 (0),
+connection_epoch 16B, sequence u32 big-endian,
+payload_length u16 big-endian
+```
+
+Version 1 accepts payload lengths from 1 through 1514 bytes. The parser rejects
+unknown flags, nonzero reserved bytes, role/direction mismatches, empty payloads,
+length mismatches, trailing bytes, and oversized frames before returning data.
+Control and data share one sequence and replay domain per direction. The codec
+and session-owned key boundary are implemented, but production transport and
+TAP forwarding are not connected; the advertised capability therefore remains
+disabled and the effective path remains relay.
+
 `ttl_seconds` is an integer from 1 through 30. It is authenticated by the relay
 offer. A client starts a local steady-clock deadline when the offer is received;
 forwarding, retransmission, or wall-clock changes cannot extend it. Both relay

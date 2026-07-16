@@ -137,6 +137,30 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertGreaterEqual(reconnect.count("p2p_offer_session_.AdvanceGeneration"), 3)
         self.assertGreaterEqual(reconnect.count("++p2p_offer_generation_"), 3)
 
+    def test_offer_v1_data_codec_is_session_owned_and_not_production_enabled(self) -> None:
+        session_header = self.source("ppp/p2p/P2PClientOfferSession.h")
+        session_source = self.source("ppp/p2p/P2PClientOfferSession.cpp")
+        codec = self.source("ppp/p2p/P2PDataDatagram.cpp")
+        exchanger = self.source("ppp/app/client/VEthernetExchanger.cpp")
+        capability = self.source("ppp/p2p/P2PCapabilityGate.h")
+
+        for required in ("SealData(", "OpenData(", "data_authorized_"):
+            self.assertIn(required, session_header)
+        for required in (
+            "SelectP2PV1Direction",
+            "next_tx_sequence_",
+            "rx_replay_window_",
+            "BuildP2PV1Nonce",
+        ):
+            self.assertIn(required, session_source)
+        self.assertIn("EVP_chacha20_poly1305()", codec)
+        self.assertIn("P2PDataPacketHeader::HeaderSize", codec)
+        self.assertNotIn(".SealData(", exchanger)
+        self.assertNotIn(".OpenData(", exchanger)
+        self.assertNotIn("Activate(true", exchanger)
+        self.assertNotIn("P2PState::Direct", exchanger)
+        self.assertIn("ProductionAuthenticatedControlV1Ready = false", capability)
+
     def test_server_registration_and_offers_are_guarded(self) -> None:
         header = self.source("ppp/app/server/VirtualEthernetSwitcher.h")
         capability = self.source("ppp/p2p/P2PCapabilityGate.h")

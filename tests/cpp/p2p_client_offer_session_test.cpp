@@ -4,6 +4,7 @@
 #include <ppp/p2p/P2PClientOfferSession.h>
 #include <ppp/p2p/P2PControlDatagram.h>
 #include <ppp/p2p/P2PControlStateMachine.h>
+#include <ppp/p2p/P2PDataDatagram.h>
 #include <ppp/p2p/P2POfferToken.h>
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
 
@@ -592,4 +593,123 @@ BOOST_AUTO_TEST_CASE(control_datagram_boundary_rejects_malformed_input_atomicall
     BOOST_TEST(static_cast<int>(result.action) ==
         static_cast<int>(P2PControlDatagramAction::Reply));
     BOOST_TEST(result.reply == std::vector<std::uint8_t>({9, 8, 7}));
+}
+
+BOOST_AUTO_TEST_CASE(offer_v1_data_requires_ack_and_round_trips_both_directions) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    const std::vector<std::uint8_t> frame{1, 2, 3, 4};
+    std::vector<std::uint8_t> datagram{9, 8, 7};
+    BOOST_TEST(!initiator.SealData(frame, 1001, 7, datagram));
+    BOOST_TEST(datagram == std::vector<std::uint8_t>({9, 8, 7}));
+
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+    P2PControlPacket ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, ack));
+    BOOST_REQUIRE(initiator.AuthenticateProbeAck(
+        ack, ack.source, ack.destination, 1003, 7).has_value());
+
+    BOOST_REQUIRE(initiator.SealData(frame, 1004, 7, datagram));
+    std::vector<std::uint8_t> opened;
+    BOOST_REQUIRE(responder.OpenData(datagram, 1005, 7, opened));
+    BOOST_TEST(opened == frame);
+    opened = {6, 6};
+    BOOST_TEST(!responder.OpenData(datagram, 1006, 7, opened));
+    BOOST_TEST(opened == std::vector<std::uint8_t>({6, 6}));
+
+    const std::vector<std::uint8_t> reverse_frame{5, 6, 7};
+    BOOST_REQUIRE(responder.SealData(reverse_frame, 1007, 7, datagram));
+    BOOST_REQUIRE(initiator.OpenData(datagram, 1008, 7, opened));
+    BOOST_TEST(opened == reverse_frame);
+}
+
+BOOST_AUTO_TEST_CASE(data_authentication_failure_is_atomic_and_generation_fenced) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+    P2PControlPacket ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, ack));
+    BOOST_REQUIRE(initiator.AuthenticateProbeAck(
+        ack, ack.source, ack.destination, 1003, 7).has_value());
+
+    const std::vector<std::uint8_t> frame{1, 2, 3};
+    std::vector<std::uint8_t> datagram;
+    BOOST_TEST(!initiator.SealData(frame, 1004, 6, datagram));
+    BOOST_TEST(!initiator.SealData(frame, 11000, 7, datagram));
+    BOOST_REQUIRE(initiator.SealData(frame, 1004, 7, datagram));
+
+    std::vector<std::uint8_t> opened{9, 8, 7};
+    BOOST_TEST(!responder.OpenData(datagram, 1005, 6, opened));
+    BOOST_TEST(opened == std::vector<std::uint8_t>({9, 8, 7}));
+    auto tampered = datagram;
+    tampered.back() ^= 1;
+    BOOST_TEST(!responder.OpenData(tampered, 1005, 7, opened));
+    BOOST_TEST(opened == std::vector<std::uint8_t>({9, 8, 7}));
+    BOOST_REQUIRE(responder.OpenData(datagram, 1005, 7, opened));
+    BOOST_TEST(opened == frame);
+}
+
+BOOST_AUTO_TEST_CASE(data_replay_domain_rejects_a_control_sequence_reuse) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+    P2PControlPacket ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, ack));
+
+    P2POfferHash offer_hash{};
+    P2PV1KeyMaterial keys{};
+    BOOST_REQUIRE(HashP2PRelayOffer(
+        initiator_fixture.bundle.offer, offer_hash));
+    BOOST_REQUIRE(DeriveP2PV1KeyMaterial(
+        initiator_fixture.pair_seed, offer_hash, keys));
+    P2PDataPacketHeader header;
+    header.offer_hash = offer_hash;
+    header.sender_role = 0;
+    header.receiver_role = 1;
+    header.direction = 0;
+    header.connection_epoch = initiator_fixture.bundle.offer.connection_epoch;
+    header.sequence = probe.sequence;
+    const std::vector<std::uint8_t> frame{1, 2, 3};
+    std::vector<std::uint8_t> datagram;
+    BOOST_REQUIRE(SealP2PDataDatagram(
+        header, keys.initiator_to_responder_key,
+        BuildP2PV1Nonce(keys.initiator_to_responder_nonce, probe.sequence),
+        frame.data(), frame.size(), datagram));
+
+    std::vector<std::uint8_t> opened;
+    BOOST_TEST(!responder.OpenData(datagram, 1003, 7, opened));
 }
