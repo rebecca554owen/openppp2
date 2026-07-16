@@ -98,6 +98,11 @@ BOOST_AUTO_TEST_CASE(candidate_set_hash_rejects_invalid_candidates) {
     BOOST_TEST(!HashP2PCandidateSet({candidate}, output));
     BOOST_TEST(output == baseline);
 
+    candidate = IPv4Candidate();
+    std::fill(candidate.address.begin() + 12, candidate.address.end(), 0);
+    BOOST_TEST(!HashP2PCandidateSet({candidate}, output));
+    BOOST_TEST(output == baseline);
+
     candidate = IPv6Candidate();
     candidate.address.fill(0);
     BOOST_TEST(!HashP2PCandidateSet({candidate}, output));

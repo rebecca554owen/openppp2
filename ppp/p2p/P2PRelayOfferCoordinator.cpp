@@ -201,7 +201,13 @@ bool ValidCandidate(const P2PCandidateV1& candidate) noexcept {
             candidate.address.begin(), candidate.address.begin() + 10,
             [](std::uint8_t byte) { return byte == 0; }) &&
         candidate.address[10] == 0xff && candidate.address[11] == 0xff;
-    return candidate.address_family == 4 ? mapped : !mapped;
+    if (candidate.address_family == 4) {
+        const bool payload_nonzero = std::any_of(
+            candidate.address.begin() + 12, candidate.address.end(),
+            [](std::uint8_t byte) { return byte != 0; });
+        return mapped && payload_nonzero;
+    }
+    return !mapped;
 }
 
 }
