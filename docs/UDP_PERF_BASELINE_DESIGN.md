@@ -14,8 +14,9 @@
 openppp2 是一个跨平台 VPN/代理系统，UDP 数据面存在明确的每包开销热点（每包 8-12 次堆分配、4-6 次整包 memcpy、全局分配器单锁、默认加密走 OpenSSL EVP 每包取锁）。优化目标是把"基准性能"提升 10-15%。
 
 仓库现已具备独立 Google Benchmark 套件、冻结配置、micro/E2E runner、真实 micro baseline
-和 CI correctness smoke。共享 CI 不判断性能阈值；固定 Linux x86-64 主机仍是权威的
-cycles/packet 与 E2E 采集环境。
+和 CI correctness smoke。`validate_fixed_host.py` 要求显式稳定主机 ID、x86-64、
+`performance` governor 和可读取 PMU cycles，并拒绝 WSL。共享 CI 不判断性能阈值；固定
+Linux x86-64 主机仍是权威的 cycles/packet 与 E2E 采集环境。
 
 **因此 Phase 0 的目标**：建立一套**可复现、可回归、能诚实验收"+10-15%"**的 UDP 性能基准，作为后续所有优化的立项与验收闸门。Phase 0 **不改一行生产逻辑**。
 
@@ -150,6 +151,9 @@ docs/superpowers/specs/
 - **微基准 self-check**：每个基准先跑正确性断言（加密后能解密还原、端点/包编解码往返一致）再计时，防止测到跑飞的路径。
 - **CI（Linux）只做冒烟**：`--benchmark_min_time` 极短，验证能编/能跑/不崩/self-check 过；**性能数字不作 CI gate**（CI 机器噪声）。权威数字在专用机/固定 VM 手动跑。
 - 端到端 harness 不进 CI（loopback 争抢不稳），本地/专用机跑。
+- 权威结果晋级前必须设置 `BENCH_HOST_ID`，并对 micro/E2E 各自的 `env.json` 执行
+  `python3 tools/bench/validate_fixed_host.py <env.json> "$BENCH_HOST_ID"`。门禁失败的结果
+  只保留为诊断证据，不得覆盖 `tools/bench/baseline/`。
 
 ## 11. Phase 0 交付物清单（Definition of Done）
 

@@ -9,6 +9,19 @@
 Linux **x86-64 + AES-NI**（H4 依赖 x86 AES-NI 指令、H1 需服务端多线程、perf 需可读 PMU）。
 在 arm/macOS 上只能看相对趋势，验收数字以 x86-64 Linux 为准。
 
+权威结果必须由操作者声明稳定主机身份，并通过晋级门禁：
+
+```sh
+export BENCH_HOST_ID=openppp2-bench-01
+tools/bench/run_micro.sh tools/bench/results/mine
+python3 tools/bench/validate_fixed_host.py \
+  tools/bench/results/mine/env.json "$BENCH_HOST_ID"
+```
+
+门禁只接受 x86-64、`performance` governor 和可读取 PMU cycles 的非 WSL 环境，且
+指纹中的 `host_id` 必须与调用者声明一致。共享 CI、WSL 和未声明身份的结果仍可用于
+correctness/趋势诊断，但不得复制到 `tools/bench/baseline/` 作为权威性能证据。
+
 ## 依赖（Debian/Ubuntu）
 
 ```sh
@@ -71,4 +84,5 @@ python3 tools/bench/compare.py tools/bench/baseline/bm_crypto.json tools/bench/r
 
 E2E 默认使用固定的 `10M` offered load，避免 `--bitrate 0` 饱和流量主动打断单条
 transmission。合格基准机可用 `BENCH_BITRATE` 校准，但 summary 会记录实际值，A/B 必须
-保持一致。WSL 结果只验证 harness；E2E baseline 仍须由固定 Linux 主机生成。
+保持一致。E2E 结果也必须用同一个 `BENCH_HOST_ID` 采集，并对其 `env.json` 执行上述
+门禁。WSL 结果只验证 harness；E2E baseline 仍须由固定 Linux 主机生成。

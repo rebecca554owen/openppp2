@@ -10,6 +10,85 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class UdpBenchmarkContractTests(unittest.TestCase):
+    def _validate_fixed_host(self, environment, expected_host_id="bench-01"):
+        validator = ROOT / "tools" / "bench" / "validate_fixed_host.py"
+        with tempfile.TemporaryDirectory() as directory:
+            fingerprint = Path(directory) / "env.json"
+            fingerprint.write_text(json.dumps(environment), encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, validator, fingerprint, expected_host_id],
+                capture_output=True,
+                text=True,
+            )
+
+    def test_fixed_host_validator_rejects_wsl(self):
+        result = self._validate_fixed_host(
+            {
+                "arch": "x86_64",
+                "host_id": "bench-01",
+                "virt": "wsl",
+                "governor": "performance",
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("WSL", result.stderr)
+
+    def test_fixed_host_validator_requires_x86_64(self):
+        result = self._validate_fixed_host(
+            {
+                "arch": "aarch64",
+                "host_id": "bench-01",
+                "virt": "none",
+                "governor": "performance",
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("x86-64", result.stderr)
+
+    def test_fixed_host_validator_requires_performance_governor(self):
+        result = self._validate_fixed_host(
+            {
+                "arch": "x86_64",
+                "host_id": "bench-01",
+                "virt": "none",
+                "governor": "unknown",
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("performance governor", result.stderr)
+
+    def test_fixed_host_validator_requires_perf_cycles(self):
+        result = self._validate_fixed_host(
+            {
+                "arch": "x86_64",
+                "host_id": "bench-01",
+                "virt": "none",
+                "governor": "performance",
+                "perf_cycles": False,
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("cycles", result.stderr)
+
+    def test_fixed_host_validator_requires_nonempty_host_id(self):
+        result = self._validate_fixed_host(
+            {
+                "arch": "x86_64",
+                "host_id": "",
+                "virt": "none",
+                "governor": "performance",
+                "perf_cycles": True,
+            },
+            expected_host_id="",
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("host_id", result.stderr)
+
     def test_all_microbenchmarks_are_built_and_smoke_tested(self):
         cmake = (ROOT / "bench" / "CMakeLists.txt").read_text(encoding="utf-8")
 
@@ -52,6 +131,17 @@ class UdpBenchmarkContractTests(unittest.TestCase):
         ):
             text = (ROOT / "bench" / "udp" / source).read_text(encoding="utf-8")
             self.assertIn('counters["allocations"]', text)
+
+    def test_environment_fingerprint_records_fixed_host_eligibility(self):
+        fingerprint = (ROOT / "tools" / "bench" / "env_fingerprint.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("BENCH_HOST_ID", fingerprint)
+        self.assertIn('"arch"', fingerprint)
+        self.assertIn('"host_id"', fingerprint)
+        self.assertIn('"perf_cycles"', fingerprint)
+        self.assertIn("perf stat -e cycles", fingerprint)
 
     def test_e2e_harness_uses_frozen_config_and_json_output(self):
         runner = ROOT / "tools" / "bench" / "run_e2e.sh"
