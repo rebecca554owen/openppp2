@@ -56,6 +56,13 @@ public:
         std::uint64_t now_ms,
         std::uint64_t generation,
         P2PControlPacket& output) noexcept;
+    bool CreateAuthenticatedProbeAck(
+        const P2PControlPacket& probe,
+        const P2PCandidateEndpoint& observed_source,
+        const P2PCandidateEndpoint& observed_destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        P2PControlPacket& output) noexcept;
     std::optional<P2PAuthenticatedProbeAck> AuthenticateProbeAck(
         const P2PControlPacket& packet,
         const P2PCandidateEndpoint& observed_source,
@@ -85,9 +92,10 @@ private:
     std::uint64_t generation_ = 0;
     std::uint64_t generation_floor_ = 0;
     P2POfferBinding outstanding_probe_{};
-    P2PReplayWindow ack_replay_window_{};
-    std::uint32_t next_probe_sequence_ = 0;
+    P2PReplayWindow rx_replay_window_{};
+    std::uint32_t next_tx_sequence_ = 0;
     std::uint8_t probe_rounds_ = 0;
+    std::uint8_t received_probe_rounds_ = 0;
     bool has_outstanding_probe_ = false;
     std::array<P2PId, ReplayCapacity> seen_offer_ids_{};
     std::size_t seen_count_ = 0;

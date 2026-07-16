@@ -396,3 +396,141 @@ BOOST_AUTO_TEST_CASE(stale_generation_ack_cannot_consume_current_probe) {
     BOOST_TEST(session.AuthenticateProbeAck(
         ack, ack.source, ack.destination, 1002, 7).has_value());
 }
+
+BOOST_AUTO_TEST_CASE(peer_sessions_complete_an_authenticated_probe_round_trip) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    const auto initiator_endpoint = Endpoint(10, 4000);
+    const auto responder_endpoint = Endpoint(40, 5000);
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        initiator_endpoint, responder_endpoint, 1001, 7, probe));
+
+    P2PControlPacket ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, ack));
+    BOOST_TEST(static_cast<int>(ack.type) ==
+        static_cast<int>(P2PControlType::ProbeAck));
+    BOOST_TEST(ack.sender_role == 1u);
+    BOOST_TEST(ack.receiver_role == 0u);
+    BOOST_TEST(static_cast<bool>(ack.source == probe.destination));
+    BOOST_TEST(static_cast<bool>(ack.destination == probe.source));
+    BOOST_TEST(ack.sequence == 0u);
+
+    auto proof = initiator.AuthenticateProbeAck(
+        ack, ack.source, ack.destination, 1003, 7);
+    BOOST_REQUIRE(proof.has_value());
+    BOOST_TEST(std::string(initiator.Snapshot().effective_path) == "relay");
+    BOOST_TEST(std::string(responder.Snapshot().effective_path) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(invalid_probe_does_not_consume_replay_or_mutate_ack_output) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+    auto tampered = probe;
+    tampered.token[0] ^= 1;
+    P2PControlPacket output;
+    output.version = 99;
+    BOOST_TEST(!responder.CreateAuthenticatedProbeAck(
+        tampered, probe.source, probe.destination, 1002, 7, output));
+    BOOST_TEST(output.version == 99u);
+
+    auto spoofed_source = probe.source;
+    ++spoofed_source.port;
+    BOOST_TEST(!responder.CreateAuthenticatedProbeAck(
+        probe, spoofed_source, probe.destination, 1002, 7, output));
+    BOOST_TEST(output.version == 99u);
+
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, output));
+    const auto baseline = output;
+    BOOST_TEST(!responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1003, 7, output));
+    BOOST_TEST(output.version == baseline.version);
+    BOOST_TEST(output.token == baseline.token);
+}
+
+BOOST_AUTO_TEST_CASE(probe_ack_creation_is_generation_and_deadline_fenced) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+
+    P2PControlPacket output;
+    output.version = 99;
+    BOOST_TEST(!responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 6, output));
+    BOOST_TEST(!responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 11000, 7, output));
+    BOOST_TEST(output.version == 99u);
+}
+
+BOOST_AUTO_TEST_CASE(rx_replay_is_shared_across_probe_and_probe_ack_types) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    P2PControlPacket initiator_probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7,
+        initiator_probe));
+    P2PControlPacket responder_ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        initiator_probe, initiator_probe.source, initiator_probe.destination,
+        1002, 7, responder_ack));
+
+    P2PControlPacket responder_probe;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbe(
+        Endpoint(40, 5000), Endpoint(10, 4000), 1003, 7,
+        responder_probe));
+    BOOST_TEST(responder_probe.sequence == 1u);
+
+    const auto reused_sequence_ack = SignedProbeAck(
+        responder_fixture, responder_probe, 0);
+    BOOST_TEST(!responder.AuthenticateProbeAck(
+        reused_sequence_ack, reused_sequence_ack.source,
+        reused_sequence_ack.destination, 1004, 7).has_value());
+
+    const auto fresh_sequence_ack = SignedProbeAck(
+        responder_fixture, responder_probe, 1);
+    BOOST_TEST(responder.AuthenticateProbeAck(
+        fresh_sequence_ack, fresh_sequence_ack.source,
+        fresh_sequence_ack.destination, 1004, 7).has_value());
+}

@@ -137,7 +137,7 @@ bool P2PClientOfferSession::CreateAuthenticatedProbe(
     packet.connection_epoch = offer_.connection_epoch;
     packet.source = source;
     packet.destination = destination;
-    packet.sequence = next_probe_sequence_;
+    packet.sequence = next_tx_sequence_;
     packet.nonce = BuildP2PV1Nonce(
         directional.tx_nonce_prefix, packet.sequence);
     packet.ttl_seconds = offer_.ttl_seconds;
@@ -152,8 +152,82 @@ bool P2PClientOfferSession::CreateAuthenticatedProbe(
     outstanding_probe_ = binding;
     has_outstanding_probe_ = true;
     ++probe_rounds_;
-    ++next_probe_sequence_;
+    ++next_tx_sequence_;
     output = packet;
+    Cleanse(directional);
+    return true;
+}
+
+bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
+    const P2PControlPacket& probe,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    P2PControlPacket& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || generation_ != generation || now_ms < received_at_ms_ ||
+        now_ms >= deadline_ms_ || received_probe_rounds_ >= MaxProbeRounds) {
+        return false;
+    }
+
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    const auto received = BuildBinding(offer_, probe);
+    auto expected_packet = probe;
+    expected_packet.version = 1;
+    expected_packet.type = P2PControlType::Probe;
+    expected_packet.offer_hash = offer_hash_;
+    expected_packet.sender_role = local_role_ == P2PPeerRole::Initiator ? 1 : 0;
+    expected_packet.receiver_role = static_cast<std::uint8_t>(local_role_);
+    expected_packet.direction = expected_packet.sender_role;
+    expected_packet.connection_epoch = offer_.connection_epoch;
+    expected_packet.source = observed_source;
+    expected_packet.destination = observed_destination;
+    expected_packet.ttl_seconds = offer_.ttl_seconds;
+    expected_packet.probe_transcript_hash = {};
+
+    auto replay = rx_replay_window_;
+    if (!ValidateP2POfferToken(
+            key_material_.offer_token_key, received,
+            BuildBinding(offer_, expected_packet),
+            observed_source, observed_destination,
+            now_ms - received_at_ms_, probe.token,
+            directional.rx_nonce_prefix, replay)) {
+        Cleanse(directional);
+        return false;
+    }
+
+    P2PControlPacket ack;
+    ack.version = 1;
+    ack.type = P2PControlType::ProbeAck;
+    ack.offer_hash = offer_hash_;
+    ack.sender_role = static_cast<std::uint8_t>(local_role_);
+    ack.receiver_role = ack.sender_role == 0 ? 1 : 0;
+    ack.direction = ack.sender_role;
+    ack.connection_epoch = offer_.connection_epoch;
+    ack.source = observed_destination;
+    ack.destination = observed_source;
+    ack.sequence = next_tx_sequence_;
+    ack.nonce = BuildP2PV1Nonce(
+        directional.tx_nonce_prefix, ack.sequence);
+    ack.ttl_seconds = offer_.ttl_seconds;
+    auto ack_binding = BuildBinding(offer_, ack);
+    if (!CreateP2PProbeTranscriptHash(
+            received, ack.probe_transcript_hash)) {
+        Cleanse(directional);
+        return false;
+    }
+    ack_binding.probe_transcript_hash = ack.probe_transcript_hash;
+    if (!CreateP2POfferToken(
+            key_material_.offer_token_key, ack_binding, ack.token)) {
+        Cleanse(directional);
+        return false;
+    }
+
+    rx_replay_window_ = replay;
+    ++received_probe_rounds_;
+    ++next_tx_sequence_;
+    output = ack;
     Cleanse(directional);
     return true;
 }
@@ -172,13 +246,15 @@ P2PClientOfferSession::AuthenticateProbeAck(
     }
 
     auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    auto replay = rx_replay_window_;
     auto proof = AuthenticateP2PProbeAck(
         key_material_.offer_token_key,
         BuildBinding(offer_, packet),
         outstanding_probe_, observed_source, observed_destination,
         now_ms - received_at_ms_, packet.token,
-        directional.rx_nonce_prefix, ack_replay_window_);
+        directional.rx_nonce_prefix, replay);
     if (proof) {
+        rx_replay_window_ = replay;
         outstanding_probe_ = {};
         has_outstanding_probe_ = false;
     }
@@ -290,9 +366,10 @@ void P2PClientOfferSession::ClearActiveLocked() noexcept {
     deadline_ms_ = 0;
     generation_ = 0;
     outstanding_probe_ = {};
-    ack_replay_window_.Reset();
-    next_probe_sequence_ = 0;
+    rx_replay_window_.Reset();
+    next_tx_sequence_ = 0;
     probe_rounds_ = 0;
+    received_probe_rounds_ = 0;
     has_outstanding_probe_ = false;
 }
 
