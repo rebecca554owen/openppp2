@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
+#include <ppp/app/P2PCandidateAdapter.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -101,6 +102,31 @@ BOOST_AUTO_TEST_CASE(candidate_set_hash_rejects_invalid_candidates) {
     candidate.address.fill(0);
     BOOST_TEST(!HashP2PCandidateSet({candidate}, output));
     BOOST_TEST(output == baseline);
+}
+
+BOOST_AUTO_TEST_CASE(endpoint_conversion_uses_canonical_candidate_encoding) {
+    P2PCandidateV1 ipv4{};
+    P2PCandidateV1 ipv6{};
+    BOOST_REQUIRE(ppp::app::P2PCandidateFromEndpoint(
+        {boost::asio::ip::make_address("192.0.2.1"), 1000}, ipv4));
+    BOOST_REQUIRE(ppp::app::P2PCandidateFromEndpoint(
+        {boost::asio::ip::make_address("2001:db8::1"), 2000}, ipv6));
+    BOOST_TEST(ipv4.address_family == 4);
+    BOOST_TEST(ipv4.address == IPv4Candidate().address);
+    BOOST_TEST(ipv4.port == 1000);
+    BOOST_TEST(ipv6.address_family == 6);
+    BOOST_TEST(ipv6.address == IPv6Candidate().address);
+    BOOST_TEST(ipv6.port == 2000);
+    BOOST_TEST(ppp::app::P2PEndpointToString(
+        {boost::asio::ip::make_address("192.0.2.1"), 1000}) == "192.0.2.1:1000");
+    BOOST_TEST(ppp::app::P2PEndpointToString(
+        {boost::asio::ip::make_address("2001:db8::1"), 2000}) == "[2001:db8::1]:2000");
+
+    const auto baseline = ipv4;
+    BOOST_TEST(!ppp::app::P2PCandidateFromEndpoint(
+        {boost::asio::ip::address_v4::any(), 1000}, ipv4));
+    BOOST_TEST(ipv4.address == baseline.address);
+    BOOST_TEST(ipv4.port == baseline.port);
 }
 
 BOOST_AUTO_TEST_CASE(wraps_one_pair_seed_for_two_session_exporters) {

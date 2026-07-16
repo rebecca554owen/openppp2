@@ -769,6 +769,9 @@ namespace
                         return complete_start(tap, 1);
                     }
 
+                    ios_tap->SetP2PDatagramTransportFactory(
+                        ppp::p2p::GetIosProviderP2PDatagramTransportFactory(tap));
+
                     set_start_stage(tap, "installing packet output");
                     ios_tap->SetPacketOutput(
                         [tap](const void* packet, int packet_size, void* packet_context, ppp::tap::TapIos::PacketOutputReleaseHandler packet_release) noexcept -> bool

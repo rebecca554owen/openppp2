@@ -388,6 +388,7 @@
     <ClCompile Include="ppp\app\ApplicationMainLoop.cpp" />
     <ClCompile Include="ppp\app\ApplicationNetwork.cpp" />
     <ClCompile Include="ppp\app\ConsoleUI.cpp" />
+    <ClCompile Include="ppp\app\P2PCandidateAdapter.cpp" />
     <ClCompile Include="ppp\app\PppApplication.cpp" />
     <ClCompile Include="ppp\facade\ApplicationBootstrap.cpp" />
     <ClCompile Include="ppp\app\client\dns\Rule.cpp" />
@@ -532,6 +533,7 @@
     <ClCompile Include="ppp\p2p\P2PDatagramTransport.cpp" />
     <ClCompile Include="ppp\p2p\P2PKeyDerivation.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOffer.cpp" />
+    <ClCompile Include="ppp\p2p\P2PClientOfferSession.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOfferConsumer.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOfferCoordinator.cpp" />
     <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp" />

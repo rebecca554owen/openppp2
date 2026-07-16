@@ -1,4 +1,5 @@
 #include <ios/ppp/tap/TapIos.h>
+#include <ppp/p2p/P2PDatagramTransport.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/threading/Executors.h>
 
@@ -76,6 +77,20 @@ namespace ppp
             e.PacketLength = packet_size;
             OnInput(e);
             return true;
+        }
+
+        void TapIos::SetP2PDatagramTransportFactory(
+            const std::shared_ptr<ppp::p2p::IP2PDatagramTransportFactory>& factory) noexcept
+        {
+            std::lock_guard<std::mutex> scope(p2p_factory_mutex_);
+            p2p_factory_ = factory;
+        }
+
+        std::shared_ptr<ppp::p2p::IP2PDatagramTransportFactory>
+            TapIos::GetP2PDatagramTransportFactory() const noexcept
+        {
+            std::lock_guard<std::mutex> scope(p2p_factory_mutex_);
+            return p2p_factory_;
         }
 
         bool TapIos::IsReady() noexcept

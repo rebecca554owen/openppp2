@@ -52,6 +52,8 @@
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
+#include <ppp/p2p/P2PClientOfferSession.h>
+#include <ppp/p2p/P2PDatagramTransport.h>
 #include <ppp/p2p/P2PState.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
@@ -1011,6 +1013,8 @@ namespace ppp {
                 virtual bool                                                            OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept override;
 
             private:
+                void                                                                    HandleP2PRelayOffer(const ITransmissionPtr& transmission, const ppp::app::protocol::P2PControlMessage& message) noexcept;
+                void                                                                    ResetP2PCandidateTransport() noexcept;
                 /** @brief Guards datagrams_, datagram_handlers_, and deadline_timers_ tables. */
                 SynchronizedObject                                                      syncobj_;
                 /** @brief Commits network and P2P projection as one runtime snapshot. */
@@ -1043,6 +1047,16 @@ namespace ppp {
                 const ppp::p2p::P2PState                                                configured_p2p_state_;
                 /** @brief Fail-closed P2P capability state published to RuntimeSnapshot. */
                 std::atomic<ppp::p2p::P2PState>                                         p2p_state_{ppp::p2p::P2PState::Disabled};
+                /** @brief Authenticated offer and derived-key owner for the active relay generation. */
+                ppp::p2p::P2PClientOfferSession                                         p2p_offer_session_;
+                /** @brief Guards the exact candidate set sent in the current registration. */
+                mutable std::mutex                                                      p2p_offer_mutex_;
+                ppp::vector<ppp::app::protocol::P2PEndpointCandidate>                   p2p_registered_candidates_;
+                std::weak_ptr<ppp::transmissions::ITransmission>                       p2p_registered_transmission_;
+                std::shared_ptr<ppp::p2p::IP2PDatagramTransport>                       p2p_candidate_transport_;
+                uint32_t                                                                p2p_registered_virtual_ip_ = 0;
+                /** @brief Invalidates queued offer work across reconnect and teardown. */
+                std::atomic<uint64_t>                                                   p2p_offer_generation_{1};
                 /** @brief FRP port mapping table. */
                 VirtualEthernetMappingPortTable                                         mappings_;
                 /** @brief Pending deadline timers (guarded by syncobj_). */

@@ -47,6 +47,55 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             reconnect.count("p2p_state_.store(configured_p2p_state_"), 2
         )
 
+    def test_client_authenticated_offer_stays_relay_until_control_ack(self) -> None:
+        header = self.source("ppp/app/client/VEthernetExchanger.h")
+        exchanger = self.source("ppp/app/client/VEthernetExchanger.cpp")
+
+        self.assertIn("<ppp/p2p/P2PClientOfferSession.h>", header)
+        self.assertIn("P2PClientOfferSession", header)
+        self.assertIn("p2p_registered_candidates_", header)
+        self.assertIn("p2p_offer_generation_", header)
+
+        register = exchanger[
+            exchanger.index("const auto p2p_capability") :
+            exchanger.index("if (!configuration->client.peer_route_announce.empty())")
+        ]
+        for required in (
+            "CreateNativeSocketP2PDatagramTransportFactory",
+            "GetUnderlyingNetworkInterface",
+            "candidate_transport->Start",
+            "candidate_transport->LocalEndpoint()",
+            "request.P2P.candidates.emplace_back",
+            "p2p_candidate_transport_",
+        ):
+            self.assertIn(required, register)
+        self.assertNotIn("P2PStunClient::Query", register)
+        self.assertIn("p2p_registered_candidates_ = request.P2P.candidates", register)
+
+        handler = exchanger[
+            exchanger.index("void VEthernetExchanger::HandleP2PRelayOffer") :
+            exchanger.index("bool VEthernetExchanger::OnInformation(",
+                            exchanger.index("void VEthernetExchanger::HandleP2PRelayOffer"))
+        ]
+        for required in (
+            'action != "offer-v1"',
+            "ppp::app::P2PCandidateFromEndpoint",
+            "HashP2PCandidateSet",
+            "Executors::Post(context, strand",
+            "ExportAuthenticatedSessionKey",
+            "p2p_offer_session_.Accept",
+            "P2PState::Eligible",
+        ):
+            self.assertIn(required, handler)
+        self.assertNotIn("StartProbing", handler)
+
+        reconnect = exchanger[
+            exchanger.index("void VEthernetExchanger::Finalize") :
+            exchanger.index("bool VEthernetExchanger::RegisterAllMappingPorts")
+        ]
+        self.assertGreaterEqual(reconnect.count("p2p_offer_session_.AdvanceGeneration"), 3)
+        self.assertGreaterEqual(reconnect.count("++p2p_offer_generation_"), 3)
+
     def test_server_registration_and_offers_are_guarded(self) -> None:
         header = self.source("ppp/app/server/VirtualEthernetSwitcher.h")
         capability = self.source("ppp/p2p/P2PCapabilityGate.h")
@@ -264,6 +313,8 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             "ios/App/OpenPPP2PacketTunnel/ProviderOwnedP2PDatagramTransport.swift"
         )
         native_transport = self.source("ppp/p2p/P2PDatagramTransport.cpp")
+        exchanger = self.source("ppp/app/client/VEthernetExchanger.cpp")
+        tap_header = self.source("ios/ppp/tap/TapIos.h")
 
         self.assertIn("openppp2_ios_tap_set_p2p_datagram_provider", header)
         self.assertIn("CreateIosProviderP2PDatagramTransportFactory", bridge)
@@ -280,6 +331,21 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("createUDPSession", provider_transport)
         self.assertIn("setReadHandler", provider_transport)
         self.assertIn("writeDatagram", provider_transport)
+        self.assertIn("SetP2PDatagramTransportFactory", bridge)
+        self.assertIn("GetP2PDatagramTransportFactory", tap_header)
+        iphone_candidate = exchanger[
+            exchanger.index("#if defined(_IPHONE)", exchanger.index("candidate_generation")) :
+            exchanger.index("#else", exchanger.index("candidate_generation"))
+        ]
+        self.assertIn("dynamic_pointer_cast<ppp::tap::TapIos>", iphone_candidate)
+        self.assertIn("GetP2PDatagramTransportFactory()", iphone_candidate)
+        self.assertNotIn("CreateNativeSocketP2PDatagramTransportFactory", iphone_candidate)
+        android_candidate = exchanger[
+            exchanger.index("#elif defined(_ANDROID)", exchanger.index("candidate_generation")) :
+            exchanger.index("#else", exchanger.index("#elif defined(_ANDROID)", exchanger.index("candidate_generation")))
+        ]
+        self.assertIn("Socket::GetBestInterfaceIP", android_candidate)
+        self.assertNotIn("GetUnderlyingNetworkInterface", android_candidate)
         iphone_factory = native_transport[native_transport.index("#if defined(_IPHONE)") :]
         self.assertIn("return nullptr", iphone_factory)
 

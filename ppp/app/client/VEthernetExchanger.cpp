@@ -7,6 +7,7 @@
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/mux/MuxTransportAdapter.h>
+#include <ppp/app/P2PCandidateAdapter.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/collections/Dictionary.h>
@@ -26,7 +27,12 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/p2p/P2PCapabilityGate.h>
+#include <ppp/p2p/P2PRelayOfferCoordinator.h>
 #include <ppp/p2p/P2PSocketProtector.h>
+
+#if defined(_IPHONE)
+#include <ios/ppp/tap/TapIos.h>
+#endif
 
 #include <chrono>
 
@@ -261,14 +267,102 @@ namespace ppp {
                     }
                 }
                 if (p2p_capability.allowed) {
-                    request.P2P.enabled = true;
-                    request.P2P.mode = configuration->p2p.mode;
-                    request.P2P.action = "register";
+                    const uint64_t candidate_generation =
+                        p2p_offer_generation_.load(std::memory_order_acquire);
+                    auto context = transmission->GetContext();
+#if defined(_IPHONE)
+                    auto ios_tap = std::dynamic_pointer_cast<ppp::tap::TapIos>(
+                        switcher ? switcher->GetTap() : nullptr);
+                    auto candidate_factory = ios_tap
+                        ? ios_tap->GetP2PDatagramTransportFactory()
+                        : nullptr;
+#else
+                    auto candidate_factory =
+                        ppp::p2p::CreateNativeSocketP2PDatagramTransportFactory(protector);
+#endif
+                    auto candidate_transport = context && candidate_factory
+                        ? candidate_factory->Create(*context)
+                        : nullptr;
+                    const bool started = candidate_transport &&
+                        candidate_transport->Start(
+                            [](ppp::p2p::P2PDatagramReceiveStatus,
+                                const boost::asio::ip::udp::endpoint&,
+                                const std::uint8_t*, int) noexcept {});
+                    const auto bound = started
+                        ? candidate_transport->LocalEndpoint()
+                        : boost::asio::ip::udp::endpoint();
+                    boost::asio::ip::address candidate_address;
+#if defined(_IPHONE)
+                    candidate_address = bound.address();
+#elif defined(_ANDROID)
+                    const auto remote_endpoint = transmission->GetRemoteEndPoint();
+                    if (remote_endpoint.address().is_v4()) {
+                        const uint32_t destination =
+                            IPEndPoint::ToEndPoint(remote_endpoint).GetAddress();
+                        candidate_address = Ipep::ToAddress(
+                            Socket::GetBestInterfaceIP(destination));
+                    }
+#else
+                    auto underlying = switcher
+                        ? switcher->GetUnderlyingNetworkInterface()
+                        : nullptr;
+                    if (underlying) {
+                        candidate_address = underlying->IPAddress;
+                    }
+#endif
+                    const boost::asio::ip::udp::endpoint host_candidate(
+                        candidate_address, bound.port());
+                    uint32_t local_virtual_ip = 0;
                     if (switcher) {
                         std::shared_ptr<ppp::tap::ITap> tap = switcher->GetTap();
                         if (NULLPTR != tap) {
-                            request.P2P.virtual_ip = tap->IPAddress;
+                            local_virtual_ip = tap->IPAddress;
                         }
+                    }
+                    ppp::app::protocol::P2PEndpointCandidate candidate;
+                    const std::string candidate_endpoint =
+                        ppp::app::P2PEndpointToString(host_candidate);
+                    candidate.endpoint.assign(
+                        candidate_endpoint.data(), candidate_endpoint.size());
+                    candidate.source = "host";
+
+                    std::shared_ptr<ppp::p2p::IP2PDatagramTransport> previous_transport;
+                    bool registered = false;
+                    if (!candidate.endpoint.empty() && local_virtual_ip != 0) {
+                        request.P2P.enabled = true;
+                        request.P2P.mode = configuration->p2p.mode;
+                        request.P2P.action = "register";
+                        request.P2P.virtual_ip = local_virtual_ip;
+                        request.P2P.candidates.emplace_back(candidate);
+                        {
+                            std::lock_guard<std::mutex> scope(p2p_offer_mutex_);
+                            if (!disposed_.load(std::memory_order_acquire) &&
+                                candidate_generation ==
+                                    p2p_offer_generation_.load(std::memory_order_acquire)) {
+                                previous_transport = std::move(p2p_candidate_transport_);
+                                p2p_registered_candidates_ = request.P2P.candidates;
+                                p2p_registered_transmission_ = transmission;
+                                p2p_candidate_transport_ = candidate_transport;
+                                p2p_registered_virtual_ip_ = request.P2P.virtual_ip;
+                                registered = true;
+                            }
+                        }
+                    }
+                    if (previous_transport) {
+                        previous_transport->Close();
+                    }
+                    if (!registered) {
+                        request.P2P.Clear();
+                        if (candidate_transport) {
+                            candidate_transport->Close();
+                        }
+                        std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                        if (!disposed_.load(std::memory_order_acquire) &&
+                            candidate_generation ==
+                                p2p_offer_generation_.load(std::memory_order_acquire)) {
+                            p2p_state_.store(ppp::p2p::P2PState::Unavailable, std::memory_order_relaxed);
+                        }
+                        ppp::telemetry::Count("p2p.candidate_gather.fail", 1);
                     }
                 }
                 else if (configuration->p2p.enabled) {
@@ -307,6 +401,9 @@ namespace ppp {
                     std::lock_guard<std::mutex> scope(runtime_state_mutex_);
                     p2p_state_.store(ppp::p2p::P2PState::Disabled, std::memory_order_relaxed);
                 }
+                const uint64_t p2p_generation = ++p2p_offer_generation_;
+                p2p_offer_session_.AdvanceGeneration(p2p_generation);
+                ResetP2PCandidateTransport();
 
                 VirtualEthernetMappingPortTable mappings;
                 ITransmissionPtr transmission;
@@ -673,6 +770,21 @@ namespace ppp {
 
                         // UDP datagram ports: the manager owns the session table and its own two-phase GC.
                         datagram_manager_->Tick(now);
+
+                        uint64_t expired_generation = 0;
+                        {
+                            std::lock_guard<std::mutex> offer_scope(p2p_offer_mutex_);
+                            if (p2p_offer_session_.Expire(now, &expired_generation) &&
+                                !p2p_offer_session_.IsActiveGeneration(expired_generation)) {
+                                std::lock_guard<std::mutex> state_scope(runtime_state_mutex_);
+                                if (!disposed_.load(std::memory_order_acquire) &&
+                                    network_state_.load(std::memory_order_relaxed) == NetworkState_Established &&
+                                    expired_generation ==
+                                        p2p_offer_generation_.load(std::memory_order_acquire)) {
+                                    p2p_state_.store(ppp::p2p::P2PState::Relay, std::memory_order_relaxed);
+                                }
+                            }
+                        }
 
                         // FRP mapping ports keep their in-place two-phase sweep (snapshot/erase under lock,
                         // dispose outside) here on the exchanger.
@@ -1488,22 +1600,28 @@ namespace ppp {
             void VEthernetExchanger::ExchangeToConnectingState() noexcept {
                 sekap_last_ = 0;
                 sekap_next_ = 0;
+                const uint64_t p2p_generation = ++p2p_offer_generation_;
+                p2p_offer_session_.AdvanceGeneration(p2p_generation);
                 {
                     std::lock_guard<std::mutex> scope(runtime_state_mutex_);
                     network_state_.store(NetworkState_Connecting, std::memory_order_relaxed);
                     p2p_state_.store(configured_p2p_state_, std::memory_order_relaxed);
                 }
+                ResetP2PCandidateTransport();
             }
 
             /** @brief Transitions state to reconnecting and increments retry count. */
             void VEthernetExchanger::ExchangeToReconnectingState() noexcept {
                 sekap_last_ = 0;
                 sekap_next_ = 0;
+                const uint64_t p2p_generation = ++p2p_offer_generation_;
+                p2p_offer_session_.AdvanceGeneration(p2p_generation);
                 {
                     std::lock_guard<std::mutex> scope(runtime_state_mutex_);
                     network_state_.store(NetworkState_Reconnecting, std::memory_order_relaxed);
                     p2p_state_.store(configured_p2p_state_, std::memory_order_relaxed);
                 }
+                ResetP2PCandidateTransport();
                 reconnection_count_++;
 #if defined(_IPHONE)
                 ResetIosChildTransmissionSlots("reconnecting");
@@ -1620,6 +1738,141 @@ namespace ppp {
             }
 
             /** @brief Adapts base information payload to extended envelope handler. */
+            void VEthernetExchanger::ResetP2PCandidateTransport() noexcept {
+                std::shared_ptr<ppp::p2p::IP2PDatagramTransport> transport;
+                {
+                    std::lock_guard<std::mutex> scope(p2p_offer_mutex_);
+                    transport = std::move(p2p_candidate_transport_);
+                    p2p_registered_candidates_.clear();
+                    p2p_registered_transmission_.reset();
+                    p2p_registered_virtual_ip_ = 0;
+                }
+                if (transport) {
+                    transport->Close();
+                }
+            }
+
+            void VEthernetExchanger::HandleP2PRelayOffer(
+                const ITransmissionPtr& transmission,
+                const ppp::app::protocol::P2PControlMessage& message) noexcept {
+                if (!transmission || !message.enabled || message.action != "offer-v1" ||
+                    message.authenticated_offer_v1.empty()) {
+                    return;
+                }
+
+                auto context = transmission->GetContext();
+                auto strand = transmission->GetStrand();
+                if (!context || !strand) {
+                    return;
+                }
+
+                const uint64_t generation = p2p_offer_generation_.load(std::memory_order_acquire);
+                auto self = shared_from_this();
+                Executors::Post(context, strand,
+                    [self, this, transmission, message, generation]() noexcept {
+                        if (disposed_.load(std::memory_order_acquire) ||
+                            generation != p2p_offer_generation_.load(std::memory_order_acquire)) {
+                            return;
+                        }
+
+                        ppp::vector<ppp::app::protocol::P2PEndpointCandidate> local_candidates;
+                        uint32_t local_virtual_ip = 0;
+                        {
+                            std::lock_guard<std::mutex> scope(p2p_offer_mutex_);
+                            if (p2p_registered_transmission_.lock() != transmission) {
+                                return;
+                            }
+                            local_candidates = p2p_registered_candidates_;
+                            local_virtual_ip = p2p_registered_virtual_ip_;
+                        }
+                        if (local_virtual_ip == 0 || message.virtual_ip != local_virtual_ip ||
+                            message.peer_virtual_ip == 0) {
+                            return;
+                        }
+
+                        std::vector<ppp::p2p::P2PCandidateV1> candidates;
+                        try {
+                            candidates.reserve(local_candidates.size() + message.candidates.size());
+                            const auto append = [&candidates](const auto& values) noexcept {
+                                try {
+                                    for (const auto& value : values) {
+                                        const auto endpoint = Ipep::ParseEndPoint(value.endpoint);
+                                        ppp::p2p::P2PCandidateV1 candidate;
+                                        if (!ppp::app::P2PCandidateFromEndpoint(endpoint, candidate)) {
+                                            return false;
+                                        }
+                                        candidates.emplace_back(candidate);
+                                    }
+                                    return true;
+                                }
+                                catch (...) {
+                                    return false;
+                                }
+                            };
+                            if (!append(local_candidates) || !append(message.candidates) || candidates.empty()) {
+                                return;
+                            }
+                        }
+                        catch (...) {
+                            return;
+                        }
+
+                        ppp::p2p::P2PRelayOfferRecipientContext recipient;
+                        ppp::p2p::Int128ToBytes(GetId(), recipient.local_session_id.data());
+                        std::memcpy(recipient.local_peer_id.data() + 12,
+                            &local_virtual_ip, sizeof(local_virtual_ip));
+                        if (!ppp::p2p::HashP2PCandidateSet(candidates, recipient.candidate_set_hash)) {
+                            return;
+                        }
+
+                        const auto exporter = [transmission](const char* label,
+                            const std::uint8_t* exporter_context, std::size_t context_length,
+                            std::uint8_t* output, std::size_t output_length) noexcept {
+                            return transmission->ExportAuthenticatedSessionKey(
+                                label, exporter_context, context_length, output, output_length);
+                        };
+                        std::string encoded;
+                        try {
+                            encoded.assign(message.authenticated_offer_v1.data(),
+                                message.authenticated_offer_v1.size());
+                        }
+                        catch (...) {
+                            return;
+                        }
+                        const uint64_t now = Executors::GetTickCount();
+                        if (!p2p_offer_session_.Accept(
+                                encoded, recipient, exporter, now, generation)) {
+                            return;
+                        }
+                        if (disposed_.load(std::memory_order_acquire) ||
+                            generation != p2p_offer_generation_.load(std::memory_order_acquire)) {
+                            p2p_offer_session_.ResetGeneration(generation);
+                            return;
+                        }
+
+                        {
+                            std::lock_guard<std::mutex> offer_scope(p2p_offer_mutex_);
+                            if (!p2p_offer_session_.IsActiveGeneration(generation)) {
+                                return;
+                            }
+                            bool stale = false;
+                            {
+                                std::lock_guard<std::mutex> state_scope(runtime_state_mutex_);
+                                stale = disposed_.load(std::memory_order_acquire) ||
+                                    generation != p2p_offer_generation_.load(std::memory_order_acquire);
+                                if (!stale) {
+                                    p2p_state_.store(ppp::p2p::P2PState::Eligible, std::memory_order_relaxed);
+                                }
+                            }
+                            if (stale) {
+                                p2p_offer_session_.ResetGeneration(generation);
+                                return;
+                            }
+                        }
+                        ppp::telemetry::Count("p2p.offer_v1.accepted", 1);
+                    });
+            }
+
             bool VEthernetExchanger::OnInformation(const ITransmissionPtr& transmission, const VirtualEthernetInformation& information, YieldContext& y) noexcept {
                 InformationEnvelope envelope;
                 envelope.Base = information;
@@ -1636,6 +1889,10 @@ namespace ppp {
                 auto ei = make_shared_object<VirtualEthernetInformation>(information.Base);
                 if (NULLPTR == ei) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                }
+
+                if (information.Extensions.P2P.HasAny()) {
+                    HandleP2PRelayOffer(transmission, information.Extensions.P2P);
                 }
 
                 auto self = shared_from_this();

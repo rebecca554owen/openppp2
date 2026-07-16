@@ -25,6 +25,7 @@
 #include <ppp/p2p/P2PCapabilityGate.h>
 #include <ppp/p2p/P2PDefs.h>
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
+#include <ppp/app/P2PCandidateAdapter.h>
 
 #include <chrono>
 
@@ -3932,23 +3933,8 @@ namespace ppp {
             }
 
             static ppp::string P2PEndpointToString(const boost::asio::ip::udp::endpoint& endpoint) noexcept {
-                if (endpoint.address().is_unspecified() || endpoint.port() <= IPEndPoint::MinPort) {
-                    return ppp::string();
-                }
-
-                std::string address = endpoint.address().to_string();
-                ppp::string value;
-                if (endpoint.address().is_v6()) {
-                    value.append("[");
-                    value.append(address.data(), address.size());
-                    value.append("]");
-                }
-                else {
-                    value.append(address.data(), address.size());
-                }
-                value.append(":");
-                value.append(stl::to_string<ppp::string>(endpoint.port()));
-                return value;
+                const std::string value = ppp::app::P2PEndpointToString(endpoint);
+                return ppp::string(value.data(), value.size());
             }
 
             static ppp::vector<ppp::app::protocol::P2PEndpointCandidate> P2PBuildCandidates(const VirtualEthernetSwitcher::P2PPeerRecord& record) noexcept {
@@ -3970,25 +3956,8 @@ namespace ppp {
                 try {
                     for (const auto& value : source) {
                         const auto endpoint = Ipep::ParseEndPoint(value.endpoint);
-                        if (endpoint.address().is_unspecified() || endpoint.port() == 0) {
-                            return false;
-                        }
-
                         ppp::p2p::P2PCandidateV1 candidate;
-                        candidate.port = endpoint.port();
-                        if (endpoint.address().is_v4()) {
-                            candidate.address_family = 4;
-                            candidate.address[10] = 0xff;
-                            candidate.address[11] = 0xff;
-                            const auto bytes = endpoint.address().to_v4().to_bytes();
-                            std::copy(bytes.begin(), bytes.end(), candidate.address.begin() + 12);
-                        }
-                        else if (endpoint.address().is_v6()) {
-                            candidate.address_family = 6;
-                            const auto bytes = endpoint.address().to_v6().to_bytes();
-                            std::copy(bytes.begin(), bytes.end(), candidate.address.begin());
-                        }
-                        else {
+                        if (!ppp::app::P2PCandidateFromEndpoint(endpoint, candidate)) {
                             return false;
                         }
                         destination.emplace_back(candidate);
