@@ -2,7 +2,7 @@
 
 > Status: Stable
 > Type: Reference
-> Last verified: 2566750
+> Last verified: ded25d6
 
 [中文版本](VMUX_VALIDATION_CN.md)
 
@@ -56,13 +56,16 @@ The implementation baseline provides:
 - negotiated requested/effective state and old-peer fallback (`7719c5f`);
 - UI presentation of effective mode and fallback diagnostics (`b991cd1`);
 - the benchmark harness, schema, parser, and tooling tests (`62c7441`); and
-- negotiation, bounded reorder, in-flight retirement, and a 100-cycle drain-state
-  regression tests (`2566750`).
+- negotiation, bounded reorder, and in-flight retirement tests (`2566750`); and
+- a 100-cycle production `vmux_net` carrier-container churn test (`ded25d6`).
 
-The 100-cycle drain-state unit test was also run locally with
-`-fsanitize=address,undefined` on 2026-07-15 (4 test cases, no ASan/UBSan
-error). It does not drive real `vmux_net` grow/shrink or asynchronous carrier
-I/O, so the actual churn sanitizer gate remains open.
+The `ded25d6` integration test drives the production attach helper, live RX/TX
+containers, in-flight retirement gate, reap, exactly-once transport disposal,
+and runtime active-link count for 100 grow/shrink cycles. It passed both the
+normal jemalloc build and the ASan/UBSan build with leak detection on
+2026-07-15. This closes the carrier-container lifecycle sanitizer gate, but it
+does not drive real network carrier I/O or satisfy the Linux-plus-mobile
+performance artifact gates.
 
 These commits establish the measurement and compatibility mechanisms. No real
 Linux-plus-mobile baseline demonstrating the throughput or p99 thresholds is

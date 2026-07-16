@@ -2,7 +2,7 @@
 
 > Status: Stable
 > Type: Reference
-> Last verified: 2566750
+> Last verified: ded25d6
 
 [English version](VMUX_VALIDATION.md)
 
@@ -50,12 +50,14 @@ telemetry 可用于正确性诊断，但不能满足此门槛。
 - 协商后的 requested/effective 状态与旧 peer fallback（`7719c5f`）；
 - effective mode 与 fallback 诊断 UI（`b991cd1`）；
 - benchmark harness、schema、parser 与 tooling tests（`62c7441`）；
-- negotiation、有界重排、in-flight retire 和 100-cycle drain-state 单元回归测试（`2566750`）。
+- negotiation、有界重排和 in-flight retire 测试（`2566750`）；
+- 100-cycle 生产 `vmux_net` carrier-container churn 测试（`ded25d6`）。
 
-100-cycle drain-state 单元测试还在 2026-07-15 使用
-`-fsanitize=address,undefined` 本地运行（4 个 test cases，未发现 ASan/UBSan
-错误）。该测试没有驱动真实 `vmux_net` grow/shrink 或异步承载 I/O，因此真实
-churn sanitizer 门槛仍未完成。
+`ded25d6` 集成测试驱动生产 attach helper、实时 RX/TX 容器、in-flight retire
+门禁、reap、transport exactly-once dispose 和 runtime active-link count，完成 100 次
+grow/shrink。它在 2026-07-15 同时通过普通 jemalloc 构建和启用 leak detection 的
+ASan/UBSan 构建。这关闭了 carrier-container 生命周期 sanitizer 门槛，但没有驱动
+真实网络 carrier I/O，也不满足 Linux + mobile 性能工件门槛。
 
 这些 commit 建立了测量和兼容机制。仓库中尚无证明吞吐与 p99 门槛达标的真实
 Linux + mobile baseline，因此不得修改生产默认值。

@@ -328,12 +328,21 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
 
     def test_readme_keeps_compat_default_and_limits_ci_thresholds(self):
         readme = (VMUX / "README.md").read_text(encoding="utf-8")
+        reference = (ROOT / "docs" / "reference" / "VMUX_VALIDATION.md").read_text(
+            encoding="utf-8"
+        )
+        reference_cn = (
+            ROOT / "docs" / "reference" / "VMUX_VALIDATION_CN.md"
+        ).read_text(encoding="utf-8")
         self.assertIn("compat", readme)
         self.assertIn("Linux x86-64", readme)
         self.assertIn("correctness/smoke", readme)
         self.assertIn("environment fingerprint", readme)
         self.assertIn("configuration fingerprint", readme)
         self.assertIn("active_links == 0", readme)
+        for document in (reference, reference_cn):
+            self.assertIn("ded25d6", document)
+        self.assertNotIn("actual churn sanitizer gate remains open", reference)
 
 
 if __name__ == "__main__":
