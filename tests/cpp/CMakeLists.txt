@@ -123,7 +123,9 @@ openppp2_add_cpp_test(p2p_client_offer_session_test SOURCES
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferConsumer.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp"
-    "${OPENPPP2_ROOT}/ppp/p2p/P2PKeyDerivation.cpp")
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PKeyDerivation.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2POfferToken.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PCrypto.cpp")
 target_link_libraries(p2p_client_offer_session_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_information_message_test SOURCES
     p2p_information_message_test.cpp

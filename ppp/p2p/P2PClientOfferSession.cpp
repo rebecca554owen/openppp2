@@ -7,9 +7,36 @@
 namespace ppp::p2p {
 namespace {
 
+constexpr std::uint8_t MaxProbeRounds = 2;
+
 template <typename T>
 void Cleanse(T& value) noexcept {
     OPENSSL_cleanse(&value, sizeof(value));
+}
+
+P2POfferBinding BuildBinding(
+    const P2PRelayOfferV1& offer,
+    const P2PControlPacket& packet) noexcept {
+    P2POfferBinding binding;
+    binding.version = packet.version;
+    binding.offer_id = offer.offer_id;
+    binding.initiator_session_id = offer.initiator_session_id;
+    binding.responder_session_id = offer.responder_session_id;
+    binding.initiator_peer_id = offer.initiator_peer_id;
+    binding.responder_peer_id = offer.responder_peer_id;
+    binding.connection_epoch = packet.connection_epoch;
+    binding.message_type = packet.type;
+    binding.offer_hash = packet.offer_hash;
+    binding.sender_role = packet.sender_role;
+    binding.receiver_role = packet.receiver_role;
+    binding.direction = packet.direction;
+    binding.source = packet.source;
+    binding.destination = packet.destination;
+    binding.sequence = packet.sequence;
+    binding.nonce = packet.nonce;
+    binding.ttl_seconds = packet.ttl_seconds;
+    binding.probe_transcript_hash = packet.probe_transcript_hash;
+    return binding;
 }
 
 }
@@ -34,8 +61,8 @@ bool P2PClientOfferSession::Accept(
     const bool derived = HashP2PRelayOffer(opened.offer, offer_hash) &&
         DeriveP2PV1KeyMaterial(opened.pair_seed, offer_hash, key_material);
     OPENSSL_cleanse(opened.pair_seed.data(), opened.pair_seed.size());
-    OPENSSL_cleanse(offer_hash.data(), offer_hash.size());
     if (!derived) {
+        Cleanse(offer_hash);
         Cleanse(key_material);
         return false;
     }
@@ -43,6 +70,7 @@ bool P2PClientOfferSession::Accept(
     const std::uint64_t ttl_ms =
         static_cast<std::uint64_t>(opened.ttl_seconds) * 1000;
     if (received_at_ms > std::numeric_limits<std::uint64_t>::max() - ttl_ms) {
+        Cleanse(offer_hash);
         Cleanse(key_material);
         return false;
     }
@@ -52,6 +80,7 @@ bool P2PClientOfferSession::Accept(
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (generation < generation_floor_) {
+            Cleanse(offer_hash);
             Cleanse(key_material);
             return false;
         }
@@ -65,6 +94,7 @@ bool P2PClientOfferSession::Accept(
             active_ = true;
             state_ = P2PState::Eligible;
             offer_ = opened.offer;
+            offer_hash_ = offer_hash;
             key_material_ = key_material;
             local_role_ = opened.local_role;
             peer_session_id_ = opened.peer_session_id;
@@ -76,8 +106,84 @@ bool P2PClientOfferSession::Accept(
             accepted = true;
         }
     }
+    Cleanse(offer_hash);
     Cleanse(key_material);
     return accepted;
+}
+
+bool P2PClientOfferSession::CreateAuthenticatedProbe(
+    const P2PCandidateEndpoint& source,
+    const P2PCandidateEndpoint& destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    P2PControlPacket& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || has_outstanding_probe_ || generation_ != generation ||
+        now_ms < received_at_ms_ || now_ms >= deadline_ms_ ||
+        probe_rounds_ >= MaxProbeRounds ||
+        !IsCanonicalP2PCandidate(source) ||
+        !IsCanonicalP2PCandidate(destination)) {
+        return false;
+    }
+
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    P2PControlPacket packet;
+    packet.version = 1;
+    packet.type = P2PControlType::Probe;
+    packet.offer_hash = offer_hash_;
+    packet.sender_role = static_cast<std::uint8_t>(local_role_);
+    packet.receiver_role = packet.sender_role == 0 ? 1 : 0;
+    packet.direction = packet.sender_role;
+    packet.connection_epoch = offer_.connection_epoch;
+    packet.source = source;
+    packet.destination = destination;
+    packet.sequence = next_probe_sequence_;
+    packet.nonce = BuildP2PV1Nonce(
+        directional.tx_nonce_prefix, packet.sequence);
+    packet.ttl_seconds = offer_.ttl_seconds;
+
+    auto binding = BuildBinding(offer_, packet);
+    if (!CreateP2POfferToken(
+            key_material_.offer_token_key, binding, packet.token)) {
+        Cleanse(directional);
+        return false;
+    }
+
+    outstanding_probe_ = binding;
+    has_outstanding_probe_ = true;
+    ++probe_rounds_;
+    ++next_probe_sequence_;
+    output = packet;
+    Cleanse(directional);
+    return true;
+}
+
+std::optional<P2PAuthenticatedProbeAck>
+P2PClientOfferSession::AuthenticateProbeAck(
+    const P2PControlPacket& packet,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !has_outstanding_probe_ || generation_ != generation ||
+        now_ms < received_at_ms_ || now_ms >= deadline_ms_) {
+        return std::nullopt;
+    }
+
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    auto proof = AuthenticateP2PProbeAck(
+        key_material_.offer_token_key,
+        BuildBinding(offer_, packet),
+        outstanding_probe_, observed_source, observed_destination,
+        now_ms - received_at_ms_, packet.token,
+        directional.rx_nonce_prefix, ack_replay_window_);
+    if (proof) {
+        outstanding_probe_ = {};
+        has_outstanding_probe_ = false;
+    }
+    Cleanse(directional);
+    return proof;
 }
 
 bool P2PClientOfferSession::Expire(
@@ -176,12 +282,18 @@ void P2PClientOfferSession::ClearActiveLocked() noexcept {
     active_ = false;
     state_ = P2PState::Relay;
     offer_ = {};
+    offer_hash_ = {};
     peer_session_id_ = {};
     peer_id_ = {};
     local_role_ = P2PPeerRole::Initiator;
     received_at_ms_ = 0;
     deadline_ms_ = 0;
     generation_ = 0;
+    outstanding_probe_ = {};
+    ack_replay_window_.Reset();
+    next_probe_sequence_ = 0;
+    probe_rounds_ = 0;
+    has_outstanding_probe_ = false;
 }
 
 }

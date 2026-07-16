@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/p2p/P2PKeyDerivation.h>
+#include <ppp/p2p/P2POfferToken.h>
 #include <ppp/p2p/P2PRelayOfferConsumer.h>
 #include <ppp/p2p/P2PState.h>
 
@@ -49,6 +50,19 @@ public:
     void Reset() noexcept;
     P2PClientOfferSnapshot Snapshot() const noexcept;
 
+    bool CreateAuthenticatedProbe(
+        const P2PCandidateEndpoint& source,
+        const P2PCandidateEndpoint& destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        P2PControlPacket& output) noexcept;
+    std::optional<P2PAuthenticatedProbeAck> AuthenticateProbeAck(
+        const P2PControlPacket& packet,
+        const P2PCandidateEndpoint& observed_source,
+        const P2PCandidateEndpoint& observed_destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation) noexcept;
+
 private:
     static constexpr std::size_t ReplayCapacity = 256;
 
@@ -61,6 +75,7 @@ private:
     bool active_ = false;
     P2PState state_ = P2PState::Relay;
     P2PRelayOfferV1 offer_;
+    P2POfferHash offer_hash_{};
     P2PV1KeyMaterial key_material_{};
     P2PPeerRole local_role_ = P2PPeerRole::Initiator;
     P2PId peer_session_id_{};
@@ -69,6 +84,11 @@ private:
     std::uint64_t deadline_ms_ = 0;
     std::uint64_t generation_ = 0;
     std::uint64_t generation_floor_ = 0;
+    P2POfferBinding outstanding_probe_{};
+    P2PReplayWindow ack_replay_window_{};
+    std::uint32_t next_probe_sequence_ = 0;
+    std::uint8_t probe_rounds_ = 0;
+    bool has_outstanding_probe_ = false;
     std::array<P2PId, ReplayCapacity> seen_offer_ids_{};
     std::size_t seen_count_ = 0;
     std::size_t seen_next_ = 0;
