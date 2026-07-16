@@ -447,8 +447,10 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("reactivecircus/android-emulator-runner@v2", workflow)
         self.assertIn("api-level: 34", workflow)
         self.assertIn("arch: x86_64", workflow)
-        self.assertIn("flutter build apk --debug", workflow)
-        self.assertIn(":app:connectedDebugAndroidTest", workflow)
+        self.assertIn("gradle/actions/setup-gradle@v4", workflow)
+        self.assertIn("gradle-version: '8.14'", workflow)
+        self.assertIn("gradle :app:connectedDebugAndroidTest", workflow)
+        self.assertNotIn("flutter build apk --debug", workflow)
         self.assertIn("timeout 15s adb logcat -d", workflow)
 
     def test_ios_uses_provider_owned_udp_transport(self) -> None:
