@@ -23,8 +23,9 @@
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/diagnostics/Telemetry.h> /* SpanScope RAII */
 #include <ppp/p2p/P2PCapabilityGate.h>
+#include <ppp/p2p/P2PDefs.h>
+#include <ppp/p2p/P2PRelayOfferCoordinator.h>
 
-#include <openssl/rand.h>
 #include <chrono>
 
 #if defined(_LINUX)
@@ -3963,28 +3964,61 @@ namespace ppp {
                 return candidates;
             }
 
-            /**
-             * @brief Generates an opaque random token for a P2P offer.
-             *
-             * M1: Uses OpenSSL RAND_bytes for cryptographically strong randomness.
-             * Output is hex-encoded, preserving the existing string format.
-             */
-            static ppp::string P2PNewToken() noexcept {
-                // Generate 32 random bytes → 64 hex chars. Well within MAX_OFFER_TOKEN_SIZE.
-                uint8_t raw[32];
-                if (RAND_bytes(raw, sizeof(raw)) != 1) {
-                    // CSPRNG failure — return empty to fail closed.
-                    return ppp::string();
-                }
+            static bool P2PAppendCanonicalCandidates(
+                const ppp::vector<ppp::app::protocol::P2PEndpointCandidate>& source,
+                std::vector<ppp::p2p::P2PCandidateV1>& destination) noexcept {
+                try {
+                    for (const auto& value : source) {
+                        const auto endpoint = Ipep::ParseEndPoint(value.endpoint);
+                        if (endpoint.address().is_unspecified() || endpoint.port() == 0) {
+                            return false;
+                        }
 
-                static constexpr char hex[] = "0123456789abcdef";
-                ppp::string token;
-                token.reserve(64);
-                for (size_t i = 0; i < sizeof(raw); ++i) {
-                    token.append(1, hex[(raw[i] >> 4) & 0x0F]);
-                    token.append(1, hex[raw[i] & 0x0F]);
+                        ppp::p2p::P2PCandidateV1 candidate;
+                        candidate.port = endpoint.port();
+                        if (endpoint.address().is_v4()) {
+                            candidate.address_family = 4;
+                            candidate.address[10] = 0xff;
+                            candidate.address[11] = 0xff;
+                            const auto bytes = endpoint.address().to_v4().to_bytes();
+                            std::copy(bytes.begin(), bytes.end(), candidate.address.begin() + 12);
+                        }
+                        else if (endpoint.address().is_v6()) {
+                            candidate.address_family = 6;
+                            const auto bytes = endpoint.address().to_v6().to_bytes();
+                            std::copy(bytes.begin(), bytes.end(), candidate.address.begin());
+                        }
+                        else {
+                            return false;
+                        }
+                        destination.emplace_back(candidate);
+                    }
+                    return true;
                 }
-                return token;
+                catch (...) {
+                    return false;
+                }
+            }
+
+            static bool P2PCollectPeerCandidates(
+                const VirtualEthernetSwitcher::P2PPeerRecord& source,
+                const VirtualEthernetSwitcher::P2PPeerRecord& destination,
+                std::vector<ppp::p2p::P2PCandidateV1>& candidates) noexcept {
+                try {
+                    candidates.reserve(source.Candidates.size() + destination.Candidates.size());
+                }
+                catch (...) {
+                    return false;
+                }
+                return P2PAppendCanonicalCandidates(source.Candidates, candidates) &&
+                    P2PAppendCanonicalCandidates(destination.Candidates, candidates) &&
+                    !candidates.empty();
+            }
+
+            static ppp::p2p::P2PId P2PPeerIdFromVirtualIP(uint32_t virtual_ip) noexcept {
+                ppp::p2p::P2PId peer_id{};
+                std::memcpy(peer_id.data() + 12, &virtual_ip, sizeof(virtual_ip));
+                return peer_id;
             }
 
             static VirtualEthernetSwitcher::InformationEnvelope P2PBuildEnvelope(const ppp::app::protocol::P2PControlMessage& message) noexcept {
@@ -4273,53 +4307,185 @@ namespace ppp {
                     return false;
                 }
 
-                // M1: Use CSPRNG-backed opaque random token — no session IDs embedded.
-                ppp::string token = P2PNewToken();
-                if (token.empty()) {
-                    // CSPRNG failure — fail closed, do not send offers with empty tokens.
+                std::vector<ppp::p2p::P2PCandidateV1> canonical_candidates;
+                ppp::p2p::P2POfferHash candidate_set_hash{};
+                if (!P2PCollectPeerCandidates(
+                        source_record, destination_record, canonical_candidates) ||
+                    !ppp::p2p::HashP2PCandidateSet(
+                        canonical_candidates, candidate_set_hash)) {
                     return false;
                 }
 
-                ppp::app::protocol::P2PControlMessage source_offer;
-                source_offer.enabled = true;
-                source_offer.mode = configuration_->p2p.mode;
-                source_offer.action = "offer";
-                source_offer.virtual_ip = source_ip;
-                source_offer.peer_virtual_ip = destination_ip;
-                source_offer.token = token;
-                source_offer.candidates = P2PBuildCandidates(destination_record);
+                auto source_context = source_transmission->GetContext();
+                auto source_strand = source_transmission->GetStrand();
+                auto destination_context = destination_transmission->GetContext();
+                auto destination_strand = destination_transmission->GetStrand();
+                if (NULLPTR == source_context || NULLPTR == destination_context) {
+                    return false;
+                }
 
-                ppp::app::protocol::P2PControlMessage destination_offer;
-                destination_offer.enabled = true;
-                destination_offer.mode = configuration_->p2p.mode;
-                destination_offer.action = "offer";
-                destination_offer.virtual_ip = destination_ip;
-                destination_offer.peer_virtual_ip = source_ip;
-                destination_offer.token = token;
-                destination_offer.candidates = P2PBuildCandidates(source_record);
-
-                bool source_ok = source_exchanger->DoInformation(source_transmission, P2PBuildEnvelope(source_offer), y);
-                bool destination_ok = destination_exchanger->DoInformation(destination_transmission, P2PBuildEnvelope(destination_offer), y);
-
-                // Fix #9: Only update LastOfferAt when at least one side succeeded.
-                // This allows faster retry when both sides fail (e.g., transient transport error).
-                if (source_ok || destination_ok) {
+                // Reserve the pair before starting either exporter so concurrent packets
+                // cannot launch duplicate offers while authenticated key export is pending.
+                UInt64 offer_generation = 0;
+                {
                     SynchronizedObjectScope scope(syncobj_);
                     auto src_it = p2p_peers_.find(source_record.SessionId);
-                    if (src_it != p2p_peers_.end()) {
-                        src_it->second.LastOfferAt = now;
-                    }
                     auto dst_it = p2p_peers_.find(destination_record.SessionId);
-                    if (dst_it != p2p_peers_.end()) {
-                        dst_it->second.LastOfferAt = now;
+                    if (src_it == p2p_peers_.end() || dst_it == p2p_peers_.end() ||
+                        src_it->second.VirtualIP != source_ip ||
+                        dst_it->second.VirtualIP != destination_ip) {
+                        return false;
                     }
-
-                    ppp::telemetry::Log(Level::kInfo, "p2p", "peer hints offered source=%s destination=%s",
-                        IPEndPoint::ToAddressString(source_ip).c_str(),
-                        IPEndPoint::ToAddressString(destination_ip).c_str());
-                    ppp::telemetry::Count("p2p.offer", 1);
+                    if (now < src_it->second.LastOfferAt + OFFER_THROTTLE_MS &&
+                        now < dst_it->second.LastOfferAt + OFFER_THROTTLE_MS) {
+                        return false;
+                    }
+                    offer_generation = ++p2p_offer_generation_;
+                    if (offer_generation == 0) {
+                        offer_generation = ++p2p_offer_generation_;
+                    }
+                    src_it->second.LastOfferAt = now;
+                    src_it->second.LastOfferGeneration = offer_generation;
+                    dst_it->second.LastOfferAt = now;
+                    dst_it->second.LastOfferGeneration = offer_generation;
                 }
-                return source_ok || destination_ok;
+
+                ppp::p2p::P2PRelayOfferInput input;
+                ppp::p2p::Int128ToBytes(source_record.SessionId, input.initiator_session_id.data());
+                ppp::p2p::Int128ToBytes(destination_record.SessionId, input.responder_session_id.data());
+                input.initiator_peer_id = P2PPeerIdFromVirtualIP(source_ip);
+                input.responder_peer_id = P2PPeerIdFromVirtualIP(destination_ip);
+                input.ttl_seconds = 10;
+                input.candidate_set_hash = candidate_set_hash;
+
+                const auto source_async_exporter = ppp::p2p::ScheduleP2PSessionExporter(
+                    [source_context, source_strand](const ppp::p2p::P2PTask& task) noexcept {
+                        return Executors::Post(source_context, source_strand, task);
+                    },
+                    [source_transmission](const char* label,
+                        const std::uint8_t* context, std::size_t context_length,
+                        std::uint8_t* output, std::size_t output_length) noexcept {
+                        return source_transmission->ExportAuthenticatedSessionKey(
+                            label, context, context_length, output, output_length);
+                    });
+                const auto destination_async_exporter = ppp::p2p::ScheduleP2PSessionExporter(
+                    [destination_context, destination_strand](const ppp::p2p::P2PTask& task) noexcept {
+                        return Executors::Post(destination_context, destination_strand, task);
+                    },
+                    [destination_transmission](const char* label,
+                        const std::uint8_t* context, std::size_t context_length,
+                        std::uint8_t* output, std::size_t output_length) noexcept {
+                        return destination_transmission->ExportAuthenticatedSessionKey(
+                            label, context, context_length, output, output_length);
+                    });
+
+                auto self = shared_from_this();
+                const auto rollback_reservation = [self, offer_generation](const Int128& session_id) noexcept {
+                    SynchronizedObjectScope scope(self->syncobj_);
+                    auto it = self->p2p_peers_.find(session_id);
+                    if (it != self->p2p_peers_.end() &&
+                        it->second.LastOfferGeneration == offer_generation) {
+                        it->second.LastOfferAt = 0;
+                        it->second.LastOfferGeneration = 0;
+                    }
+                };
+
+                const bool scheduled = ppp::p2p::CreateP2PRelayOfferBundleAsync(
+                    input, source_async_exporter, destination_async_exporter,
+                    [self, source_record, destination_record,
+                        source_exchanger, destination_exchanger,
+                        source_transmission, destination_transmission,
+                        source_ip, destination_ip, rollback_reservation]
+                    (bool ok, const ppp::p2p::P2PRelayOfferBundle& bundle) noexcept {
+                        if (!ok || self->IsDisposed()) {
+                            rollback_reservation(source_record.SessionId);
+                            rollback_reservation(destination_record.SessionId);
+                            return;
+                        }
+
+                        std::string source_encoded;
+                        std::string destination_encoded;
+                        if (!ppp::p2p::EncodeP2PRelayOfferRecipientHex(
+                                bundle.offer, bundle.initiator_envelope, source_encoded) ||
+                            !ppp::p2p::EncodeP2PRelayOfferRecipientHex(
+                                bundle.offer, bundle.responder_envelope, destination_encoded)) {
+                            rollback_reservation(source_record.SessionId);
+                            rollback_reservation(destination_record.SessionId);
+                            return;
+                        }
+
+                        ppp::app::protocol::P2PControlMessage source_offer;
+                        source_offer.enabled = true;
+                        source_offer.mode = "direct-preferred";
+                        source_offer.action = "offer-v1";
+                        source_offer.virtual_ip = source_ip;
+                        source_offer.peer_virtual_ip = destination_ip;
+                        source_offer.authenticated_offer_v1.assign(
+                            source_encoded.data(), source_encoded.size());
+                        source_offer.candidates = P2PBuildCandidates(destination_record);
+
+                        ppp::app::protocol::P2PControlMessage destination_offer;
+                        destination_offer.enabled = true;
+                        destination_offer.mode = "direct-preferred";
+                        destination_offer.action = "offer-v1";
+                        destination_offer.virtual_ip = destination_ip;
+                        destination_offer.peer_virtual_ip = source_ip;
+                        destination_offer.authenticated_offer_v1.assign(
+                            destination_encoded.data(), destination_encoded.size());
+                        destination_offer.candidates = P2PBuildCandidates(source_record);
+
+                        const auto send_offer = [self, rollback_reservation](
+                            const std::shared_ptr<VirtualEthernetExchanger>& exchanger,
+                            const ITransmissionPtr& transmission,
+                            const ppp::app::protocol::P2PControlMessage& message,
+                            const Int128& session_id) noexcept {
+                            auto context = transmission->GetContext();
+                            auto strand = transmission->GetStrand();
+                            auto allocator = transmission->BufferAllocator;
+                            if (NULLPTR == context) {
+                                rollback_reservation(session_id);
+                                return false;
+                            }
+
+                            InformationEnvelope envelope = P2PBuildEnvelope(message);
+                            const bool spawned = YieldContext::Spawn(
+                                allocator.get(), *context, strand.get(),
+                                [self, exchanger, transmission, envelope,
+                                    session_id, rollback_reservation](YieldContext& send_y) noexcept {
+                                    if (!exchanger->DoInformation(transmission, envelope, send_y)) {
+                                        rollback_reservation(session_id);
+                                        return;
+                                    }
+                                    ppp::telemetry::Count("p2p.offer_v1_delivery", 1);
+                                });
+                            if (!spawned) {
+                                rollback_reservation(session_id);
+                            }
+                            return spawned;
+                        };
+
+                        const bool source_spawned = send_offer(
+                            source_exchanger, source_transmission,
+                            source_offer, source_record.SessionId);
+                        const bool destination_spawned = send_offer(
+                            destination_exchanger, destination_transmission,
+                            destination_offer, destination_record.SessionId);
+                        if (source_spawned || destination_spawned) {
+                            ppp::telemetry::Log(
+                                Level::kInfo, "p2p",
+                                "authenticated peer hints scheduled source=%s destination=%s",
+                                IPEndPoint::ToAddressString(source_ip).c_str(),
+                                IPEndPoint::ToAddressString(destination_ip).c_str());
+                            ppp::telemetry::Count("p2p.offer_v1", 1);
+                        }
+                    });
+
+                if (!scheduled) {
+                    rollback_reservation(source_record.SessionId);
+                    rollback_reservation(destination_record.SessionId);
+                }
+                (void)y;
+                return scheduled;
             }
 
             /**

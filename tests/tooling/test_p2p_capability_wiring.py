@@ -48,6 +48,8 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         )
 
     def test_server_registration_and_offers_are_guarded(self) -> None:
+        header = self.source("ppp/app/server/VirtualEthernetSwitcher.h")
+        capability = self.source("ppp/p2p/P2PCapabilityGate.h")
         source = self.source("ppp/app/server/VirtualEthernetSwitcher.cpp")
         registration = source[
             source.index("bool VirtualEthernetSwitcher::UpdateP2PPeer") :
@@ -67,6 +69,21 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertGreaterEqual(
             offers.count("ProductionAuthenticatedControlV1Ready"), 2
         )
+        self.assertIn("HashP2PCandidateSet", offers)
+        self.assertIn("CreateP2PRelayOfferBundleAsync", offers)
+        self.assertGreaterEqual(offers.count("ScheduleP2PSessionExporter"), 2)
+        self.assertGreaterEqual(offers.count("ExportAuthenticatedSessionKey"), 2)
+        self.assertGreaterEqual(offers.count('action = "offer-v1"'), 2)
+        self.assertGreaterEqual(offers.count("authenticated_offer_v1"), 2)
+        self.assertIn("YieldContext::Spawn", offers)
+        self.assertNotIn("P2PNewToken", offers)
+        self.assertNotIn("source_offer.token", offers)
+        self.assertNotIn("destination_offer.token", offers)
+        self.assertIn("LastOfferGeneration", header)
+        self.assertIn("p2p_offer_generation_", header)
+        self.assertIn("LastOfferGeneration == offer_generation", offers)
+        self.assertNotIn("LastOfferAt == now", offers)
+        self.assertIn("ProductionAuthenticatedControlV1Ready = false", capability)
 
     def test_channel_protects_before_receive_and_probe(self) -> None:
         channel = self.source("ppp/p2p/P2PChannel.cpp")

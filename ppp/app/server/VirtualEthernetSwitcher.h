@@ -147,6 +147,7 @@ namespace ppp {
                     ppp::vector<ppp::app::protocol::P2PEndpointCandidate> Candidates;              ///< Client-advertised UDP/STUN candidates.
                     UInt64                                               LastSeen = 0;             ///< Last control update tick.
                     UInt64                                               LastOfferAt = 0;          ///< Last peer-offer send tick for coarse throttling.
+                    UInt64                                               LastOfferGeneration = 0;  ///< Unique owner of the current asynchronous offer reservation.
                     std::weak_ptr<VirtualEthernetExchanger>              Exchanger;                ///< Owning exchanger.
                     ppp::p2p::P2PNatType                                 NatType = ppp::p2p::P2PNatType::Unknown; ///< Inferred NAT type from relay traffic.
                 };
@@ -839,6 +840,7 @@ namespace ppp {
                 IPv6LeaseTable                                          ipv6_leases_;                   ///< Active IPv6 lease records.
                 P2PPeerTable                                            p2p_peers_;                     ///< P2P control-plane peer records (key = session_id).
                 ppp::unordered_map<uint32_t, Int128>                    p2p_virtual_ips_;               ///< Reverse index: virtual_ip → session_id for dedup and NAT-ownership validation.
+                UInt64                                                  p2p_offer_generation_ = 0;      ///< Monotonic offer reservation identity guarded by syncobj_.
                 PeerPrefixGatewayTable                                  peer_prefix_gateways_;          ///< Prefix gateway records keyed by session_id.
                 ppp::net::native::RouteInformationTable                 peer_prefix_rib_;               ///< Prefix → gateway virtual IP lookup table.
                 ppp::p2p::P2PNatClassifier                              p2p_nat_classifier_;            ///< Server-side NAT type inference from relay traffic.
