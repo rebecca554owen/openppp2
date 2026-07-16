@@ -306,3 +306,67 @@ BOOST_AUTO_TEST_CASE(async_initiator_failure_skips_responder) {
     BOOST_TEST(responder_calls == 0);
     BOOST_TEST(completion_calls == 1);
 }
+
+BOOST_AUTO_TEST_CASE(scheduled_exporter_runs_only_on_scheduler) {
+    P2PTask scheduled;
+    int export_calls = 0;
+    int completion_calls = 0;
+    bool completion_ok = false;
+    P2PExporterKey output{};
+    const auto expected = Bytes<32>(17);
+    P2PExporterContext context = Bytes<113>(31);
+
+    const P2PTaskScheduler scheduler = [&](const P2PTask& task) {
+        scheduled = task;
+        return true;
+    };
+    const P2PSessionExporter exporter =
+        [&](const char*, const std::uint8_t*, std::size_t,
+            std::uint8_t* destination, std::size_t length) {
+        ++export_calls;
+        BOOST_REQUIRE_EQUAL(length, expected.size());
+        std::memcpy(destination, expected.data(), expected.size());
+        return true;
+    };
+    const auto async_exporter =
+        ScheduleP2PSessionExporter(scheduler, exporter);
+
+    async_exporter(
+        P2PWrapExporterLabel, context, output,
+        [&](bool ok) {
+            ++completion_calls;
+            completion_ok = ok;
+        });
+    BOOST_TEST(export_calls == 0);
+    BOOST_TEST(completion_calls == 0);
+    BOOST_REQUIRE(scheduled);
+    scheduled();
+    BOOST_TEST(export_calls == 1);
+    BOOST_TEST(completion_calls == 1);
+    BOOST_TEST(completion_ok);
+    BOOST_TEST(output == expected);
+}
+
+BOOST_AUTO_TEST_CASE(scheduled_exporter_fails_when_post_is_rejected) {
+    int export_calls = 0;
+    int completion_calls = 0;
+    P2PExporterKey output{};
+    const P2PTaskScheduler scheduler = [](const P2PTask&) { return false; };
+    const P2PSessionExporter exporter =
+        [&](const char*, const std::uint8_t*, std::size_t,
+            std::uint8_t*, std::size_t) {
+        ++export_calls;
+        return true;
+    };
+    const auto async_exporter =
+        ScheduleP2PSessionExporter(scheduler, exporter);
+
+    async_exporter(
+        P2PWrapExporterLabel, Bytes<113>(31), output,
+        [&](bool ok) {
+            BOOST_TEST(!ok);
+            ++completion_calls;
+        });
+    BOOST_TEST(export_calls == 0);
+    BOOST_TEST(completion_calls == 1);
+}

@@ -272,4 +272,60 @@ bool CreateP2PRelayOfferBundleAsync(
     }
 }
 
+P2PAsyncSessionExporter ScheduleP2PSessionExporter(
+    const P2PTaskScheduler& scheduler,
+    const P2PSessionExporter& exporter) noexcept {
+    if (!scheduler || !exporter) {
+        return {};
+    }
+    try {
+        return [scheduler, exporter](
+                   const char* label,
+                   const P2PExporterContext& context,
+                   P2PExporterKey& output,
+                   const P2PExportCompletion& completion) {
+            auto finished = std::make_shared<std::atomic_bool>(false);
+            const auto finish = [finished, completion](bool ok) noexcept {
+                if (finished->exchange(true, std::memory_order_acq_rel) ||
+                    !completion) {
+                    return;
+                }
+                try {
+                    completion(ok);
+                }
+                catch (...) {
+                }
+            };
+            const std::string copied_label = label ? label : "";
+            const P2PExporterContext copied_context = context;
+            const P2PTask task = [
+                exporter, copied_label, copied_context,
+                &output, finish]() noexcept {
+                bool ok = false;
+                try {
+                    ok = exporter(
+                        copied_label.c_str(),
+                        copied_context.data(), copied_context.size(),
+                        output.data(), output.size());
+                }
+                catch (...) {
+                }
+                finish(ok);
+            };
+            bool scheduled = false;
+            try {
+                scheduled = scheduler(task);
+            }
+            catch (...) {
+            }
+            if (!scheduled) {
+                finish(false);
+            }
+        };
+    }
+    catch (...) {
+        return {};
+    }
+}
+
 }

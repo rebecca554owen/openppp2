@@ -46,6 +46,8 @@ using P2PAsyncSessionExporter = std::function<void(
 using P2PRelayOfferCompletion = std::function<void(
     bool ok,
     const P2PRelayOfferBundle& bundle)>;
+using P2PTask = std::function<void()>;
+using P2PTaskScheduler = std::function<bool(const P2PTask& task)>;
 
 bool BuildP2PRelayOfferBundle(
     const P2PRelayOfferInput& input,
@@ -65,5 +67,9 @@ bool CreateP2PRelayOfferBundleAsync(
     const P2PAsyncSessionExporter& initiator_exporter,
     const P2PAsyncSessionExporter& responder_exporter,
     const P2PRelayOfferCompletion& completion) noexcept;
+
+P2PAsyncSessionExporter ScheduleP2PSessionExporter(
+    const P2PTaskScheduler& scheduler,
+    const P2PSessionExporter& exporter) noexcept;
 
 }
