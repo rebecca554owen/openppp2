@@ -110,6 +110,12 @@ openppp2_add_cpp_test(p2p_relay_offer_coordinator_test SOURCES
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp")
 target_link_libraries(p2p_relay_offer_coordinator_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_relay_offer_consumer_test SOURCES
+    p2p_relay_offer_consumer_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferConsumer.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferCoordinator.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp")
+target_link_libraries(p2p_relay_offer_consumer_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_information_message_test SOURCES
     p2p_information_message_test.cpp
     support/peer_prefix_route_test_stubs.cpp

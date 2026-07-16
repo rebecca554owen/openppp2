@@ -163,6 +163,12 @@ BOOST_AUTO_TEST_CASE(rejects_invalid_input_without_modifying_output) {
     BOOST_TEST(!BuildP2PRelayOfferBundle(
         input, initiator_exporter, responder_exporter, secrets, output));
     BOOST_TEST(output.offer.offer_id == baseline);
+
+    input = Input();
+    input.candidate_set_hash.fill(0);
+    BOOST_TEST(!BuildP2PRelayOfferBundle(
+        input, initiator_exporter, responder_exporter, secrets, output));
+    BOOST_TEST(output.offer.offer_id == baseline);
 }
 
 BOOST_AUTO_TEST_CASE(creates_fresh_session_bound_bundles) {

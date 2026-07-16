@@ -29,6 +29,7 @@ bool ValidOffer(const P2PRelayOfferV1& offer) noexcept {
         !IsZero(offer.initiator_peer_id) &&
         !IsZero(offer.responder_peer_id) &&
         !IsZero(offer.connection_epoch) &&
+        !IsZero(offer.candidate_set_hash) &&
         offer.initiator_session_id != offer.responder_session_id &&
         offer.initiator_peer_id != offer.responder_peer_id;
 }

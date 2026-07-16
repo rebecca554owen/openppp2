@@ -532,6 +532,7 @@
     <ClCompile Include="ppp\p2p\P2PDatagramTransport.cpp" />
     <ClCompile Include="ppp\p2p\P2PKeyDerivation.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOffer.cpp" />
+    <ClCompile Include="ppp\p2p\P2PRelayOfferConsumer.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOfferCoordinator.cpp" />
     <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp" />
     <ClCompile Include="ppp\p2p\P2POfferToken.cpp" />
