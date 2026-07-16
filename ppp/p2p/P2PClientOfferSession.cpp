@@ -282,7 +282,8 @@ P2PClientOfferSession::AuthenticateProbeAck(
 }
 
 bool P2PClientOfferSession::SealData(
-    const std::vector<std::uint8_t>& payload,
+    const std::uint8_t* payload,
+    std::size_t payload_length,
     std::uint64_t now_ms,
     std::uint64_t generation,
     std::vector<std::uint8_t>& output) noexcept {
@@ -290,8 +291,8 @@ bool P2PClientOfferSession::SealData(
     if (!active_ || !data_authorized_ || generation_ != generation ||
         now_ms < received_at_ms_ || now_ms >= deadline_ms_ ||
         next_tx_sequence_ == std::numeric_limits<std::uint32_t>::max() ||
-        payload.empty() ||
-        payload.size() > P2PDataPacketHeader::MaxPayloadSize) {
+        !payload || payload_length == 0 ||
+        payload_length > P2PDataPacketHeader::MaxPayloadSize) {
         return false;
     }
 
@@ -307,7 +308,7 @@ bool P2PClientOfferSession::SealData(
         directional.tx_nonce_prefix, header.sequence);
     const bool sealed = SealP2PDataDatagram(
         header, directional.tx_key, nonce,
-        payload.data(), payload.size(), output);
+        payload, payload_length, output);
     if (sealed) ++next_tx_sequence_;
     Cleanse(directional);
     return sealed;

@@ -52,6 +52,13 @@ Eligible/Probing/Direct/Suspect -> FallingBack
 The relay forwarding path stays active through `Eligible`, `Probing`,
 `Suspect`, `FallingBack`, and `Failed`. A coordinator may suppress duplicate
 delivery while Direct is healthy, but it cannot dispose the relay session.
+After authenticating a peer Probe and producing its ACK, `Probing` may accept
+authenticated inbound data from that exact peer endpoint; it must not send
+direct data or suppress outbound relay delivery until its own Probe ACK is
+authenticated and the state reaches `Direct`.
+Direct data is scoped to the authenticated IPv4 virtual-peer pair. Traffic for
+other destinations, including Internet and IPv6 traffic, continues over relay
+and does not trigger `FallingBack`.
 Every transition that destroys an active attempt passes through `FallingBack`,
 which closes the UDP socket and erases direct keys, tokens, endpoint bindings,
 timers, and replay state before publishing `Relay`, `Unavailable`, or

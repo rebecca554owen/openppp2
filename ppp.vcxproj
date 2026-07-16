@@ -537,6 +537,7 @@
     <ClCompile Include="ppp\p2p\P2PControlDatagram.cpp" />
     <ClCompile Include="ppp\p2p\P2PDataDatagram.cpp" />
     <ClCompile Include="ppp\p2p\P2PDirectActivationCoordinator.cpp" />
+    <ClCompile Include="ppp\p2p\P2PDirectDataPath.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOfferConsumer.cpp" />
     <ClCompile Include="ppp\p2p\P2PRelayOfferCoordinator.cpp" />
     <ClCompile Include="ppp\p2p\P2PNatClassifier.cpp" />

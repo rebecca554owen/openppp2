@@ -53,12 +53,14 @@ class P2PCapabilityWiringTests(unittest.TestCase):
 
         self.assertIn("<ppp/p2p/P2PClientOfferSession.h>", header)
         self.assertIn("P2PClientOfferSession", header)
-        self.assertIn("<ppp/p2p/P2PDirectActivationCoordinator.h>", header)
-        self.assertIn("P2PDirectActivationCoordinator", header)
+        self.assertIn("<ppp/p2p/P2PDirectDataPath.h>", header)
+        self.assertIn("P2PDirectDataPath", header)
         self.assertNotIn("std::optional<ppp::p2p::P2PAuthenticatedProbeAck>", header)
         self.assertIn("p2p_registered_candidates_", header)
         self.assertIn("p2p_offer_generation_", header)
         self.assertIn("p2p_transport_registration_id_", header)
+        self.assertIn("p2p_peer_candidate_", header)
+        self.assertIn("p2p_peer_virtual_ip_", header)
 
         register = exchanger[
             exchanger.index("const auto p2p_capability") :
@@ -68,7 +70,7 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             "CreateNativeSocketP2PDatagramTransportFactory",
             "GetUnderlyingNetworkInterface",
             "candidate_transport->Start",
-            "HandleP2PControlDatagram",
+            "HandleP2PDatagram",
             "candidate_transport->LocalEndpoint()",
             "request.P2P.candidates.emplace_back",
             "p2p_candidate_transport_",
@@ -76,7 +78,7 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             self.assertIn(required, register)
         self.assertNotIn("P2PStunClient::Query", register)
         self.assertIn("p2p_registered_candidates_ = request.P2P.candidates", register)
-        self.assertIn("p2p_direct_activation_.Reset(candidate_generation)", register)
+        self.assertIn("p2p_direct_data_path_.Reset(candidate_generation)", register)
 
         handler = exchanger[
             exchanger.index("void VEthernetExchanger::HandleP2PRelayOffer") :
@@ -98,7 +100,7 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("candidate_transport->SendTo", handler)
 
         datagram_handler = exchanger[
-            exchanger.index("void VEthernetExchanger::HandleP2PControlDatagram") :
+            exchanger.index("void VEthernetExchanger::HandleP2PDatagram") :
             exchanger.index("void VEthernetExchanger::HandleP2PRelayOffer")
         ]
         for required in (
@@ -106,29 +108,53 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             "HandleAuthenticatedControlDatagram",
             "P2PControlDatagramAction::Reply",
             "transport->SendTo",
-            "p2p_direct_activation_.StageAuthenticatedAck",
+            "p2p_direct_data_path_.StageAuthenticatedAck",
+            "p2p_direct_data_path_.Activate(transport->IsReady()",
+            "P2PDataPacketHeader::HeaderSize",
+            "sender != p2p_peer_candidate_",
+            "p2p_direct_data_path_.Open",
+            "AllowsInboundPacket",
+            "p2p_peer_virtual_ip_",
+            "OnNat(transmission",
             "p2p_offer_generation_",
             "p2p_transport_registration_id_",
         ):
             self.assertIn(required, datagram_handler)
-        self.assertNotIn("P2PState::Direct", datagram_handler)
         self.assertNotIn("StartProbing", datagram_handler)
         self.assertNotIn("Activate(true", datagram_handler)
         transport_error = datagram_handler[
             datagram_handler.index("P2PDatagramReceiveStatus::Error") :
-            datagram_handler.index("packet_size !=")
+            datagram_handler.index("P2PDatagramReceiveStatus::Packet")
         ]
         self.assertIn("p2p_transport_registration_id_", transport_error)
         self.assertIn("p2p_offer_session_.ResetGeneration", transport_error)
-        self.assertIn("p2p_direct_activation_.Fallback", transport_error)
+        self.assertIn("p2p_direct_data_path_.Fallback", transport_error)
         self.assertIn("P2PFallbackReason::SocketError", transport_error)
         self.assertIn("p2p_state_.store(ppp::p2p::P2PState::Relay", transport_error)
         self.assertIn("transport->Close()", transport_error)
 
         probe_failure = handler[handler.index("const bool sent =") :]
-        self.assertIn("p2p_direct_activation_.Begin(generation)", probe_failure)
+        self.assertIn("p2p_direct_data_path_.Begin(generation)", probe_failure)
+        self.assertIn("p2p_peer_candidate_ = peer_candidate", probe_failure)
+        self.assertIn("p2p_peer_virtual_ip_ = message.peer_virtual_ip", probe_failure)
         self.assertIn("p2p_state_.store(ppp::p2p::P2PState::Relay", probe_failure)
         self.assertNotIn("Activate(true", handler)
+
+        accepted_offer = handler[
+            handler.index("if (!p2p_offer_session_.Accept(") :
+            handler.index('Count("p2p.offer_v1.accepted"')
+        ]
+        self.assertIn("p2p_peer_candidate_ = {}", accepted_offer)
+        self.assertIn("p2p_peer_virtual_ip_ = 0", accepted_offer)
+        self.assertIn("p2p_direct_data_path_.Reset(generation)", accepted_offer)
+
+        update = exchanger[
+            exchanger.index("bool VEthernetExchanger::Update()") :
+            exchanger.index("bool VEthernetExchanger::DoKeepAlived")
+        ]
+        self.assertIn("P2PFallbackReason::Timeout", update)
+        self.assertIn("p2p_direct_data_path_.Fallback", update)
+        self.assertIn("expired_transport->Close()", update)
 
         reconnect = exchanger[
             exchanger.index("void VEthernetExchanger::Finalize") :
@@ -155,11 +181,21 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             self.assertIn(required, session_source)
         self.assertIn("EVP_chacha20_poly1305()", codec)
         self.assertIn("P2PDataPacketHeader::HeaderSize", codec)
-        self.assertNotIn(".SealData(", exchanger)
-        self.assertNotIn(".OpenData(", exchanger)
+        self.assertIn("p2p_direct_data_path_.Send", exchanger)
+        self.assertIn("p2p_direct_data_path_.Open", exchanger)
         self.assertNotIn("Activate(true", exchanger)
-        self.assertNotIn("P2PState::Direct", exchanger)
         self.assertIn("ProductionAuthenticatedControlV1Ready = false", capability)
+
+        nat = exchanger[
+            exchanger.index("bool VEthernetExchanger::Nat(") :
+            exchanger.index("int VEthernetExchanger::EchoLanToRemoteExchanger")
+        ]
+        self.assertLess(
+            nat.index("p2p_direct_data_path_.Send"), nat.index("DoNat(")
+        )
+        self.assertIn("P2PFallbackReason::SocketError", nat)
+        self.assertIn("AllowsOutboundPacket", nat)
+        self.assertIn("p2p_peer_virtual_ip_", nat)
 
     def test_server_registration_and_offers_are_guarded(self) -> None:
         header = self.source("ppp/app/server/VirtualEthernetSwitcher.h")

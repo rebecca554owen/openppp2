@@ -122,6 +122,8 @@ openppp2_add_cpp_test(p2p_client_offer_session_test SOURCES
     "${OPENPPP2_ROOT}/ppp/p2p/P2PClientOfferSession.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PControlDatagram.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PDataDatagram.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PDirectActivationCoordinator.cpp"
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PDirectDataPath.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferConsumer.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOfferCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PRelayOffer.cpp"

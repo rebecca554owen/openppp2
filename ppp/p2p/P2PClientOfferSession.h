@@ -71,10 +71,19 @@ public:
         std::uint64_t now_ms,
         std::uint64_t generation) noexcept;
     bool SealData(
-        const std::vector<std::uint8_t>& payload,
+        const std::uint8_t* payload,
+        std::size_t payload_length,
         std::uint64_t now_ms,
         std::uint64_t generation,
         std::vector<std::uint8_t>& output) noexcept;
+    bool SealData(
+        const std::vector<std::uint8_t>& payload,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        std::vector<std::uint8_t>& output) noexcept {
+        return SealData(payload.data(), payload.size(),
+            now_ms, generation, output);
+    }
     bool OpenData(
         const std::vector<std::uint8_t>& datagram,
         std::uint64_t now_ms,

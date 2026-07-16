@@ -5,14 +5,49 @@
 #include <ppp/p2p/P2PControlDatagram.h>
 #include <ppp/p2p/P2PControlStateMachine.h>
 #include <ppp/p2p/P2PDataDatagram.h>
+#include <ppp/p2p/P2PDirectDataPath.h>
 #include <ppp/p2p/P2POfferToken.h>
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
+#include <ppp/net/native/ip.h>
 
 #include <algorithm>
+
+namespace ppp::net::native {
+
+ip_hdr* ip_hdr::Parse(const void* packet, int& size) noexcept {
+    if (!packet || size < static_cast<int>(sizeof(ip_hdr))) return nullptr;
+    auto* header = const_cast<ip_hdr*>(static_cast<const ip_hdr*>(packet));
+    const int header_size = (header->v_hl & 0x0f) << 2;
+    if ((header->v_hl >> 4) != 4 ||
+        header_size < static_cast<int>(sizeof(ip_hdr)) ||
+        header_size > size || header->ttl == 0) return nullptr;
+    const int wire_size = ntohs(header->len);
+    if (wire_size > size) {
+        header->len = htons(static_cast<std::uint16_t>(size));
+    }
+    else {
+        size = wire_size;
+    }
+    return header;
+}
+
+}
 
 namespace {
 
 using namespace ppp::p2p;
+
+std::vector<std::uint8_t> IPv4Packet(
+    std::uint32_t source, std::uint32_t destination) {
+    std::vector<std::uint8_t> packet(sizeof(ppp::net::native::ip_hdr), 0);
+    auto* header = reinterpret_cast<ppp::net::native::ip_hdr*>(packet.data());
+    header->v_hl = 0x45;
+    header->len = htons(static_cast<std::uint16_t>(packet.size()));
+    header->ttl = 64;
+    header->src = source;
+    header->dest = destination;
+    return packet;
+}
 
 template <std::size_t N>
 std::array<std::uint8_t, N> Bytes(std::uint8_t first) {
@@ -138,6 +173,28 @@ P2PControlPacket SignedProbeAck(
         keys.offer_token_key, BindingFromPacket(fixture, ack), ack.token));
     return ack;
 }
+
+class FakeP2PTransport final : public IP2PDatagramTransport {
+public:
+    bool IsReady() const noexcept override { return ready; }
+    bool Start(const P2PDatagramReceiveCallback&) noexcept override { return true; }
+    boost::asio::ip::udp::endpoint LocalEndpoint() const noexcept override {
+        return {};
+    }
+    bool SendTo(const std::uint8_t* packet, int packet_size,
+        const boost::asio::ip::udp::endpoint& endpoint) noexcept override {
+        if (!ready || !send_success || !packet || packet_size < 1) return false;
+        destination = endpoint;
+        datagram.assign(packet, packet + packet_size);
+        return true;
+    }
+    void Close() noexcept override { ready = false; }
+
+    bool ready = true;
+    bool send_success = true;
+    boost::asio::ip::udp::endpoint destination;
+    std::vector<std::uint8_t> datagram;
+};
 
 }
 
@@ -712,4 +769,122 @@ BOOST_AUTO_TEST_CASE(data_replay_domain_rejects_a_control_sequence_reuse) {
 
     std::vector<std::uint8_t> opened;
     BOOST_TEST(!responder.OpenData(datagram, 1003, 7, opened));
+}
+
+BOOST_AUTO_TEST_CASE(direct_data_path_requires_ready_transport_and_falls_back) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    P2PDirectDataPath path;
+    BOOST_REQUIRE(path.Begin(7));
+    P2PDirectDataPath responder_path;
+    BOOST_REQUIRE(responder_path.Begin(7));
+    FakeP2PTransport transport;
+    const auto peer = boost::asio::ip::udp::endpoint(
+        boost::asio::ip::make_address("203.0.113.8"), 45000);
+    const std::vector<std::uint8_t> frame{1, 2, 3, 4};
+    BOOST_TEST(!path.Send(
+        initiator, transport, peer, frame, 1001, 7));
+
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+    P2PControlPacket ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, ack));
+    auto proof = initiator.AuthenticateProbeAck(
+        ack, ack.source, ack.destination, 1003, 7);
+    BOOST_REQUIRE(proof.has_value());
+
+    std::vector<std::uint8_t> early_datagram;
+    BOOST_REQUIRE(initiator.SealData(
+        frame, 1004, 7, early_datagram));
+    std::vector<std::uint8_t> opened;
+    BOOST_REQUIRE(responder_path.Open(
+        responder, early_datagram, 1004, 7, opened));
+    BOOST_TEST(opened == frame);
+    BOOST_TEST(!responder_path.Send(
+        responder, transport, peer, frame, 1004, 7));
+
+    BOOST_REQUIRE(path.StageAuthenticatedAck(std::move(*proof), 7));
+    BOOST_TEST(!path.Activate(false, 7));
+    BOOST_TEST(!path.Send(
+        initiator, transport, peer, frame, 1004, 7));
+    BOOST_REQUIRE(path.Activate(true, 7));
+    BOOST_REQUIRE(path.Send(
+        initiator, transport, peer, frame, 1004, 7));
+    BOOST_TEST(transport.destination == peer);
+
+    BOOST_REQUIRE(responder.OpenData(
+        transport.datagram, 1005, 7, opened));
+    BOOST_TEST(opened == frame);
+
+    const std::vector<std::uint8_t> reverse{5, 6, 7};
+    std::vector<std::uint8_t> reverse_datagram;
+    BOOST_REQUIRE(responder.SealData(
+        reverse, 1006, 7, reverse_datagram));
+    BOOST_REQUIRE(path.Open(
+        initiator, reverse_datagram, 1007, 7, opened));
+    BOOST_TEST(opened == reverse);
+
+    transport.send_success = false;
+    BOOST_TEST(!path.Send(
+        initiator, transport, peer, frame, 1008, 7));
+    BOOST_REQUIRE(path.Fallback(
+        P2PFallbackReason::SocketError, true, 7));
+    BOOST_TEST(!path.Send(
+        initiator, transport, peer, frame, 1009, 7));
+    BOOST_TEST(std::string(path.EffectivePath()) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(direct_data_path_only_accepts_the_bound_virtual_peer) {
+    const std::uint32_t local = htonl(0x0a000002u);
+    const std::uint32_t peer = htonl(0x0a000003u);
+    const std::uint32_t internet = htonl(0x08080808u);
+
+    const auto outbound_peer = IPv4Packet(local, peer);
+    BOOST_TEST(P2PDirectDataPath::AllowsOutboundPacket(
+        outbound_peer.data(), static_cast<int>(outbound_peer.size()),
+        local, peer));
+
+    const auto outbound_internet = IPv4Packet(local, internet);
+    BOOST_TEST(!P2PDirectDataPath::AllowsOutboundPacket(
+        outbound_internet.data(), static_cast<int>(outbound_internet.size()),
+        local, peer));
+
+    const auto inbound_peer = IPv4Packet(peer, local);
+    BOOST_TEST(P2PDirectDataPath::AllowsInboundPacket(
+        inbound_peer.data(), static_cast<int>(inbound_peer.size()),
+        local, peer));
+
+    const auto inbound_wrong_source = IPv4Packet(internet, local);
+    BOOST_TEST(!P2PDirectDataPath::AllowsInboundPacket(
+        inbound_wrong_source.data(), static_cast<int>(inbound_wrong_source.size()),
+        local, peer));
+
+    const std::vector<std::uint8_t> ipv6(40, 0x60);
+    BOOST_TEST(!P2PDirectDataPath::AllowsOutboundPacket(
+        ipv6.data(), static_cast<int>(ipv6.size()), local, peer));
+    const std::vector<std::uint8_t> malformed{0x45, 0, 0};
+    BOOST_TEST(!P2PDirectDataPath::AllowsInboundPacket(
+        malformed.data(), static_cast<int>(malformed.size()), local, peer));
+
+    auto length_mismatch = outbound_peer;
+    auto* mismatch_header = reinterpret_cast<ppp::net::native::ip_hdr*>(
+        length_mismatch.data());
+    mismatch_header->len = htons(
+        static_cast<std::uint16_t>(length_mismatch.size() + 1));
+    const auto unchanged = length_mismatch;
+    BOOST_TEST(!P2PDirectDataPath::AllowsOutboundPacket(
+        length_mismatch.data(), static_cast<int>(length_mismatch.size()),
+        local, peer));
+    BOOST_TEST(length_mismatch == unchanged);
 }

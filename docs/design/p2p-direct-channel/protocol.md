@@ -7,8 +7,9 @@
 ## Scope And Eligibility
 
 This document specifies a future experimental protected UDP channel. It does
-not describe an enabled production data path. The existing `P2PChannel` and
-crypto files are scaffolding and are not connected to the exchanger.
+not describe an enabled production data path. The offer-v1 crypto and exchanger
+data path are implemented behind a fail-closed production capability gate;
+current releases remain relay-only.
 
 A peer advertises `p2p.direct.v1` only when all of these are true:
 
@@ -76,10 +77,28 @@ payload_length u16 big-endian
 Version 1 accepts payload lengths from 1 through 1514 bytes. The parser rejects
 unknown flags, nonzero reserved bytes, role/direction mismatches, empty payloads,
 length mismatches, trailing bytes, and oversized frames before returning data.
-Control and data share one sequence and replay domain per direction. The codec
-and session-owned key boundary are implemented, but production transport and
-TAP forwarding are not connected; the advertised capability therefore remains
-disabled and the effective path remains relay.
+Control and data share one sequence and replay domain per direction. The same
+protected UDP transport dispatches control types 1 through 4 and data type 5;
+length alone never selects the parser. Data may be opened in `Probing` after the
+session authenticated the peer Probe and produced its ACK, or in `Direct`; this
+prevents the peer that receives the ACK first from losing its first direct
+packet. Outbound direct sends and relay suppression remain forbidden until the
+local Probe ACK is authenticated and the state reaches `Direct`. In either
+state the observed sender must exactly match the authenticated peer candidate
+for the current transport registration and runtime generation. The decrypted
+payload must also be IPv4 and match the authenticated virtual-peer binding:
+outbound packets require `src == virtual_ip` and `dst == peer_virtual_ip`, while
+inbound packets require the reverse. Both fields use network byte order. IPv6,
+Internet, malformed, and unrelated-peer traffic remains on relay without
+tearing down a healthy Direct path. Authenticated matching plaintext then
+passes through the existing inbound NAT policy before TAP output. A matching
+direct send failure tears down the direct attempt and sends the current packet
+through relay.
+
+The codec, session-owned key boundary, protected transport, and TAP forwarding
+are implemented. The advertised production capability remains disabled while
+cross-NAT and platform evidence is incomplete, so default and current release
+behavior remains relay-only.
 
 `ttl_seconds` is an integer from 1 through 30. It is authenticated by the relay
 offer. A client starts a local steady-clock deadline when the offer is received;
