@@ -333,6 +333,20 @@ class UdpBenchmarkContractTests(unittest.TestCase):
             workflow,
         )
 
+    def test_debian10_installs_git_before_checkout(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-linux-amd64.yml").read_text(
+            encoding="utf-8"
+        )
+        debian10 = workflow.split("  build-debian10:", 1)[1].split(
+            "\n  build-asan:", 1
+        )[0]
+
+        self.assertIn("Install Git for checkout", debian10)
+        bootstrap = debian10.index("Install Git for checkout")
+        checkout = debian10.index("uses: actions/checkout@v4")
+        self.assertLess(bootstrap, checkout)
+        self.assertIn("apt-get install -y --no-install-recommends git ca-certificates", debian10[:checkout])
+
     def test_micro_runner_records_every_required_metric(self):
         runner = (ROOT / "tools" / "bench" / "run_micro.sh").read_text(encoding="utf-8")
 
