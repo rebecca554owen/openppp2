@@ -376,7 +376,7 @@ namespace ppp {
                                 p2p_registered_transmission_ = transmission;
                                 p2p_candidate_transport_ = candidate_transport;
                                 p2p_local_candidate_ = host_candidate;
-                                p2p_authenticated_probe_ack_.reset();
+                                p2p_direct_activation_.Reset(candidate_generation);
                                 p2p_transport_registration_id_ = transport_registration;
                                 p2p_registered_virtual_ip_ = request.P2P.virtual_ip;
                                 registered = true;
@@ -1781,7 +1781,8 @@ namespace ppp {
                     p2p_registered_candidates_.clear();
                     p2p_registered_transmission_.reset();
                     p2p_local_candidate_ = {};
-                    p2p_authenticated_probe_ack_.reset();
+                    p2p_direct_activation_.Reset(
+                        p2p_offer_generation_.load(std::memory_order_acquire));
                     p2p_transport_registration_id_ = 0;
                     p2p_registered_virtual_ip_ = 0;
                 }
@@ -1825,11 +1826,12 @@ namespace ppp {
                                 p2p_registered_candidates_.clear();
                                 p2p_registered_transmission_.reset();
                                 p2p_local_candidate_ = {};
-                                p2p_authenticated_probe_ack_.reset();
                                 p2p_transport_registration_id_ = 0;
                                 p2p_registered_virtual_ip_ = 0;
                             }
                             p2p_offer_session_.ResetGeneration(generation);
+                            p2p_direct_activation_.Fallback(
+                                ppp::p2p::P2PFallbackReason::SocketError, true, generation);
                             {
                                 std::lock_guard<std::mutex> state_scope(runtime_state_mutex_);
                                 if (!disposed_.load(std::memory_order_acquire) &&
@@ -1924,9 +1926,10 @@ namespace ppp {
                                 p2p_registered_transmission_.lock() == transmission &&
                                 p2p_candidate_transport_ == transport &&
                                 p2p_transport_registration_id_ == transport_registration) {
-                                p2p_authenticated_probe_ack_.emplace(
-                                    std::move(*result.authenticated_ack));
-                                ppp::telemetry::Count("p2p.control.ack.authenticated", 1);
+                                if (p2p_direct_activation_.StageAuthenticatedAck(
+                                        std::move(*result.authenticated_ack), generation)) {
+                                    ppp::telemetry::Count("p2p.control.ack.authenticated", 1);
+                                }
                             }
                         }
                     });
@@ -2077,7 +2080,7 @@ namespace ppp {
                                 Executors::GetTickCount(), generation, probe) &&
                             candidate_transport->SendTo(
                                 probe.data(), static_cast<int>(probe.size()), peer_candidate);
-                        if (!sent) {
+                        if (!sent || !p2p_direct_activation_.Begin(generation)) {
                             p2p_offer_session_.ResetGeneration(generation);
                             {
                                 std::lock_guard<std::mutex> state_scope(runtime_state_mutex_);

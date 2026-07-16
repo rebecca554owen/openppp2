@@ -3,6 +3,7 @@
 
 #include <ppp/p2p/P2POfferToken.h>
 #include <ppp/p2p/P2PControlStateMachine.h>
+#include <ppp/p2p/P2PDirectActivationCoordinator.h>
 #include <ppp/p2p/P2PKeyDerivation.h>
 
 #include <array>
@@ -412,4 +413,53 @@ BOOST_AUTO_TEST_CASE(direct_socket_and_suspect_migration_failures_fall_back) {
     BOOST_REQUIRE(migration_machine.MarkSuspect());
     BOOST_REQUIRE(migration_machine.BeginFallback(P2PFallbackReason::MigrationFailure));
     BOOST_TEST(std::string(migration_machine.EffectivePath()) == "relay");
+}
+
+BOOST_AUTO_TEST_CASE(direct_activation_requires_proof_and_ready_data_channel) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+    P2PReplayWindow replay;
+    auto proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay);
+    BOOST_REQUIRE(proof.has_value());
+
+    P2PDirectActivationCoordinator coordinator;
+    BOOST_REQUIRE(coordinator.Begin(7));
+    BOOST_TEST(static_cast<int>(coordinator.State()) ==
+        static_cast<int>(P2PState::Probing));
+    BOOST_REQUIRE(coordinator.StageAuthenticatedAck(std::move(*proof), 7));
+    BOOST_TEST(coordinator.HasPendingAck());
+    BOOST_TEST(!coordinator.Activate(false, 7));
+    BOOST_TEST(!coordinator.Activate(true, 6));
+    BOOST_TEST(std::string(coordinator.EffectivePath()) == "relay");
+    BOOST_REQUIRE(coordinator.Activate(true, 7));
+    BOOST_TEST(static_cast<int>(coordinator.State()) ==
+        static_cast<int>(P2PState::Direct));
+    BOOST_TEST(std::string(coordinator.EffectivePath()) == "direct");
+}
+
+BOOST_AUTO_TEST_CASE(fallback_and_generation_reset_discard_pending_proof) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+    P2PReplayWindow replay;
+    auto proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay);
+    BOOST_REQUIRE(proof.has_value());
+
+    P2PDirectActivationCoordinator coordinator;
+    BOOST_REQUIRE(coordinator.Begin(7));
+    BOOST_REQUIRE(coordinator.StageAuthenticatedAck(std::move(*proof), 7));
+    BOOST_REQUIRE(coordinator.Fallback(
+        P2PFallbackReason::SocketError, true, 7));
+    BOOST_TEST(!coordinator.HasPendingAck());
+    BOOST_TEST(std::string(coordinator.EffectivePath()) == "relay");
+    BOOST_TEST(!coordinator.Activate(true, 7));
+    BOOST_REQUIRE(coordinator.Reset(8));
+    BOOST_TEST(!coordinator.Begin(7));
 }

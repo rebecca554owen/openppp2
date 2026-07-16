@@ -140,6 +140,7 @@ openppp2_add_cpp_test(p2p_information_message_test SOURCES
 target_link_libraries(p2p_information_message_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(p2p_offer_token_test SOURCES
     p2p_offer_token_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PDirectActivationCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2POfferToken.cpp"
     "${OPENPPP2_ROOT}/ppp/p2p/P2PCrypto.cpp")
 target_link_libraries(p2p_offer_token_test PRIVATE OpenSSL::Crypto)

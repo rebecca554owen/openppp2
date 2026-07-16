@@ -54,6 +54,7 @@
 #include <ppp/net/packet/IcmpFrame.h>
 #include <ppp/p2p/P2PClientOfferSession.h>
 #include <ppp/p2p/P2PDatagramTransport.h>
+#include <ppp/p2p/P2PDirectActivationCoordinator.h>
 #include <ppp/p2p/P2PState.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
@@ -1056,7 +1057,7 @@ namespace ppp {
                 std::weak_ptr<ppp::transmissions::ITransmission>                       p2p_registered_transmission_;
                 std::shared_ptr<ppp::p2p::IP2PDatagramTransport>                       p2p_candidate_transport_;
                 boost::asio::ip::udp::endpoint                                          p2p_local_candidate_;
-                std::optional<ppp::p2p::P2PAuthenticatedProbeAck>                       p2p_authenticated_probe_ack_;
+                ppp::p2p::P2PDirectActivationCoordinator                               p2p_direct_activation_;
                 uint64_t                                                                p2p_transport_registration_id_ = 0;
                 uint32_t                                                                p2p_registered_virtual_ip_ = 0;
                 /** @brief Invalidates queued offer work across reconnect and teardown. */
