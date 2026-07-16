@@ -447,6 +447,7 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("reactivecircus/android-emulator-runner@v2", workflow)
         self.assertIn("api-level: 34", workflow)
         self.assertIn("arch: x86_64", workflow)
+        self.assertIn("flutter build apk --debug", workflow)
         self.assertIn(":app:connectedDebugAndroidTest", workflow)
         self.assertIn("timeout 15s adb logcat -d", workflow)
 
