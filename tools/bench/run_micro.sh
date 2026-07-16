@@ -27,10 +27,15 @@ mkdir -p "$OUT"
 bash "$HERE/env_fingerprint.sh" > "$OUT/env.json"
 echo "env fingerprint -> $OUT/env.json"
 
+perf_available=false
+if command -v perf >/dev/null && perf stat -e cycles true >/dev/null 2>&1; then
+    perf_available=true
+fi
+
 for bm in "${benchmarks[@]}"; do
     echo "running $bm ..."
     runner=(nice -n 19)
-    if command -v perf >/dev/null && perf stat -e cycles true >/dev/null 2>&1; then
+    if "$perf_available"; then
         runner+=(perf stat -x, -e cycles -o "$OUT/$bm.perf" --)
     else
         printf 'cycles,unavailable\n' > "$OUT/$bm.perf"
@@ -43,6 +48,11 @@ for bm in "${benchmarks[@]}"; do
 done
 
 python3 "$HERE/summarize.py" "$OUT" > "$OUT/summary.json"
+if "$perf_available"; then
+    python3 "$HERE/collect_cycles.py" "$BUILD" "$OUT/cycles.json"
+else
+    python3 "$HERE/collect_cycles.py" --unavailable ignored "$OUT/cycles.json"
+fi
 
 echo "done. results in $OUT"
 echo "compare with a baseline via: python3 $HERE/compare.py <baseline>/bm_crypto.json $OUT/bm_crypto.json"
