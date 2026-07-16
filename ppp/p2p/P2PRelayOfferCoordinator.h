@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <vector>
 
 namespace ppp::p2p {
 
@@ -28,6 +29,12 @@ struct P2PRelayOfferBundle {
     P2PRelayOfferV1 offer;
     P2PWrappedPairSeed initiator_envelope;
     P2PWrappedPairSeed responder_envelope;
+};
+
+struct P2PCandidateV1 {
+    std::uint8_t address_family = 0;
+    std::array<std::uint8_t, 16> address{};
+    std::uint16_t port = 0;
 };
 
 using P2PSessionExporter = std::function<bool(
@@ -71,5 +78,9 @@ bool CreateP2PRelayOfferBundleAsync(
 P2PAsyncSessionExporter ScheduleP2PSessionExporter(
     const P2PTaskScheduler& scheduler,
     const P2PSessionExporter& exporter) noexcept;
+
+bool HashP2PCandidateSet(
+    const std::vector<P2PCandidateV1>& candidates,
+    P2POfferHash& output) noexcept;
 
 }

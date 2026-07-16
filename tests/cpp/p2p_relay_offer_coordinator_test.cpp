@@ -41,6 +41,66 @@ P2PRelayOfferSecrets Secrets() {
     return secrets;
 }
 
+P2PCandidateV1 IPv4Candidate() {
+    P2PCandidateV1 candidate;
+    candidate.address_family = 4;
+    candidate.address = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff,
+        192, 0, 2, 1};
+    candidate.port = 1000;
+    return candidate;
+}
+
+P2PCandidateV1 IPv6Candidate() {
+    P2PCandidateV1 candidate;
+    candidate.address_family = 6;
+    candidate.address = {
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1};
+    candidate.port = 2000;
+    return candidate;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(candidate_set_hash_is_canonical) {
+    const auto ipv4 = IPv4Candidate();
+    const auto ipv6 = IPv6Candidate();
+    const P2POfferHash expected{{
+        0x91, 0x19, 0x97, 0xf4, 0x7b, 0xff, 0x4c, 0x15,
+        0x09, 0x11, 0xac, 0x32, 0x74, 0x6f, 0x51, 0xd1,
+        0x08, 0x66, 0x59, 0xac, 0x53, 0x7a, 0xfe, 0x95,
+        0x2e, 0xc8, 0xff, 0x6e, 0xfa, 0xe8, 0x73, 0x8f}};
+    P2POfferHash forward{};
+    P2POfferHash reversed{};
+    P2POfferHash duplicated{};
+
+    BOOST_REQUIRE(HashP2PCandidateSet({ipv4, ipv6}, forward));
+    BOOST_REQUIRE(HashP2PCandidateSet({ipv6, ipv4}, reversed));
+    BOOST_REQUIRE(HashP2PCandidateSet({ipv4, ipv6, ipv4}, duplicated));
+    BOOST_TEST(forward == expected);
+    BOOST_TEST(reversed == expected);
+    BOOST_TEST(duplicated == expected);
+}
+
+BOOST_AUTO_TEST_CASE(candidate_set_hash_rejects_invalid_candidates) {
+    auto candidate = IPv4Candidate();
+    P2POfferHash output = Bytes<32>(211);
+    const auto baseline = output;
+
+    candidate.port = 0;
+    BOOST_TEST(!HashP2PCandidateSet({candidate}, output));
+    BOOST_TEST(output == baseline);
+
+    candidate = IPv4Candidate();
+    candidate.address[10] = 0;
+    BOOST_TEST(!HashP2PCandidateSet({candidate}, output));
+    BOOST_TEST(output == baseline);
+
+    candidate = IPv6Candidate();
+    candidate.address.fill(0);
+    BOOST_TEST(!HashP2PCandidateSet({candidate}, output));
+    BOOST_TEST(output == baseline);
 }
 
 BOOST_AUTO_TEST_CASE(wraps_one_pair_seed_for_two_session_exporters) {

@@ -1,8 +1,10 @@
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
 
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 
@@ -183,6 +185,25 @@ private:
     std::atomic_bool completed_{false};
 };
 
+bool ValidCandidate(const P2PCandidateV1& candidate) noexcept {
+    if (candidate.port == 0 ||
+        (candidate.address_family != 4 && candidate.address_family != 6)) {
+        return false;
+    }
+    bool any = false;
+    for (const auto byte : candidate.address) {
+        any = any || byte != 0;
+    }
+    if (!any) {
+        return false;
+    }
+    const bool mapped = std::all_of(
+            candidate.address.begin(), candidate.address.begin() + 10,
+            [](std::uint8_t byte) { return byte == 0; }) &&
+        candidate.address[10] == 0xff && candidate.address[11] == 0xff;
+    return candidate.address_family == 4 ? mapped : !mapped;
+}
+
 }
 
 bool BuildP2PRelayOfferBundle(
@@ -326,6 +347,50 @@ P2PAsyncSessionExporter ScheduleP2PSessionExporter(
     catch (...) {
         return {};
     }
+}
+
+bool HashP2PCandidateSet(
+    const std::vector<P2PCandidateV1>& candidates,
+    P2POfferHash& output) noexcept {
+    using CandidateBytes = std::array<std::uint8_t, 19>;
+    std::vector<CandidateBytes> records;
+    try {
+        records.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            if (!ValidCandidate(candidate)) {
+                return false;
+            }
+            CandidateBytes record{};
+            record[0] = candidate.address_family;
+            std::copy(
+                candidate.address.begin(), candidate.address.end(),
+                record.begin() + 1);
+            record[17] = static_cast<std::uint8_t>(candidate.port >> 8);
+            record[18] = static_cast<std::uint8_t>(candidate.port);
+            records.emplace_back(record);
+        }
+        std::sort(records.begin(), records.end());
+        records.erase(std::unique(records.begin(), records.end()), records.end());
+    }
+    catch (...) {
+        return false;
+    }
+
+    P2POfferHash digest{};
+    unsigned int digest_size = 0;
+    static constexpr std::uint8_t empty = 0;
+    const auto* data = records.empty()
+        ? &empty
+        : reinterpret_cast<const std::uint8_t*>(records.data());
+    const std::size_t size = records.size() * CandidateBytes{}.size();
+    const bool ok = EVP_Digest(
+            data, size, digest.data(), &digest_size, EVP_sha256(), nullptr) == 1 &&
+        digest_size == digest.size();
+    if (ok) {
+        output = digest;
+    }
+    OPENSSL_cleanse(digest.data(), digest.size());
+    return ok;
 }
 
 }
