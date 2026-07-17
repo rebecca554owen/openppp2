@@ -1,10 +1,10 @@
 # Runtime/UI Execution Status
 
 > Type: Status report
-> Last verified: 888a71b
+> Last verified: cfd4571
 
 > Branch: `main`
-> Head: `888a71b`
+> Head: `cfd4571`
 > Status: Implemented and merged; runtime, lifecycle, Route/DNS, VMUX state, and guarded P2P integration are on main
 
 ## Completion accounting
@@ -26,7 +26,7 @@
 - P2P ADR, authenticated exporter/offer/data wiring, fail-closed capability gate, and Android emulator socket-protection evidence.
 - Client Exchanger ownership split for keepalive timing policy, FRP mapping storage, StaticEcho session/socket state, and VMUX sessions.
 
-## Validation state (head `888a71b`)
+## Validation state (head `cfd4571`)
 
 - focused C++: pass
 - full C++ unit suite: pass
@@ -40,7 +40,7 @@
 - macOS arm64: pass
 - Windows x64 Release: pass
 - Android API 34 P2P socket-protection instrumentation: pass
-- PR #46 required checks: 12/12 pass
+- Main branch workflows: 9/9 pass
 
 ## Remaining release evidence
 

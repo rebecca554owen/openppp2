@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 888a71b
+> Last verified: cfd4571
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -346,7 +346,7 @@ No socket forwarding is enabled yet.
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
 
-Current production wiring at `main@888a71b` includes the authenticated WSS
+Current production wiring at `main@cfd4571` includes the authenticated WSS
 session exporter, asynchronous server-side offer coordination, client offer
 validation, protected UDP candidate transports, direct-data handling, and typed
 `RuntimeSnapshot` projection. Raw TCP retains the default no-exporter behavior
