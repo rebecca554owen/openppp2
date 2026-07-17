@@ -3,7 +3,7 @@
 **Status:** authenticated offer/data integration is implemented but production
 direct mode remains fail-closed pending protocol approval and physical-network evidence.
 
-**Last verified:** 2026-07-17, `7c61af7`.
+**Last verified:** 2026-07-17, `main@5bcccce`.
 
 This document describes manual test scenarios for validating the P2P direct-path
 networking feature. Automated C++ and tooling tests cover protocol components and

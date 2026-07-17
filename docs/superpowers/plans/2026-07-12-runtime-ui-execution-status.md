@@ -1,10 +1,10 @@
 # Runtime/UI Execution Status
 
 > Type: Status report
-> Last verified: cfd4571
+> Last verified: 5bcccce
 
 > Branch: `main`
-> Head: `cfd4571`
+> Head: `5bcccce`
 > Status: Implemented and merged; runtime, lifecycle, Route/DNS, VMUX state, and guarded P2P integration are on main
 
 ## Completion accounting
@@ -26,7 +26,18 @@
 - P2P ADR, authenticated exporter/offer/data wiring, fail-closed capability gate, and Android emulator socket-protection evidence.
 - Client Exchanger ownership split for keepalive timing policy, FRP mapping storage, StaticEcho session/socket state, and VMUX sessions.
 
-## Validation state (head `cfd4571`)
+## Completion audit (head `5bcccce`)
+
+| Stage | Repository evidence | Result |
+| --- | --- | --- |
+| Runtime/UI | versioned snapshots, readiness, ordered publisher, shared fixtures, and generation-aware TUI/Dart/Swift stores | Implemented |
+| Lifecycle | generation-scoped stop owner, ordered teardown, 100-cycle tests, and lifecycle sanitizers | Implemented |
+| Route/DNS and governance | coordinator-owned state, platform adapters, controller-owned DNS sessions, namespace rollback, and executable boundary checks | Implemented |
+| UDP benchmark | endpoint, codec, crypto-chain, micro/E2E runners, fixed-host validator, and baseline-bundle validator | Harness complete; fixed-host evidence open |
+| Exchanger/VMUX | KeepAlive, FRP, StaticEcho, and VMUX ownership boundaries plus negotiation/churn tests and rollout validator | Implementation complete; fixed Linux/mobile evidence open |
+| P2P | ADR, authenticated exporter/offer/data path, protected transports, authenticated UDP observations, and fail-closed production gate | Guarded implementation complete; physical network/device evidence open |
+
+## Validation state (head `5bcccce`)
 
 - focused C++: pass
 - full C++ unit suite: pass
