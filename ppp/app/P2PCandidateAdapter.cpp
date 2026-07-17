@@ -60,4 +60,25 @@ std::string P2PEndpointToString(
     }
 }
 
+bool P2PAppendObservedEndpointCandidate(
+    const boost::asio::ip::udp::endpoint& endpoint,
+    ppp::vector<ppp::app::protocol::P2PEndpointCandidate>& candidates) noexcept {
+    const std::string value = P2PEndpointToString(endpoint);
+    if (value.empty()) {
+        return false;
+    }
+
+    for (const auto& candidate : candidates) {
+        if (candidate.endpoint == value.c_str()) {
+            return true;
+        }
+    }
+
+    ppp::app::protocol::P2PEndpointCandidate candidate;
+    candidate.endpoint = value.c_str();
+    candidate.source = "observed";
+    candidates.emplace_back(std::move(candidate));
+    return true;
+}
+
 }

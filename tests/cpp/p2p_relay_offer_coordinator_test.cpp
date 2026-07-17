@@ -3,6 +3,7 @@
 
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
 #include <ppp/app/P2PCandidateAdapter.h>
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -132,6 +133,25 @@ BOOST_AUTO_TEST_CASE(endpoint_conversion_uses_canonical_candidate_encoding) {
         {boost::asio::ip::address_v4::any(), 1000}, ipv4));
     BOOST_TEST(ipv4.address == baseline.address);
     BOOST_TEST(ipv4.port == baseline.port);
+}
+
+BOOST_AUTO_TEST_CASE(observed_udp_candidate_is_validated_and_deduplicated) {
+    ppp::vector<ppp::app::protocol::P2PEndpointCandidate> candidates;
+    const boost::asio::ip::udp::endpoint observed{
+        boost::asio::ip::make_address("203.0.113.1"), 4000};
+
+    BOOST_REQUIRE(ppp::app::P2PAppendObservedEndpointCandidate(
+        observed, candidates));
+    BOOST_REQUIRE(candidates.size() == 1);
+    BOOST_TEST(candidates.front().endpoint == "203.0.113.1:4000");
+    BOOST_TEST(candidates.front().source == "observed");
+
+    BOOST_TEST(ppp::app::P2PAppendObservedEndpointCandidate(
+        observed, candidates));
+    BOOST_TEST(candidates.size() == 1);
+    BOOST_TEST(!ppp::app::P2PAppendObservedEndpointCandidate(
+        {boost::asio::ip::address_v4::any(), 4000}, candidates));
+    BOOST_TEST(candidates.size() == 1);
 }
 
 BOOST_AUTO_TEST_CASE(wraps_one_pair_seed_for_two_session_exporters) {

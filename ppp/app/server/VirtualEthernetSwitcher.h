@@ -143,7 +143,7 @@ namespace ppp {
                     Int128                                               SessionId = 0;            ///< Session that owns this peer record.
                     uint32_t                                             VirtualIP = 0;            ///< Client virtual IPv4 in network byte order.
                     ppp::string                                          Mode;                     ///< Client-requested P2P mode.
-                    boost::asio::ip::udp::endpoint                       ObservedEndpoint;         ///< Coordinator-observed endpoint hint.
+                    boost::asio::ip::udp::endpoint                       ObservedEndpoint;         ///< Authenticated static-echo UDP source endpoint.
                     ppp::vector<ppp::app::protocol::P2PEndpointCandidate> Candidates;              ///< Client-advertised UDP/STUN candidates.
                     UInt64                                               LastSeen = 0;             ///< Last control update tick.
                     UInt64                                               LastOfferAt = 0;          ///< Last peer-offer send tick for coarse throttling.
@@ -794,6 +794,8 @@ namespace ppp {
                 NatInformationPtr                                       AddNatInformation(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, uint32_t ip, uint32_t mask) noexcept;
                 /** @brief Updates server-side P2P peer state from an INFO extension. */
                 bool                                                    UpdateP2PPeer(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, const ITransmissionPtr& transmission, const VirtualEthernetInformationExtensions& request, VirtualEthernetInformationExtensions& response) noexcept;
+                /** @brief Records an authenticated static-echo UDP endpoint after NAT ownership validation. */
+                bool                                                    ObserveP2PUdpEndpoint(const std::shared_ptr<VirtualEthernetExchanger>& exchanger, uint32_t virtual_ip, const boost::asio::ip::udp::endpoint& source) noexcept;
                 /** @brief Removes P2P peer state for a disconnected session. */
                 bool                                                    DeleteP2PPeer(const Int128& session_id) noexcept;
                 /** @brief Sends peer endpoint hints to both sides while preserving server relay fallback. */

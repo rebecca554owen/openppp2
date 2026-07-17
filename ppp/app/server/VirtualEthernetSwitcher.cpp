@@ -2777,6 +2777,7 @@ namespace ppp {
                 }
 
                 exchanger->static_echo_source_ep_ = sourceEP;
+                ObserveP2PUdpEndpoint(exchanger, packet->SourceIP, sourceEP);
                 if (packet->Protocol == ppp::net::native::ip_hdr::IP_PROTO_UDP) {
                     return exchanger->StaticEchoSendToDestination(packet);
                 }
@@ -3932,21 +3933,9 @@ namespace ppp {
                 }
             }
 
-            static ppp::string P2PEndpointToString(const boost::asio::ip::udp::endpoint& endpoint) noexcept {
-                const std::string value = ppp::app::P2PEndpointToString(endpoint);
-                return ppp::string(value.data(), value.size());
-            }
-
             static ppp::vector<ppp::app::protocol::P2PEndpointCandidate> P2PBuildCandidates(const VirtualEthernetSwitcher::P2PPeerRecord& record) noexcept {
                 ppp::vector<ppp::app::protocol::P2PEndpointCandidate> candidates = record.Candidates;
-
-                // C4: TCP control endpoints are NOT usable as UDP P2P candidates.
-                // Do NOT append the TCP control channel's remote endpoint here.
-                // Only actual UDP/STUN candidates from the client's INFO message
-                // are included.  The server-observed TCP endpoint (record.ObservedEndpoint)
-                // is stored for server-side use only (e.g., NAT classifier diagnostics)
-                // but must not be offered to clients for UDP probing.
-
+                ppp::app::P2PAppendObservedEndpointCandidate(record.ObservedEndpoint, candidates);
                 return candidates;
             }
 
@@ -4058,8 +4047,6 @@ namespace ppp {
                     }
                 }
 
-                boost::asio::ip::tcp::endpoint remote_tcp = transmission->GetRemoteEndPoint();
-                boost::asio::ip::udp::endpoint observed(remote_tcp.address(), remote_tcp.port());
                 UInt64 now = Executors::GetTickCount();
                 Int128 session_id = exchanger->GetId();
 
@@ -4067,7 +4054,6 @@ namespace ppp {
                 record.SessionId = session_id;
                 record.VirtualIP = virtual_ip;
                 record.Mode = requested_mode;
-                record.ObservedEndpoint = observed;
                 record.Candidates = request.P2P.candidates;
                 record.LastSeen = now;
                 record.Exchanger = exchanger;
@@ -4083,6 +4069,9 @@ namespace ppp {
                     auto existing_peer_it = p2p_peers_.find(session_id);
                     if (existing_peer_it != p2p_peers_.end()) {
                         uint32_t old_vip = existing_peer_it->second.VirtualIP;
+                        if (old_vip == virtual_ip) {
+                            record.ObservedEndpoint = existing_peer_it->second.ObservedEndpoint;
+                        }
                         if (old_vip != 0 && old_vip != virtual_ip) {
                             auto old_vip_it = p2p_virtual_ips_.find(old_vip);
                             if (old_vip_it != p2p_virtual_ips_.end() && old_vip_it->second == session_id) {
@@ -4107,6 +4096,41 @@ namespace ppp {
                 response.P2P.action = "status";
                 response.P2P.reason = "registered";
                 response.P2P.candidates = P2PBuildCandidates(record);
+                return true;
+            }
+
+            bool VirtualEthernetSwitcher::ObserveP2PUdpEndpoint(
+                const std::shared_ptr<VirtualEthernetExchanger>& exchanger,
+                uint32_t virtual_ip,
+                const boost::asio::ip::udp::endpoint& source) noexcept {
+                if (NULLPTR == exchanger || source.address().is_unspecified() || source.port() == 0) {
+                    return false;
+                }
+
+                NatInformationPtr nat = FindNatInformation(virtual_ip);
+                if (NULLPTR == nat || nat->Exchanger.get() != exchanger.get()) {
+                    return false;
+                }
+
+                boost::system::error_code ec;
+                boost::asio::ip::udp::endpoint destination = static_echo_socket_.local_endpoint(ec);
+                if (ec || destination.address().is_unspecified() || destination.port() == 0) {
+                    return false;
+                }
+
+                const auto observed = Ipep::V6ToV4(source);
+                destination = Ipep::V6ToV4(destination);
+                const UInt64 now = Executors::GetTickCount();
+                p2p_nat_classifier_.Observe(virtual_ip, observed, destination, now);
+
+                SynchronizedObjectScope scope(syncobj_);
+                auto vip = p2p_virtual_ips_.find(virtual_ip);
+                if (vip != p2p_virtual_ips_.end()) {
+                    auto peer = p2p_peers_.find(vip->second);
+                    if (peer != p2p_peers_.end() && peer->second.Exchanger.lock().get() == exchanger.get()) {
+                        peer->second.ObservedEndpoint = observed;
+                    }
+                }
                 return true;
             }
 
@@ -4203,13 +4227,11 @@ namespace ppp {
                 // NAT classification check: skip offer if both peers have
                 // symmetric NAT or either is UDP-blocked.
                 //
-                // H2: The NAT classifier requires actual UDP relay observations
-                // (from static-echo or UDP sendto paths) to make meaningful
-                // classifications.  TCP control endpoint observations are NOT
-                // used because they reflect TCP NAT, not UDP NAT behavior.
-                // Until actual UDP observation sources are wired, the classifier
-                // returns Unknown for all peers.  Unknown allows probing
-                // (conservative: let the probe path determine reachability).
+                // Authenticated static-echo datagrams feed real UDP source mappings.
+                // TCP control endpoints remain excluded because they do not predict
+                // UDP NAT behavior. A single server destination remains Unknown;
+                // classification requires observations across multiple destinations.
+                // Unknown still allows bounded probing.
                 // Only Symmetric-Symmetric and UdpBlocked (based on real
                 // observations) cause immediate skip.
                 {

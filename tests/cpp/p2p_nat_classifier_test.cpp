@@ -51,3 +51,28 @@ BOOST_AUTO_TEST_CASE(unknown_nat_remains_eligible_for_bounded_probing) {
     P2PNatClassification unknown;
     BOOST_TEST(P2PNatClassifier::ShouldAttemptPunch(unknown, unknown));
 }
+
+BOOST_AUTO_TEST_CASE(single_udp_destination_is_insufficient_to_classify_nat) {
+    P2PNatClassifier classifier;
+    classifier.Observe(1, Endpoint("203.0.113.1", 4000),
+        Endpoint("198.51.100.1", 5000), 1000);
+
+    const auto classification = classifier.Classify(1, 1001);
+    BOOST_TEST(static_cast<int>(classification.type) ==
+        static_cast<int>(P2PNatType::Unknown));
+    BOOST_TEST(classification.confidence == 1);
+    BOOST_TEST(!classification.stale);
+}
+
+BOOST_AUTO_TEST_CASE(stable_mapping_across_two_udp_destinations_is_full_cone) {
+    P2PNatClassifier classifier;
+    classifier.Observe(1, Endpoint("203.0.113.1", 4000),
+        Endpoint("198.51.100.1", 5000), 1000);
+    classifier.Observe(1, Endpoint("203.0.113.1", 4000),
+        Endpoint("198.51.100.2", 5000), 1001);
+
+    const auto classification = classifier.Classify(1, 1002);
+    BOOST_TEST(static_cast<int>(classification.type) ==
+        static_cast<int>(P2PNatType::FullCone));
+    BOOST_TEST(classification.confidence == 2);
+}

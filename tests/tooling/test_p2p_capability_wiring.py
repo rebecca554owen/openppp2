@@ -246,6 +246,27 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertNotIn("LastOfferAt == now", offers)
         self.assertIn("ProductionAuthenticatedControlV1Ready = false", capability)
 
+    def test_server_uses_authenticated_static_echo_udp_observations(self) -> None:
+        header = self.source("ppp/app/server/VirtualEthernetSwitcher.h")
+        source = self.source("ppp/app/server/VirtualEthernetSwitcher.cpp")
+        registration = source[
+            source.index("bool VirtualEthernetSwitcher::UpdateP2PPeer") :
+            source.index("bool VirtualEthernetSwitcher::DeleteP2PPeer")
+        ]
+        static_echo = source[
+            source.index("bool VirtualEthernetSwitcher::StaticEchoPacketInput") :
+            source.index("VirtualEthernetSwitcher::VirtualEthernetStaticEchoAllocatedContextPtr")
+        ]
+        candidates = source[
+            source.index("static ppp::vector<ppp::app::protocol::P2PEndpointCandidate> P2PBuildCandidates") :
+            source.index("static bool P2PAppendCanonicalCandidates")
+        ]
+
+        self.assertIn("ObserveP2PUdpEndpoint", header)
+        self.assertIn("ObserveP2PUdpEndpoint(exchanger, packet->SourceIP, sourceEP)", static_echo)
+        self.assertIn("P2PAppendObservedEndpointCandidate", candidates)
+        self.assertNotIn("transmission->GetRemoteEndPoint()", registration)
+
     def test_channel_protects_before_receive_and_probe(self) -> None:
         channel = self.source("ppp/p2p/P2PChannel.cpp")
         transport = self.source("ppp/p2p/P2PDatagramTransport.cpp")

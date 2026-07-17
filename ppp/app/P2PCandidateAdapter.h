@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
 
 #include <boost/asio/ip/udp.hpp>
@@ -13,5 +14,9 @@ bool P2PCandidateFromEndpoint(
 
 std::string P2PEndpointToString(
     const boost::asio::ip::udp::endpoint& endpoint) noexcept;
+
+bool P2PAppendObservedEndpointCandidate(
+    const boost::asio::ip::udp::endpoint& endpoint,
+    ppp::vector<ppp::app::protocol::P2PEndpointCandidate>& candidates) noexcept;
 
 }
