@@ -76,6 +76,8 @@ openppp2_add_cpp_test(runtime_stop_pipeline_test SOURCES
     runtime_stop_pipeline_test.cpp)
 openppp2_add_cpp_test(client_lifecycle_stress_test SOURCES
     client_lifecycle_stress_test.cpp)
+openppp2_add_cpp_test(client_keepalive_policy_test SOURCES
+    client_keepalive_policy_test.cpp)
 openppp2_add_cpp_test(runtime_snapshot_publisher_test SOURCES
     runtime_snapshot_publisher_test.cpp)
 openppp2_add_cpp_test(vmux_runtime_state_test SOURCES

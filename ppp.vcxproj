@@ -812,6 +812,7 @@
     <ClInclude Include="ppp\app\client\AggregatorLoader.h" />
     <ClInclude Include="ppp\app\client\RemoteEndpointLoader.h" />
     <ClInclude Include="ppp\app\client\ExchangerStaticEchoChannel.h" />
+    <ClInclude Include="ppp\app\client\ClientKeepAlivePolicy.h" />
     <ClInclude Include="ppp\app\client\ClientConnectionOpener.h" />
     <ClInclude Include="ppp\app\client\ClientPacketDispatchHandler.h" />
     <ClInclude Include="ppp\app\client\ClientNetworkInterface.h" />

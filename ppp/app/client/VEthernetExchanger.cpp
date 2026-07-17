@@ -140,8 +140,6 @@ namespace ppp {
                 const Int128&                           id) noexcept
                 : VirtualEthernetLinklayer(configuration, context, id)
                 , disposed_(false)
-                , sekap_last_(0)
-                , sekap_next_(0)
                 , switcher_(switcher)
                 , network_state_(NetworkState_Connecting)
                 , configured_p2p_state_(ConfiguredP2PState(configuration))
@@ -1650,8 +1648,10 @@ namespace ppp {
             /** @brief Transitions state to established and initializes keepalive schedule. */
             void VEthernetExchanger::ExchangeToEstablishState() noexcept {
                 uint64_t now = Executors::GetTickCount();
-                sekap_last_ = now;
-                sekap_next_ = now + RandomNext(SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT, SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT);
+                keepalive_policy_.OnConnected(
+                    now,
+                    RandomNext(SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT,
+                        SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT));
                 {
                     std::lock_guard<std::mutex> scope(runtime_state_mutex_);
                     network_state_.store(NetworkState_Established, std::memory_order_relaxed);
@@ -1661,8 +1661,7 @@ namespace ppp {
 
             /** @brief Transitions state to connecting. */
             void VEthernetExchanger::ExchangeToConnectingState() noexcept {
-                sekap_last_ = 0;
-                sekap_next_ = 0;
+                keepalive_policy_.Reset();
                 const uint64_t p2p_generation = ++p2p_offer_generation_;
                 p2p_offer_session_.AdvanceGeneration(p2p_generation);
                 {
@@ -1675,8 +1674,7 @@ namespace ppp {
 
             /** @brief Transitions state to reconnecting and increments retry count. */
             void VEthernetExchanger::ExchangeToReconnectingState() noexcept {
-                sekap_last_ = 0;
-                sekap_next_ = 0;
+                keepalive_policy_.Reset();
                 const uint64_t p2p_generation = ++p2p_offer_generation_;
                 p2p_offer_session_.AdvanceGeneration(p2p_generation);
                 {
@@ -2550,38 +2548,41 @@ namespace ppp {
                     return false;
                 }
 
-                UInt64 next = sekap_last_ + SEND_ECHO_KEEP_ALIVE_PACKET_MMX_TIMEOUT;
-                if (now >= next) {
-                    ITransmissionPtr transmission = transmission_;
-                    if (transmission) {
+                ITransmissionPtr transmission = transmission_;
+                bool defer_for_child_links = false;
 #if defined(_IPHONE)
-                        if (NULLPTR == mux_coordinator_->Session()
-                            && ios_child_transmission_active_.load(std::memory_order_acquire) > 0) {
-                            sekap_last_ = now;
-                            ppp::telemetry::Count("client_exchanger.keepalive.defer_children", 1);
-                            return false;
-                        }
+                defer_for_child_links = NULLPTR == mux_coordinator_->Session() &&
+                    ios_child_transmission_active_.load(std::memory_order_acquire) > 0;
 #endif
-                        ppp::telemetry::Count("client_exchanger.keepalive.timeout", 1);
-                        ppp::telemetry::Log(Level::kInfo, "client_exchanger",
-                            "echo keepalive stale disposing transmission silence_ms=%llu threshold_ms=%d",
-                            (unsigned long long)(now - sekap_last_),
-                            SEND_ECHO_KEEP_ALIVE_PACKET_MMX_TIMEOUT);
-                        transmission->Dispose();
+                const ClientKeepAliveAction action = keepalive_policy_.Evaluate(
+                    now,
+                    immediately,
+                    NULLPTR != transmission,
+                    defer_for_child_links,
+                    SEND_ECHO_KEEP_ALIVE_PACKET_MMX_TIMEOUT);
+                if (action == ClientKeepAliveAction::DeferForChildLinks) {
+                    ppp::telemetry::Count("client_exchanger.keepalive.defer_children", 1);
+                    return false;
+                }
+                if (action == ClientKeepAliveAction::CloseTransport) {
+                    ppp::telemetry::Count("client_exchanger.keepalive.timeout", 1);
+                    ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                        "echo keepalive stale disposing transmission silence_ms=%llu threshold_ms=%d",
+                        (unsigned long long)(now - keepalive_policy_.LastPacketAt()),
+                        SEND_ECHO_KEEP_ALIVE_PACKET_MMX_TIMEOUT);
+                    transmission->Dispose();
 #if defined(_IPHONE)
-                        ResetIosChildTransmissionSlots("keepalive_stale");
+                    ResetIosChildTransmissionSlots("keepalive_stale");
 #endif
-                        return false;
-                    }
+                    return false;
                 }
-
-                if (!immediately) {
-                    if (now < sekap_next_) {
-                        return false;
-                    }
+                if (action != ClientKeepAliveAction::SendEcho) {
+                    return false;
                 }
-
-                sekap_next_ = now + RandomNext(SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT, SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT);
+                keepalive_policy_.OnEchoSent(
+                    now,
+                    RandomNext(SEND_ECHO_KEEP_ALIVE_PACKET_MIN_TIMEOUT,
+                        SEND_ECHO_KEEP_ALIVE_PACKET_MAX_TIMEOUT));
                 return Echo(0);
             }
 
@@ -2590,7 +2591,7 @@ namespace ppp {
                 bool successed = VirtualEthernetLinklayer::PacketInput(transmission, p, packet_length, y);
                 if (successed) {
                     if (network_state_ == NetworkState_Established) {
-                        sekap_last_ = Executors::GetTickCount();
+                        keepalive_policy_.OnPacket(Executors::GetTickCount());
                     }
                 }
 

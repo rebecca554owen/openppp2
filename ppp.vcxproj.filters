@@ -1730,6 +1730,9 @@
     <ClInclude Include="ppp\app\mux\vmux.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\client\ClientKeepAlivePolicy.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\app\mux\MuxCoordinator.h">
       <Filter>头文件</Filter>
     </ClInclude>

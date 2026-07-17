@@ -60,6 +60,7 @@
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
+#include <ppp/app/client/ClientKeepAlivePolicy.h>
 #include <ppp/app/client/udp/UdpRelayHost.h>
 #include <ppp/app/client/dns/IDnsTunnelTransport.h>
 
@@ -1028,10 +1029,8 @@ namespace ppp {
                 /** @brief Shared receive buffer allocated once and reused across async reads. */
                 std::shared_ptr<Byte>                                                   buffer_;
 
-                /** @brief Tick count at which last static-echo keepalive packet was sent. */
-                UInt64                                                                  sekap_last_         = 0;
-                /** @brief Tick count at which next static-echo keepalive packet is due. */
-                UInt64                                                                  sekap_next_         = 0;
+                /** @brief Pure keepalive timing and stale-link decision state. */
+                ClientKeepAlivePolicy                                                   keepalive_policy_;
 
                 /** @brief Owning network switcher. */
                 VEthernetNetworkSwitcherPtr                                             switcher_;
