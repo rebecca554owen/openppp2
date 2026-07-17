@@ -71,6 +71,7 @@ namespace ppp {
         namespace client {
             class VEthernetNetworkSwitcher;
             class VEthernetDatagramPort;
+            class ClientFrpRegistry;
 
             namespace udp {
                 class ClientDatagramPortManager;
@@ -148,8 +149,6 @@ namespace ppp {
                 typedef ppp::app::protocol::VirtualEthernetMappingPort                  VirtualEthernetMappingPort;
                 /** @brief Shared pointer alias for mapping port. */
                 typedef std::shared_ptr<VirtualEthernetMappingPort>                     VirtualEthernetMappingPortPtr;
-                /** @brief Map from composite port key to mapping port object. */
-                typedef ppp::unordered_map<uint32_t, VirtualEthernetMappingPortPtr>     VirtualEthernetMappingPortTable;
                 /** @brief Ciphertext algorithm alias. */
                 typedef ppp::cryptography::Ciphertext                                   Ciphertext;
                 /** @brief Shared pointer alias for ciphertext objects. */
@@ -1062,8 +1061,8 @@ namespace ppp {
                 /** @brief Invalidates queued offer work across reconnect and teardown. */
                 std::atomic<uint64_t>                                                   p2p_offer_generation_{1};
                 std::atomic<uint64_t>                                                   p2p_transport_registration_sequence_{1};
-                /** @brief FRP port mapping table. */
-                VirtualEthernetMappingPortTable                                         mappings_;
+                /** @brief Owns FRP mapping storage, updates, and release ordering. */
+                std::unique_ptr<ClientFrpRegistry>                                      frp_registry_;
                 /** @brief Pending deadline timers (guarded by syncobj_). */
                 DeadlineTimerTable                                                      deadline_timers_;
 

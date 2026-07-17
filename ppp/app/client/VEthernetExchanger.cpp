@@ -4,6 +4,7 @@
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetDatagramPort.h>
 #include <ppp/app/client/udp/ClientDatagramPortManager.h>
+#include <ppp/app/client/ClientFrpRegistry.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/mux/MuxTransportAdapter.h>
@@ -163,6 +164,7 @@ namespace ppp {
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
                 static_echo_.Bind(this);
                 datagram_manager_ = std::make_unique<udp::ClientDatagramPortManager>(BuildUdpRelayHostPorts());
+                frp_registry_ = std::make_unique<ClientFrpRegistry>();
             }
 
             udp::UdpRelayHostPorts VEthernetExchanger::BuildUdpRelayHostPorts() noexcept {
@@ -442,7 +444,6 @@ namespace ppp {
                 p2p_offer_session_.AdvanceGeneration(p2p_generation);
                 ResetP2PCandidateTransport();
 
-                VirtualEthernetMappingPortTable mappings;
                 ITransmissionPtr transmission;
                 DeadlineTimerTable deadline_timers;
                 std::shared_ptr<vmux::vmux_net> mux;
@@ -450,9 +451,6 @@ namespace ppp {
                 /** @brief Atomically swaps internal tables/resources before releasing outside lock. */
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
-
-                    mappings = std::move(mappings_);
-                    mappings_.clear();
 
                     deadline_timers = std::move(deadline_timers_);
                     deadline_timers_.clear();
@@ -472,7 +470,7 @@ namespace ppp {
                     ppp::net::Socket::Cancel(*deadline_timer);
                 }
 
-                Dictionary::ReleaseAllObjects(mappings);
+                frp_registry_->ReleaseAll();
                 datagram_manager_->Release();
 
                 ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger finalized");
@@ -843,53 +841,7 @@ namespace ppp {
                             }
                         }
 
-                        // FRP mapping ports keep their in-place two-phase sweep (snapshot/erase under lock,
-                        // dispose outside) here on the exchanger.
-                        ppp::vector<std::pair<uint32_t, VirtualEthernetMappingPortPtr>> mapping_candidates;
-                        ppp::vector<std::pair<uint32_t, VirtualEthernetMappingPortPtr>> stale_mapping_candidates;
-                        ppp::vector<VirtualEthernetMappingPortPtr> stale_mappings;
-
-                        for (;;) {
-                            SynchronizedObjectScope scope(syncobj_);
-
-                            for (auto&& kv : mappings_) {
-                                mapping_candidates.emplace_back(kv.first, kv.second);
-                            }
-
-                            break;
-                        }
-
-                        for (auto&& kv : mapping_candidates) {
-                            VirtualEthernetMappingPortPtr& mapping = kv.second;
-                            if (NULLPTR == mapping || !mapping->Update(now)) {
-                                stale_mapping_candidates.emplace_back(kv.first, mapping);
-                            }
-                        }
-
-                        for (;;) {
-                            SynchronizedObjectScope scope(syncobj_);
-
-                            for (auto&& stale_mapping_candidate : stale_mapping_candidates) {
-                                auto&& object_key = stale_mapping_candidate.first;
-                                auto tail = mappings_.find(object_key);
-                                auto endl = mappings_.end();
-                                if (tail == endl || tail->second != stale_mapping_candidate.second) {
-                                    continue;
-                                }
-
-                                VirtualEthernetMappingPortPtr mapping = std::move(tail->second);
-                                mappings_.erase(tail);
-                                if (NULLPTR != mapping) {
-                                    stale_mappings.emplace_back(std::move(mapping));
-                                }
-                            }
-
-                            break;
-                        }
-
-                        for (auto&& mapping : stale_mappings) {
-                            IDisposable::Dispose(*mapping);
-                        }
+                        frp_registry_->Tick(now);
                     });
                 return true;
             }
@@ -1721,13 +1673,7 @@ namespace ppp {
 
             /** @brief Unregisters and disposes all FRP mapping ports. */
             void VEthernetExchanger::UnregisterAllMappingPorts() noexcept {
-                VirtualEthernetMappingPortTable mappings; {
-                    SynchronizedObjectScope scope(syncobj_);
-                    mappings = std::move(mappings_);
-                    mappings_.clear();
-                }
-
-                ppp::collections::Dictionary::ReleaseAllObjects(mappings);
+                frp_registry_->ReleaseAll();
             }
 
             /** @brief Rejects unsolicited LAN messages for security hardening. */
@@ -2635,8 +2581,8 @@ namespace ppp {
 
                 bool ok = mapping_port->OpenFrpClient(local_ip, mapping.local_port);
                 if (ok) {
-                    SynchronizedObjectScope scope(syncobj_);
-                    ok = VirtualEthernetMappingPort::AddMappingPort(mappings_, in, protocol_tcp_or_udp, mapping.remote_port, mapping_port);
+                    ok = frp_registry_->Add(
+                        in, protocol_tcp_or_udp, mapping.remote_port, mapping_port);
                 }
 
                 if (!ok) {
@@ -2669,9 +2615,10 @@ namespace ppp {
                                 auto self = shared_from_this();
                                 std::shared_ptr<boost::asio::io_context> context = exchanger->GetContext();
                                 auto remove_mapping = [exchanger, self]() noexcept {
-                                    SynchronizedObjectScope scope(exchanger->syncobj_);
-                                    VirtualEthernetMappingPort::DeleteMappingPort(
-                                        exchanger->mappings_, self->ProtocolIsNetworkV4(), self->ProtocolIsTcpNetwork(), self->GetRemotePort());
+                                    exchanger->frp_registry_->Remove(
+                                        self->ProtocolIsNetworkV4(),
+                                        self->ProtocolIsTcpNetwork(),
+                                        self->GetRemotePort());
                                 };
 
                                 if (NULLPTR != context) {
@@ -2698,8 +2645,7 @@ namespace ppp {
 
             /** @brief Returns FRP mapping port by direction/protocol/port key. */
             VEthernetExchanger::VirtualEthernetMappingPortPtr VEthernetExchanger::GetMappingPort(bool in, bool tcp, int remote_port) noexcept {
-                SynchronizedObjectScope scope(syncobj_);
-                return VirtualEthernetMappingPort::FindMappingPort(mappings_, in, tcp, remote_port);
+                return frp_registry_->Get(in, tcp, remote_port);
             }
 
             /** @brief Dispatches FRP UDP payload callback to mapped client port. */

@@ -463,6 +463,7 @@
     <ClCompile Include="ppp\net\rinetd\RinetdConnection.cpp" />
     <ClCompile Include="ppp\app\client\AssignedAddressManager.cpp" />
     <ClCompile Include="ppp\app\client\ClientConnectionTeardown.cpp" />
+    <ClCompile Include="ppp\app\client\ClientFrpRegistry.cpp" />
     <ClCompile Include="ppp\app\client\ClientBypassRouteLoader.cpp" />
     <ClCompile Include="ppp\app\client\ExchangerStaticEchoChannel.cpp" />
     <ClCompile Include="ppp\app\client\ClientConnectionOpener.cpp" />
@@ -813,6 +814,7 @@
     <ClInclude Include="ppp\app\client\RemoteEndpointLoader.h" />
     <ClInclude Include="ppp\app\client\ExchangerStaticEchoChannel.h" />
     <ClInclude Include="ppp\app\client\ClientKeepAlivePolicy.h" />
+    <ClInclude Include="ppp\app\client\ClientFrpRegistry.h" />
     <ClInclude Include="ppp\app\client\ClientConnectionOpener.h" />
     <ClInclude Include="ppp\app\client\ClientPacketDispatchHandler.h" />
     <ClInclude Include="ppp\app\client\ClientNetworkInterface.h" />
