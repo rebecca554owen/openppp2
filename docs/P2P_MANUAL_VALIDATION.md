@@ -3,7 +3,7 @@
 **Status:** authenticated offer/data integration is implemented but production
 direct mode remains fail-closed pending protocol approval and physical-network evidence.
 
-**Last verified:** 2026-07-17, `ef97c8c`.
+**Last verified:** 2026-07-17, `7c61af7`.
 
 This document describes manual test scenarios for validating the P2P direct-path
 networking feature. Automated C++ and tooling tests cover protocol components and
@@ -42,10 +42,9 @@ The following integration is already wired behind that gate:
 5. **Runtime projection:** requested capability, effective P2P state, network
    state, and fallback reason reach the runtime snapshot.
 
-Remaining enablement work is evidence-driven: approve authenticated control v1,
-feed the NAT classifier from actual UDP relay observations, and complete the
-physical device/NAT matrix below. The production gate must not be changed until
-those checks pass.
+Remaining enablement work is evidence-driven: approve authenticated control v1
+and complete the physical device/NAT matrix below. The production gate must not
+be changed until those checks pass.
 
 ## Automated Evidence
 
@@ -75,9 +74,19 @@ from real UDP relay paths (static-echo, UDP sendto).  TCP control channel
 endpoints are intentionally NOT used because they reflect TCP NAT mapping,
 which does not predict UDP NAT behavior.
 
-**Current state:** No actual UDP observation sources are wired to the
-classifier yet. All peers classify as `Unknown`; production offers are also
-suppressed by the capability gate described above.
+**Current state:** Authenticated StaticEcho ingress is wired as a UDP
+observation source. Before recording an endpoint, the switcher verifies that
+the virtual source IP belongs to the sending connection in the authoritative
+NAT table. Valid source endpoints are deduplicated, stored on the registered
+peer, and included in later offer candidates. TCP control endpoints remain
+excluded.
+
+A single observed UDP mapping remains `Unknown`. The classifier requires
+observations through at least two distinct outer UDP destinations before it
+infers endpoint-independent or symmetric mapping behavior. The inner
+application destination is deliberately not counted because it does not affect
+the outer NAT mapping. Production offers remain suppressed by the capability
+gate described above.
 
 **Conservative behavior:**
 - `Unknown` → probing is allowed (server sends offers, clients attempt

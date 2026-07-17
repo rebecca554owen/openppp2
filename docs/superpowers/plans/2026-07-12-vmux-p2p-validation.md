@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: cfd4571
+> Last verified: 7c61af7
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -346,7 +346,7 @@ No socket forwarding is enabled yet.
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
 
-Current production wiring at `main@cfd4571` includes the authenticated WSS
+Current production wiring at `7c61af7` includes the authenticated WSS
 session exporter, asynchronous server-side offer coordination, client offer
 validation, protected UDP candidate transports, direct-data handling, and typed
 `RuntimeSnapshot` projection. Raw TCP retains the default no-exporter behavior
@@ -356,6 +356,15 @@ directional keys, nonce and replay checks, and mandatory relay fallback.
 `ProductionAuthenticatedControlV1Ready` deliberately remains `false`, so the
 production capability gate still fails closed until the physical-device and
 real-network release evidence below is complete.
+
+Authenticated StaticEcho ingress now supplies production UDP endpoint
+observations after the switcher verifies virtual-IP ownership against the
+authoritative NAT table. Observed endpoints are deduplicated, update the
+registered peer, and become offer candidates; TCP control endpoints are not
+treated as UDP evidence. One outer UDP destination is insufficient to classify
+mapping behavior and therefore remains `Unknown`. At least two distinct outer
+destinations are required, and inner application destinations are deliberately
+excluded because they do not influence the outer NAT mapping.
 
 Local and CI evidence covers parser/crypto/state tests, repeated close and
 callback cancellation, protected-transport failure, simulated UDP blackhole,
