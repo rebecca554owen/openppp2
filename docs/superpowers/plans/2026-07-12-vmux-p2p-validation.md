@@ -2,7 +2,7 @@
 
 > Status: In progress
 > Type: Plan
-> Last verified: 59e2c0e
+> Last verified: 888a71b
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -346,47 +346,27 @@ No socket forwarding is enabled yet.
 
 P2P must remain experimental until the release gate in the roadmap is satisfied.
 
-Task 10 now has a pure control-v1 authentication boundary: only a move-only,
-single-use proof minted after validating an ACK against the canonical SHA-256
-transcript of the locally outstanding Probe may move `Probing` to `Direct`.
-Offer/session/peer/epoch/role/endpoint/TTL bindings, ACK token authentication,
-nonce prefix, and replay checks all complete before the proof is minted. Bare
-boolean ACK and recovery claims fail closed. `ProductionAuthenticatedControlV1Ready`
-remains `false`, so existing transports remain relay-only and the legacy
-bearer-token offer path is unreachable. Remaining work includes a real exporter
-override, pair-seed wrapping/control-v1 coordinator integration, Android
-`VpnService` and iOS socket protection injection, and device/NAT adversarial
-evidence. Legacy Tier-2 handling permits Direct and
-Suspect to authenticate endpoint, AEAD, replay, and heartbeat control, but only
-the entry-state Direct path may demultiplex or publish payload frames. A Suspect
-heartbeat ACK may restore Direct without forwarding payload from that same
-packet. Timeout, trusted local authentication failure, socket error, and
-migration failure now retain an explicit first fallback reason while the base
-path remains relay. One cleanup path cancels timers, closes the socket, resets
-attempt state, and securely erases stored keys, tokens, replay material, receive
-buffers, endpoints, candidates, and counters. Invalid unsolicited network MAC,
-token, or AEAD input still drops silently and cannot force relay fallback.
+Current production wiring at `main@888a71b` includes the authenticated WSS
+session exporter, asynchronous server-side offer coordination, client offer
+validation, protected UDP candidate transports, direct-data handling, and typed
+`RuntimeSnapshot` projection. Raw TCP retains the default no-exporter behavior
+and therefore remains relay-only. The control-v1 path keeps the single-use
+authenticated ACK proof, offer/session/peer/epoch/role/endpoint/TTL bindings,
+directional keys, nonce and replay checks, and mandatory relay fallback.
+`ProductionAuthenticatedControlV1Ready` deliberately remains `false`, so the
+production capability gate still fails closed until the physical-device and
+real-network release evidence below is complete.
 
-Verification at `1c9fa59`: production `openppp2_lib` build passed; C++ tests
-52/52, tooling tests 82/82, and MSVC source parity 202/202 passed. The eight P2P
-ASan/UBSan tests passed with CTest retry; the production-linked channel test
-covers repeated Close, receive/timer cancellation callbacks, first-reason
-retention, socket-protection failure, and a bound local UDP blackhole that
-deterministically reaches timeout without ICMP port-unreachable ambiguity.
-Synthetic relay observations cover symmetric NAT classification and punch
-policy. Existing validator tests cover TTL expiry, stale sequence/epoch, and
-spoofed observed endpoints; a fresh channel object confirms that attempt state
-is not restored. These are local unit/simulation results, not proof of production
-UDP-blocked classification, real NAT behavior, device behavior, or a real
-process restart. This WSL environment intermittently faults while initializing
-ASan before test code runs; all tests passed on retry and no sanitizer diagnostic
-was reported. Independent review finished with Critical 0, Important 0. The
-real encrypted-packet/callback/replay combination and platform evidence remain
-in Step 8; no Android or iOS device result is claimed. VMUX Task 4
-Step 5 was completed separately at `ded25d6` with actual carrier-container churn
-coverage; it does not claim real network I/O.
+Local and CI evidence covers parser/crypto/state tests, repeated close and
+callback cancellation, protected-transport failure, simulated UDP blackhole,
+synthetic NAT classification, stale token/sequence/epoch rejection, spoofed
+endpoints, Android API 34 socket protection, and iOS simulator type checking.
+These results do not prove physical Android/iOS protection, background/roaming,
+real symmetric NAT, production UDP blocking, process restart, or cross-platform
+control-v1 interoperability. VMUX carrier-container churn is covered separately;
+it is not a substitute for fixed-host or mobile netem evidence.
 
-Step 7 verification at `bb52e04`: C++ runtime snapshot, TUI, and authenticated
+Historical Step 7 verification at `bb52e04`: C++ runtime snapshot, TUI, and authenticated
 proof tests passed 3/3; UI wiring/schema tooling passed 13/13. The exact-SHA
 `Test · Unit` workflow also passed its Flutter, iOS simulator, C++, Go, and
 lifecycle sanitizer jobs. Android and Swift derive the displayed path only from
@@ -395,9 +375,9 @@ generations, and downgrade unknown snapshots to Unavailable/Relay. Suspect and
 every pre-authentication state remain Relay; only Direct renders Direct.
 Independent review found no Critical, Important, or Minor issue. Flutter and
 Swift were not available on the local PATH, so their fresh evidence is CI, not a
-local tool run. Production snapshots still default to Disabled because the P2P
-coordinator is not wired; any future coordinator must publish typed Direct only
-after its authenticated transition.
+local tool run. At that commit the production coordinator was not yet wired;
+the current production wiring is described above and still publishes typed
+Direct only after authenticated transition.
 
 Step 8 Android progress at `0e750bd`: `AndroidSocketProtector` now reuses the
 existing native-thread-safe `OpenPPP2VpnProtectBridge` instead of maintaining a
@@ -427,12 +407,11 @@ new transport object. Independent review finished with Critical 0 and Important
 adapter against the real SDK before running Swift tests. This is host/simulator
 evidence only, not an iOS device protection or no-loop result.
 
-Step 8 remains open. The iOS factory is installed on the native tap but the
-production P2P coordinator does not yet exist to consume it and construct
-`P2PChannel`. All production transmissions still return no authenticated
-session exporter, and control-v1 primitives are not connected to a production
-coordinator or `RuntimeSnapshot`. Real Android/iOS device protection, network
-switch/background behavior, real NAT/UDP-blocked evidence, and cross-platform
-control-v1 interoperability are also outstanding. Consequently
+Step 8 code integration is complete: the client consumes the iOS/native
+transport factories, WSS transmissions expose the authenticated exporter, the
+server coordinates paired offers, and the client updates its typed P2P runtime
+projection. The release-evidence portion remains open: real Android/iOS device
+protection, network switch/background behavior, real NAT/UDP-blocked behavior,
+process restart, and cross-platform control-v1 interoperability. Consequently
 `ProductionAuthenticatedControlV1Ready` remains `false` and production traffic
 remains relay-only.

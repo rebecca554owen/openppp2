@@ -2,14 +2,14 @@
 
 > Status: In progress
 > Type: Roadmap
-> Last verified: 59e2c0e
+> Last verified: 888a71b
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish one runtime truth model shared by C++ core, TUI, Android, and iOS; stabilize lifecycle and teardown; enforce architecture and CI boundaries; then validate VMUX and design P2P safely.
 
 Repository implementation and correctness gates were reverified on 2026-07-17 at
-`main@59e2c0e` with all 9 GitHub Actions workflows successful. The remaining
+`main@888a71b`; PR #46 passed all 12 required checks. The remaining
 release gates require authoritative fixed-host or physical-device evidence:
 the UDP baseline bundle, VMUX Linux/mobile netem artifacts, and the P2P
 Android/iOS device and real-NAT matrix. They are intentionally left unchecked.
@@ -70,6 +70,9 @@ Android/iOS device and real-NAT matrix. They are intentionally left unchecked.
 - [x] Documentation status metadata is checked.
 - [x] RouteHostPorts has been removed; repository checks reject reintroduction.
 - [x] No new `.inc` files are accepted.
+- [x] Client Exchanger delegates keepalive timing, FRP storage, StaticEcho state,
+  and VMUX session ownership to domain components; boundary tests reject those
+  fields returning to `VEthernetExchanger`.
 
 ### Gate D: VMUX Verified
 

@@ -4,7 +4,7 @@
 > Type: Design
 > Owner: Client networking
 > Created: 2026-07-14
-> Last verified: 4ec816b
+> Last verified: 888a71b
 > Related objective: 解耦模块，使其各司其职
 
 ## 1. 背景
