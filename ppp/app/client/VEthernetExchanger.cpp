@@ -144,25 +144,14 @@ namespace ppp {
                 , switcher_(switcher)
                 , network_state_(NetworkState_Connecting)
                 , configured_p2p_state_(ConfiguredP2PState(configuration))
-                , p2p_state_(ConfiguredP2PState(configuration))
-                , static_echo_input_(false)
-                , static_echo_timeout_(UINT64_MAX)
-                , static_echo_session_id_(0)
-                , static_echo_remote_port_(IPEndPoint::MinPort) {
-
-                if (configuration->key.protocol.size() > 0 && configuration->key.protocol_key.size() > 0 &&
-                    configuration->key.transport.size() > 0 && configuration->key.transport_key.size() > 0) {
-                    if (Ciphertext::Support(configuration->key.protocol) && Ciphertext::Support(configuration->key.transport)) {
-                        static_echo_protocol_ = make_shared_object<Ciphertext>(configuration->key.protocol, configuration->key.protocol_key);
-                        static_echo_transport_ = make_shared_object<Ciphertext>(configuration->key.transport, configuration->key.transport_key);
-                    }
-                }
+                , p2p_state_(ConfiguredP2PState(configuration)) {
 
                 buffer_                   = Executors::GetCachedBuffer(context);
                 mux_coordinator_          = std::make_unique<ppp::app::mux::MuxCoordinator>();
                 server_url_.port          = 0;
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
                 static_echo_.Bind(this);
+                static_echo_.InitializeCiphers(configuration);
                 datagram_manager_ = std::make_unique<udp::ClientDatagramPortManager>(BuildUdpRelayHostPorts());
                 frp_registry_ = std::make_unique<ClientFrpRegistry>();
             }
@@ -2240,11 +2229,8 @@ namespace ppp {
                     static_echo_.StaticEchoClean();
                 }
                 else {
-                    static_echo_session_id_ = session_id;
-                    static_echo_remote_port_ = remote_port;
-
                     AppConfigurationPtr configuration = GetConfiguration();
-                    VirtualEthernetPacket::Ciphertext(configuration, GetId(), fsid, session_id, static_echo_protocol_, static_echo_transport_);
+                    static_echo_.ConfigureSession(configuration, GetId(), fsid, session_id, remote_port);
                 }
 
                 StaticEchoGatewayServer(STATIC_ECHO_KEEP_ALIVED_ID);

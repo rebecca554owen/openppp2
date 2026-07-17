@@ -30,6 +30,23 @@ class ExchangerSubsystemBoundaryTests(unittest.TestCase):
         self.assertNotIn("sekap_last_", header)
         self.assertNotIn("sekap_next_", header)
 
+    def test_static_echo_channel_owns_its_domain_state(self) -> None:
+        channel = self.source("ppp/app/client/ExchangerStaticEchoChannel.h")
+        exchanger = self.source("ppp/app/client/VEthernetExchanger.h")
+        for field in (
+            "static_echo_sockets_",
+            "static_echo_protocol_",
+            "static_echo_transport_",
+            "static_echo_session_id_",
+            "static_echo_remote_port_",
+            "static_echo_timeout_",
+            "static_echo_server_ep_balances_",
+            "static_echo_server_ep_set_",
+        ):
+            self.assertIn(field, channel)
+            self.assertNotIn(field, exchanger)
+        self.assertIn("std::mutex syncobj_", channel)
+
 
 if __name__ == "__main__":
     unittest.main()

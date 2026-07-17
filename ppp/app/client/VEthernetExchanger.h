@@ -867,50 +867,6 @@ namespace ppp {
 
             private:
                 /**
-                 * @brief UDP socket wrapper used by the static-echo bypass channel.
-                 *
-                 * @details
-                 * Extends boost::asio::ip::udp::socket to add a logical `opened` flag that
-                 * separates the protocol-level "allocated" state from the OS-level socket
-                 * open state. This allows the static-echo machinery to distinguish between
-                 * a socket that is physically open but not yet protocol-negotiated.
-                 */
-                class StaticEchoDatagarmSocket final : public boost::asio::ip::udp::socket {
-                public:
-                    /**
-                     * @brief Constructs the socket wrapper and resets the opened flag.
-                     * @param context  Boost.Asio io_context to bind the socket to.
-                     */
-                    StaticEchoDatagarmSocket(boost::asio::io_context& context) noexcept
-                        : basic_datagram_socket(context)
-                        , opened(false) {
-
-                    }
-
-                    /**
-                     * @brief Destructor — unregisters the native socket before release.
-                     */
-                    virtual ~StaticEchoDatagarmSocket() noexcept {
-                        boost::asio::ip::udp::socket* my = this;
-                        destructor_invoked(my);
-                    }
-
-                public:
-                    /**
-                     * @brief Queries whether the socket is open in native and/or logical sense.
-                     *
-                     * @param only_native  If true, checks only the OS-level open state.
-                     *                     If false (default), also checks the `opened` flag.
-                     * @return true if open according to the selected mode.
-                     */
-                    bool                                                                is_open(bool only_native = false) noexcept { return only_native ? basic_datagram_socket::is_open() : opened && basic_datagram_socket::is_open(); }
-
-                public:
-                    /** @brief Logical open flag set after protocol-level allocation succeeds. */
-                    bool                                                                opened = false;
-                };
-
-                /**
                  * @brief Adds a server-side remote UDP endpoint to the static-echo load-balance pool.
                  *
                  * @param remoteEP  Remote endpoint to add.
@@ -1022,9 +978,6 @@ namespace ppp {
 
                 /** @brief Atomic one-shot disposed flag; safe for cross-strand reads. */
                 std::atomic_bool                                                        disposed_{false};
-                /** @brief Tracking flag for static-echo receive state. */
-                bool                                                                    static_echo_input_  = false;
-
                 /** @brief Shared receive buffer allocated once and reused across async reads. */
                 std::shared_ptr<Byte>                                                   buffer_;
 
@@ -1088,25 +1041,6 @@ namespace ppp {
                     ProtocolType                                                        protocol_type       = ProtocolType::ProtocolType_PPP;
                 }                                                                       server_url_;
 
-                /** @brief Protocol ciphertext for static-echo packet authentication. */
-                CiphertextPtr                                                           static_echo_protocol_;
-                /** @brief Transport ciphertext for static-echo packet encryption. */
-                CiphertextPtr                                                           static_echo_transport_;
-                /** @brief Dual-socket pair used for static-echo rotation (active/standby). */
-                std::shared_ptr<StaticEchoDatagarmSocket>                               static_echo_sockets_[2];
-                /** @brief Local UDP endpoint bound for static-echo receives. */
-                boost::asio::ip::udp::endpoint                                          static_echo_source_ep_;
-                /** @brief Round-robin list of server-side static-echo endpoints. */
-                ppp::list<boost::asio::ip::udp::endpoint>                               static_echo_server_ep_balances_;
-                /** @brief Set for deduplication of static-echo server endpoints. */
-                ppp::unordered_set<boost::asio::ip::udp::endpoint>                      static_echo_server_ep_set_;
-
-                /** @brief Tick count at which static-echo socket rotation is due. */
-                uint64_t                                                                static_echo_timeout_     = 0;
-                /** @brief Session identifier assigned by the server for static-echo. */
-                int                                                                     static_echo_session_id_  = 0;
-                /** @brief UDP port on the server used for static-echo traffic. */
-                int                                                                     static_echo_remote_port_ = 0;
                 /** @brief Static-echo UDP channel extracted from exchanger core. */
                 ExchangerStaticEchoChannel                                              static_echo_;
 
