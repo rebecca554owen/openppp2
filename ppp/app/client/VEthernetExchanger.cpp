@@ -7,6 +7,7 @@
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/mux/MuxTransportAdapter.h>
+#include <ppp/app/mux/MuxCoordinator.h>
 #include <ppp/app/P2PCandidateAdapter.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -159,6 +160,7 @@ namespace ppp {
                 }
 
                 buffer_                   = Executors::GetCachedBuffer(context);
+                mux_coordinator_          = std::make_unique<ppp::app::mux::MuxCoordinator>();
                 server_url_.port          = 0;
                 server_url_.protocol_type = ProtocolType::ProtocolType_PPP;
                 static_echo_.Bind(this);
@@ -458,7 +460,7 @@ namespace ppp {
                     deadline_timers_.clear();
 
                     mux_vlan_ = 0;
-                    mux = std::move(mux_);
+                    mux = mux_coordinator_->Take();
                     transmission = std::move(transmission_);
                     break;
                 }
@@ -984,7 +986,7 @@ namespace ppp {
 
 #if defined(_IPHONE)
             bool VEthernetExchanger::IosPeerConnectBackpressured() const noexcept {
-                std::shared_ptr<vmux::vmux_net> mux = mux_;
+                std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                 if (NULLPTR != mux && mux->is_established()) {
                     return false;
                 }
@@ -1257,7 +1259,7 @@ namespace ppp {
                         break;
                     }
 
-                    std::shared_ptr<vmux::vmux_net> mux = mux_;
+                    std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                     if (NULLPTR != mux) {
                         bool breaking = true;
                         successes = true;
@@ -1271,7 +1273,7 @@ namespace ppp {
 
                             uint64_t now = mux->now_tick();
                             if (now >= (mux_last + (uint64_t)reconnection_timeout)) {
-                                mux_.reset();
+                                mux_coordinator_->ResetIfCurrent(mux);
                                 breaking = false;
                             }
 
@@ -1347,7 +1349,7 @@ namespace ppp {
                     }
 
                     std::shared_ptr<VirtualEthernetLinklayer> self = shared_from_this();
-                    mux_ = mux;
+                    mux_coordinator_->Replace(mux);
 
                     successes = YieldContext::Spawn(buffer_allocator.get(), *vnet_context,
                         [self, this, vnet_transmission, mux, vnet_context, configuration](YieldContext& y) noexcept {
@@ -1373,7 +1375,7 @@ namespace ppp {
                 }
 
                 if (!successes) {
-                    std::shared_ptr<vmux::vmux_net> mux = std::move(mux_);
+                    std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Take();
                     if (NULLPTR != mux) {
                         mux->close_exec();
                     }
@@ -1388,7 +1390,7 @@ namespace ppp {
                     return NetworkState_Reconnecting;
                 }
 
-                std::shared_ptr<vmux::vmux_net> mux = mux_;
+                std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                 if (NULLPTR == mux) {
                     return NetworkState_Connecting;
                 }
@@ -1405,8 +1407,8 @@ namespace ppp {
             }
 
             ppp::app::mux::MuxRuntimeState VEthernetExchanger::GetMuxRuntimeState() noexcept {
-                if (std::shared_ptr<vmux::vmux_net> mux = mux_; NULLPTR != mux) {
-                    return mux->get_runtime_state();
+                if (std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session(); NULLPTR != mux) {
+                    return mux_coordinator_->RuntimeState();
                 }
 
                 ppp::app::mux::MuxRuntimeState state;
@@ -1426,8 +1428,10 @@ namespace ppp {
             }
 
             /** @brief Establishes all required vmux child linklayers. */
-            bool VEthernetExchanger::MuxConnectAllLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<vmux::vmux_net>& mux) noexcept {
+            bool VEthernetExchanger::MuxConnectAllLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<void>& session) noexcept {
                 using ppp::app::protocol::VirtualEthernetTcpipConnection;
+                const std::shared_ptr<vmux::vmux_net> mux =
+                    std::static_pointer_cast<vmux::vmux_net>(session);
 
                 std::shared_ptr<boost::asio::io_context> context = mux->get_context();
                 if (NULLPTR == context) {
@@ -1439,7 +1443,7 @@ namespace ppp {
 
                 return YieldContext::Spawn(allocator.get(), *context, strand.get(),
                     [self, this, mux, context, strand](YieldContext& y) noexcept -> bool {
-                        if (disposed_.load(std::memory_order_acquire) || mux != mux_) {
+                        if (disposed_.load(std::memory_order_acquire) || !mux_coordinator_->IsCurrent(mux)) {
                             mux->close_exec();
                             return false;
                         }
@@ -1458,7 +1462,7 @@ namespace ppp {
                         auto strand = mux->get_strand();
 
                         for (int i = 0; i < max_connections; i++) {
-                            if (disposed_.load(std::memory_order_acquire) || mux != mux_) {
+                            if (disposed_.load(std::memory_order_acquire) || !mux_coordinator_->IsCurrent(mux)) {
                                 bok_connections = -1;
                                 break;
                             }
@@ -1520,8 +1524,10 @@ namespace ppp {
             }
 
             /** @brief Connects `count` extra carrier links at runtime (turbo grow, C-B3 caller). */
-            bool VEthernetExchanger::MuxGrowLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<vmux::vmux_net>& mux, int count) noexcept {
+            bool VEthernetExchanger::MuxGrowLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<void>& session, int count) noexcept {
                 using ppp::app::protocol::VirtualEthernetTcpipConnection;
+                const std::shared_ptr<vmux::vmux_net> mux =
+                    std::static_pointer_cast<vmux::vmux_net>(session);
 
                 if (NULLPTR == mux || count <= 0) {
                     return false;
@@ -1544,7 +1550,7 @@ namespace ppp {
                         const uint32_t& rx_ack = mux->get_rx_ack();
 
                         for (int i = 0; i < count; i++) {
-                            if (disposed_.load(std::memory_order_acquire) || mux != mux_ || mux->is_disposed()) {
+                            if (disposed_.load(std::memory_order_acquire) || !mux_coordinator_->IsCurrent(mux) || mux->is_disposed()) {
                                 break;
                             }
 
@@ -1761,7 +1767,7 @@ namespace ppp {
 
             /** @brief Handles mux negotiation callback and starts vmux linking. */
             bool VEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept {
-                std::shared_ptr<vmux::vmux_net> mux = mux_;
+                std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                 if (NULLPTR != mux) {
                     bool successed = false;
                     if (vlan != 0 && max_connections > 0 && mux->Vlan == vlan && max_connections == mux->get_max_connections() && !mux->is_disposed()) {
@@ -2549,7 +2555,7 @@ namespace ppp {
                     ITransmissionPtr transmission = transmission_;
                     if (transmission) {
 #if defined(_IPHONE)
-                        if (NULLPTR == mux_
+                        if (NULLPTR == mux_coordinator_->Session()
                             && ios_child_transmission_active_.load(std::memory_order_acquire) > 0) {
                             sekap_last_ = now;
                             ppp::telemetry::Count("client_exchanger.keepalive.defer_children", 1);

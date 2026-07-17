@@ -4,6 +4,7 @@
 #include <ppp/app/server/VirtualEthernetExchanger.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/mux/MuxTransportAdapter.h>
+#include <ppp/app/mux/MuxCoordinator.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
 #include <ppp/diagnostics/Error.h>
 
@@ -213,7 +214,8 @@ namespace ppp {
                     return false;
                 }
 
-                std::shared_ptr<vmux::vmux_net> mux = exchanger->GetMux();
+                std::shared_ptr<vmux::vmux_net> mux =
+                    exchanger->GetMuxCoordinator()->Session();
                 if (NULLPTR == mux) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     return false;

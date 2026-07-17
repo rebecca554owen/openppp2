@@ -16,7 +16,7 @@
  *          - Proxies UDP datagrams through per-source `VirtualEthernetDatagramPort` objects.
  *          - Manages ICMP echo forwarding via `VirtualInternetControlMessageProtocol`.
  *          - Provides FRP inbound/outbound port-mapping via `VirtualEthernetMappingPort`.
- *          - Negotiates VMUX sub-channel multiplexing via `vmux::vmux_net`.
+ *          - Negotiates VMUX sub-channel multiplexing through a coordinator.
  *          - Handles static-echo allocation requests and forwards static-echo datagrams.
  *          - Uploads per-session traffic deltas to the managed server on each tick.
  *
@@ -44,7 +44,6 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/udp/ServerUdpRelayHost.h>
 #include <ppp/app/server/udp/StaticUdpRelayHost.h>
-#include <ppp/app/mux/vmux_net.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
@@ -52,6 +51,8 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
 #include <atomic>
+
+namespace ppp::app::mux { class MuxCoordinator; }
 
 namespace ppp {
     namespace app {
@@ -192,8 +193,7 @@ namespace ppp {
                 bool                                                                        StaticEchoReleasePort(uint32_t source_ip, int source_port) noexcept;
                 /** @brief Returns the link telemetry object for this session. */
                 ppp::diagnostics::LinkTelemetry&                                             GetLinkTelemetry() noexcept { return link_telemetry_; }
-                /** @brief Returns the VMUX instance when sub-channel multiplexing is active. */
-                std::shared_ptr<vmux::vmux_net>                                             GetMux() noexcept           { return mux_; }
+                ppp::app::mux::MuxCoordinator*                                              GetMuxCoordinator() noexcept { return mux_coordinator_.get(); }
                 /**
                  * @brief Returns the preferred TUN file descriptor hint for the forwarding layer.
                  * @return TUN fd; -1 if none is set.
@@ -680,7 +680,7 @@ namespace ppp {
                 VirtualEthernetMappingPortTable                                             mappings_;                  ///< Active FRP port-mapping objects.
                 ITransmissionStatisticsPtr                                                  statistics_;                ///< Current traffic statistics for this session.
                 ppp::diagnostics::LinkTelemetry                                             link_telemetry_;            ///< Per-session link fault telemetry.
-                std::shared_ptr<vmux::vmux_net>                                             mux_;                       ///< VMUX multiplexed sub-channel instance (may be null).
+                std::unique_ptr<ppp::app::mux::MuxCoordinator>                              mux_coordinator_;           ///< Owns the VMUX session and runtime projection.
 
                 std::shared_ptr<VirtualInternetControlMessageProtocolStatic>                static_echo_;                       ///< Static-echo ICMP forwarding helper.
                 VirtualEthernetStaticEchoAllocatedContextPtr                                static_allocated_context_;          ///< Active static-echo allocation context.

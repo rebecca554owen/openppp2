@@ -42,7 +42,7 @@
 #include <ppp/configurations/MappingConfiguration.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
-#include <ppp/app/mux/vmux_net.h>
+#include <ppp/app/mux/MuxRuntimeState.h>
 #include <ppp/cryptography/Ciphertext.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/Int128.h>
@@ -62,6 +62,8 @@
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
 #include <ppp/app/client/udp/UdpRelayHost.h>
 #include <ppp/app/client/dns/IDnsTunnelTransport.h>
+
+namespace ppp::app::mux { class MuxCoordinator; }
 
 namespace ppp {
     namespace app {
@@ -87,7 +89,7 @@ namespace ppp {
              * The exchanger owns:
              *  - One primary ITransmission channel (TCP / WebSocket / WebSocket-SSL / PPP).
              *  - A table of VEthernetDatagramPort objects for UDP relay.
-             *  - Optional vmux_net for multiplexed sub-links.
+             *  - Optional coordinated VMUX session for multiplexed sub-links.
              *  - A static-echo UDP channel for low-latency bypass.
              *  - FRP port-mapping registrations from AppConfiguration.
              *
@@ -215,11 +217,7 @@ namespace ppp {
                  */
                 std::shared_ptr<Byte>                                                   GetBuffer()             noexcept { return buffer_; }
 
-                /**
-                 * @brief Gets the current VMUX instance, if multiplexing is active.
-                 * @return Shared vmux_net pointer, or null if mux is not negotiated.
-                 */
-                std::shared_ptr<vmux::vmux_net>                                         GetMux()                noexcept { return mux_; }
+                ppp::app::mux::MuxCoordinator*                                          GetMuxCoordinator()     noexcept { return mux_coordinator_.get(); }
 
                 /**
                  * @brief Gets the owning network switcher.
@@ -254,7 +252,7 @@ namespace ppp {
                 ppp::diagnostics::LinkTelemetry&                                           GetLinkTelemetry()      noexcept { return link_telemetry_; }
 
                 /**
-                 * @brief Gets the VMUX network state derived from the vmux_net lifecycle.
+                 * @brief Gets the VMUX network state derived from the coordinated session lifecycle.
                  * @return NetworkState based on vmux connectivity; NetworkState_Connecting if mux is null.
                  */
                 NetworkState                                                            GetMuxNetworkState()    noexcept;
@@ -853,19 +851,19 @@ namespace ppp {
                 bool                                                                    DoMuxEvents() noexcept;
 
                 /**
-                 * @brief Connects all VMUX sub-linklayers required by the negotiated vmux_net session.
+                 * @brief Connects all VMUX sub-linklayers required by the negotiated session.
                  *
                  * @param allocator  Buffer allocator for sub-link transmission buffers.
                  * @param mux        VMUX instance to populate with sub-links.
                  * @return true if all sub-links were connected; false if any failed.
                  */
-                bool                                                                    MuxConnectAllLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<vmux::vmux_net>& mux) noexcept;
+                bool                                                                    MuxConnectAllLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<void>& mux) noexcept;
                 /**
                  * @brief Connect N extra carrier links at runtime and attach each via
                  *        add_linklayer's established-session path (turbo dynamic pool grow).
                  * @return true when the grow coroutine was spawned.
                  */
-                bool                                                                    MuxGrowLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<vmux::vmux_net>& mux, int count) noexcept;
+                bool                                                                    MuxGrowLinklayers(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<void>& mux, int count) noexcept;
 
             private:
                 /**
@@ -1070,8 +1068,8 @@ namespace ppp {
                 /** @brief Pending deadline timers (guarded by syncobj_). */
                 DeadlineTimerTable                                                      deadline_timers_;
 
-                /** @brief Active VMUX session, if multiplexing was negotiated. */
-                std::shared_ptr<vmux::vmux_net>                                         mux_;
+                /** @brief Owns the active VMUX session and its runtime projection. */
+                std::unique_ptr<ppp::app::mux::MuxCoordinator>                          mux_coordinator_;
                 /** @brief VLAN identifier assigned during VMUX negotiation. */
                 uint16_t                                                                mux_vlan_           = 0;
 

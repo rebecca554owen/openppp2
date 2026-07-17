@@ -429,6 +429,7 @@
     <ClCompile Include="ppp\app\client\proxys\VEthernetLocalProxySwitcher.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetSocksProxyConnection.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetSocksProxySwitcher.cpp" />
+    <ClCompile Include="ppp\app\mux\MuxCoordinator.cpp" />
     <ClCompile Include="ppp\app\mux\vmux_net.cpp" />
     <ClCompile Include="ppp\app\mux\vmux_skt.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetLogger.cpp" />
@@ -856,6 +857,7 @@
     <ClInclude Include="ppp\configurations\MappingConfiguration.h" />
     <ClInclude Include="ppp\p2p\P2PDefs.h" />
     <ClInclude Include="ppp\app\mux\IMuxTransport.h" />
+    <ClInclude Include="ppp\app\mux\MuxCoordinator.h" />
     <ClInclude Include="ppp\app\mux\MuxTransportAdapter.h" />
     <ClInclude Include="ppp\p2p\P2PCapabilityGate.h" />
     <ClInclude Include="ppp\p2p\P2PAuthenticatedProbeAck.h" />

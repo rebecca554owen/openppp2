@@ -1,5 +1,6 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/server/VirtualEthernetExchanger.h>
+#include <ppp/app/mux/MuxCoordinator.h>
 #include <ppp/app/server/udp/ServerDatagramPortManager.h>
 #include <ppp/app/server/udp/StaticDatagramPortManager.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
@@ -212,6 +213,7 @@ namespace ppp {
 
                 std::shared_ptr<boost::asio::io_context> context = transmission->GetContext();
                 buffer_ = Executors::GetCachedBuffer(context);
+                mux_coordinator_ = std::make_unique<ppp::app::mux::MuxCoordinator>();
                 firewall_ = switcher->GetFirewall();
                 managed_server_ = switcher->GetManagedServer();
                 datagram_manager_ = std::make_unique<udp::ServerDatagramPortManager>(BuildServerUdpRelayHostPorts());
@@ -371,7 +373,7 @@ namespace ppp {
                     VirtualInternetControlMessageProtocolPtr echo = std::move(echo_);
                     std::shared_ptr<VirtualInternetControlMessageProtocolStatic> static_echo = std::move(static_echo_);
                     ITransmissionPtr transmission = std::move(transmission_);
-                    std::shared_ptr<vmux::vmux_net> mux = std::move(mux_);
+                    std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Take();
 
                     if (NULLPTR != echo) {
                         echo->Dispose();
@@ -595,10 +597,10 @@ namespace ppp {
                     }
 
                     bool clean = vlan == 0 || max_connections == 0;
-                    std::shared_ptr<vmux::vmux_net> mux = mux_;
+                    std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                     if (NULLPTR != mux) {
                         if (clean || mux->Vlan != vlan || mux->get_max_connections() != max_connections || mux->is_disposed()) {
-                            mux_.reset();
+                            mux_coordinator_->ResetIfCurrent(mux);
                             mux->close_exec();
                         }
                         else {
@@ -645,10 +647,10 @@ namespace ppp {
 
                         if (mux->update()) {
                             err = false;
-                            mux_ = mux;
+                            mux_coordinator_->Replace(mux);
                         }
                         else {
-                            mux_.reset();
+                            mux_coordinator_->ResetIfCurrent(mux);
                             mux->close_exec();
                         }
                     }
@@ -657,7 +659,7 @@ namespace ppp {
                 }
 
                 if (err) {
-                    if (std::shared_ptr<vmux::vmux_net> mux = std::move(mux_); NULLPTR != mux) {
+                    if (std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Take(); NULLPTR != mux) {
                         mux->close_exec();
                     }
 
@@ -1370,13 +1372,13 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                std::shared_ptr<vmux::vmux_net> mux = mux_;
+                std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                 if (NULLPTR != mux) {
                     if (mux->update()) {
                         return true;
                     }
 
-                    mux_.reset();
+                    mux_coordinator_->ResetIfCurrent(mux);
                     mux->close_exec();
                 }
 

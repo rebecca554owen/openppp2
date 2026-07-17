@@ -3,6 +3,7 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
+#include <ppp/app/mux/MuxCoordinator.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/net/Ipep.h>
 
@@ -104,7 +105,7 @@ namespace ppp {
                 typedef VEthernetExchanger::NetworkState NetworkState;
                 typedef std::shared_ptr<vmux::vmux_skt> VmuxSktPtr;
 
-                if (auto mux = exchanger->GetMux(); NULLPTR != mux) {
+                if (auto mux = exchanger->GetMuxCoordinator()->Session(); NULLPTR != mux) {
                     auto network_state = exchanger->GetMuxNetworkState();
                     if (network_state == NetworkState::NetworkState_Established) {
                         std::shared_ptr<VmuxSktPtr> pmux_connection = make_shared_object<VmuxSktPtr>();
