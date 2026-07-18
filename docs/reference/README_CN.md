@@ -12,6 +12,7 @@
 
 这里汇总当前有效文档，按用户任务和维护职责组织。
 
+- [项目接口全景图](PROJECT_INTERFACE_MAP_CN.md)：CLI、配置、协议、HTTP API、平台桥、内部接口和已知缺口的规范总清单。
 - [命令行参考](CLI_REFERENCE_CN.md)
 - [配置模型](CONFIGURATION_CN.md)
 - [诊断错误系统](DIAGNOSTICS_ERROR_SYSTEM_CN.md)

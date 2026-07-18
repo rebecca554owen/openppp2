@@ -32,6 +32,7 @@ The documentation is written from code facts upward. It explains what the system
 | Install, create a minimum configuration, start, and verify | [`docs/getting-started/USER_MANUAL.md`](docs/getting-started/USER_MANUAL.md) |
 | Routing, DNS, proxy, subscriptions, and platform operations | [`docs/guides/README.md`](docs/guides/README.md) |
 | Complete configuration, CLI, errors, and protocol formats | [`docs/reference/README.md`](docs/reference/README.md) |
+| Discover every stable, experimental, and internal interface | [`docs/reference/PROJECT_INTERFACE_MAP.md`](docs/reference/PROJECT_INTERFACE_MAP.md) |
 | Deployment, operations, security, and troubleshooting | [`docs/operations/README.md`](docs/operations/README.md) |
 | Architecture and source reading | [`docs/architecture/README.md`](docs/architecture/README.md), [`docs/development/README.md`](docs/development/README.md) |
 | Historical designs, plans, audits, and status records | [`docs/archive/README.md`](docs/archive/README.md) |
@@ -105,6 +106,7 @@ sequenceDiagram
 |----------|---------|
 | [`docs/README.md`](docs/README.md) | Documentation index and reading paths |
 | [`docs/README_CN.md`](docs/README_CN.md) | Chinese documentation index |
+| [`docs/reference/PROJECT_INTERFACE_MAP.md`](docs/reference/PROJECT_INTERFACE_MAP.md) | Complete interface, protocol, API, CLI, configuration, and platform bridge inventory |
 | [`docs/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) | Top-level architecture map |
 | [`docs/USER_MANUAL.md`](docs/getting-started/USER_MANUAL.md) | End-user quick start and appendices |
 | [`docs/SOURCE_READING_GUIDE.md`](docs/development/SOURCE_READING_GUIDE.md) | Source reading order |

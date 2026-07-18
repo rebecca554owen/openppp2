@@ -12,6 +12,7 @@
 
 This section groups current documentation by user task and maintenance responsibility.
 
+- [Project Interface Map](PROJECT_INTERFACE_MAP.md): canonical inventory of CLI, configuration, protocols, HTTP APIs, platform bridges, internal interfaces, and known gaps.
 - [CLI Reference](CLI_REFERENCE.md)
 - [Configuration Model](CONFIGURATION.md)
 - [Diagnostics Error System](DIAGNOSTICS_ERROR_SYSTEM.md)

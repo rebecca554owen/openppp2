@@ -27,12 +27,14 @@ Use this page as the current documentation entry point. Historical designs, plan
 | Manage subscriptions and the admin UI | [Management backend](guides/MANAGEMENT_BACKEND.md) |
 | Deploy as a service | [Deployment](operations/DEPLOYMENT.md) |
 | Troubleshoot a failure | [Operations and troubleshooting](operations/OPERATIONS.md#troubleshooting-by-phase) |
+| Discover every project interface and known gap | [Project interface map](reference/PROJECT_INTERFACE_MAP.md) |
 
 ## Browse by Responsibility
 
 - [Getting started](getting-started/README.md): installation, minimum configuration, startup, and first verification.
 - [Guides](guides/README.md): routing, DNS, proxy, subscriptions, management, IPv6, and platforms.
 - [Reference](reference/README.md): complete configuration, CLI, errors, protocol, and data formats.
+- [Project interface map](reference/PROJECT_INTERFACE_MAP.md), [项目接口全景图](reference/PROJECT_INTERFACE_MAP_CN.md): stable, experimental, internal, deprecated, and missing interfaces across the whole repository.
 - [Runtime contracts and rollout gates](reference/UI_RUNTIME_CONTRACT.md), [UI runtime contract (CN)](reference/UI_RUNTIME_CONTRACT_CN.md), [VMUX validation](reference/VMUX_VALIDATION.md), and [VMUX validation (CN)](reference/VMUX_VALIDATION_CN.md): current platform-facing contracts and release evidence.
 - [Architecture](architecture/README.md): current runtime, protocol, transport, and subsystem models.
 - [Development](development/README.md): source reading, builds, testing, and compatibility.

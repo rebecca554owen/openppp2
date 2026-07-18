@@ -27,12 +27,14 @@
 | 管理订阅和后台 | [管理后端](guides/MANAGEMENT_BACKEND_CN.md) |
 | 部署为系统服务 | [部署说明](operations/DEPLOYMENT_CN.md) |
 | 排查故障 | [运维与故障排查](operations/OPERATIONS_CN.md#按阶段排障) |
+| 查找项目全部接口和已知缺口 | [项目接口全景图](reference/PROJECT_INTERFACE_MAP_CN.md) |
 
 ## 按职责浏览
 
 - [快速开始](getting-started/README_CN.md)：安装、最小配置、启动和首次验证。
 - [任务指南](guides/README_CN.md)：路由、DNS、代理、订阅、管理后台、IPv6 和平台操作。
 - [参考手册](reference/README_CN.md)：完整配置、CLI、错误、协议和数据格式。
+- [项目接口全景图](reference/PROJECT_INTERFACE_MAP_CN.md)、[Project Interface Map](reference/PROJECT_INTERFACE_MAP.md)：全仓库稳定、实验、内部、废弃和缺失接口。
 - [运行时契约与发布门槛](reference/UI_RUNTIME_CONTRACT_CN.md)、[VMUX 验证](reference/VMUX_VALIDATION_CN.md)：当前平台契约和发布证据。
 - [当前架构](architecture/README_CN.md)：当前运行时、协议、传输和子系统模型。
 - [开发文档](development/README_CN.md)：源码阅读、构建、测试和兼容性。

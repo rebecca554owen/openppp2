@@ -32,6 +32,7 @@ OPENPPP2 是一套源码驱动、跨平台的网络运行时，围绕 C++ 主程
 | 安装、最小配置、启动和验证 | [`docs/getting-started/USER_MANUAL_CN.md`](docs/getting-started/USER_MANUAL_CN.md) |
 | 路由、DNS、代理、订阅和平台操作 | [`docs/guides/README_CN.md`](docs/guides/README_CN.md) |
 | 完整配置、CLI、错误码和协议格式 | [`docs/reference/README_CN.md`](docs/reference/README_CN.md) |
+| 查找全部稳定、实验和内部接口 | [`docs/reference/PROJECT_INTERFACE_MAP_CN.md`](docs/reference/PROJECT_INTERFACE_MAP_CN.md) |
 | 部署、运维、安全和故障排查 | [`docs/operations/README_CN.md`](docs/operations/README_CN.md) |
 | 架构与源码阅读 | [`docs/architecture/README_CN.md`](docs/architecture/README_CN.md)、[`docs/development/README_CN.md`](docs/development/README_CN.md) |
 | 历史设计、计划、审计和状态记录 | [`docs/archive/README_CN.md`](docs/archive/README_CN.md) |
@@ -105,6 +106,7 @@ sequenceDiagram
 |------|------|
 | [`docs/README_CN.md`](docs/README_CN.md) | 文档总索引与阅读路径 |
 | [`docs/README.md`](docs/README.md) | English 文档总索引 |
+| [`docs/reference/PROJECT_INTERFACE_MAP_CN.md`](docs/reference/PROJECT_INTERFACE_MAP_CN.md) | 全量接口、协议、API、CLI、配置和平台桥盘点 |
 | [`docs/ARCHITECTURE_CN.md`](docs/architecture/ARCHITECTURE_CN.md) | 顶层架构地图 |
 | [`docs/USER_MANUAL_CN.md`](docs/getting-started/USER_MANUAL_CN.md) | 用户快速开始与附录 |
 | [`docs/SOURCE_READING_GUIDE_CN.md`](docs/development/SOURCE_READING_GUIDE_CN.md) | 源码阅读顺序 |
