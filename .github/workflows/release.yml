@@ -59,14 +59,20 @@ jobs:
             fi
           done
 
-      - name: List artifacts
+      - name: Prepare release assets
         run: |
-          echo "Downloaded artifacts:"
-          if [ -d artifacts ]; then
-            ls -R artifacts
-          else
-            echo "No artifacts found"
+          mkdir -p release-assets
+          find artifacts -type f -size +0c \
+            \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.apk' \) \
+            -exec cp {} release-assets/ \;
+
+          if ! find release-assets -maxdepth 1 -type f -print -quit | grep -q .; then
+            echo "No non-empty release assets found"
+            exit 1
           fi
+
+          echo "Release assets:"
+          find release-assets -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -74,8 +80,8 @@ jobs:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.title }}
           prerelease: ${{ inputs.prerelease }}
-          files: artifacts/**/*
+          files: release-assets/*
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
