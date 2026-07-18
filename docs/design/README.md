@@ -15,3 +15,4 @@ to paired reference documentation once verified.
 - [P2P direct-channel protocol](p2p-direct-channel/protocol.md)
 - [P2P direct-channel state machine](p2p-direct-channel/state-machine.md)
 - [P2P direct-channel threat model](p2p-direct-channel/threat-model.md)
+- [OpenPPP2 Sub / Client 方案设计](SUB_CLIENT_DESIGN_CN.md)
