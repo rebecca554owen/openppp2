@@ -79,6 +79,9 @@ final class ProfileStore {
                 updated.subscriptionUrl = url
                 updated.subscriptionNodeId = node.id
                 updated.subscriptionUpdatedAtMs = now
+                if let options = node.options {
+                    updated.options = options
+                }
                 list[index] = updated
             } else {
                 list.append(ConfigProfile(
@@ -91,7 +94,7 @@ final class ProfileStore {
                     subscriptionUrl: url,
                     subscriptionNodeId: node.id,
                     subscriptionUpdatedAtMs: now,
-                    options: LaunchOptions(),
+                    options: node.options ?? LaunchOptions(),
                     history: []
                 ))
             }

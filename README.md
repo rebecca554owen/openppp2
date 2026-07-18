@@ -1,5 +1,11 @@
 # OPENPPP2
 
+> **Purpose:** Provide the repository overview and route readers to current task-oriented documentation.
+> **Audience:** OPENPPP2 users, operators, and developers.
+> **Status:** Current.
+> **Last verified against:** Current repository structure and documentation map, 2026-07-18.
+> **Documentation index:** [Browse by task](docs/README.md) · **Chinese:** [简体中文](README_CN.md)
+
 English | [简体中文](README_CN.md)
 
 OPENPPP2 is a source-driven, cross-platform network runtime built around the C++ executable `ppp`, with an optional Go management backend. The real implementation boundary lives in `main.cpp`, `ppp/configurations`, `ppp/transmissions`, `ppp/app/protocol`, `ppp/app/client`, `ppp/app/server`, and the platform-specific integration directories.
@@ -19,28 +25,18 @@ The documentation is written from code facts upward. It explains what the system
 
 ---
 
-## Table of Contents
+## Start by Task
 
-1. [System Architecture Overview](#system-architecture-overview)
-2. [Start Here](#start-here)
-3. [Reading Paths](#reading-paths)
-4. [Documentation Set](#documentation-set)
-5. [Repository Layout](#repository-layout)
-6. [Build Instructions](#build-instructions)
-7. [Quick Start](#quick-start)
-8. [Configuration Overview](#configuration-overview)
-9. [Protocol and Transport Overview](#protocol-and-transport-overview)
-10. [Client Runtime Summary](#client-runtime-summary)
-11. [Server Runtime Summary](#server-runtime-summary)
-12. [Platform Integration Summary](#platform-integration-summary)
-13. [Concurrency and Threading Model](#concurrency-and-threading-model)
-14. [Error Handling Summary](#error-handling-summary)
-15. [Management Backend](#management-backend)
-16. [Security Summary](#security-summary)
-17. [Code Facts That Shape The Docs](#code-facts-that-shape-the-docs)
-18. [Boundaries](#boundaries)
-19. [Quick Reference](#quick-reference)
-20. [Notes](#notes)
+| Task | Entry point |
+|---|---|
+| Install, create a minimum configuration, start, and verify | [`docs/getting-started/USER_MANUAL.md`](docs/getting-started/USER_MANUAL.md) |
+| Routing, DNS, proxy, subscriptions, and platform operations | [`docs/guides/README.md`](docs/guides/README.md) |
+| Complete configuration, CLI, errors, and protocol formats | [`docs/reference/README.md`](docs/reference/README.md) |
+| Deployment, operations, security, and troubleshooting | [`docs/operations/README.md`](docs/operations/README.md) |
+| Architecture and source reading | [`docs/architecture/README.md`](docs/architecture/README.md), [`docs/development/README.md`](docs/development/README.md) |
+| Historical designs, plans, audits, and status records | [`docs/archive/README.md`](docs/archive/README.md) |
+
+See [`docs/README.md`](docs/README.md) for the full task-oriented documentation index.
 
 ---
 
@@ -109,9 +105,9 @@ sequenceDiagram
 |----------|---------|
 | [`docs/README.md`](docs/README.md) | Documentation index and reading paths |
 | [`docs/README_CN.md`](docs/README_CN.md) | Chinese documentation index |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Top-level architecture map |
-| [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) | End-user quick start and appendices |
-| [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md) | Source reading order |
+| [`docs/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) | Top-level architecture map |
+| [`docs/USER_MANUAL.md`](docs/getting-started/USER_MANUAL.md) | End-user quick start and appendices |
+| [`docs/SOURCE_READING_GUIDE.md`](docs/development/SOURCE_READING_GUIDE.md) | Source reading order |
 
 ---
 
@@ -119,22 +115,22 @@ sequenceDiagram
 
 ### Whole System
 
-1. [`docs/ENGINEERING_CONCEPTS.md`](docs/ENGINEERING_CONCEPTS.md)
-2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-3. [`docs/STARTUP_AND_LIFECYCLE.md`](docs/STARTUP_AND_LIFECYCLE.md)
-4. [`docs/TRANSMISSION.md`](docs/TRANSMISSION.md)
-5. [`docs/HANDSHAKE_SEQUENCE.md`](docs/HANDSHAKE_SEQUENCE.md)
-6. [`docs/PACKET_FORMATS.md`](docs/PACKET_FORMATS.md)
-7. [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
-8. [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
-9. [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
-10. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
-11. [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-12. [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+1. [`docs/ENGINEERING_CONCEPTS.md`](docs/architecture/ENGINEERING_CONCEPTS.md)
+2. [`docs/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md)
+3. [`docs/STARTUP_AND_LIFECYCLE.md`](docs/architecture/STARTUP_AND_LIFECYCLE.md)
+4. [`docs/TRANSMISSION.md`](docs/architecture/TRANSMISSION.md)
+5. [`docs/HANDSHAKE_SEQUENCE.md`](docs/architecture/HANDSHAKE_SEQUENCE.md)
+6. [`docs/PACKET_FORMATS.md`](docs/reference/PACKET_FORMATS.md)
+7. [`docs/CLIENT_ARCHITECTURE.md`](docs/architecture/CLIENT_ARCHITECTURE.md)
+8. [`docs/SERVER_ARCHITECTURE.md`](docs/architecture/SERVER_ARCHITECTURE.md)
+9. [`docs/ROUTING_AND_DNS.md`](docs/guides/ROUTING_AND_DNS.md)
+10. [`docs/PLATFORMS.md`](docs/guides/PLATFORMS.md)
+11. [`docs/DEPLOYMENT.md`](docs/operations/DEPLOYMENT.md)
+12. [`docs/OPERATIONS.md`](docs/operations/OPERATIONS.md)
 
 ### Code Reading
 
-1. [`docs/SOURCE_READING_GUIDE.md`](docs/SOURCE_READING_GUIDE.md)
+1. [`docs/SOURCE_READING_GUIDE.md`](docs/development/SOURCE_READING_GUIDE.md)
 2. `main.cpp`
 3. `ppp/configurations/*`
 4. `ppp/transmissions/*`
@@ -146,32 +142,32 @@ sequenceDiagram
 
 ### Deployment And Operations
 
-1. [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-2. [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)
-3. [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
-4. [`docs/ROUTING_AND_DNS.md`](docs/ROUTING_AND_DNS.md)
-5. [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-6. [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-7. [`docs/SECURITY.md`](docs/SECURITY.md)
+1. [`docs/CONFIGURATION.md`](docs/reference/CONFIGURATION.md)
+2. [`docs/CLI_REFERENCE.md`](docs/reference/CLI_REFERENCE.md)
+3. [`docs/PLATFORMS.md`](docs/guides/PLATFORMS.md)
+4. [`docs/ROUTING_AND_DNS.md`](docs/guides/ROUTING_AND_DNS.md)
+5. [`docs/DEPLOYMENT.md`](docs/operations/DEPLOYMENT.md)
+6. [`docs/OPERATIONS.md`](docs/operations/OPERATIONS.md)
+7. [`docs/SECURITY.md`](docs/operations/SECURITY.md)
 
 ### Deep Dives (Advanced)
 
-1. [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md)
-2. [`docs/EDSM_STATE_MACHINES.md`](docs/EDSM_STATE_MACHINES.md)
-3. [`docs/PACKET_LIFECYCLE.md`](docs/PACKET_LIFECYCLE.md)
-4. [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
-5. [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/TRANSMISSION_PACK_SESSIONID.md)
-6. [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
-7. [`docs/ERROR_CODES.md`](docs/ERROR_CODES.md)
-8. [`docs/ERROR_HANDLING_API.md`](docs/ERROR_HANDLING_API.md)
-9. [`docs/DIAGNOSTICS_ERROR_SYSTEM.md`](docs/DIAGNOSTICS_ERROR_SYSTEM.md)
+1. [`docs/CONCURRENCY_MODEL.md`](docs/architecture/CONCURRENCY_MODEL.md)
+2. [`docs/EDSM_STATE_MACHINES.md`](docs/architecture/EDSM_STATE_MACHINES.md)
+3. [`docs/PACKET_LIFECYCLE.md`](docs/architecture/PACKET_LIFECYCLE.md)
+4. [`docs/LINKLAYER_PROTOCOL.md`](docs/reference/LINKLAYER_PROTOCOL.md)
+5. [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/reference/TRANSMISSION_PACK_SESSIONID.md)
+6. [`docs/TUNNEL_DESIGN.md`](docs/architecture/TUNNEL_DESIGN.md)
+7. [`docs/ERROR_CODES.md`](docs/reference/ERROR_CODES.md)
+8. [`docs/ERROR_HANDLING_API.md`](docs/reference/ERROR_HANDLING_API.md)
+9. [`docs/DIAGNOSTICS_ERROR_SYSTEM.md`](docs/reference/DIAGNOSTICS_ERROR_SYSTEM.md)
 
 ### IPv6 Subsystem
 
-1. [`docs/IPV6_LEASE_MANAGEMENT.md`](docs/IPV6_LEASE_MANAGEMENT.md)
-2. [`docs/IPV6_TRANSIT_PLANE.md`](docs/IPV6_TRANSIT_PLANE.md)
-3. [`docs/IPV6_NDP_PROXY.md`](docs/IPV6_NDP_PROXY.md)
-4. [`docs/IPV6_CLIENT_ASSIGNMENT.md`](docs/IPV6_CLIENT_ASSIGNMENT.md)
+1. [`docs/IPV6_LEASE_MANAGEMENT.md`](docs/guides/IPV6_LEASE_MANAGEMENT.md)
+2. [`docs/IPV6_TRANSIT_PLANE.md`](docs/guides/IPV6_TRANSIT_PLANE.md)
+3. [`docs/IPV6_NDP_PROXY.md`](docs/guides/IPV6_NDP_PROXY.md)
+4. [`docs/IPV6_CLIENT_ASSIGNMENT.md`](docs/guides/IPV6_CLIENT_ASSIGNMENT.md)
 
 ---
 
@@ -280,7 +276,7 @@ The repository contains paired English/Chinese documents plus the root README pa
 
 ## Testing
 
-See [docs/TESTING.md](docs/TESTING.md) for unit test commands and the GitHub Actions **Test · Unit** workflow.
+See [docs/TESTING.md](docs/development/TESTING.md) for unit test commands and the GitHub Actions **Test · Unit** workflow.
 
 ## Build Instructions
 
@@ -461,7 +457,7 @@ Key configuration groups:
 | `concurrent` | (integer) | Number of io_context threads |
 | `cdn` | (array) | Obfuscation CDN port modes |
 
-Full reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+Full reference: [`docs/CONFIGURATION.md`](docs/reference/CONFIGURATION.md)
 
 ---
 
@@ -541,7 +537,7 @@ Key opcodes:
 | `PacketAction_MUX` | `0x35` | Both | MUX channel data |
 | `PacketAction_MUXON` | `0x36` | Both | MUX channel open |
 
-Full opcode reference: [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
+Full opcode reference: [`docs/LINKLAYER_PROTOCOL.md`](docs/reference/LINKLAYER_PROTOCOL.md)
 
 ---
 
@@ -578,7 +574,7 @@ Responsibilities:
 | `--auto-restart` | Full runtime: TAP + Switcher | Nothing |
 | `--link-restart` | ITransmission only | Switcher, TAP, routes |
 
-Full reference: [`docs/CLIENT_ARCHITECTURE.md`](docs/CLIENT_ARCHITECTURE.md)
+Full reference: [`docs/CLIENT_ARCHITECTURE.md`](docs/architecture/CLIENT_ARCHITECTURE.md)
 
 ---
 
@@ -615,7 +611,7 @@ Key facts:
 - QoS token bucket: per-session, refill rate from `bandwidth` field (bytes/sec). Coroutine suspends on exhaustion.
 - `OnTick()` tasks: stats refresh, tunnel liveness check, session aging, IPv6 lease aging, TUI dirty-flag publish.
 
-Full reference: [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
+Full reference: [`docs/SERVER_ARCHITECTURE.md`](docs/architecture/SERVER_ARCHITECTURE.md)
 
 ---
 
@@ -645,7 +641,7 @@ Platform-specific behaviors:
 | macOS | `/dev/utun*` | BSD routing socket | 4-byte AF prefix on all frames |
 | Android | `VpnService` fd | VpnService routing | JNI: `__LIBOPENPPP2__` macro; no direct tun open |
 
-Full reference: [`docs/PLATFORMS.md`](docs/PLATFORMS.md)
+Full reference: [`docs/PLATFORMS.md`](docs/guides/PLATFORMS.md)
 
 ---
 
@@ -689,7 +685,7 @@ stateDiagram-v2
     RESUMING --> RESUMED: CAS success
 ```
 
-Full reference: [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md)
+Full reference: [`docs/CONCURRENCY_MODEL.md`](docs/architecture/CONCURRENCY_MODEL.md)
 
 ---
 
@@ -725,7 +721,7 @@ Error code categories (partial):
 
 Atomic error snapshot: high 32 bits = truncated millisecond timestamp; low 32 bits = error code value.
 
-Full reference: [`docs/ERROR_CODES.md`](docs/ERROR_CODES.md), [`docs/ERROR_HANDLING_API.md`](docs/ERROR_HANDLING_API.md)
+Full reference: [`docs/ERROR_CODES.md`](docs/reference/ERROR_CODES.md), [`docs/ERROR_HANDLING_API.md`](docs/reference/ERROR_HANDLING_API.md)
 
 ---
 
@@ -757,7 +753,7 @@ cd go && go build -o ppp-go .
 
 The C++ server enables managed mode by setting `server.managed` to the Go service address in `appsettings.json`. Without the Go backend, the server runs in standalone mode with no external auth.
 
-Full reference: [`docs/MANAGEMENT_BACKEND.md`](docs/MANAGEMENT_BACKEND.md)
+Full reference: [`docs/MANAGEMENT_BACKEND.md`](docs/guides/MANAGEMENT_BACKEND.md)
 
 ---
 
@@ -781,7 +777,7 @@ Additional obfuscation features (configured via `key.*`):
 
 Supported cipher algorithms: AES-128-CFB, AES-256-CFB, and variants. The `kf`, `kx`, `kl`, `kh` fields in `key` control the NOP handshake timing and framing shape, making traffic fingerprinting significantly harder.
 
-Full reference: [`docs/SECURITY.md`](docs/SECURITY.md)
+Full reference: [`docs/SECURITY.md`](docs/operations/SECURITY.md)
 
 ---
 
@@ -900,7 +896,7 @@ Key facts:
 - IPv6 lease aging runs in `OnTick()` — not in a separate thread.
 - Linux is the primary platform for IPv6 data-plane. Windows and Android have limited IPv6 support in this context.
 
-Full reference: [`docs/IPV6_LEASE_MANAGEMENT.md`](docs/IPV6_LEASE_MANAGEMENT.md), [`docs/IPV6_TRANSIT_PLANE.md`](docs/IPV6_TRANSIT_PLANE.md), [`docs/IPV6_NDP_PROXY.md`](docs/IPV6_NDP_PROXY.md), [`docs/IPV6_CLIENT_ASSIGNMENT.md`](docs/IPV6_CLIENT_ASSIGNMENT.md)
+Full reference: [`docs/IPV6_LEASE_MANAGEMENT.md`](docs/guides/IPV6_LEASE_MANAGEMENT.md), [`docs/IPV6_TRANSIT_PLANE.md`](docs/guides/IPV6_TRANSIT_PLANE.md), [`docs/IPV6_NDP_PROXY.md`](docs/guides/IPV6_NDP_PROXY.md), [`docs/IPV6_CLIENT_ASSIGNMENT.md`](docs/guides/IPV6_CLIENT_ASSIGNMENT.md)
 
 ---
 
@@ -932,7 +928,7 @@ TUI layout:
 - Real cursor hidden for full TUI lifetime
 - Minimum terminal size: 40 columns × 20 rows
 
-Full reference: [`docs/TUI_DESIGN.md`](docs/TUI_DESIGN.md)
+Full reference: [`docs/TUI_DESIGN.md`](docs/architecture/TUI_DESIGN.md)
 
 ---
 
@@ -958,7 +954,7 @@ Static packet constraints:
 - Checksum covers header + payload after all transforms.
 - Pack pipeline has 14 steps; unpack exactly reverses them.
 
-Full reference: [`docs/PACKET_FORMATS.md`](docs/PACKET_FORMATS.md), [`docs/TUNNEL_DESIGN.md`](docs/TUNNEL_DESIGN.md)
+Full reference: [`docs/PACKET_FORMATS.md`](docs/reference/PACKET_FORMATS.md), [`docs/TUNNEL_DESIGN.md`](docs/architecture/TUNNEL_DESIGN.md)
 
 ---
 
@@ -986,7 +982,7 @@ Key facts:
 - All sub-connections share the same underlying TCP/WS connection.
 - Reduces connection setup overhead when many concurrent streams are needed.
 
-Full reference: [`docs/LINKLAYER_PROTOCOL.md`](docs/LINKLAYER_PROTOCOL.md)
+Full reference: [`docs/LINKLAYER_PROTOCOL.md`](docs/reference/LINKLAYER_PROTOCOL.md)
 
 ---
 
@@ -1020,7 +1016,7 @@ sequenceDiagram
     TAP-->>APP: IP reply packet
 ```
 
-Full reference: [`docs/PACKET_LIFECYCLE.md`](docs/PACKET_LIFECYCLE.md)
+Full reference: [`docs/PACKET_LIFECYCLE.md`](docs/architecture/PACKET_LIFECYCLE.md)
 
 ---
 
@@ -1048,7 +1044,7 @@ State machine properties:
 - `Dispose()` is idempotent: calling it multiple times is safe.
 - Objects are kept alive by `std::shared_ptr` reference counting until all in-flight coroutines complete.
 
-Full reference: [`docs/EDSM_STATE_MACHINES.md`](docs/EDSM_STATE_MACHINES.md)
+Full reference: [`docs/EDSM_STATE_MACHINES.md`](docs/architecture/EDSM_STATE_MACHINES.md)
 
 ---
 
@@ -1070,7 +1066,7 @@ graph LR
 
 The transition from extended to simple header is controlled by `frame_tn_` (transmit) and `frame_rn_` (receive) counters. The first packet in each direction uses the extended header; all subsequent packets use the simple 4-byte header.
 
-Full reference: [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/TRANSMISSION_PACK_SESSIONID.md)
+Full reference: [`docs/TRANSMISSION_PACK_SESSIONID.md`](docs/reference/TRANSMISSION_PACK_SESSIONID.md)
 
 ---
 
@@ -1108,7 +1104,7 @@ graph LR
 
 The `cdn` field in `appsettings.json` configures port-mode obfuscation to make the traffic appear as regular HTTP/WebSocket to intermediate proxies.
 
-Full reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+Full reference: [`docs/DEPLOYMENT.md`](docs/operations/DEPLOYMENT.md)
 
 ---
 
@@ -1136,7 +1132,7 @@ The main runtime tick fires on a configurable interval (default ~1 second). Each
 5. Publish dirty flag to TUI render thread.
 6. Reschedule via `NextTickAlwaysTimeout(false)`.
 
-Full reference: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+Full reference: [`docs/OPERATIONS.md`](docs/operations/OPERATIONS.md)
 
 ---
 
@@ -1156,4 +1152,4 @@ flowchart TD
 
 The error snapshot is atomic: it can be read from any thread without locking. The timestamp is truncated milliseconds, sufficient for ordering events within a session.
 
-Full reference: [`docs/DIAGNOSTICS_ERROR_SYSTEM.md`](docs/DIAGNOSTICS_ERROR_SYSTEM.md), [`docs/ERROR_CODES.md`](docs/ERROR_CODES.md)
+Full reference: [`docs/DIAGNOSTICS_ERROR_SYSTEM.md`](docs/reference/DIAGNOSTICS_ERROR_SYSTEM.md), [`docs/ERROR_CODES.md`](docs/reference/ERROR_CODES.md)
