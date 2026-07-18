@@ -255,6 +255,7 @@ struct ConfigProfile: Codable, Equatable {
         try container.encodeIfPresent(subscriptionUrl, forKey: .subscriptionUrl)
         try container.encodeIfPresent(subscriptionNodeId, forKey: .subscriptionNodeId)
         try container.encodeIfPresent(subscriptionUpdatedAtMs, forKey: .subscriptionUpdatedAtMs)
+        try container.encode(options, forKey: .options)
         try container.encode(history, forKey: .history)
     }
 }

@@ -1,5 +1,11 @@
 # Code Style and Module Boundaries
 
+> **Purpose:** Define current code placement, dependency, and formatting rules.
+> **Audience:** Contributors and reviewers.
+> **Status:** Current governance.
+> **Last verified against:** Current repository checks and CI rules, 2026-07-18.
+> **Parent index:** [Development](../development/README.md)
+
 > Status: Active
 > Type: Governance
 > Last verified: a9cfec7

@@ -1,5 +1,11 @@
 # VMUX 验证与发布门槛
 
+> **用途：**定义 VMUX 模式当前所需的验证证据和发布门槛。
+> **适用对象：**运行时、性能、发布与平台维护者。
+> **当前状态：**当前有效。
+> **最后核对依据：**main 最新 VMUX 实现与验证记录，2026-07-18。
+> **上一层索引：**[参考手册](README_CN.md) · **English:** [VMUX Validation and Rollout Gate](VMUX_VALIDATION.md)
+
 > Status: Stable
 > Type: Reference
 > Last verified: ded25d6

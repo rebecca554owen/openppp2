@@ -1,5 +1,11 @@
 # VMUX Validation and Rollout Gate
 
+> **Purpose:** Define the current validation evidence and rollout gates for VMUX modes.
+> **Audience:** Runtime, performance, release, and platform maintainers.
+> **Status:** Current.
+> **Last verified against:** Latest main VMUX implementation and evidence, 2026-07-18.
+> **Parent index:** [Reference](README.md) · **Chinese:** [VMUX 验证与发布门槛](VMUX_VALIDATION_CN.md)
+
 > Status: Stable
 > Type: Reference
 > Last verified: ded25d6

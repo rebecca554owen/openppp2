@@ -1,5 +1,11 @@
 # P2P Direct Channel Protocol
 
+> **Purpose:** Define the authenticated P2P direct-channel wire protocol.
+> **Audience:** Protocol, networking, and security maintainers.
+> **Status:** Current design evidence.
+> **Last verified against:** Latest main P2P integration evidence, 2026-07-18.
+> **Parent index:** [Design Documents](../README.md)
+
 > Status: Draft
 > Type: Design
 > Last verified: 889a0a3

@@ -1,5 +1,11 @@
 # Documentation Style
 
+> **Purpose:** Define current document metadata, placement, link, and pairing rules.
+> **Audience:** Documentation authors and reviewers.
+> **Status:** Current governance.
+> **Last verified against:** Current documentation checker and directory layout, 2026-07-18.
+> **Parent index:** [Development](../development/README.md)
+
 > Status: Active
 > Type: Governance
 > Last verified: a9cfec7

@@ -1,5 +1,11 @@
 # P2P Direct Channel State Machine
 
+> **Purpose:** Define P2P direct-channel states, transitions, and failure behavior.
+> **Audience:** Protocol, networking, and platform maintainers.
+> **Status:** Current design evidence.
+> **Last verified against:** Latest main P2P integration evidence, 2026-07-18.
+> **Parent index:** [Design Documents](../README.md)
+
 > Status: Draft
 > Type: Design
 > Last verified: 889a0a3

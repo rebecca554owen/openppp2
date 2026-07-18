@@ -1,5 +1,11 @@
 # UI Runtime Contract
 
+> **Purpose:** Specify the current runtime state contract consumed by user interfaces.
+> **Audience:** Runtime, Android, iOS, and TUI developers.
+> **Status:** Current.
+> **Last verified against:** Latest main runtime and platform wiring, 2026-07-18.
+> **Parent index:** [Reference](README.md) · **Chinese:** [UI Runtime 契约](UI_RUNTIME_CONTRACT_CN.md)
+
 > Status: Stable
 > Type: Reference
 > Last verified: d8ddd71

@@ -1,5 +1,11 @@
 # P2P Direct Channel Threat Model
 
+> **Purpose:** Define threats and required controls for P2P direct channels.
+> **Audience:** Security, protocol, and platform maintainers.
+> **Status:** Current design evidence.
+> **Last verified against:** Latest main P2P integration evidence, 2026-07-18.
+> **Parent index:** [Design Documents](../README.md)
+
 > Status: Draft
 > Type: Design
 > Last verified: df3c89c

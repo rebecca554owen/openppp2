@@ -1,5 +1,11 @@
 # ADR 0002: Gate P2P Direct Channels on an Authenticated Session Exporter
 
+> **Purpose:** Record the durable security boundary for P2P direct channels.
+> **Audience:** Protocol, security, and platform maintainers.
+> **Status:** Current architecture decision.
+> **Last verified against:** Latest main implementation evidence, 2026-07-18.
+> **Parent index:** [Architecture Decision Records](README.md)
+
 > Status: Accepted
 > Type: ADR
 > Last verified: df3c89c

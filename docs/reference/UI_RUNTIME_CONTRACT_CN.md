@@ -1,5 +1,11 @@
 # UI Runtime 契约
 
+> **用途：**定义各用户界面使用的当前运行时状态契约。
+> **适用对象：**运行时、Android、iOS 与 TUI 开发者。
+> **当前状态：**当前有效。
+> **最后核对依据：**main 最新运行时与平台接线，2026-07-18。
+> **上一层索引：**[参考手册](README_CN.md) · **English:** [UI Runtime Contract](UI_RUNTIME_CONTRACT.md)
+
 > Status: Stable
 > Type: Reference
 > Last verified: d8ddd71

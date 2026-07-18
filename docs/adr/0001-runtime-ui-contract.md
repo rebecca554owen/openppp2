@@ -1,5 +1,11 @@
 # ADR 0001: Runtime Snapshot Is the UI State Authority
 
+> **Purpose:** Record the durable runtime-to-UI authority decision.
+> **Audience:** Runtime, platform, and UI maintainers.
+> **Status:** Current architecture decision.
+> **Last verified against:** Latest main implementation evidence, 2026-07-18.
+> **Parent index:** [Architecture Decision Records](README.md)
+
 > Status: Accepted
 > Type: ADR
 > Last verified: d8ddd71
