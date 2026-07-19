@@ -57,16 +57,20 @@ export function createClientState() {
       cached: false,
       cacheAgeMinutes: 0,
       nodes: [
-        { id: 'tokyo-01', name: '东京 01', subtitle: 'jp-tokyo-eq', address: '47.102.41.18:32000', latencyMs: 32, favorite: true },
-        { id: 'osaka-02', name: '大阪 02', subtitle: 'jp-osaka-xt', address: '103.85.24.196:24000', latencyMs: 48, favorite: true },
-        { id: 'singapore-01', name: '新加坡 01', subtitle: 'sg-sin-eq', address: '156.234.110.8:20000', latencyMs: 86, favorite: true },
-        { id: 'los-angeles-03', name: '洛杉矶 03', subtitle: 'us-lax-tx', address: '45.88.190.66:28000', latencyMs: 138, favorite: false },
+        { id: 'tokyo-01', name: '东京 01', subtitle: 'jp-tokyo-eq', address: '47.102.41.18:32000', latencyMs: 32, favorite: true, source: 'subscription', config: null, options: null },
+        { id: 'osaka-02', name: '大阪 02', subtitle: 'jp-osaka-xt', address: '103.85.24.196:24000', latencyMs: 48, favorite: true, source: 'subscription', config: null, options: null },
+        { id: 'singapore-01', name: '新加坡 01', subtitle: 'sg-sin-eq', address: '156.234.110.8:20000', latencyMs: 86, favorite: true, source: 'subscription', config: null, options: null },
+        { id: 'los-angeles-03', name: '洛杉矶 03', subtitle: 'us-lax-tx', address: '45.88.190.66:28000', latencyMs: 138, favorite: false, source: 'subscription', config: null, options: null },
       ],
     },
     config: JSON.stringify({
       concurrent: 4,
       client: { guid: 'DEMO-CLIENT-GUID', server: 'ppp://47.102.41.18:32000/' },
     }, null, 2),
+    launchOptions: {
+      tunIp: '', tunMask: '', gateway: '', dns1: '8.8.8.8', dns2: '1.1.1.1',
+      mux: 0, muxMode: 'compat', vnet: true, blockQuic: false, staticMode: false,
+    },
     settings: {
       autostart: false,
       closeToTray: true,
@@ -95,6 +99,7 @@ export function createEmptyClientState() {
       cached: false, cacheAgeMinutes: 0, nodes: [],
     },
     config: '{}',
+    launchOptions: {},
     settings: {
       autostart: false, closeToTray: true, disconnectOnExit: true,
       language: '简体中文', appearance: '深色', pppPath: '',
