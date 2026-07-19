@@ -1,4 +1,5 @@
 use crate::config::{build_node_config_with_base, default_config_string};
+use crate::pinger::{probe_nodes, targets_for_nodes};
 use crate::preferences::{load_preferences, save_preferences, update_setting, Preferences};
 use crate::process::{CommandSpec, ProcessManager};
 use crate::subscription::{
@@ -6,6 +7,7 @@ use crate::subscription::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -204,6 +206,29 @@ async fn subscription_refresh(
         .lock()
         .map_err(|_| "订阅状态锁已损坏".to_string())? = Some(StoredSubscription::from(result));
     Ok(payload)
+}
+
+#[tauri::command]
+async fn client_probe_latency(
+    node_ids: Option<Vec<String>>,
+    state: State<'_, DesktopState>,
+    app: AppHandle,
+) -> Result<BTreeMap<String, Option<u32>>, String> {
+    let nodes = state
+        .subscription
+        .lock()
+        .map_err(|_| "订阅状态锁已损坏".to_string())?
+        .as_ref()
+        .map(|stored| stored.document.nodes.clone())
+        .unwrap_or_default();
+    let targets = targets_for_nodes(&nodes, node_ids.as_deref());
+    let latencies = tauri::async_runtime::spawn_blocking(move || {
+        probe_nodes(targets, 4, Duration::from_secs(3)).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    let _ = app.emit("client://latency", &latencies);
+    Ok(latencies)
 }
 
 #[tauri::command]
@@ -437,6 +462,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             client_bootstrap,
             subscription_refresh,
+            client_probe_latency,
             client_connect,
             client_disconnect,
             client_update_config,
