@@ -144,6 +144,13 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
       state.config = config
       emit()
     },
+    async updateClientConfig(config, options) {
+      const saved = await bridge.core.invoke('client_update_client_config', { config, options })
+      state.config = config
+      state.launchOptions = saved || {}
+      emit()
+      return state.launchOptions
+    },
     async saveManualNode(node) {
       const subscription = await bridge.core.invoke('client_upsert_manual_node', { node })
       state.subscription = subscription

@@ -29,6 +29,7 @@ function fakeBridge() {
         }
         if (command === 'client_delete_manual_node') return { ...bootstrap.subscription, nodes: [] }
         if (command === 'client_update_launch_options') return args.options
+        if (command === 'client_update_client_config') return args.options
         return null
       } },
       event: { listen: async (name, handler) => {
@@ -134,6 +135,11 @@ test('tauri runtime persists manual profiles and launch options through backend 
   await runtime.updateLaunchOptions({ mux: 4, muxMode: 'flow' })
   assert.equal(fake.calls.at(-1)[0], 'client_update_launch_options')
   assert.deepEqual(state.launchOptions, { mux: 4, muxMode: 'flow' })
+
+  await runtime.updateClientConfig('{"concurrent":3}', { mux: 6, muxMode: 'balance' })
+  assert.equal(fake.calls.at(-1)[0], 'client_update_client_config')
+  assert.equal(state.config, '{"concurrent":3}')
+  assert.deepEqual(state.launchOptions, { mux: 6, muxMode: 'balance' })
 
   await runtime.deleteManualNode('manual:1')
   assert.equal(fake.calls.at(-1)[0], 'client_delete_manual_node')
