@@ -18,9 +18,9 @@ final class HomeViewController: UIViewController {
     private let errorLabel = PaddingLabel()
     private var timer: Timer?
     private var pollTimer: Timer?
-    private var connectedAt: Date?
     private var linkState = 6
-    private var statistics = VpnStatistics.empty
+    private var traffic = RuntimeTrafficRate.empty
+    private var previousTrafficSample: RuntimeSnapshot?
     private var connectStartedAt: Date?
     private var connectWatchdogTimer: Timer?
     private var stopPresentationTimer: Timer?
@@ -120,7 +120,11 @@ final class HomeViewController: UIViewController {
     @objc private func refreshUI() {
         if let json = TunnelSharedState.readRuntimeSnapshotJsonIfAlive() {
             do {
-                runtimeStore.apply(try TunnelRuntimeBridge.decodeSnapshot(json))
+                let snapshot = try TunnelRuntimeBridge.decodeSnapshot(json)
+                if runtimeStore.apply(snapshot) {
+                    traffic = RuntimeTrafficRate.between(previousTrafficSample, snapshot)
+                    previousTrafficSample = snapshot
+                }
                 runtimeDecodeError = nil
             } catch {
                 runtimeDecodeError = error.localizedDescription
@@ -131,8 +135,12 @@ final class HomeViewController: UIViewController {
                     )
                 }
             }
-        } else if runtimeStore.state.phase != .idle {
-            runtimeStore.markUnknown()
+        } else {
+            traffic = .empty
+            previousTrafficSample = nil
+            if runtimeStore.state.phase != .idle {
+                runtimeStore.markUnknown()
+            }
         }
         if let generation = pendingStartGeneration,
            runtimeStore.state.generation > generation ||
@@ -167,7 +175,6 @@ final class HomeViewController: UIViewController {
         var statusDetail = controls.detailKey.isEmpty ? "" : L10n.tr(controls.detailKey)
 
         if controls.isConnected {
-            connectedAt = connectedAt ?? Date()
             updateElapsedText()
             statusDetail = elapsedText
             if !runtimeStore.state.effectiveMuxMode.isEmpty {
@@ -177,7 +184,6 @@ final class HomeViewController: UIViewController {
             stopConnectWatchdog()
             startTimer()
         } else {
-            connectedAt = nil
             timer?.invalidate()
             timer = nil
         }
@@ -202,8 +208,8 @@ final class HomeViewController: UIViewController {
             buttonTitle: L10n.tr(controls.buttonTitleKey),
             buttonEnabled: controls.buttonEnabled,
             configEditable: controls.configEditable,
-            upload: "\(formatBytes(statistics.txSpeedBytes))/s",
-            download: "\(formatBytes(statistics.rxSpeedBytes))/s",
+            upload: "\(formatBytes(Int(traffic.txBytesPerSecond)))/s",
+            download: "\(formatBytes(Int(traffic.rxBytesPerSecond)))/s",
             options: launchOptions
         )
         profileListView.apply(
@@ -256,12 +262,15 @@ final class HomeViewController: UIViewController {
         }
     }
 
+    /// Elapsed connect time comes from the runtime snapshot's own clock, so it
+    /// stays correct after the app process is recreated while the tunnel keeps
+    /// running.
     private func updateElapsedText() {
-        guard let connectedAt else {
+        guard runtimeStore.state.connectedMonotonicMs != 0 else {
             elapsedText = ""
             return
         }
-        let duration = Int(Date().timeIntervalSince(connectedAt))
+        let duration = Int(connectedElapsedMs(runtimeStore.state) / 1000)
         let h = duration / 3600
         let m = (duration / 60) % 60
         let s = duration % 60
@@ -279,7 +288,8 @@ final class HomeViewController: UIViewController {
     private func pollTunnel() {
         let status = vpn.status
         guard status == .connected || status == .connecting || status == .reasserting else {
-            statistics = .empty
+            traffic = .empty
+            previousTrafficSample = nil
             linkState = 6
             pollTimer?.invalidate()
             pollTimer = nil
@@ -300,11 +310,6 @@ final class HomeViewController: UIViewController {
             }
         }
 
-        vpn.fetchStatistics(previous: statistics) { [weak self] stats in
-            guard let self else { return }
-            self.statistics = stats
-            self.refreshUI()
-        }
     }
 
     private func startConnectWatchdog() {
