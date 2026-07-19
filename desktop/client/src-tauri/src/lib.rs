@@ -1,5 +1,6 @@
 pub mod config;
 mod desktop;
+pub mod pinger;
 pub mod preferences;
 pub mod process;
 pub mod stats;

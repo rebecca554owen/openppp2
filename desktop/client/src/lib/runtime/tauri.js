@@ -7,7 +7,7 @@ function clone(value) {
 export function createTauriRuntime(bridge = window.__TAURI__) {
   let state = createEmptyClientState()
   const listeners = new Set()
-  let unlisten = null
+  let unlisteners = []
 
   function emit() {
     const snapshot = clone(state)
@@ -30,6 +30,7 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
         state.connection.status = 'connected'
         state.connection.connectedAt ||= Date.now()
         state.connection.lastError = ''
+        if (state.connection.currentNodeId) void probeLatency([state.connection.currentNodeId])
       } else if (event.payload.signal === 'failed') {
         state.connection.status = 'error'
         state.connection.lastError = event.payload.message
@@ -50,13 +51,35 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
     emit()
   }
 
+  function applyLatencies(latencies) {
+    state.subscription.nodes = state.subscription.nodes.map((node) => (
+      Object.hasOwn(latencies, node.id)
+        ? { ...node, latencyMs: Number.isFinite(latencies[node.id]) ? latencies[node.id] : null }
+        : node
+    ))
+    emit()
+  }
+
+  async function probeLatency(nodeIds = null) {
+    try {
+      const latencies = await bridge.core.invoke('client_probe_latency', { nodeIds })
+      if (latencies) applyLatencies(latencies)
+    } catch {
+      // A failed reference probe is represented by unchanged/null latency data.
+    }
+  }
+
   async function initialize() {
-    unlisten = await bridge.event.listen('client://process', ({ payload }) => processEvent(payload))
+    unlisteners = await Promise.all([
+      bridge.event.listen('client://process', ({ payload }) => processEvent(payload)),
+      bridge.event.listen('client://latency', ({ payload }) => applyLatencies(payload)),
+    ])
     const bootstrap = await bridge.core.invoke('client_bootstrap')
     if (bootstrap.subscription) state.subscription = bootstrap.subscription
     state.config = bootstrap.config || '{}'
     state.settings = { ...state.settings, ...bootstrap.settings }
     emit()
+    void probeLatency()
   }
 
   const runtime = {
@@ -67,9 +90,9 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
       listener(clone(state))
       return async () => {
         listeners.delete(listener)
-        if (listeners.size === 0 && unlisten) {
-          unlisten()
-          unlisten = null
+        if (listeners.size === 0 && unlisteners.length) {
+          unlisteners.forEach((unlisten) => unlisten())
+          unlisteners = []
         }
       }
     },
@@ -109,6 +132,7 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
       try {
         const subscription = await bridge.core.invoke('subscription_refresh', { url })
         state.subscription = subscription
+        void probeLatency()
       } catch (error) {
         appendEvent({ message: String(error), severity: 'error' })
       }

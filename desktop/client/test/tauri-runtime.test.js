@@ -4,7 +4,7 @@ import { createTauriRuntime } from '../src/lib/runtime/tauri.js'
 
 function fakeBridge() {
   const calls = []
-  let eventHandler
+  const eventHandlers = new Map()
   const bootstrap = {
     subscription: {
       url: 'https://sub.test/token', name: 'Real nodes', updatedAt: '2026-07-19T12:00:00Z',
@@ -17,10 +17,20 @@ function fakeBridge() {
   return {
     calls,
     bridge: {
-      core: { invoke: async (command, args) => { calls.push([command, args]); if (command === 'client_bootstrap') return bootstrap; return null } },
-      event: { listen: async (_name, handler) => { eventHandler = handler; return () => { eventHandler = null } } },
+      core: { invoke: async (command, args) => {
+        calls.push([command, args])
+        if (command === 'client_bootstrap') return bootstrap
+        if (command === 'subscription_refresh') return bootstrap.subscription
+        if (command === 'client_probe_latency') return { 'real-1': 17 }
+        return null
+      } },
+      event: { listen: async (name, handler) => {
+        eventHandlers.set(name, handler)
+        return () => eventHandlers.delete(name)
+      } },
     },
-    emit(payload) { eventHandler?.({ payload }) },
+    emit(payload, name = 'client://process') { eventHandlers.get(name)?.({ payload }) },
+    listenerCount() { return eventHandlers.size },
   }
 }
 
@@ -30,12 +40,15 @@ test('tauri runtime bootstraps without demo data and cleans up listener', async 
   const snapshots = []
   const unsubscribe = runtime.subscribe((state) => snapshots.push(state))
   await runtime.ready
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(runtime.kind, 'tauri')
   assert.equal(snapshots[0].subscription.nodes.length, 0)
   assert.equal(snapshots.at(-1).subscription.nodes[0].id, 'real-1')
   assert.equal(snapshots.at(-1).connection.status, 'disconnected')
   await unsubscribe()
+  assert.equal(fake.listenerCount(), 0)
   assert.equal(fake.calls[0][0], 'client_bootstrap')
+  assert.equal(fake.calls.some(([name, args]) => name === 'client_probe_latency' && args.nodeIds === null), true)
 })
 
 test('tauri runtime invokes commands and derives connection state only from events', async () => {
@@ -49,12 +62,31 @@ test('tauri runtime invokes commands and derives connection state only from even
   assert.equal(state.connection.status, 'connecting')
   assert.equal(fake.calls.at(-1)[0], 'client_connect')
   fake.emit({ type: 'telemetry', payload: { message: 'session established role=main', severity: 'success', signal: 'connected' } })
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(state.connection.status, 'connected')
   assert.equal(state.events.at(-1).message, 'session established role=main')
+  assert.equal(fake.calls.some(([name, args]) => name === 'client_probe_latency' && args.nodeIds?.[0] === 'real-1'), true)
 
   fake.emit({ type: 'exited', payload: { code: 7, success: false } })
   assert.equal(state.connection.status, 'error')
   assert.equal(state.connection.exitCode, 7)
+})
+
+test('tauri runtime merges latency only for known nodes and reprobes after refresh', async () => {
+  const fake = fakeBridge()
+  const runtime = createTauriRuntime(fake.bridge)
+  let state
+  runtime.subscribe((next) => { state = next })
+  await runtime.ready
+  fake.emit({ 'real-1': 24, stale: 1 }, 'client://latency')
+  assert.equal(state.subscription.nodes[0].latencyMs, 24)
+  assert.equal(state.subscription.nodes.some((node) => node.id === 'stale'), false)
+
+  const before = fake.calls.filter(([name]) => name === 'client_probe_latency').length
+  await runtime.refreshSubscription('https://sub.test/next')
+  await new Promise((resolve) => setImmediate(resolve))
+  const after = fake.calls.filter(([name]) => name === 'client_probe_latency').length
+  assert.equal(after, before + 1)
 })
 
 test('tauri runtime maps stats and persists edits through explicit commands', async () => {
