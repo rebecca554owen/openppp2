@@ -3,6 +3,10 @@ name = "openppp2-client-desktop"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [lib]
 name = "openppp2_client_desktop"
 crate-type = ["lib", "cdylib", "staticlib"]
