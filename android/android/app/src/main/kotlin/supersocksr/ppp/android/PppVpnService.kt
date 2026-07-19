@@ -62,6 +62,9 @@ class PppVpnService : VpnService() {
     private var linkStateHandler: Handler? = null
     private var connectStartedAtMs: Long = 0L
     private var lastNotificationText: String? = null
+    private val snapshotOrdering = Any()
+    private var lastSnapshotGeneration = -1L
+    private var lastSnapshotMonotonicMs = -1L
     private var activeConfigJson: String? = null
     private var activeVpnOptionsJson: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -80,19 +83,53 @@ class PppVpnService : VpnService() {
                 6
             }
             publishLinkState(ls)
+            // The heartbeat above is this poller's real job now that snapshots
+            // are pushed from native; the read below is only a safety net.
             val runtimeSnapshot = try {
                 libopenppp2.get_runtime_snapshot()
             } catch (e: Throwable) {
                 PppLog.write(this@PppVpnService, "get_runtime_snapshot poller failed", e)
                 null
             }
-            publishRuntimeSnapshot(runtimeSnapshot)
+            if (runtimeSnapshot != null) {
+                onRuntimeSnapshot(runtimeSnapshot)
+            }
             linkStateHandler?.postDelayed(this, 1000L)
         }
     }
 
-    private fun publishRuntimeSnapshot(value: String?) {
-        if (value.isNullOrBlank()) return
+    /**
+     * Entry point for every snapshot, whether it was pushed from native or
+     * read by the poller. Native pushes arrive on whichever thread produced
+     * the transition and carry no cross-thread ordering guarantee, so they are
+     * ordered here by the snapshot's own generation and timestamp. Routing the
+     * poller through the same gate means a missed push is still picked up
+     * within a second, and a duplicate costs nothing.
+     */
+    fun onRuntimeSnapshot(json: String) {
+        if (json.isBlank()) return
+
+        val root = try {
+            JSONObject(json)
+        } catch (_: Throwable) {
+            return
+        }
+
+        val generation = root.optLong("generation", -1L)
+        val monotonicMs = root.optLong("monotonic_ms", -1L)
+        if (generation < 0L || monotonicMs < 0L) return
+        synchronized(snapshotOrdering) {
+            if (generation < lastSnapshotGeneration) return
+            if (generation == lastSnapshotGeneration && monotonicMs <= lastSnapshotMonotonicMs) {
+                return
+            }
+            lastSnapshotGeneration = generation
+            lastSnapshotMonotonicMs = monotonicMs
+        }
+        publishRuntimeSnapshot(json)
+    }
+
+    private fun publishRuntimeSnapshot(value: String) {
         PppStateStore.setRuntimeSnapshot(this, value)
         updateNotificationForSnapshot(value)
     }
@@ -138,7 +175,7 @@ class PppVpnService : VpnService() {
 
     private fun stopLinkStatePoller() {
         try {
-            publishRuntimeSnapshot(libopenppp2.get_runtime_snapshot())
+            libopenppp2.get_runtime_snapshot()?.let { onRuntimeSnapshot(it) }
         } catch (e: Throwable) {
             PppLog.write(this, "final get_runtime_snapshot failed", e)
         }

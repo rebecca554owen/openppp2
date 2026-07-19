@@ -157,6 +157,41 @@ class RuntimeUIWiringTests(unittest.TestCase):
         store_dart = self.source("android/lib/runtime/runtime_store.dart")
         self.assertIn("resetForNewSession", store_dart)
 
+    def test_android_native_pushes_runtime_snapshots(self) -> None:
+        native = self.source("android/libopenppp2.cpp")
+        self.assertIn("runtime_lifecycle_.Subscribe(", native)
+        self.assertIn('GetStaticMethodID(clazz, "runtime_snapshot"', native)
+        # FindClass on an attached native thread cannot see application
+        # classes, so the class is resolved while JNI_OnLoad still holds the
+        # loader, and every publish attaches its own thread.
+        self.assertIn("libopenppp2_cache_runtime_snapshot_method(vm, env)", native)
+        self.assertIn("AttachCurrentThread", native)
+        self.assertIn("NewGlobalRef", native)
+
+        publish = native[
+            native.index("static void") :
+            native.index("JNIEXPORT jint JNICALL JNI_OnLoad")
+        ]
+        # PostJNI drops work once client_ is null, which is exactly the window
+        # the terminal Idle/Failed snapshot is published in.
+        self.assertNotIn("PostJNI", publish)
+
+        bridge = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt"
+        )
+        self.assertIn("fun runtime_snapshot(json: String)", bridge)
+
+        service = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
+        )
+        # Pushes carry no cross-thread ordering guarantee.
+        self.assertIn("fun onRuntimeSnapshot(json: String)", service)
+        self.assertIn("lastSnapshotGeneration", service)
+        self.assertIn("lastSnapshotMonotonicMs", service)
+
+        dart = self.source("android/lib/vpn_service.dart")
+        self.assertIn("didChangeAppLifecycleState", dart)
+
     def test_runtime_contract_docs_are_governed_and_indexed(self) -> None:
         paths = (
             "docs/adr/0001-runtime-ui-contract.md",

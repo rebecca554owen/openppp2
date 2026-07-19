@@ -25,10 +25,13 @@ runtime and the desktop, Android, and iOS user interfaces.
 | `requested_mux_mode`, `effective_mux_mode` | Requested and negotiated MUX behavior. |
 | `mux_fallback_reason` | Reason the effective MUX mode differs. |
 | `p2p_state`, `effective_path` | Typed P2P state and effective path; the path is always `relay` or `direct`, and only the `direct` state maps to `direct`. |
-| `last_error` | Code, severity, retryability, message key, and diagnostic detail. |
+| `traffic` | Cumulative `rx_bytes` and `tx_bytes`. Consumers derive rates from two snapshots using `monotonic_ms`; they must not accumulate per-tick deltas. |
+| `connected_monotonic_ms` | `monotonic_ms` at which the session entered `connected`, or 0 when it is not connected. Elapsed time is `monotonic_ms - connected_monotonic_ms`. Leaving `connected` clears it, so a reconnect starts a new interval. |
+| `last_error` | Code, severity, retryability, message key, and diagnostic detail. Populated on stop completion and on mobile start failure; mid-session failures do not currently set it. |
 
 Consumers ignore unknown optional fields. Missing required ordering or phase
 fields, unknown phase strings, and unsupported schema versions are errors.
+`traffic` and `connected_monotonic_ms` are optional and default to zero.
 
 ## Phase sequence
 

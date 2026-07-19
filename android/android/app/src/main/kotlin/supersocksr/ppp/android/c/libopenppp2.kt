@@ -43,6 +43,16 @@ class libopenppp2 {
         }
 
         /**
+         * Called from native code whenever the runtime publishes a snapshot.
+         * Runs on whichever thread produced the transition, so delivery order
+         * is not guaranteed; the service orders by the snapshot's own fields.
+         */
+        @JvmStatic
+        fun runtime_snapshot(json: String) {
+            PppVpnService.instance?.onRuntimeSnapshot(json)
+        }
+
+        /**
          * Called from native code after VPN run() starts successfully.
          */
         @JvmStatic

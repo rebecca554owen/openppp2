@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 import 'runtime/runtime_bridge.dart';
 import 'runtime/runtime_snapshot.dart';
 import 'runtime/runtime_store.dart';
 import 'runtime/runtime_traffic_rate.dart';
 
-class VpnService {
+class VpnService with WidgetsBindingObserver {
   static const _channel = MethodChannel('supersocksr.ppp/vpn');
 
   static final VpnService _instance = VpnService._internal();
@@ -29,7 +30,21 @@ class VpnService {
   void init() {
     if (_initialized) return;
     _initialized = true;
+    WidgetsBinding.instance.addObserver(this);
     _startRuntimePolling();
+  }
+
+  /// Nothing reads the mirror while the app is not visible, and the files it
+  /// polls persist, so the timer is stopped in the background and resumed with
+  /// an immediate read.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startRuntimePolling();
+      return;
+    }
+    _runtimePollTimer?.cancel();
+    _runtimePollTimer = null;
   }
 
   void _applyRuntimeSnapshot(String raw) {
@@ -235,6 +250,7 @@ class VpnService {
   }
 
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _runtimePollTimer?.cancel();
     _errorController.close();
   }
