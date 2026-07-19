@@ -159,11 +159,11 @@ The authoritative route table is `go/ppp/Admin.go`; persistence is `go/ppp/Local
 | Routes | Status | Preferred surface / risk |
 |---|---|---|
 | `/ppp/consumer/set`, `/new`, `/reload`, `/load` | **Internal**, legacy compatibility | Prefer `/api/v1/users`; handlers accept arbitrary methods and encode business errors in HTTP 200 responses |
-| `/ppp/server/all`, `/get`, `/load` | **Internal**, legacy compatibility | Prefer `/api/v1/servers`; these routes currently have no authentication |
+| `/ppp/server/all`, `/get`, `/load` | **Internal**, legacy compatibility | Prefer `/api/v1/servers`; the shared `key` query parameter is required, as it is for the consumer routes |
 
 The control WebSocket and all `/ppp/*` routes exist only in managed mode. No source-level removal schedule or formal deprecation policy currently exists.
 
-**Gaps:** legacy server routes are unauthenticated; origin policy is permissive; server secrets can be returned to the admin UI; a formal OpenAPI document and complete response/error schema are missing.
+**Gaps:** origin policy is permissive; server secrets can be returned to the admin UI; a formal OpenAPI document and complete response/error schema are missing.
 
 ## 8. Subscription And Admin UI Contracts
 
@@ -229,8 +229,8 @@ All iOS entries below are **Internal** to the bundled app and Packet Tunnel exte
 | Boundary | Operations / payload | Lifecycle | Source truth |
 |---|---|---|---|
 | App → Network Extension | Save/load manager, start/stop tunnel, provider configuration | System authorization and `NETunnelProviderManager` lifecycle | `VPNController.swift` |
-| Provider messages | `stats`, `linkState`, `lastError`, `diagnostics`, `crashReports`, `deleteCrashReports`, JSON `uploadCrashReports` | Only a connected `NETunnelProviderSession` can exchange messages | `VPNController.swift`, `PacketTunnelProvider.swift` |
-| Swift → C ABI | `openppp2_ios_version`; tap create/destroy/start/stop/input; link/snapshot/stat/stage queries; last error; telemetry; P2P datagram callbacks | Tap and callback ownership is explicit; provider close must stop callbacks synchronously | `ios/OpenPPP2PacketTunnelBridge.h` |
+| Provider messages | `linkState`, `lastError`, `diagnostics`, `crashReports`, `deleteCrashReports`, JSON `uploadCrashReports` | Only a connected `NETunnelProviderSession` can exchange messages | `VPNController.swift`, `PacketTunnelProvider.swift` |
+| Swift → C ABI | `openppp2_ios_version`; tap create/destroy/start/stop/input; link/snapshot/stage queries; last error; telemetry; P2P datagram callbacks | Tap and callback ownership is explicit; provider close must stop callbacks synchronously | `ios/OpenPPP2PacketTunnelBridge.h` |
 | App Group state | Link heartbeat, runtime snapshot, diagnostics, defaults | App and extension share entitled container; atomic file writes | `TunnelSharedState.swift` |
 | Profile bundle | `type=openppp2-profile-export`, `version=1`, active ID and profiles | User-selected security-scoped file; 2 MiB limit; secrets included | `ProfileImportExport.swift` |
 
@@ -324,7 +324,6 @@ Creating a supported native SDK would require a deliberately small installed hea
 | Priority | Gap | Affected surface | Completion evidence |
 |---|---|---|---|
 | P1 | Android cross-process runtime delivery has no device test because debug builds collapse `:vpn` into the app process | Android runtime UI | An instrumentation variant that keeps `android:process`, or an equivalent multi-process harness |
-| P0 | Legacy `/ppp/server/*` manager routes are unauthenticated | Go manager | Authentication or removal, migration notice, and handler tests |
 | P1 | No tunnel protocol version/opcode registry/cross-release matrix | Wire protocol | Version negotiation, registry, and compatibility fixtures |
 | P1 | Guardian binary paths can expose arbitrary host paths; config PUT ignores body | Guardian | Path policy, correct update behavior, and API tests |
 | P1 | iOS native bridge/Packet Tunnel is not built end-to-end in CI | iOS | Static library build plus provider-message integration test |

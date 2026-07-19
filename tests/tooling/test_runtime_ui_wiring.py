@@ -171,6 +171,24 @@ class RuntimeUIWiringTests(unittest.TestCase):
         controller = self.source("ios/App/OpenPPP2/VPNController.swift")
         self.assertNotIn("fetchStatistics", controller)
 
+        # The traffic C ABI and its provider message are gone; diagnostics
+        # carry the runtime snapshot, which already holds the totals.
+        for relative in (
+            "ios/OpenPPP2PacketTunnelBridge.h",
+            "ios/OpenPPP2PacketTunnelBridge.cpp",
+            "ios/App/OpenPPP2PacketTunnel/OpenPPP2PacketTunnelAdapter.swift",
+            "ios/App/OpenPPP2PacketTunnel/PacketTunnelProvider.swift",
+            "ios/App/OpenPPP2PacketTunnel/PacketFlowDiagnostics.swift",
+        ):
+            source = self.source(relative)
+            self.assertNotIn("openppp2_ios_tap_get_statistics", source)
+            self.assertNotIn("statistics_writer", source)
+            self.assertNotIn("statisticsJson", source)
+        self.assertIn(
+            "runtimeSnapshotJson",
+            self.source("ios/App/OpenPPP2PacketTunnel/PacketFlowDiagnostics.swift"),
+        )
+
         self.assertTrue(
             (ROOT / "ios/App/OpenPPP2/Runtime/RuntimeTrafficRate.swift").is_file()
         )

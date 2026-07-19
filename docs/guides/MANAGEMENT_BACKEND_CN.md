@@ -191,7 +191,14 @@ C++ 侧的配置字段：
 
 Go backend 为运维人员暴露 HTTP 管理 API。
 
-旧 `/ppp/*` 查询参数接口继续保留。下面的 JSON API 使用独立的管理 token，不复用 C++ 节点连接使用的
+旧 `/ppp/*` 查询参数接口继续保留。其中每一个接口——包括 `/ppp/server/all`、`/ppp/server/get`
+和 `/ppp/server/load`——都要求以查询参数传入共享 `key`，缺失时返回 `Code 14`。这些 server 接口返回的
+节点记录含 `protocol-key` 与 `transport-key`，因此共享 key 应当按隧道凭据对待。
+
+`prefixes` 会绑定其中列出的每个网络接口。`:10000` 意味着管理 API、订阅 URL 和旧接口在所有地址上
+均可访问；除非管理器本就需要公网可达，否则应绑定到回环或管理网地址，或用防火墙限制该端口。
+
+下面的 JSON API 使用独立的管理 token，不复用 C++ 节点连接使用的
 `key` / `server.backend-key`。
 
 管理页面默认位于 `/admin/`：
