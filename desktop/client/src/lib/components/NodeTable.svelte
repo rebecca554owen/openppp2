@@ -14,7 +14,7 @@
       {#each nodes as node (node.id)}
         <tr class:current={node.id === currentNodeId}>
           {#if showFavorite}<td class="fav"><button class:active={node.favorite} class="favorite" on:click={() => runtime.toggleFavorite(node.id)} aria-label={node.favorite ? '取消收藏' : '收藏'}><Star size={14} fill={node.favorite ? 'currentColor' : 'none'} /></button></td>{/if}
-          <td><strong>{node.name}</strong></td><td class="muted">{node.subtitle}</td><td class="address mono">{node.address}</td><td class="latency number {latencyTone(node.latencyMs)}">{node.latencyMs} ms</td>
+          <td><strong>{node.name}</strong></td><td class="muted">{node.subtitle}</td><td class="address mono">{node.address}</td><td class="latency number {latencyTone(node.latencyMs)}">{Number.isFinite(node.latencyMs) ? `${node.latencyMs} ms` : '未测试'}</td>
           <td class="action">{#if node.id === currentNodeId && currentNodeId}<span class="current-label">当前</span>{:else}<button class="row-button" on:click={() => runtime.switchNode(node.id)}>连接</button>{/if}</td>
         </tr>
       {/each}

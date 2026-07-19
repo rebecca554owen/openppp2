@@ -26,13 +26,13 @@
     <div class="status"><i></i><strong>{status.label}</strong>{#if connection.status === 'error'}<span>· 退出码 {connection.exitCode}</span>{/if}</div>
     <div class="node"><b>{node?.name || '未选择节点'}</b>{#if node}<span class="mono">{node.address}</span>{/if}</div>
     {#if connection.status === 'connected'}
-      <div class="meta">延迟 <span class="number">{node.latencyMs} ms</span>（直连参考）<span>·</span>已连接 <span class="number">{formatDuration(connection.connectedAt, now)}</span></div>
+      <div class="meta">{#if Number.isFinite(node?.latencyMs)}延迟 <span class="number">{node.latencyMs} ms</span>（直连参考）<span>·</span>{/if}已连接 <span class="number">{formatDuration(connection.connectedAt, now)}</span></div>
     {:else if connection.status === 'connecting'}
       <div class="meta">{node.name}<span>·</span>正在等待真实握手事件</div>
     {:else if connection.status === 'error'}
-      <div class="meta error-copy">authentication failed / server rejected</div>
+      <div class="meta error-copy">{connection.lastError || 'ppp 进程已异常退出'}</div>
     {:else}
-      <div class="meta">延迟 <span class="number">{node?.latencyMs || 0} ms</span>（直连参考）</div>
+      <div class="meta">{#if Number.isFinite(node?.latencyMs)}延迟 <span class="number">{node.latencyMs} ms</span>（直连参考）{:else}延迟未测试{/if}</div>
     {/if}
   </div>
   <button class="primary-button" on:click={act}>{status.action}</button>

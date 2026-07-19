@@ -1,0 +1,134 @@
+import { createEmptyClientState } from './model.js'
+
+function clone(value) {
+  return structuredClone(value)
+}
+
+export function createTauriRuntime(bridge = window.__TAURI__) {
+  let state = createEmptyClientState()
+  const listeners = new Set()
+  let unlisten = null
+
+  function emit() {
+    const snapshot = clone(state)
+    listeners.forEach((listener) => listener(snapshot))
+  }
+
+  function appendEvent(event) {
+    state.events = [...state.events, {
+      id: `${Date.now()}-${Math.random()}`,
+      time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      message: event.message,
+      severity: event.severity || 'info',
+    }].slice(-500)
+  }
+
+  function processEvent(event) {
+    if (event.type === 'telemetry') {
+      appendEvent(event.payload)
+      if (event.payload.signal === 'connected') {
+        state.connection.status = 'connected'
+        state.connection.connectedAt ||= Date.now()
+        state.connection.lastError = ''
+      } else if (event.payload.signal === 'failed') {
+        state.connection.status = 'error'
+        state.connection.lastError = event.payload.message
+      }
+    } else if (event.type === 'stats') {
+      state.stats = { ...state.stats, ...event.payload }
+      state.connection.statsAvailable = true
+    } else if (event.type === 'exited') {
+      state.connection.status = event.payload.success ? 'disconnected' : 'error'
+      state.connection.exitCode = event.payload.code
+      state.connection.connectedAt = null
+      state.connection.statsAvailable = false
+      state.connection.pid = null
+      if (!event.payload.success && !state.connection.lastError) {
+        state.connection.lastError = `ppp 进程异常退出，退出码 ${event.payload.code ?? '未知'}`
+      }
+    }
+    emit()
+  }
+
+  async function initialize() {
+    unlisten = await bridge.event.listen('client://process', ({ payload }) => processEvent(payload))
+    const bootstrap = await bridge.core.invoke('client_bootstrap')
+    if (bootstrap.subscription) state.subscription = bootstrap.subscription
+    state.config = bootstrap.config || '{}'
+    state.settings = { ...state.settings, ...bootstrap.settings }
+    emit()
+  }
+
+  const runtime = {
+    kind: 'tauri',
+    ready: null,
+    subscribe(listener) {
+      listeners.add(listener)
+      listener(clone(state))
+      return async () => {
+        listeners.delete(listener)
+        if (listeners.size === 0 && unlisten) {
+          unlisten()
+          unlisten = null
+        }
+      }
+    },
+    navigate(route) { state.route = route; emit() },
+    async connect(nodeId = state.connection.currentNodeId || state.subscription.nodes[0]?.id) {
+      if (!nodeId) return
+      state.connection = { ...state.connection, status: 'connecting', currentNodeId: nodeId, exitCode: null, statsAvailable: false, lastError: '' }
+      emit()
+      try {
+        const process = await bridge.core.invoke('client_connect', { nodeId })
+        if (process) {
+          state.connection.pid = process.pid ?? null
+          state.stats = { ...state.stats, ...(process.network || {}) }
+          emit()
+        }
+      } catch (error) {
+        state.connection.status = 'error'
+        state.connection.lastError = String(error)
+        appendEvent({ message: String(error), severity: 'error' })
+        emit()
+      }
+    },
+    async disconnect() { await bridge.core.invoke('client_disconnect') },
+    async cancel() { await bridge.core.invoke('client_disconnect') },
+    async switchNode(nodeId) {
+      if (state.connection.status === 'connected' || state.connection.status === 'connecting') {
+        await bridge.core.invoke('client_disconnect')
+      }
+      await runtime.connect(nodeId)
+    },
+    async toggleFavorite(nodeId) {
+      state.subscription.nodes = state.subscription.nodes.map((node) => node.id === nodeId ? { ...node, favorite: !node.favorite } : node)
+      emit()
+      await bridge.core.invoke('client_toggle_favorite', { nodeId })
+    },
+    async refreshSubscription(url = state.subscription.url) {
+      try {
+        const subscription = await bridge.core.invoke('subscription_refresh', { url })
+        state.subscription = subscription
+      } catch (error) {
+        appendEvent({ message: String(error), severity: 'error' })
+      }
+      emit()
+    },
+    async updateConfig(config) {
+      await bridge.core.invoke('client_update_config', { config })
+      state.config = config
+      emit()
+    },
+    async updateSetting(key, value) {
+      await bridge.core.invoke('client_update_setting', { key, value })
+      state.settings = { ...state.settings, [key]: value }
+      emit()
+    },
+    async clearEvents() {
+      state.events = []
+      emit()
+    },
+  }
+  runtime.ready = initialize()
+  return runtime
+}

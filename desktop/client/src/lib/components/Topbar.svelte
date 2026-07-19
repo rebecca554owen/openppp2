@@ -13,7 +13,7 @@
   <div class="sync-line">
     {#if notice}<span class="cache">{notice}</span>{:else}订阅已同步 · updatedAt {formatDateTime(state.subscription.updatedAt)}{/if}
   </div>
-  {#if import.meta.env.DEV}
+  {#if import.meta.env.DEV && runtime.kind === 'demo'}
     <div class="state-preview" aria-label="状态预览">
       {#each previewStates as item}
         <button class:active={state.connection.status === item} on:click={() => runtime.simulate(item)}>{connectionStates[item].label}</button>

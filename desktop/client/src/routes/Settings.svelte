@@ -12,6 +12,7 @@
   <section class="panel">
     <div class="panel-head"><h1 class="panel-title">设置</h1></div>
     <div class="setting-list">
+      <label class="setting-row path-row"><span><b>ppp 可执行文件</b><small>留空时使用与 Client 同目录的 ppp</small></span><input class="text-input mono" value={state.settings.pppPath} on:change={(event) => runtime.updateSetting('pppPath', event.currentTarget.value.trim())} placeholder="ppp.exe" /></label>
       {#each toggleRows as row}
         <label class="setting-row"><span><b>{row.label}</b><small>{row.description}</small></span><input type="checkbox" checked={state.settings[row.key]} on:change={(event) => runtime.updateSetting(row.key, event.currentTarget.checked)} /><i></i></label>
       {/each}
@@ -31,4 +32,5 @@
   .setting-row i::after { content: ''; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #a3abb4; transition: transform 150ms; }
   .setting-row input:checked + i { background: #edf0f4; }.setting-row input:checked + i::after { background: #0b0d10; transform: translateX(15px); }
   .setting-row select { width: 132px; }
+  .path-row input { width: min(420px, 52%); }
 </style>

@@ -6,6 +6,8 @@
   export let runtime
   let copied = false
   let refreshing = false
+  let urlDraft = state.subscription.url
+  let editing = false
   $: subscription = state.subscription
   $: notice = subscriptionNotice(subscription)
 
@@ -17,9 +19,10 @@
 
   async function refresh() {
     refreshing = true
-    await runtime.refreshSubscription()
+    await runtime.refreshSubscription(urlDraft.trim())
     setTimeout(() => (refreshing = false), 350)
   }
+  $: if (!editing && urlDraft !== subscription.url) urlDraft = subscription.url
 </script>
 
 <div class="page">
@@ -27,7 +30,7 @@
   <section class="panel">
     <div class="panel-head"><h1 class="panel-title">订阅</h1><button class="secondary-button refresh" on:click={refresh} disabled={refreshing}><span class:spin={refreshing}><RefreshCw size={14} /></span>刷新</button></div>
     <div class="panel-body subscription-body">
-      <div class="field full"><label for="subscription-url">订阅地址</label><div class="url-row"><input id="subscription-url" class="text-input mono" readonly value={subscription.url} /><button class="icon-button" on:click={copyUrl} title="复制订阅地址">{#if copied}<Check size={15} />{:else}<Copy size={15} />{/if}</button></div></div>
+      <div class="field full"><label for="subscription-url">订阅地址</label><div class="url-row"><input id="subscription-url" class="text-input mono" bind:value={urlDraft} on:focus={() => editing = true} on:blur={() => editing = false} placeholder="https://example.com/sub/token" /><button class="icon-button" on:click={copyUrl} title="复制订阅地址">{#if copied}<Check size={15} />{:else}<Copy size={15} />{/if}</button></div></div>
       <div class="fact"><span>名称</span><strong>{subscription.name}</strong></div>
       <div class="fact"><span>节点数量</span><strong class="number">{subscription.nodes.length}</strong></div>
       <div class="fact"><span>上次成功同步</span><strong class="number">{formatDateTime(subscription.lastSyncedAt)}</strong></div>

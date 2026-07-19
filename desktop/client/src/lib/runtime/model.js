@@ -76,3 +76,28 @@ export function createClientState() {
     },
   }
 }
+
+export function createEmptyClientState() {
+  return {
+    route: 'connection',
+    connection: {
+      status: 'disconnected', currentNodeId: null, connectedAt: null,
+      exitCode: null, statsAvailable: false, pid: null, lastError: '',
+    },
+    stats: {
+      rxRateMbps: 0, txRateMbps: 0, rxBytes: 0, txBytes: 0,
+      qualityPercent: 0, qualityGrade: '', activeLinks: 0,
+      effectivePath: '', tunIp: '', gateway: '', httpProxy: '', socksProxy: '',
+    },
+    events: [],
+    subscription: {
+      url: '', name: '', updatedAt: null, lastSyncedAt: null,
+      cached: false, cacheAgeMinutes: 0, nodes: [],
+    },
+    config: '{}',
+    settings: {
+      autostart: false, closeToTray: true, disconnectOnExit: true,
+      language: '简体中文', appearance: '深色', pppPath: '',
+    },
+  }
+}

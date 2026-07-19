@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test --test-isolation=none test/*.test.js"
+    "test": "node --test --test-isolation=none test/*.test.js",
+    "desktop": "cargo run --manifest-path src-tauri/Cargo.toml --bin openppp2-client-app"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.0.2",
