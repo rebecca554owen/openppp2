@@ -43,6 +43,13 @@ class VpnService with WidgetsBindingObserver {
       _startRuntimePolling();
       return;
     }
+    stopPolling();
+  }
+
+  /// Stops reading the mirror. This service is an app-lifetime singleton, so a
+  /// widget test that builds the whole app must call this before it ends —
+  /// `flutter_test` checks for pending timers before it tears the tree down.
+  void stopPolling() {
     _runtimePollTimer?.cancel();
     _runtimePollTimer = null;
   }
