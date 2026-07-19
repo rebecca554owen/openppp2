@@ -94,6 +94,12 @@ export function createMockRuntime() {
       state.config = config
       emit()
     },
+    async updateClientConfig(config, options) {
+      state.config = config
+      state.launchOptions = structuredClone(options)
+      emit()
+      return state.launchOptions
+    },
     async saveManualNode(node) {
       const id = node.id || `manual:${Date.now()}`
       const server = node.config?.client?.server || ''

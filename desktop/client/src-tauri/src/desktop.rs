@@ -349,6 +349,44 @@ fn client_update_config(config: String, state: State<'_, DesktopState>) -> Resul
     state.save_preferences(&preferences)
 }
 
+fn validated_client_config(
+    config: &str,
+    options: Value,
+) -> Result<(String, BTreeMap<String, Value>), String> {
+    let config_value: Value = serde_json::from_str(config).map_err(|error| error.to_string())?;
+    if !config_value.is_object() {
+        return Err("配置根节点必须是 JSON object".into());
+    }
+    let object = options
+        .as_object()
+        .ok_or_else(|| "启动参数必须是 JSON object".to_string())?;
+    let launch_options: BTreeMap<String, Value> = object
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    append_launch_args(&launch_options, &mut Vec::new()).map_err(|error| error.to_string())?;
+    let raw_config =
+        serde_json::to_string_pretty(&config_value).map_err(|error| error.to_string())?;
+    Ok((raw_config, launch_options))
+}
+
+#[tauri::command]
+fn client_update_client_config(
+    config: String,
+    options: Value,
+    state: State<'_, DesktopState>,
+) -> Result<BTreeMap<String, Value>, String> {
+    let (raw_config, launch_options) = validated_client_config(&config, options)?;
+    let mut preferences = state
+        .preferences
+        .lock()
+        .map_err(|_| "设置状态锁已损坏".to_string())?;
+    preferences.raw_config = raw_config;
+    preferences.launch_options = launch_options.clone();
+    state.save_preferences(&preferences)?;
+    Ok(launch_options)
+}
+
 #[tauri::command]
 fn client_upsert_manual_node(
     node: ManualNodeInput,
@@ -733,6 +771,7 @@ pub fn run() {
             client_connect,
             client_disconnect,
             client_update_config,
+            client_update_client_config,
             client_upsert_manual_node,
             client_delete_manual_node,
             client_update_launch_options,
@@ -750,7 +789,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{subscription_payload, StoredSubscription};
+    use super::{subscription_payload, validated_client_config, StoredSubscription};
     use crate::manual_nodes::upsert_manual_node;
     use crate::manual_nodes::{ManualNodeInput, NodeSource};
     use crate::preferences::Preferences;
@@ -794,5 +833,23 @@ mod tests {
             .as_ref()
             .is_some_and(|value| value.is_object()));
         assert_eq!(payload.nodes[0].options.as_ref().unwrap()["mux"], 2);
+    }
+
+    #[test]
+    fn combined_client_config_validates_both_inputs_before_save() {
+        let (config, options) = validated_client_config(
+            r#"{"concurrent":2}"#,
+            json!({ "mux": 4, "muxMode": "flow", "vnet": true }),
+        )
+        .unwrap();
+        assert!(config.contains("\"concurrent\": 2"));
+        assert_eq!(options["mux"], 4);
+
+        assert!(validated_client_config("[]", json!({})).is_err());
+        assert!(validated_client_config(
+            r#"{"concurrent":2}"#,
+            json!({ "muxMode": "unsupported" }),
+        )
+        .is_err());
     }
 }
