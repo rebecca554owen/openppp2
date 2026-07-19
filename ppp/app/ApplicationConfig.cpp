@@ -32,6 +32,16 @@ std::shared_ptr<BufferswapAllocator> PppApplication::GetBufferAllocator() noexce
 int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) noexcept {
     Socket::SetDefaultFlashTypeOfService(ppp::ToBoolean(ppp::GetCommandArgument("--tun-flash", argc, argv).data()));
 
+    stats_json_path_ = ppp::GetCommandArgument("--stats-json", argc, argv);
+    if (!stats_json_path_.empty() && stats_json_path_ != "stdout") {
+        std::FILE* output = std::fopen(stats_json_path_.c_str(), "wb");
+        if (NULLPTR != output) {
+            std::fclose(output);
+        } else {
+            stats_json_path_.clear();
+        }
+    }
+
     if (ppp::IsInputHelpCommand(argc, argv)) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppHelpRequested);
         return -1;

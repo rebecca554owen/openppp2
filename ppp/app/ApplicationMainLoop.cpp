@@ -14,6 +14,7 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/app/runtime/RuntimeStatsJson.h>
 #include <ppp/app/tui/TuiRuntimeAdapter.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
@@ -74,6 +75,46 @@ static ppp::string BuildHostingEnvironmentText(ApplicationMode mode) noexcept {
         prefix = "proxy:";
     }
     return prefix + env;
+}
+
+static const char* RuntimeStatsGradeName(
+    ppp::diagnostics::LinkQualityGrade grade) noexcept {
+    using Grade = ppp::diagnostics::LinkQualityGrade;
+    switch (grade) {
+        case Grade::Excellent: return "Excellent";
+        case Grade::Outstanding: return "Outstanding";
+        case Grade::Good: return "Good";
+        case Grade::Average: return "Average";
+        case Grade::Poor: return "Poor";
+        case Grade::Terrible: return "Terrible";
+        case Grade::Unusable: return "Unusable";
+        default: return "Unknown";
+    }
+}
+
+static void WriteRuntimeStatsLine(
+    const ppp::string& path,
+    const ppp::app::runtime::RuntimeStatsSample& sample) noexcept {
+    if (path.empty()) {
+        return;
+    }
+
+    const std::string json = ppp::app::runtime::SerializeRuntimeStats(sample);
+    std::FILE* output = stdout;
+    bool close_output = false;
+    if (path != "stdout") {
+        output = std::fopen(path.c_str(), "ab");
+        close_output = true;
+    }
+    if (NULLPTR == output) {
+        return;
+    }
+    std::fwrite(json.data(), 1, json.size(), output);
+    std::fputc('\n', output);
+    std::fflush(output);
+    if (close_output) {
+        std::fclose(output);
+    }
 }
 
 /**
@@ -668,7 +709,11 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         }
     }
 
-    if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
+    const bool has_transmission_statistics = GetTransmissionStatistics(
+        incoming_traffic,
+        outgoing_traffic,
+        statistics_snapshot);
+    if (!has_transmission_statistics) {
         incoming_traffic = 0;
         outgoing_traffic = 0;
     }
@@ -681,6 +726,20 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     }
 
     runtime = runtime_lifecycle_.GetSnapshot();
+    if (has_transmission_statistics && !stats_json_path_.empty()) {
+        const ppp::diagnostics::LinkTelemetrySnapshot link =
+            ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().GetSnapshot();
+        ppp::app::runtime::RuntimeStatsSample sample;
+        sample.monotonic_ms = now;
+        sample.rx_bytes = incoming_traffic;
+        sample.tx_bytes = outgoing_traffic;
+        sample.link.quality_percent = link.quality_percent;
+        sample.link.grade = RuntimeStatsGradeName(link.grade);
+        sample.link.error_count = link.error_count;
+        sample.link.success_count = link.success_count;
+        sample.runtime = runtime;
+        WriteRuntimeStatsLine(stats_json_path_, sample);
+    }
     const std::vector<std::string> runtime_lines =
         ppp::app::tui::BuildStatusLines(runtime);
     ppp::string status = "vpn=";
