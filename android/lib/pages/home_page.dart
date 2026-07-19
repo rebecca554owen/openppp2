@@ -299,7 +299,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         timer.cancel();
         return;
       }
-      final log = await _vpnService.readLog();
       final hbAgeMs = await _vpnService.getVpnHeartbeatAgeMs();
       final hbStale = hbAgeMs < 0 || hbAgeMs > 30000;
       final totalSec = DateTime.now().difference(startedAt).inSeconds;
@@ -308,9 +307,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final reason = totalSec >= _connectMaxSeconds
           ? '超过 ${_connectMaxSeconds}s 上限'
           : ':vpn 心跳已停 ${(hbAgeMs / 1000).toStringAsFixed(1)}s';
-      final error = log.trim().isEmpty
-          ? '连接超时（$reason）：VPN Service 没有返回状态，也没有生成日志。'
-          : log.contains('vpnThread started')
+      final timedOutPhase = _runtimeStore.state.phase;
+      final error = timedOutPhase == RuntimePhase.unknown
+          ? '连接超时（$reason）：VPN Service 没有发布运行时状态。'
+          : timedOutPhase == RuntimePhase.handshaking ||
+                  timedOutPhase == RuntimePhase.applyingPolicy
               ? '连接超时（$reason）：native 引擎已启动但未完成握手。\n请检查所选配置的服务器地址、密钥与网络连通性。'
               : '连接超时（$reason）：VPN 未进入已连接状态。';
       if (!mounted ||

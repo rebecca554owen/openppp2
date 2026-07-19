@@ -115,6 +115,8 @@ class VpnService {
 
   bool _initialized = false;
   StreamSubscription<dynamic>? _eventSubscription;
+  Timer? _runtimePollTimer;
+  String? _lastReportedError;
 
   void init() {
     if (_initialized) return;
@@ -128,6 +130,7 @@ class VpnService {
       },
       onDone: _markRuntimeUnavailable,
     );
+    _startRuntimePolling();
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -197,6 +200,43 @@ class VpnService {
       }
       _errorController.add('Invalid runtime snapshot: $error');
     }
+  }
+
+  /// The `:vpn` service runs in its own process and cannot reach the UI
+  /// process's EventChannel sink, so it mirrors every published snapshot to a
+  /// file. Polling that mirror is safe because snapshots carry their own
+  /// generation and timestamp ordering.
+  void _startRuntimePolling() {
+    _runtimePollTimer?.cancel();
+    _runtimePollTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_pollRuntime()),
+    );
+    unawaited(_pollRuntime());
+  }
+
+  Future<void> _pollRuntime() async {
+    applyRuntimeSnapshotPoll(await getRuntimeSnapshot());
+    final error = await getLastError();
+    if (error.isEmpty) {
+      _lastReportedError = null;
+      return;
+    }
+    if (error == _lastReportedError) return;
+    _lastReportedError = error;
+    _errorController.add(error);
+  }
+
+  /// Applies one mirror read. A null payload means the service is not alive,
+  /// so the next payload is treated as a new session.
+  void applyRuntimeSnapshotPoll(String? raw) {
+    if (raw == null || raw.trim().isEmpty) {
+      runtimeStore.endSession();
+      _markRuntimeUnavailable();
+      return;
+    }
+    runtimeStore.beginSession();
+    _applyRuntimeSnapshot(raw);
   }
 
   void _updateLinkState(int value) {
@@ -303,6 +343,27 @@ class VpnService {
     return _applyStatistics(value);
   }
 
+  /// Runtime snapshot mirrored by the `:vpn` service, or null while that
+  /// process is not alive.
+  Future<String?> getRuntimeSnapshot() async {
+    try {
+      return await _channel.invokeMethod<String>('getRuntimeSnapshot');
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Last failure reported by the `:vpn` service. Errors raised around the
+  /// native call never reach the runtime snapshot, so they are mirrored
+  /// separately.
+  Future<String> getLastError() async {
+    try {
+      return await _channel.invokeMethod<String>('getLastError') ?? '';
+    } on PlatformException {
+      return '';
+    }
+  }
+
   Future<String> readLog() async {
     try {
       return await _channel.invokeMethod<String>('readLog') ?? '';
@@ -399,6 +460,7 @@ class VpnService {
   }
 
   void dispose() {
+    _runtimePollTimer?.cancel();
     _eventSubscription?.cancel();
     _stateController.close();
     _statsController.close();

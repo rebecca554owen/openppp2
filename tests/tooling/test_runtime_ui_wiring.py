@@ -83,6 +83,55 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("controls.buttonEnabled = false", source)
         self.assertIn("controls.configEditable = false", source)
 
+    def test_android_state_is_not_derived_from_log_text(self) -> None:
+        activity = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/MainActivity.kt"
+        )
+        # The old getState scanned the log with lastIndexOf("failed") and friends,
+        # so any benign log line containing "failed" reported a disconnect.
+        self.assertNotIn("lastIndexOf", activity)
+        self.assertNotIn("vpnThread started", activity)
+        self.assertIn("legacyStateFromSnapshot()", activity)
+        self.assertIn("getRuntimeSnapshotIfAlive", activity)
+        # Statics of a service running in `:vpn` are always zero here.
+        self.assertNotIn("PppVpnService.isRunning", activity)
+        self.assertNotIn("PppVpnService.currentState", activity)
+
+        home = self.source("android/lib/pages/home_page.dart")
+        self.assertNotIn("vpnThread started", home)
+
+        settings = self.source("android/lib/pages/settings_page.dart")
+        self.assertNotIn("VpnState", settings)
+        self.assertIn("controlsFor(_runtimeStore.state.phase)", settings)
+
+    def test_android_service_mirrors_runtime_state_across_processes(self) -> None:
+        service = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
+        )
+        # MainActivity.sendEvent touches a process-local sink, so every event
+        # published from `:vpn` needs a file mirror to reach the UI process.
+        self.assertIn("PppStateStore.setRuntimeSnapshot(this, value)", service)
+        self.assertIn("PppStateStore.setLastError(this, message)", service)
+        self.assertIn("updateNotificationForSnapshot(value)", service)
+        self.assertNotIn('updateNotification("已连接")', service)
+
+        store = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppStateStore.kt"
+        )
+        self.assertIn("createTempFile", store)
+        self.assertIn("renameTo", store)
+        self.assertNotIn("writeText(value.toString())", store)
+
+        dart = self.source("android/lib/vpn_service.dart")
+        self.assertIn("applyRuntimeSnapshotPoll", dart)
+        self.assertIn("runtimeStore.beginSession()", dart)
+        self.assertIn("runtimeStore.endSession()", dart)
+        self.assertIn("getRuntimeSnapshot", dart)
+        self.assertIn("getLastError", dart)
+
+        store_dart = self.source("android/lib/runtime/runtime_store.dart")
+        self.assertIn("resetForNewSession", store_dart)
+
     def test_runtime_contract_docs_are_governed_and_indexed(self) -> None:
         paths = (
             "docs/adr/0001-runtime-ui-contract.md",

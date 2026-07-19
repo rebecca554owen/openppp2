@@ -63,6 +63,7 @@ class PppVpnService : VpnService() {
     private var connectStartedAtMs: Long = 0L
     private var lastReportedLinkState: Int = 6
     private var lastReportedRuntimeSnapshot: String? = null
+    private var lastNotificationText: String? = null
     private var activeConfigJson: String? = null
     private var activeVpnOptionsJson: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -94,6 +95,8 @@ class PppVpnService : VpnService() {
 
     private fun publishRuntimeSnapshot(value: String?, forceEvent: Boolean = false) {
         if (value.isNullOrBlank()) return
+        PppStateStore.setRuntimeSnapshot(this, value)
+        updateNotificationForSnapshot(value)
         if (!forceEvent && value == lastReportedRuntimeSnapshot) return
         lastReportedRuntimeSnapshot = value
         MainActivity.sendEvent(mapOf("type" to "runtimeSnapshot", "value" to value))
@@ -106,10 +109,36 @@ class PppVpnService : VpnService() {
         MainActivity.sendEvent(mapOf("type" to "linkState", "value" to value))
     }
 
+    /**
+     * The notification is a second state surface. Its text mirrors the status
+     * labels the app derives from the same phase (see runtime_controls.dart),
+     * so the two cannot disagree.
+     */
+    private fun updateNotificationForSnapshot(json: String) {
+        val phase = try {
+            JSONObject(json).optString("phase")
+        } catch (_: Throwable) {
+            return
+        }
+        if (phase.isEmpty() || phase == "idle") return
+        val text = when (phase) {
+            "connected" -> "已连接"
+            "reconnecting" -> "重连中..."
+            "stopping" -> "断开中..."
+            "failed" -> "连接失败"
+            "unknown" -> "未知状态"
+            else -> "连接中..."
+        }
+        if (text == lastNotificationText) return
+        lastNotificationText = text
+        updateNotification(text)
+    }
+
     private fun startLinkStatePoller() {
         if (linkStateThread != null) return
         lastReportedLinkState = 6
         lastReportedRuntimeSnapshot = null
+        lastNotificationText = null
         val t = HandlerThread("openppp2-linkstate").also { it.start() }
         linkStateThread = t
         val h = Handler(t.looper)
@@ -141,6 +170,8 @@ class PppVpnService : VpnService() {
         // the UI sit on "Initializing" forever. Reset them so the user
         // sees a clean disconnected state.
         PppStateStore.clearLinkState(this)
+        PppStateStore.clearRuntimeSnapshot(this)
+        PppStateStore.clearLastError(this)
         PppStateStore.set(this, 0)
         currentState = 0
         isRunning = false
@@ -261,6 +292,10 @@ class PppVpnService : VpnService() {
     }
 
     private fun startVpn(configJson: String, vpnOptionsJson: String) {
+        // A new attempt owns the mirrored state: the previous session's error
+        // and snapshot carry a stale generation and must not be presented.
+        PppStateStore.clearLastError(this)
+        PppStateStore.clearRuntimeSnapshot(this)
         if (isRunning) {
             // A previous session is still live or wedged (common after the UI
             // process is killed while :vpn keeps running). Queue the new config
@@ -620,7 +655,6 @@ class PppVpnService : VpnService() {
         PppLog.write(this, "VPN started with key=$key")
         publishLinkState(0, forceEvent = true)
         notifyStateChanged(2) // connected
-        updateNotification("已连接")
     }
 
     @Volatile
@@ -668,6 +702,7 @@ class PppVpnService : VpnService() {
     private fun notifyError(message: String) {
         Log.e(TAG, message)
         PppLog.write(this, message)
+        PppStateStore.setLastError(this, message)
         MainActivity.sendEvent(mapOf("type" to "error", "value" to message))
     }
 

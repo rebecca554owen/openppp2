@@ -76,6 +76,14 @@ class MainActivity : FlutterActivity() {
                     "getStatistics" -> {
                         result.success(PppStateStore.getStatistics(this))
                     }
+                    "getRuntimeSnapshot" -> {
+                        // Mirrored by PppVpnService from the `:vpn` process;
+                        // null while that process is not alive.
+                        result.success(PppStateStore.getRuntimeSnapshotIfAlive(this))
+                    }
+                    "getLastError" -> {
+                        result.success(PppStateStore.getLastError(this))
+                    }
                     "getLinkState" -> {
                         // The native engine lives in the `:vpn` process, so we
                         // CANNOT call libopenppp2.get_link_state() from this
@@ -85,9 +93,7 @@ class MainActivity : FlutterActivity() {
                         // to a file via PppStateStore; we read that file here.
                         // Same liveness gate as getState: if :vpn is dead, the
                         // file is stale and would pin the UI on "Initializing".
-                        val linkFile = java.io.File(filesDir, "openppp2-linkstate.txt")
-                        val ageMs = System.currentTimeMillis() - linkFile.lastModified()
-                        if (!linkFile.exists() || ageMs !in 0..30_000) {
+                        if (!PppStateStore.isVpnAlive(this)) {
                             PppStateStore.clearLinkState(this)
                             result.success(6) // APPLICATION_UNINITIALIZED
                             return@setMethodCallHandler
@@ -102,10 +108,7 @@ class MainActivity : FlutterActivity() {
                         // 60s), the link-state poller keeps writing once a
                         // second so the file mtime is fresh. -1 means file
                         // doesn't exist yet (no session has started).
-                        val f = java.io.File(filesDir, "openppp2-linkstate.txt")
-                        val age = if (!f.exists()) -1L
-                                  else System.currentTimeMillis() - f.lastModified()
-                        result.success(age)
+                        result.success(PppStateStore.heartbeatAgeMs(this))
                     }
                     "getInstalledApps" -> {
                         val includeSystem = (call.argument<Boolean>("includeSystem")) ?: false
@@ -127,61 +130,7 @@ class MainActivity : FlutterActivity() {
                         requestVpnPermission(result)
                     }
                     "getState" -> {
-                        // Liveness gate: the :vpn process polls native link
-                        // state and rewrites the linkstate file every 1s while
-                        // the tunnel is alive. If the file is missing or its
-                        // mtime is stale (>10s), :vpn is dead (crash, killed
-                        // by OOM, user swipe, etc.). In that case any
-                        // "connected/connecting" state we have on disk is
-                        // garbage and would trap the UI on "Initializing".
-                        val linkFile = java.io.File(filesDir, "openppp2-linkstate.txt")
-                        val ageMs = System.currentTimeMillis() - linkFile.lastModified()
-                        val vpnAlive = linkFile.exists() && ageMs in 0..30_000
-                        if (!vpnAlive) {
-                            PppStateStore.set(this, 0)
-                            PppStateStore.clearLinkState(this)
-                            result.success(0)
-                            return@setMethodCallHandler
-                        }
-
-                        val log = PppLog.read(this)
-                        val connectedAt = maxOf(
-                            log.lastIndexOf("VPN started with key"),
-                            log.lastIndexOf("onStarted key=")
-                        )
-                        val connectingAt = maxOf(
-                            log.lastIndexOf("set_network_interface result=0"),
-                            log.lastIndexOf("before libopenppp2.run"),
-                            log.lastIndexOf("builder.establish result=true"),
-                            log.lastIndexOf("startForeground done")
-                        )
-                        val stoppedAt = maxOf(
-                            log.lastIndexOf("stopVpn requested"),
-                            log.lastIndexOf("libopenppp2.run returned"),
-                            log.lastIndexOf("failed"),
-                            log.lastIndexOf("exception"),
-                            log.lastIndexOf("error:")
-                        )
-                        val state = when {
-                            connectedAt > stoppedAt -> 2
-                            connectingAt > stoppedAt -> 1
-                            else -> 0
-                        }
-                        if (state == 2) {
-                            PppStateStore.set(this, 2)
-                            result.success(2)
-                            return@setMethodCallHandler
-                        }
-                        val persistedState = PppStateStore.get(this)
-                        if (persistedState == 1 || persistedState == 2) {
-                            result.success(persistedState)
-                            return@setMethodCallHandler
-                        }
-                        if (PppVpnService.isRunning || PppVpnService.currentState != 0) {
-                            result.success(PppVpnService.currentState)
-                            return@setMethodCallHandler
-                        }
-                        result.success(state)
+                        result.success(legacyStateFromSnapshot())
                     }
                     else -> result.notImplemented()
                 }
@@ -200,14 +149,30 @@ class MainActivity : FlutterActivity() {
             })
     }
 
+    /**
+     * Legacy four-value connection state derived from the mirrored runtime
+     * snapshot. The snapshot phase is the authoritative lifecycle signal; this
+     * mapping exists only for callers that still speak the older enum.
+     */
+    private fun legacyStateFromSnapshot(): Int {
+        val raw = PppStateStore.getRuntimeSnapshotIfAlive(this) ?: return 0
+        val phase = try {
+            JSONObject(raw).optString("phase")
+        } catch (_: Throwable) {
+            return 0
+        }
+        return when (phase) {
+            "connected" -> 2
+            "stopping" -> 3
+            "idle", "failed", "unknown", "" -> 0
+            else -> 1
+        }
+    }
+
     private fun handleConnect(config: String, vpnOptions: String, result: MethodChannel.Result) {
         try {
             PppLog.write(this, "connect requested")
-            val linkFile = java.io.File(filesDir, "openppp2-linkstate.txt")
-            val ageMs = if (!linkFile.exists()) -1L
-                        else System.currentTimeMillis() - linkFile.lastModified()
-            val vpnAlive = linkFile.exists() && ageMs in 0..30_000
-            if (!vpnAlive) {
+            if (!PppStateStore.isVpnAlive(this)) {
                 PppStateStore.set(this, 0)
                 PppStateStore.clearLinkState(this)
             }
@@ -240,7 +205,9 @@ class MainActivity : FlutterActivity() {
             startService(intent)
             result.success(true)
         } catch (e: Throwable) {
-            PppStateStore.set(this, PppVpnService.currentState)
+            // PppVpnService statics live in `:vpn`; this process always reads
+            // its own zeroed copy, so record the disconnected state directly.
+            PppStateStore.set(this, 0)
             PppLog.write(this, "disconnect failed", e)
             result.error("DISCONNECT_FAILED", e.message ?: e.javaClass.name, PppLog.read(this))
         }
