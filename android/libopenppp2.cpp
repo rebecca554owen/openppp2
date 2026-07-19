@@ -437,7 +437,6 @@ private:
     bool                                                                    GetTransmissionStatistics(uint64_t& incoming_traffic, uint64_t& outgoing_traffic, std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept;
 
 public:
-    bool                                                                    StatisticsJNI(JNIEnv* env, const char* json) noexcept;
     bool                                                                    PostExecJNI(JNIEnv* env, int sequence) noexcept;
     bool                                                                    StartJNI(JNIEnv* env, int key) noexcept;
     bool                                                                    ExecJNI(JNIEnv* env, const char* method_name, int param) noexcept;
@@ -576,32 +575,20 @@ bool                                                                        libo
 
 bool                                                                        libopenppp2_application::ReportTransmissionStatistics(uint64_t now) noexcept {
     // Get statistics on the physical network transport layer of the Virtual Ethernet switcher.
-    struct {
-        uint64_t                                                            incoming_traffic;
-        uint64_t                                                            outgoing_traffic;
-        std::shared_ptr<ppp::transmissions::ITransmissionStatistics>        statistics_snapshot;
-    } TransmissionStatistics;
-
-    if (!GetTransmissionStatistics(TransmissionStatistics.incoming_traffic, TransmissionStatistics.outgoing_traffic, TransmissionStatistics.statistics_snapshot)) {
-        TransmissionStatistics.incoming_traffic = 0;
-        TransmissionStatistics.outgoing_traffic = 0;
-        TransmissionStatistics.statistics_snapshot = NULLPTR;
+    uint64_t incoming_traffic = 0;
+    uint64_t outgoing_traffic = 0;
+    std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
+    if (!GetTransmissionStatistics(incoming_traffic, outgoing_traffic, statistics_snapshot)) {
+        incoming_traffic = 0;
+        outgoing_traffic = 0;
+        statistics_snapshot = NULLPTR;
     }
 
-    Json::Value json;
-    json["tx"] = stl::to_string<ppp::string>(TransmissionStatistics.outgoing_traffic);
-    json["rx"] = stl::to_string<ppp::string>(TransmissionStatistics.incoming_traffic);
+    const uint64_t in_total = NULLPTR != statistics_snapshot ? statistics_snapshot->IncomingTraffic.load() : 0;
+    const uint64_t out_total = NULLPTR != statistics_snapshot ? statistics_snapshot->OutgoingTraffic.load() : 0;
 
-    if (auto statistics = TransmissionStatistics.statistics_snapshot; statistics) {
-        json["in"] = stl::to_string<ppp::string>(statistics->IncomingTraffic.load());
-        json["out"] = stl::to_string<ppp::string>(statistics->OutgoingTraffic.load());
-    }
-
-    const uint64_t in_total = json.isMember("in") ? JsonAuxiliary::AsUInt64(json["in"]) : 0;
-    const uint64_t out_total = json.isMember("out") ? JsonAuxiliary::AsUInt64(json["out"]) : 0;
-
-    // Publish the totals through the runtime snapshot as well; consumers derive
-    // rates from two snapshots instead of accumulating per-tick deltas.
+    // The runtime snapshot is the only traffic surface; consumers derive rates
+    // from two snapshots instead of accumulating per-tick deltas.
     if (const uint64_t generation = runtime_lifecycle_.GetSnapshot().generation; generation != 0) {
         ppp::app::runtime::RuntimeTraffic traffic;
         traffic.rx_bytes = in_total;
@@ -609,15 +596,15 @@ bool                                                                        libo
         runtime_lifecycle_.UpdateTraffic(generation, traffic, now);
     }
 
-    if (last_reported_statistics_.tx == TransmissionStatistics.outgoing_traffic &&
-        last_reported_statistics_.rx == TransmissionStatistics.incoming_traffic &&
+    if (last_reported_statistics_.tx == outgoing_traffic &&
+        last_reported_statistics_.rx == incoming_traffic &&
         last_reported_statistics_.in == in_total &&
         last_reported_statistics_.out == out_total) {
         return true;
     }
 
-    last_reported_statistics_.tx = TransmissionStatistics.outgoing_traffic;
-    last_reported_statistics_.rx = TransmissionStatistics.incoming_traffic;
+    last_reported_statistics_.tx = outgoing_traffic;
+    last_reported_statistics_.rx = incoming_traffic;
     last_reported_statistics_.in = in_total;
     last_reported_statistics_.out = out_total;
 
@@ -625,21 +612,13 @@ bool                                                                        libo
     if ((stats_perf_log_ticks_ % 10) == 0) {
         __android_log_print(ANDROID_LOG_INFO, "libopenppp2",
             "perf throughput tx=%llu rx=%llu in=%llu out=%llu",
-            static_cast<unsigned long long>(TransmissionStatistics.outgoing_traffic),
-            static_cast<unsigned long long>(TransmissionStatistics.incoming_traffic),
+            static_cast<unsigned long long>(outgoing_traffic),
+            static_cast<unsigned long long>(incoming_traffic),
             static_cast<unsigned long long>(in_total),
             static_cast<unsigned long long>(out_total));
     }
 
-    std::shared_ptr<ppp::string> json_string = ppp::make_shared_object<ppp::string>(JsonAuxiliary::ToString(json));
-    if (NULLPTR == json_string) {
-        return false;
-    }
-
-    return PostJNI(
-        [this, json_string](JNIEnv* env) noexcept {
-            StatisticsJNI(env, json_string->data());
-        });
+    return true;
 }
 
 bool                                                                        libopenppp2_application::PostJNI(const ppp::function<void(JNIEnv*)>& task) noexcept {
@@ -686,53 +665,6 @@ bool                                                                        libo
             task(env);
         });
     return true;
-}
-
-// package: supersocksr.ppp.android.c
-// public final class libopenpppp2
-// public static void statistics(string json)
-// param
-//  json: {
-//      tx:         string(int64),
-//      rx:         string(int64),
-//      in:         string(int64),
-//      out :       string(int64)
-//  }
-bool                                                                        libopenppp2_application::StatisticsJNI(JNIEnv* env, const char* json) noexcept {
-    jclass clazz = env->FindClass(LIBOPENPPP2_CLASSNAME);
-    if (NULLPTR != env->ExceptionOccurred()) {
-        env->ExceptionClear();
-    }
-
-    if (NULLPTR == clazz) {
-        return false;
-    }
-
-    jmethodID method = env->GetStaticMethodID(clazz, "statistics", "(Ljava/lang/String;)V");
-    if (NULLPTR != env->ExceptionOccurred()) {
-        env->ExceptionClear();
-    }
-
-    bool result = false;
-    if (NULLPTR != method) {
-        jstring json_string = JNIENV_NewStringUTF(env, json);
-        env->CallStaticVoidMethod(clazz, method, json_string);
-
-        if (env->ExceptionCheck()) {
-            env->ExceptionDescribe();
-            env->ExceptionClear();
-        }
-        else {
-            result = true;
-        }
-
-        if (NULLPTR != json_string) {
-            env->DeleteLocalRef(json_string);
-        }
-    }
-
-    env->DeleteLocalRef(clazz);
-    return result;
 }
 
 bool                                                                        libopenppp2_application::GetTransmissionStatistics(uint64_t& incoming_traffic, uint64_t& outgoing_traffic, std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept {

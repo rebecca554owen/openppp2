@@ -157,6 +157,37 @@ class RuntimeUIWiringTests(unittest.TestCase):
         store_dart = self.source("android/lib/runtime/runtime_store.dart")
         self.assertIn("resetForNewSession", store_dart)
 
+    def test_ios_reads_traffic_and_connect_time_from_the_snapshot(self) -> None:
+        home = self.source("ios/App/OpenPPP2/HomeViewController.swift")
+        self.assertNotIn("VpnStatistics", home)
+        self.assertNotIn("connectedAt =", home)
+        self.assertIn("connectedElapsedMs(runtimeStore.state)", home)
+        self.assertIn("RuntimeTrafficRate.between", home)
+
+        models = self.source("ios/App/OpenPPP2/AppModels.swift")
+        self.assertNotIn("VpnStatistics", models)
+        self.assertNotIn("outgoingTraffic", models)
+
+        controller = self.source("ios/App/OpenPPP2/VPNController.swift")
+        self.assertNotIn("fetchStatistics", controller)
+
+        self.assertTrue(
+            (ROOT / "ios/App/OpenPPP2/Runtime/RuntimeTrafficRate.swift").is_file()
+        )
+        self.assertIn(
+            "Runtime/RuntimeTrafficRate.swift",
+            self.source("ios/App/Package.swift"),
+        )
+
+        # Both platforms must reject the same degenerate inputs.
+        for relative in (
+            "ios/App/OpenPPP2/Runtime/RuntimeTrafficRate.swift",
+            "android/lib/runtime/runtime_traffic_rate.dart",
+        ):
+            source = self.source(relative)
+            self.assertIn("generation", source)
+            self.assertIn("moved backwards", source)
+
     def test_android_native_pushes_runtime_snapshots(self) -> None:
         native = self.source("android/libopenppp2.cpp")
         self.assertIn("runtime_lifecycle_.Subscribe(", native)
@@ -180,6 +211,22 @@ class RuntimeUIWiringTests(unittest.TestCase):
             "android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt"
         )
         self.assertIn("fun runtime_snapshot(json: String)", bridge)
+        # Traffic rides the snapshot now, so the separate statistics payload
+        # and its JNI callback are gone from every layer.
+        self.assertNotIn("fun statistics(", bridge)
+        self.assertNotIn("StatisticsJNI", native)
+        self.assertNotIn(
+            "getStatistics",
+            self.source(
+                "android/android/app/src/main/kotlin/supersocksr/ppp/android/MainActivity.kt"
+            ),
+        )
+        self.assertNotIn(
+            "setStatistics",
+            self.source(
+                "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppStateStore.kt"
+            ),
+        )
 
         service = self.source(
             "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"

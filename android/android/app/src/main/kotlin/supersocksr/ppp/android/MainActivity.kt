@@ -60,9 +60,6 @@ class MainActivity : FlutterActivity() {
                         PppLog.clear(this)
                         result.success(true)
                     }
-                    "getStatistics" -> {
-                        result.success(PppStateStore.getStatistics(this))
-                    }
                     "getRuntimeSnapshot" -> {
                         // Mirrored by PppVpnService from the `:vpn` process;
                         // null while that process is not alive.

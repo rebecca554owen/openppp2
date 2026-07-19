@@ -209,12 +209,12 @@ All Android entries below are **Internal** to the bundled Flutter application. C
 
 | Boundary | Operations / payload | Lifecycle | Source truth |
 |---|---|---|---|
-| Flutter MethodChannel `supersocksr.ppp/vpn` | `connect`, `disconnect`, `getRuntimeSnapshot`, `getLastError`, `getStatistics`, `readLog`, `getLogPath`, `clearLog`, `getVpnHeartbeatAgeMs`, installed-app query, diagnostics, `requestPermission` | UI process; asynchronous calls | `android/lib/vpn_service.dart`, `MainActivity.kt` |
+| Flutter MethodChannel `supersocksr.ppp/vpn` | `connect`, `disconnect`, `getRuntimeSnapshot`, `getLastError`, `readLog`, `getLogPath`, `clearLog`, `getVpnHeartbeatAgeMs`, installed-app query, diagnostics, `requestPermission` | UI process; asynchronous calls | `android/lib/vpn_service.dart`, `MainActivity.kt` |
 | Activity → service Intent | connect/disconnect actions with `config_json`, `vpn_options_json` extras | Starts foreground non-exported `:vpn` service | `MainActivity.kt`, `PppVpnService.kt` |
 | Kotlin → JNI | native run/stop, state/statistics/error/snapshot, socket protection, telemetry HTTP callback | `run()` blocks a background thread; callbacks require live service | `android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt`, `android/libopenppp2.cpp` |
-| JNI → Kotlin | `statistics`, `runtime_snapshot`, `protect`, `start_exec`, `post_exec`, telemetry HTTP | Static callbacks on `libopenppp2`; invoked from arbitrary runtime threads, so each attaches the JVM and never caches `JNIEnv*` | same |
+| JNI → Kotlin | `runtime_snapshot`, `protect`, `start_exec`, `post_exec`, telemetry HTTP | Static callbacks on `libopenppp2`; invoked from arbitrary runtime threads, so each attaches the JVM and never caches `JNIEnv*` | same |
 | Profile storage | `profiles_v2`, active ID, options, bounded history | App-private SharedPreferences | `android/lib/services/profile_store.dart` |
-| Cross-process state | `openppp2-runtime-snapshot.json`, `openppp2-lasterror.txt`, `openppp2-statistics.json`, `openppp2-linkstate.txt` | Atomic replace via temporary file plus rename; heartbeat freshness is 30 seconds | `PppStateStore.kt`, `MainActivity.kt` |
+| Cross-process state | `openppp2-runtime-snapshot.json`, `openppp2-lasterror.txt`, `openppp2-linkstate.txt` | Atomic replace via temporary file plus rename; heartbeat freshness is 30 seconds | `PppStateStore.kt`, `MainActivity.kt` |
 
 `PppVpnService` runs in `:vpn`. The EventChannel it previously published to resolved a process-local static sink and delivered nothing, so it has been removed; the service now mirrors every runtime snapshot and error to the files above and the UI process polls them once per second while visible. Native publishes reach the service through the `runtime_snapshot` JNI callback and are ordered by the snapshot's own `generation` and `monotonic_ms`.
 
