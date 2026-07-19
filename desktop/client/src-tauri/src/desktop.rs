@@ -1,7 +1,10 @@
 use crate::config::{build_node_config_with_base, default_config_string};
+use crate::lifecycle::{
+    close_action, should_disconnect_on_exit, tray_primary_action, CloseAction, TrayPrimaryAction,
+};
 use crate::pinger::{probe_nodes, targets_for_nodes};
 use crate::preferences::{load_preferences, save_preferences, update_setting, Preferences};
-use crate::process::{CommandSpec, ProcessManager};
+use crate::process::{CommandSpec, ProcessEvent, ProcessManager};
 use crate::subscription::{
     refresh_with, RefreshResult, SubscriptionDocument, SubscriptionNode, MAX_SUBSCRIPTION_BYTES,
 };
@@ -11,9 +14,14 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent, Wry};
 use url::Url;
 
 pub struct DesktopState {
@@ -21,6 +29,14 @@ pub struct DesktopState {
     preferences: Mutex<Preferences>,
     subscription: Mutex<Option<StoredSubscription>>,
     process: Mutex<ProcessManager>,
+    last_node_id: Mutex<Option<String>>,
+    tray_items: Mutex<Option<TrayItems>>,
+    exit_requested: AtomicBool,
+}
+
+struct TrayItems {
+    status: MenuItem<Wry>,
+    primary: MenuItem<Wry>,
 }
 
 struct StoredSubscription {
@@ -99,13 +115,21 @@ impl DesktopState {
         let subscription = cached.map(StoredSubscription::from);
         let emitter = app.clone();
         let process = ProcessManager::new(move |event| {
+            let exited = matches!(&event, ProcessEvent::Exited(_));
             let _ = emitter.emit("client://process", event);
+            if exited {
+                let state = emitter.state::<DesktopState>();
+                update_tray(&state, false, None);
+            }
         });
         Ok(Self {
             data_dir,
             preferences: Mutex::new(preferences),
             subscription: Mutex::new(subscription),
             process: Mutex::new(process),
+            last_node_id: Mutex::new(None),
+            tray_items: Mutex::new(None),
+            exit_requested: AtomicBool::new(false),
         })
     }
 
@@ -236,6 +260,10 @@ fn client_connect(
     node_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<ConnectPayload, String> {
+    connect_node(&node_id, &state)
+}
+
+fn connect_node(node_id: &str, state: &DesktopState) -> Result<ConnectPayload, String> {
     let node = state
         .subscription
         .lock()
@@ -276,6 +304,11 @@ fn client_connect(
         .map_err(|_| "进程状态锁已损坏".to_string())?
         .start(spec)
         .map_err(|error| error.to_string())?;
+    *state
+        .last_node_id
+        .lock()
+        .map_err(|_| "最近节点状态锁已损坏".to_string())? = Some(node.id.clone());
+    update_tray(state, true, Some(&node.name));
     Ok(ConnectPayload {
         pid,
         network: network_payload(&node, &config),
@@ -453,11 +486,163 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::rename(temporary, path).map_err(|error| error.to_string())
 }
 
+fn update_tray(state: &DesktopState, running: bool, node_name: Option<&str>) {
+    let Ok(items) = state.tray_items.lock() else {
+        return;
+    };
+    let Some(items) = items.as_ref() else {
+        return;
+    };
+    let status = if running {
+        match node_name {
+            Some(name) => format!("状态：已连接 - {name}"),
+            None => "状态：已连接".to_string(),
+        }
+    } else {
+        "状态：未连接".to_string()
+    };
+    let _ = items.status.set_text(status);
+    let _ = items
+        .primary
+        .set_text(if running { "断开连接" } else { "连接" });
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn handle_tray_primary(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<DesktopState>();
+    let running = state
+        .process
+        .lock()
+        .map_err(|_| "进程状态锁已损坏".to_string())?
+        .is_running();
+    let last_node_id = state
+        .last_node_id
+        .lock()
+        .map_err(|_| "最近节点状态锁已损坏".to_string())?
+        .clone();
+    match tray_primary_action(running, last_node_id.as_deref()) {
+        TrayPrimaryAction::Connect(node_id) => {
+            connect_node(&node_id, &state)?;
+        }
+        TrayPrimaryAction::Disconnect => {
+            state
+                .process
+                .lock()
+                .map_err(|_| "进程状态锁已损坏".to_string())?
+                .stop()
+                .map_err(|error| error.to_string())?;
+            update_tray(&state, false, None);
+        }
+        TrayPrimaryAction::ShowWindow => show_main_window(app),
+    }
+    Ok(())
+}
+
+fn prepare_exit(app: &AppHandle) {
+    let state = app.state::<DesktopState>();
+    if state.exit_requested.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let disconnect = state
+        .preferences
+        .lock()
+        .map(|preferences| preferences.settings.disconnect_on_exit)
+        .unwrap_or(true);
+    if should_disconnect_on_exit(disconnect) {
+        let result = state
+            .process
+            .lock()
+            .map_err(|_| "进程状态锁已损坏".to_string())
+            .and_then(|mut process| process.stop().map_err(|error| error.to_string()));
+        if let Err(error) = result {
+            let _ = app.emit("client://tray-error", error);
+        }
+    }
+}
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let status = MenuItem::with_id(app, "status", "状态：未连接", false, None::<&str>)?;
+    let primary = MenuItem::with_id(app, "primary", "连接", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "打开 OpenPPP2", true, None::<&str>)?;
+    let exit = MenuItem::with_id(app, "exit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&status, &primary, &show, &exit])?;
+
+    let mut builder = TrayIconBuilder::with_id("main")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("OpenPPP2 Client")
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "primary" => {
+                if let Err(error) = handle_tray_primary(app) {
+                    let _ = app.emit("client://tray-error", error);
+                    show_main_window(app);
+                }
+            }
+            "show" => show_main_window(app),
+            "exit" => {
+                prepare_exit(app);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+
+    if let Ok(mut items) = app.state::<DesktopState>().tray_items.lock() {
+        *items = Some(TrayItems { status, primary });
+    }
+    Ok(())
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             app.manage(DesktopState::new(&app.handle())?);
+            setup_tray(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<DesktopState>();
+                let close_to_tray = state
+                    .preferences
+                    .lock()
+                    .map(|preferences| preferences.settings.close_to_tray)
+                    .unwrap_or(true);
+                match close_action(close_to_tray, state.exit_requested.load(Ordering::SeqCst)) {
+                    CloseAction::HideToTray => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    CloseAction::Exit => {
+                        api.prevent_close();
+                        prepare_exit(window.app_handle());
+                        window.app_handle().exit(0);
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             client_bootstrap,
@@ -469,8 +654,13 @@ pub fn run() {
             client_update_setting,
             client_toggle_favorite,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run OpenPPP2 Client");
+        .build(tauri::generate_context!())
+        .expect("failed to build OpenPPP2 Client");
+    app.run(|app, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            prepare_exit(app);
+        }
+    });
 }
 
 #[cfg(test)]
