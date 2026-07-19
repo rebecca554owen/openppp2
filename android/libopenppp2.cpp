@@ -336,7 +336,7 @@ public:
     ppp::app::runtime::RuntimeLifecycle                                     runtime_lifecycle_;
 
 private:
-    bool                                                                    ReportTransmissionStatistics() noexcept;
+    bool                                                                    ReportTransmissionStatistics(uint64_t now) noexcept;
     bool                                                                    GetTransmissionStatistics(uint64_t& incoming_traffic, uint64_t& outgoing_traffic, std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics_snapshot) noexcept;
 
 public:
@@ -473,11 +473,11 @@ bool                                                                        libo
                 now);
         }
     }
-    ReportTransmissionStatistics();
+    ReportTransmissionStatistics(now);
     return true;
 }
 
-bool                                                                        libopenppp2_application::ReportTransmissionStatistics() noexcept {
+bool                                                                        libopenppp2_application::ReportTransmissionStatistics(uint64_t now) noexcept {
     // Get statistics on the physical network transport layer of the Virtual Ethernet switcher.
     struct {
         uint64_t                                                            incoming_traffic;
@@ -502,6 +502,16 @@ bool                                                                        libo
 
     const uint64_t in_total = json.isMember("in") ? JsonAuxiliary::AsUInt64(json["in"]) : 0;
     const uint64_t out_total = json.isMember("out") ? JsonAuxiliary::AsUInt64(json["out"]) : 0;
+
+    // Publish the totals through the runtime snapshot as well; consumers derive
+    // rates from two snapshots instead of accumulating per-tick deltas.
+    if (const uint64_t generation = runtime_lifecycle_.GetSnapshot().generation; generation != 0) {
+        ppp::app::runtime::RuntimeTraffic traffic;
+        traffic.rx_bytes = in_total;
+        traffic.tx_bytes = out_total;
+        runtime_lifecycle_.UpdateTraffic(generation, traffic, now);
+    }
+
     if (last_reported_statistics_.tx == TransmissionStatistics.outgoing_traffic &&
         last_reported_statistics_.rx == TransmissionStatistics.incoming_traffic &&
         last_reported_statistics_.in == in_total &&

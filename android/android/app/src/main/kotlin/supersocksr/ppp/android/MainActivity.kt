@@ -11,12 +11,9 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.VpnService
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.util.Base64
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import org.json.JSONObject
@@ -24,18 +21,8 @@ import org.json.JSONObject
 class MainActivity : FlutterActivity() {
     companion object {
         private const val METHOD_CHANNEL = "supersocksr.ppp/vpn"
-        private const val EVENT_CHANNEL = "supersocksr.ppp/vpn_events"
         private const val VPN_PERMISSION_REQUEST = 1001
         private const val NOTIFICATION_PERMISSION_REQUEST = 1002
-
-        private var eventSink: EventChannel.EventSink? = null
-        private val mainHandler = Handler(Looper.getMainLooper())
-
-        fun sendEvent(data: Map<String, Any?>) {
-            mainHandler.post {
-                eventSink?.success(data)
-            }
-        }
     }
 
     private var pendingConfig: String? = null
@@ -84,22 +71,6 @@ class MainActivity : FlutterActivity() {
                     "getLastError" -> {
                         result.success(PppStateStore.getLastError(this))
                     }
-                    "getLinkState" -> {
-                        // The native engine lives in the `:vpn` process, so we
-                        // CANNOT call libopenppp2.get_link_state() from this
-                        // (UI) process -- the loaded library is process-local
-                        // and would always report CLIENT_UNINITIALIZED here.
-                        // PppVpnService polls the native value and writes it
-                        // to a file via PppStateStore; we read that file here.
-                        // Same liveness gate as getState: if :vpn is dead, the
-                        // file is stale and would pin the UI on "Initializing".
-                        if (!PppStateStore.isVpnAlive(this)) {
-                            PppStateStore.clearLinkState(this)
-                            result.success(6) // APPLICATION_UNINITIALIZED
-                            return@setMethodCallHandler
-                        }
-                        result.success(PppStateStore.getLinkState(this))
-                    }
                     "getVpnHeartbeatAgeMs" -> {
                         // Returns milliseconds since :vpn last wrote the link
                         // state file. UI uses this as a liveness signal --
@@ -129,44 +100,9 @@ class MainActivity : FlutterActivity() {
                     "requestPermission" -> {
                         requestVpnPermission(result)
                     }
-                    "getState" -> {
-                        result.success(legacyStateFromSnapshot())
-                    }
                     else -> result.notImplemented()
                 }
             }
-
-        // Event Channel
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    eventSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    eventSink = null
-                }
-            })
-    }
-
-    /**
-     * Legacy four-value connection state derived from the mirrored runtime
-     * snapshot. The snapshot phase is the authoritative lifecycle signal; this
-     * mapping exists only for callers that still speak the older enum.
-     */
-    private fun legacyStateFromSnapshot(): Int {
-        val raw = PppStateStore.getRuntimeSnapshotIfAlive(this) ?: return 0
-        val phase = try {
-            JSONObject(raw).optString("phase")
-        } catch (_: Throwable) {
-            return 0
-        }
-        return when (phase) {
-            "connected" -> 2
-            "stopping" -> 3
-            "idle", "failed", "unknown", "" -> 0
-            else -> 1
-        }
     }
 
     private fun handleConnect(config: String, vpnOptions: String, result: MethodChannel.Result) {

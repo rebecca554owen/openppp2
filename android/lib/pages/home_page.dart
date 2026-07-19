@@ -6,6 +6,7 @@ import '../models/launch_route_mode.dart';
 import '../runtime/runtime_controls.dart';
 import '../runtime/runtime_snapshot.dart';
 import '../runtime/runtime_store.dart';
+import '../runtime/runtime_traffic_rate.dart';
 import '../services/profile_store.dart';
 import '../services/telemetry_settings_store.dart';
 import '../vpn_service.dart';
@@ -25,14 +26,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final _store = ProfileStore();
   late final RuntimeStore _runtimeStore;
 
-  VpnStatistics _stats = const VpnStatistics();
   List<ConfigProfile> _profiles = const [];
   ConfigProfile? _active;
   Map<String, dynamic> _launchOptions = Map<String, dynamic>.from(
     ProfileStore.defaultOptions,
   );
-  DateTime? _connectedAt;
-  String _duration = '00:00:00';
   String? _lastError;
   bool _debugPanelEnabled = false;
   String _debugLog = '';
@@ -40,7 +38,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int? _pendingStartGeneration;
   int? _pendingStopGeneration;
 
-  Timer? _durationTimer;
   Timer? _connectWatchdogTimer;
   Timer? _stopPresentationTimer;
   Timer? _logPollTimer;
@@ -48,8 +45,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   static const _stopPresentationTimeout = Duration(seconds: 15);
 
-  StreamSubscription<VpnState>? _stateSub;
-  StreamSubscription<VpnStatistics>? _statsSub;
   StreamSubscription<String>? _errorSub;
   StreamSubscription<void>? _storeSub;
 
@@ -60,11 +55,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _vpnService.init();
     _runtimeStore = _vpnService.runtimeStore;
     _runtimeStore.addListener(_runtimeChanged);
-    _stateSub = _vpnService.stateStream.listen(_applyState);
-    _statsSub = _vpnService.statsStream.listen((stats) {
-      if (!mounted) return;
-      setState(() => _stats = stats);
-    });
     _errorSub = _vpnService.errorStream.listen((error) {
       if (!mounted) return;
       _connectWatchdogTimer?.cancel();
@@ -74,7 +64,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _storeSub = _store.changes.listen((_) => _refreshStore());
 
     unawaited(_refreshStore());
-    unawaited(_refreshStartupState());
     unawaited(_loadDebugPanelEnabled());
   }
 
@@ -108,15 +97,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _pendingStopGeneration = null;
       }
       if (phase == RuntimePhase.connected) {
-        _connectedAt ??= DateTime.now();
         _connectWatchdogTimer?.cancel();
-        _startDurationTimer();
-      } else if (phase == RuntimePhase.idle || phase == RuntimePhase.failed) {
-        _connectedAt = null;
-        _durationTimer?.cancel();
-        _duration = '00:00:00';
-      } else if (phase == RuntimePhase.reconnecting) {
-        _connectedAt = null;
       }
     });
   }
@@ -141,7 +122,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(_refreshStartupState());
       unawaited(_refreshStore());
       unawaited(_loadDebugPanelEnabled());
     }
@@ -167,44 +147,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
-  void _startDurationTimer() {
-    _durationTimer?.cancel();
-    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_connectedAt != null && mounted) {
-        final diff = DateTime.now().difference(_connectedAt!);
-        setState(() => _duration = _formatDuration(diff));
-      }
-    });
-  }
-
-  Future<void> _refreshStartupState() async {
-    final state = await _vpnService.getState();
-    if (!mounted) return;
-    _applyState(state);
-    if (state == VpnState.connected || state == VpnState.connecting) {
-      unawaited(_refreshStatistics());
-    }
-  }
-
-  Future<void> _refreshStatistics() async {
-    final stats = await _vpnService.getStatistics();
-    if (!mounted) return;
-    setState(() => _stats = stats);
-  }
-
-  void _applyState(VpnState state) {
-    if (!mounted) return;
-    setState(() {
-      if (state == VpnState.disconnected) {
-        _pendingStopGeneration = null;
-        _connectedAt = null;
-        _connectWatchdogTimer?.cancel();
-        _durationTimer?.cancel();
-        _duration = '00:00:00';
-        _stats = const VpnStatistics();
-      }
-    });
-  }
+  /// Elapsed connect time comes from the runtime snapshot's own clock, so it
+  /// stays correct after the UI process is killed and recreated while `:vpn`
+  /// keeps running.
+  String get _duration => _formatDuration(
+        Duration(milliseconds: connectedElapsedMs(_runtimeStore.state)),
+      );
 
   String _formatDuration(Duration d) {
     final h = d.inHours.toString().padLeft(2, '0');
@@ -497,15 +445,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stateSub?.cancel();
-    _statsSub?.cancel();
     _errorSub?.cancel();
     _storeSub?.cancel();
     _runtimeStore.removeListener(_runtimeChanged);
     _connectWatchdogTimer?.cancel();
     _stopPresentationTimer?.cancel();
     _logPollTimer?.cancel();
-    _durationTimer?.cancel();
     super.dispose();
   }
 
@@ -541,8 +486,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               isBusy: controls.isBusy,
               buttonLabel: controls.buttonLabel,
               buttonEnabled: controls.buttonEnabled && !commandPending,
-              uploadText: _formatSpeed(_stats.txSpeedBytes),
-              downloadText: _formatSpeed(_stats.rxSpeedBytes),
+              uploadText: _formatSpeed(_vpnService.traffic.txBytesPerSecond),
+              downloadText: _formatSpeed(_vpnService.traffic.rxBytesPerSecond),
               allowLan: _launchOptions['allowLan'] == true,
               blockQuic: _launchOptions['blockQuic'] == true,
               routeMode: routeMode,

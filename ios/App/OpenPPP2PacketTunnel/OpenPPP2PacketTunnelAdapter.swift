@@ -233,12 +233,21 @@ final class OpenPPP2PacketTunnelAdapter {
             return nil
         }
 
-        var buffer = [CChar](repeating: 0, count: 2_048)
-        let count = openppp2_ios_tap_get_runtime_snapshot(tap, &buffer, Int32(buffer.count))
-        guard count > 0 else {
-            return nil
+        // The bridge truncates silently but returns the full length, so grow
+        // and retry rather than decoding a cut-off payload.
+        var capacity = 4_096
+        for _ in 0..<2 {
+            var buffer = [CChar](repeating: 0, count: capacity)
+            let count = openppp2_ios_tap_get_runtime_snapshot(tap, &buffer, Int32(buffer.count))
+            guard count > 0 else {
+                return nil
+            }
+            if count < buffer.count {
+                return String(cString: buffer)
+            }
+            capacity = Int(count) + 1
         }
-        return String(cString: buffer)
+        return nil
     }
 
     private func readPackets() {

@@ -65,8 +65,9 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("decodeRuntimeOrdering", android)
         self.assertIn("runtimeStore.applyUnknown", android)
         self.assertIn("_markRuntimeUnavailable", android)
-        self.assertIn("onError:", android)
-        self.assertIn("onDone:", android)
+        # An unreadable mirror ends the session instead of leaving the last
+        # connected snapshot on screen.
+        self.assertIn("runtimeStore.endSession()", android)
         self.assertIn("decodeOrdering", ios)
         self.assertIn("runtimeStore.applyUnknown", ios)
         self.assertIn("runtimeStore.markUnknown()", ios)
@@ -91,11 +92,13 @@ class RuntimeUIWiringTests(unittest.TestCase):
         # so any benign log line containing "failed" reported a disconnect.
         self.assertNotIn("lastIndexOf", activity)
         self.assertNotIn("vpnThread started", activity)
-        self.assertIn("legacyStateFromSnapshot()", activity)
+        self.assertNotIn('"getState"', activity)
         self.assertIn("getRuntimeSnapshotIfAlive", activity)
-        # Statics of a service running in `:vpn` are always zero here.
+        # Statics of a service running in `:vpn` are always zero here, and the
+        # EventChannel sink it wrote to never existed in that process.
         self.assertNotIn("PppVpnService.isRunning", activity)
         self.assertNotIn("PppVpnService.currentState", activity)
+        self.assertNotIn("EventChannel", activity)
 
         home = self.source("android/lib/pages/home_page.dart")
         self.assertNotIn("vpnThread started", home)
@@ -103,6 +106,28 @@ class RuntimeUIWiringTests(unittest.TestCase):
         settings = self.source("android/lib/pages/settings_page.dart")
         self.assertNotIn("VpnState", settings)
         self.assertIn("controlsFor(_runtimeStore.state.phase)", settings)
+
+    def test_android_ui_reads_only_the_runtime_snapshot(self) -> None:
+        dart = self.source("android/lib/vpn_service.dart")
+        # The legacy four-value state, the key-guessing statistics parser, and
+        # the cross-process EventChannel are all gone.
+        self.assertNotIn("enum VpnState", dart)
+        self.assertNotIn("VpnStatistics", dart)
+        self.assertNotIn("EventChannel", dart)
+        self.assertNotIn("outgoingTraffic", dart)
+        self.assertIn("RuntimeTrafficRate", dart)
+
+        home = self.source("android/lib/pages/home_page.dart")
+        self.assertNotIn("VpnState", home)
+        self.assertNotIn("VpnStatistics", home)
+        self.assertNotIn("_connectedAt", home)
+        self.assertIn("connectedElapsedMs(_runtimeStore.state)", home)
+        self.assertIn("_vpnService.traffic.txBytesPerSecond", home)
+
+        service = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
+        )
+        self.assertNotIn("MainActivity.sendEvent", service)
 
     def test_android_service_mirrors_runtime_state_across_processes(self) -> None:
         service = self.source(

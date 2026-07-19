@@ -61,8 +61,6 @@ class PppVpnService : VpnService() {
     private var linkStateThread: HandlerThread? = null
     private var linkStateHandler: Handler? = null
     private var connectStartedAtMs: Long = 0L
-    private var lastReportedLinkState: Int = 6
-    private var lastReportedRuntimeSnapshot: String? = null
     private var lastNotificationText: String? = null
     private var activeConfigJson: String? = null
     private var activeVpnOptionsJson: String? = null
@@ -93,20 +91,14 @@ class PppVpnService : VpnService() {
         }
     }
 
-    private fun publishRuntimeSnapshot(value: String?, forceEvent: Boolean = false) {
+    private fun publishRuntimeSnapshot(value: String?) {
         if (value.isNullOrBlank()) return
         PppStateStore.setRuntimeSnapshot(this, value)
         updateNotificationForSnapshot(value)
-        if (!forceEvent && value == lastReportedRuntimeSnapshot) return
-        lastReportedRuntimeSnapshot = value
-        MainActivity.sendEvent(mapOf("type" to "runtimeSnapshot", "value" to value))
     }
 
-    private fun publishLinkState(value: Int, forceEvent: Boolean = false) {
+    private fun publishLinkState(value: Int) {
         PppStateStore.setLinkState(this, value)
-        if (!forceEvent && value == lastReportedLinkState) return
-        lastReportedLinkState = value
-        MainActivity.sendEvent(mapOf("type" to "linkState", "value" to value))
     }
 
     /**
@@ -136,8 +128,6 @@ class PppVpnService : VpnService() {
 
     private fun startLinkStatePoller() {
         if (linkStateThread != null) return
-        lastReportedLinkState = 6
-        lastReportedRuntimeSnapshot = null
         lastNotificationText = null
         val t = HandlerThread("openppp2-linkstate").also { it.start() }
         linkStateThread = t
@@ -148,7 +138,7 @@ class PppVpnService : VpnService() {
 
     private fun stopLinkStatePoller() {
         try {
-            publishRuntimeSnapshot(libopenppp2.get_runtime_snapshot(), forceEvent = true)
+            publishRuntimeSnapshot(libopenppp2.get_runtime_snapshot())
         } catch (e: Throwable) {
             PppLog.write(this, "final get_runtime_snapshot failed", e)
         }
@@ -157,7 +147,7 @@ class PppVpnService : VpnService() {
         linkStateThread?.quitSafely()
         linkStateThread = null
         PppStateStore.clearLinkState(this)
-        publishLinkState(6, forceEvent = true)
+        publishLinkState(6)
     }
 
     override fun onCreate() {
@@ -653,7 +643,7 @@ class PppVpnService : VpnService() {
         Log.i(TAG, "perf connect_established_ms=$connectElapsedMs")
         PppLog.write(this, "onStarted key=$key")
         PppLog.write(this, "VPN started with key=$key")
-        publishLinkState(0, forceEvent = true)
+        publishLinkState(0)
         notifyStateChanged(2) // connected
     }
 
@@ -665,7 +655,6 @@ class PppVpnService : VpnService() {
         if (json == lastStatisticsJson) return
         lastStatisticsJson = json
         PppStateStore.setStatistics(this, json)
-        MainActivity.sendEvent(mapOf("type" to "statistics", "value" to json))
         statsPerfLogTicks += 1
         if (statsPerfLogTicks % 10 == 0) {
             PppLog.write(this, "perf statistics=$json")
@@ -679,7 +668,6 @@ class PppVpnService : VpnService() {
             statsPerfLogTicks = 0
         }
         PppStateStore.set(this, state)
-        MainActivity.sendEvent(mapOf("type" to "state", "value" to state))
     }
 
     /**
@@ -703,7 +691,6 @@ class PppVpnService : VpnService() {
         Log.e(TAG, message)
         PppLog.write(this, message)
         PppStateStore.setLastError(this, message)
-        MainActivity.sendEvent(mapOf("type" to "error", "value" to message))
     }
 
     private fun buildConfigureIntent(): PendingIntent {

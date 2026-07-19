@@ -190,6 +190,39 @@ BOOST_AUTO_TEST_CASE(unknown_optional_fields_are_ignored) {
     BOOST_TEST(snapshot.capabilities[3] == "mux.stripe");
 }
 
+BOOST_AUTO_TEST_CASE(traffic_and_connect_time_round_trip) {
+    runtime::RuntimeSnapshot snapshot;
+    snapshot.generation = 3;
+    snapshot.monotonic_ms = 900;
+    snapshot.phase = runtime::RuntimePhase::Connected;
+    snapshot.traffic.rx_bytes = 4096;
+    snapshot.traffic.tx_bytes = 1024;
+    snapshot.connected_monotonic_ms = 500;
+
+    runtime::RuntimeSnapshot parsed;
+    BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(
+        runtime::SerializeRuntimeSnapshot(snapshot), parsed));
+    BOOST_TEST(parsed.traffic.rx_bytes == 4096u);
+    BOOST_TEST(parsed.traffic.tx_bytes == 1024u);
+    BOOST_TEST(parsed.connected_monotonic_ms == 500u);
+}
+
+BOOST_AUTO_TEST_CASE(connected_fixture_carries_traffic_and_connect_time) {
+    runtime::RuntimeSnapshot snapshot;
+    BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(ReadFixture("connected.json"), snapshot));
+    BOOST_TEST(snapshot.traffic.rx_bytes == 10485760u);
+    BOOST_TEST(snapshot.traffic.tx_bytes == 2097152u);
+    BOOST_TEST(snapshot.connected_monotonic_ms == 30000u);
+}
+
+BOOST_AUTO_TEST_CASE(absent_traffic_and_connect_time_default_to_zero) {
+    runtime::RuntimeSnapshot snapshot;
+    BOOST_REQUIRE(runtime::ParseRuntimeSnapshot(ReadFixture("idle.json"), snapshot));
+    BOOST_TEST(snapshot.traffic.rx_bytes == 0u);
+    BOOST_TEST(snapshot.traffic.tx_bytes == 0u);
+    BOOST_TEST(snapshot.connected_monotonic_ms == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(unknown_phase_is_rejected) {
     runtime::RuntimeSnapshot snapshot;
     BOOST_TEST(!runtime::ParseRuntimeSnapshot(
