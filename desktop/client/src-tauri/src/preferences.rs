@@ -1,6 +1,7 @@
+use crate::subscription::SubscriptionNode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
@@ -34,6 +35,8 @@ pub struct Preferences {
     pub ppp_path: String,
     pub raw_config: String,
     pub favorites: BTreeSet<String>,
+    pub manual_nodes: Vec<SubscriptionNode>,
+    pub launch_options: BTreeMap<String, Value>,
     pub settings: ClientSettings,
 }
 
