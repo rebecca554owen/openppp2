@@ -84,6 +84,17 @@ chmod +x tools/proxy_mode_smoke.sh
 PPP_BIN=./bin/ppp CONFIG=./appsettings.json ./tools/proxy_mode_smoke.sh
 ```
 
+## Client+server functional smoke
+
+Use the combined client/server smoke for interoperability changes that need the Android default key material in `tools/compat/`. It starts a local server, a proxy-mode client, and a TCP echo target with unique per-run ports:
+
+```bash
+sudo PPP_BIN=./bin/ppp COMPAT_MODE=match ./tools/client_server_compat_smoke.sh
+sudo PPP_BIN=./bin/ppp COMPAT_MODE=mismatch ./tools/client_server_compat_smoke.sh
+```
+
+Pull request CI should prefer this functional smoke over emulator coverage when validating client/server interoperability.
+
 ## Test Layout
 
 ```text
