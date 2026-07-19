@@ -15,7 +15,6 @@
 This section preserves historical material. Every entry is archived and is not current configuration guidance.
 
 - [Runtime/UI Execution Status](2026-07-12-runtime-ui-execution-status.md)
-- [docs 目录调试文档](debug.md)
 - [IPv6 Implementation Analysis and Fixes](IPV6_FIXES.md)
 - [VMUX Defect Ledger and Fix / Optimization Plan](MUX_DEFECTS_AND_FIXES.md)
 - [P2P Networking — Manual Validation Scenarios](P2P_MANUAL_VALIDATION.md)
