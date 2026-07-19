@@ -12,6 +12,7 @@ function fakeBridge() {
       nodes: [{ id: 'real-1', name: 'Real 1', subtitle: 'edge', address: '127.0.0.1:20000', latencyMs: null, favorite: false }],
     },
     config: '{"concurrent":1}',
+    launchOptions: { mux: 2, muxMode: 'compat' },
     settings: { autostart: false, closeToTray: true, disconnectOnExit: true, language: '简体中文', appearance: '深色', pppPath: '' },
   }
   return {
@@ -22,6 +23,12 @@ function fakeBridge() {
         if (command === 'client_bootstrap') return bootstrap
         if (command === 'subscription_refresh') return bootstrap.subscription
         if (command === 'client_probe_latency') return { 'real-1': 17 }
+        if (command === 'client_upsert_manual_node') return {
+          ...bootstrap.subscription,
+          nodes: [{ id: 'manual:1', name: args.node.name, subtitle: '', address: '127.0.0.1:21000', latencyMs: null, favorite: false, source: 'manual', config: args.node.config, options: args.node.options }],
+        }
+        if (command === 'client_delete_manual_node') return { ...bootstrap.subscription, nodes: [] }
+        if (command === 'client_update_launch_options') return args.options
         return null
       } },
       event: { listen: async (name, handler) => {
@@ -103,4 +110,32 @@ test('tauri runtime maps stats and persists edits through explicit commands', as
   await runtime.updateSetting('pppPath', 'C:\\ppp.exe')
   await runtime.toggleFavorite('real-1')
   assert.deepEqual(fake.calls.slice(-3).map(([name]) => name), ['client_update_config', 'client_update_setting', 'client_toggle_favorite'])
+})
+
+test('tauri runtime persists manual profiles and launch options through backend snapshots', async () => {
+  const fake = fakeBridge()
+  const runtime = createTauriRuntime(fake.bridge)
+  let state
+  runtime.subscribe((next) => { state = next })
+  await runtime.ready
+  assert.deepEqual(state.launchOptions, { mux: 2, muxMode: 'compat' })
+
+  const node = {
+    id: null,
+    name: 'Local',
+    subtitle: '',
+    config: { key: { 'protocol-key': 'p' }, client: { server: 'ppp://127.0.0.1:21000/' } },
+    options: {},
+  }
+  await runtime.saveManualNode(node)
+  assert.equal(fake.calls.some(([name]) => name === 'client_upsert_manual_node'), true)
+  assert.equal(state.subscription.nodes[0].source, 'manual')
+
+  await runtime.updateLaunchOptions({ mux: 4, muxMode: 'flow' })
+  assert.equal(fake.calls.at(-1)[0], 'client_update_launch_options')
+  assert.deepEqual(state.launchOptions, { mux: 4, muxMode: 'flow' })
+
+  await runtime.deleteManualNode('manual:1')
+  assert.equal(fake.calls.at(-1)[0], 'client_delete_manual_node')
+  assert.equal(state.subscription.nodes.length, 0)
 })

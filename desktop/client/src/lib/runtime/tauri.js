@@ -77,6 +77,7 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
     const bootstrap = await bridge.core.invoke('client_bootstrap')
     if (bootstrap.subscription) state.subscription = bootstrap.subscription
     state.config = bootstrap.config || '{}'
+    state.launchOptions = bootstrap.launchOptions || {}
     state.settings = { ...state.settings, ...bootstrap.settings }
     emit()
     void probeLatency()
@@ -142,6 +143,25 @@ export function createTauriRuntime(bridge = window.__TAURI__) {
       await bridge.core.invoke('client_update_config', { config })
       state.config = config
       emit()
+    },
+    async saveManualNode(node) {
+      const subscription = await bridge.core.invoke('client_upsert_manual_node', { node })
+      state.subscription = subscription
+      emit()
+      void probeLatency()
+      return subscription
+    },
+    async deleteManualNode(nodeId) {
+      const subscription = await bridge.core.invoke('client_delete_manual_node', { nodeId })
+      state.subscription = subscription
+      emit()
+      return subscription
+    },
+    async updateLaunchOptions(options) {
+      const saved = await bridge.core.invoke('client_update_launch_options', { options })
+      state.launchOptions = saved || {}
+      emit()
+      return state.launchOptions
     },
     async updateSetting(key, value) {
       await bridge.core.invoke('client_update_setting', { key, value })

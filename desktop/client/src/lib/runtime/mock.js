@@ -94,6 +94,27 @@ export function createMockRuntime() {
       state.config = config
       emit()
     },
+    async saveManualNode(node) {
+      const id = node.id || `manual:${Date.now()}`
+      const server = node.config?.client?.server || ''
+      const address = server.replace(/^ppp:\/\/(?:wss?\/)?/, '').split('/')[0]
+      const saved = { ...node, id, address, latencyMs: null, favorite: false, source: 'manual' }
+      const index = state.subscription.nodes.findIndex((item) => item.id === id)
+      if (index >= 0) state.subscription.nodes[index] = saved
+      else state.subscription.nodes = [saved, ...state.subscription.nodes]
+      emit()
+      return state.subscription
+    },
+    async deleteManualNode(nodeId) {
+      state.subscription.nodes = state.subscription.nodes.filter((node) => node.id !== nodeId)
+      emit()
+      return state.subscription
+    },
+    async updateLaunchOptions(options) {
+      state.launchOptions = structuredClone(options)
+      emit()
+      return state.launchOptions
+    },
     updateSetting(key, value) {
       state.settings = { ...state.settings, [key]: value }
       emit()
