@@ -11,9 +11,9 @@
     <div><span class="label">链路质量</span><strong>{stats.qualityPercent.toFixed(1)}% {stats.qualityGrade}</strong></div>
     <div><span class="label">累计 ↓</span><strong>{formatBytes(stats.rxBytes)}</strong></div>
     <div><span class="label">累计 ↑</span><strong>{formatBytes(stats.txBytes)}</strong></div>
-    <div><span class="label">活动链路</span><strong>{stats.activeLinks}/{stats.requestedLinks} · {stats.effectivePath}</strong></div>
+    <div><span class="label">活动链路</span><strong>{stats.activeLinks}{#if stats.effectivePath} · {stats.effectivePath}{/if}</strong></div>
   </div>
-  <div class="network mono"><span><i>TUN</i>{stats.tunIp}</span><span><i>gw</i>{stats.gateway}</span><span><i>http</i>{stats.httpProxy}</span><span><i>socks</i>{stats.socksProxy}</span></div>
+  {#if stats.tunIp || stats.gateway || stats.httpProxy || stats.socksProxy}<div class="network mono">{#if stats.tunIp}<span><i>TUN</i>{stats.tunIp}</span>{/if}{#if stats.gateway}<span><i>gw</i>{stats.gateway}</span>{/if}{#if stats.httpProxy}<span><i>http</i>{stats.httpProxy}</span>{/if}{#if stats.socksProxy}<span><i>socks</i>{stats.socksProxy}</span>{/if}</div>{/if}
 </section>
 
 <style>

@@ -8,9 +8,9 @@
   import Logs from './routes/Logs.svelte'
   import Config from './routes/Config.svelte'
   import Settings from './routes/Settings.svelte'
-  import { createMockRuntime } from './lib/runtime/mock.js'
+  import { createRuntime } from './lib/runtime/index.js'
 
-  const runtime = createMockRuntime()
+  const runtime = createRuntime()
   let state
   let unsubscribe
 
