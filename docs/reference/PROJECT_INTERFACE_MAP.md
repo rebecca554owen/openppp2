@@ -229,8 +229,8 @@ All iOS entries below are **Internal** to the bundled app and Packet Tunnel exte
 | Boundary | Operations / payload | Lifecycle | Source truth |
 |---|---|---|---|
 | App → Network Extension | Save/load manager, start/stop tunnel, provider configuration | System authorization and `NETunnelProviderManager` lifecycle | `VPNController.swift` |
-| Provider messages | `stats`, `linkState`, `lastError`, `diagnostics`, `crashReports`, `deleteCrashReports`, JSON `uploadCrashReports` | Only a connected `NETunnelProviderSession` can exchange messages | `VPNController.swift`, `PacketTunnelProvider.swift` |
-| Swift → C ABI | `openppp2_ios_version`; tap create/destroy/start/stop/input; link/snapshot/stat/stage queries; last error; telemetry; P2P datagram callbacks | Tap and callback ownership is explicit; provider close must stop callbacks synchronously | `ios/OpenPPP2PacketTunnelBridge.h` |
+| Provider messages | `linkState`, `lastError`, `diagnostics`, `crashReports`, `deleteCrashReports`, JSON `uploadCrashReports` | Only a connected `NETunnelProviderSession` can exchange messages | `VPNController.swift`, `PacketTunnelProvider.swift` |
+| Swift → C ABI | `openppp2_ios_version`; tap create/destroy/start/stop/input; link/snapshot/stage queries; last error; telemetry; P2P datagram callbacks | Tap and callback ownership is explicit; provider close must stop callbacks synchronously | `ios/OpenPPP2PacketTunnelBridge.h` |
 | App Group state | Link heartbeat, runtime snapshot, diagnostics, defaults | App and extension share entitled container; atomic file writes | `TunnelSharedState.swift` |
 | Profile bundle | `type=openppp2-profile-export`, `version=1`, active ID and profiles | User-selected security-scoped file; 2 MiB limit; secrets included | `ProfileImportExport.swift` |
 

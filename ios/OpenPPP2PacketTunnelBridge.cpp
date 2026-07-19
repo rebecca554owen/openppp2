@@ -42,16 +42,12 @@ struct openppp2_ios_tap
     std::shared_ptr<boost::asio::io_context>                                    context;
     std::shared_ptr<ppp::threading::BufferswapAllocator>                        allocator;
     std::shared_ptr<ppp::p2p::IP2PDatagramTransportFactory>                    p2p_datagram_factory;
-    ppp::transmissions::ITransmissionStatistics                                 statistics_reference;
     ppp::string                                                                 start_stage = "idle";
     std::thread                                                                 runtime_thread;
     openppp2_ios_packet_writer                                                  writer = nullptr;
     void*                                                                       user_data = nullptr;
-    ppp::string                                                                 latest_statistics = "{}";
     uint64_t                                                                    inbound_total = 0;
     uint64_t                                                                    outbound_total = 0;
-    uint64_t                                                                    inbound_last = 0;
-    uint64_t                                                                    outbound_last = 0;
     int                                                                         link_state = 6;
     int                                                                         start_result = 1;
     bool                                                                        start_completed = false;
@@ -128,8 +124,8 @@ namespace
             runtime.generation,
             exchanger->GetMuxRuntimeState(),
             runtime_now_ms());
-        // Read the lifetime counters directly: the delta helper rebases its
-        // reference, so calling it here would zero the statistics reader.
+        // Lifetime counters, read straight from the atomics: the delta helper
+        // rebases its reference and would make the totals non-monotonic.
         if (std::shared_ptr<ITransmissionStatistics> statistics = client->GetStatistics(); statistics != nullptr)
         {
             ppp::app::runtime::RuntimeTraffic traffic;
@@ -322,20 +318,6 @@ namespace
         }
         buffer[count] = '\0';
         return true;
-    }
-
-    ppp::string make_statistics_json(uint64_t rx_speed, uint64_t tx_speed, uint64_t in_total, uint64_t out_total) noexcept
-    {
-        char buffer[192];
-        std::snprintf(
-            buffer,
-            sizeof(buffer),
-            "{\"rx\":\"%" PRIu64 "\",\"tx\":\"%" PRIu64 "\",\"in\":\"%" PRIu64 "\",\"out\":\"%" PRIu64 "\"}",
-            rx_speed,
-            tx_speed,
-            in_total,
-            out_total);
-        return ppp::string(buffer);
     }
 
     ppp::string c_string_or_empty(const char* value) noexcept
@@ -581,60 +563,6 @@ namespace
         return 1;
     }
 
-    bool refresh_engine_statistics_locked(openppp2_ios_tap* tap) noexcept
-    {
-        if (tap == nullptr || tap->client == nullptr || tap->client->IsDisposed())
-        {
-            return false;
-        }
-
-        std::shared_ptr<ITransmissionStatistics> source = tap->client->GetStatistics();
-        if (source == nullptr)
-        {
-            return false;
-        }
-
-        uint64_t incoming = 0;
-        uint64_t outgoing = 0;
-        std::shared_ptr<ITransmissionStatistics> snapshot;
-        if (!ITransmissionStatistics::GetTransmissionStatistics(source, tap->statistics_reference, incoming, outgoing, snapshot))
-        {
-            return false;
-        }
-
-        uint64_t total_in = snapshot == nullptr ? 0 : snapshot->IncomingTraffic.load();
-        uint64_t total_out = snapshot == nullptr ? 0 : snapshot->OutgoingTraffic.load();
-        tap->latest_statistics = make_statistics_json(incoming, outgoing, total_in, total_out);
-        return true;
-    }
-
-    void refresh_statistics(openppp2_ios_tap* tap, openppp2_ios_statistics_writer writer, void* writer_user_data) noexcept
-    {
-        if (nullptr == tap)
-        {
-            return;
-        }
-
-        uint64_t rx_speed = 0;
-        uint64_t tx_speed = 0;
-        {
-            std::lock_guard<std::mutex> scope(tap->sync);
-            if (!refresh_engine_statistics_locked(tap))
-            {
-                rx_speed = tap->inbound_total >= tap->inbound_last ? tap->inbound_total - tap->inbound_last : 0;
-                tx_speed = tap->outbound_total >= tap->outbound_last ? tap->outbound_total - tap->outbound_last : 0;
-                tap->inbound_last = tap->inbound_total;
-                tap->outbound_last = tap->outbound_total;
-                tap->latest_statistics = make_statistics_json(rx_speed, tx_speed, tap->inbound_total, tap->outbound_total);
-            }
-        }
-
-        if (nullptr != writer)
-        {
-            writer(tap->latest_statistics.c_str(), writer_user_data);
-        }
-    }
-
     bool change_working_directory(const char* root_path) noexcept
     {
         if (root_path == nullptr || root_path[0] == '\0')
@@ -671,9 +599,7 @@ namespace
     bool start_runtime(
         openppp2_ios_tap*                  tap,
         const char*                        configuration_json,
-        const openppp2_ios_tunnel_options* options,
-        openppp2_ios_statistics_writer     statistics_writer,
-        void*                              statistics_user_data) noexcept
+        const openppp2_ios_tunnel_options* options) noexcept
     {
         if (tap == nullptr || tap->writer == nullptr)
         {
@@ -726,12 +652,8 @@ namespace
             tap->running = true;
             tap->link_state = 5;
             tap->configuration = configuration;
-            tap->statistics_reference.Clear();
             tap->inbound_total = 0;
             tap->outbound_total = 0;
-            tap->inbound_last = 0;
-            tap->outbound_last = 0;
-            tap->latest_statistics = "{}";
             tap->start_stage = "runtime thread pending";
             tap->packet_logging.store(options_copy.packet_logging != 0, std::memory_order_relaxed);
         }
@@ -740,9 +662,9 @@ namespace
         {
             native_logf("OpenPPP2 native start: creating runtime thread");
             tap->runtime_thread = start_thread_with_stack_size(
-                [tap, configuration, options_copy, ip, gateway, mask, statistics_writer, statistics_user_data]() mutable noexcept
+                [tap, configuration, options_copy, ip, gateway, mask]() mutable noexcept
             {
-                auto start = [tap, configuration, &options_copy, ip, gateway, mask, statistics_writer, statistics_user_data](int, const char**) noexcept -> int
+                auto start = [tap, configuration, &options_copy, ip, gateway, mask](int, const char**) noexcept -> int
                 {
                     set_start_stage(tap, "executor callback entered");
                     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
@@ -867,7 +789,6 @@ namespace
                         tap->link_state = 0;
                     }
 
-                    refresh_statistics(tap, statistics_writer, statistics_user_data);
                     set_last_error("success");
                     set_start_stage(tap, "client opened");
                     return complete_start(tap, 0);
@@ -1049,9 +970,7 @@ void openppp2_ios_tap_destroy(openppp2_ios_tap* tap)
 int openppp2_ios_tap_start(
     openppp2_ios_tap*                  tap,
     const char*                        configuration_json,
-    const openppp2_ios_tunnel_options* options,
-    openppp2_ios_statistics_writer     statistics_writer,
-    void*                              statistics_user_data)
+    const openppp2_ios_tunnel_options* options)
 {
     if (nullptr == tap || nullptr == tap->writer)
     {
@@ -1083,7 +1002,7 @@ int openppp2_ios_tap_start(
         ppp::app::runtime::RuntimePhase::Connecting,
         runtime_now_ms());
 
-    if (!start_runtime(tap, configuration_json, options, statistics_writer, statistics_user_data))
+    if (!start_runtime(tap, configuration_json, options))
     {
         ppp::app::runtime::RuntimeError error;
         error.code = static_cast<uint32_t>(std::max(0, openppp2_ios_last_error_code()));
@@ -1230,7 +1149,6 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
         tap->running = false;
         tap->stopping = false;
         tap->link_state = 2;
-        tap->latest_statistics = "{}";
     }
     return 0;
 }
@@ -1314,37 +1232,6 @@ int openppp2_ios_tap_get_runtime_snapshot(
         return 0;
     }
     return static_cast<int>(snapshot.size());
-}
-
-int openppp2_ios_tap_get_statistics(
-    openppp2_ios_tap* tap,
-    char*             buffer,
-    int               buffer_size)
-{
-    if (nullptr == tap)
-    {
-        return 0;
-    }
-
-    ppp::string statistics;
-    {
-        std::lock_guard<std::mutex> scope(tap->sync);
-        if (!refresh_engine_statistics_locked(tap))
-        {
-            uint64_t rx_speed = tap->inbound_total >= tap->inbound_last ? tap->inbound_total - tap->inbound_last : 0;
-            uint64_t tx_speed = tap->outbound_total >= tap->outbound_last ? tap->outbound_total - tap->outbound_last : 0;
-            tap->inbound_last = tap->inbound_total;
-            tap->outbound_last = tap->outbound_total;
-            tap->latest_statistics = make_statistics_json(rx_speed, tx_speed, tap->inbound_total, tap->outbound_total);
-        }
-        statistics = tap->latest_statistics;
-    }
-
-    if (!copy_text(statistics, buffer, buffer_size))
-    {
-        return 0;
-    }
-    return static_cast<int>(statistics.size());
 }
 
 int openppp2_ios_tap_get_start_stage(

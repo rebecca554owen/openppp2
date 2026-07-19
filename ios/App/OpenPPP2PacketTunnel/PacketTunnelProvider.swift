@@ -183,8 +183,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         switch command {
-        case "stats":
-            completionHandler?(adapter?.statisticsJson().data(using: .utf8))
         case "linkState":
             let state = adapter?.linkState() ?? 2
             completionHandler?("\(state)".data(using: .utf8))
