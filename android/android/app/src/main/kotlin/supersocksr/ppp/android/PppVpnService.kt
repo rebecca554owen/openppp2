@@ -684,26 +684,8 @@ class PppVpnService : VpnService() {
         notifyStateChanged(2) // connected
     }
 
-    @Volatile
-    private var lastStatisticsJson: String? = null
-    private var statsPerfLogTicks: Int = 0
-
-    fun onStatistics(json: String) {
-        if (json == lastStatisticsJson) return
-        lastStatisticsJson = json
-        PppStateStore.setStatistics(this, json)
-        statsPerfLogTicks += 1
-        if (statsPerfLogTicks % 10 == 0) {
-            PppLog.write(this, "perf statistics=$json")
-        }
-    }
-
     private fun notifyStateChanged(state: Int) {
         currentState = state
-        if (state == 0) {
-            lastStatisticsJson = null
-            statsPerfLogTicks = 0
-        }
         PppStateStore.set(this, state)
     }
 

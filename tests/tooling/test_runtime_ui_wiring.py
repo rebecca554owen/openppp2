@@ -211,6 +211,22 @@ class RuntimeUIWiringTests(unittest.TestCase):
             "android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt"
         )
         self.assertIn("fun runtime_snapshot(json: String)", bridge)
+        # Traffic rides the snapshot now, so the separate statistics payload
+        # and its JNI callback are gone from every layer.
+        self.assertNotIn("fun statistics(", bridge)
+        self.assertNotIn("StatisticsJNI", native)
+        self.assertNotIn(
+            "getStatistics",
+            self.source(
+                "android/android/app/src/main/kotlin/supersocksr/ppp/android/MainActivity.kt"
+            ),
+        )
+        self.assertNotIn(
+            "setStatistics",
+            self.source(
+                "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppStateStore.kt"
+            ),
+        )
 
         service = self.source(
             "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
