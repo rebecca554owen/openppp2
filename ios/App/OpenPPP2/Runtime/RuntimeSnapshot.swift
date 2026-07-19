@@ -74,6 +74,21 @@ public struct RuntimeErrorSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public struct RuntimeTrafficSnapshot: Codable, Equatable, Sendable {
+    public var rxBytes: UInt64
+    public var txBytes: UInt64
+
+    public init(rxBytes: UInt64 = 0, txBytes: UInt64 = 0) {
+        self.rxBytes = rxBytes
+        self.txBytes = txBytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rxBytes = "rx_bytes"
+        case txBytes = "tx_bytes"
+    }
+}
+
 public struct RuntimeSnapshot: Codable, Equatable, Sendable {
     public static let schemaVersion: UInt32 = 1
     public static let bundledCapabilities = [
@@ -94,6 +109,12 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
     public var muxFallbackReason: String
     public var p2pState: P2PState
     public var effectivePath: String { p2pState == .direct ? "direct" : "relay" }
+    public var traffic: RuntimeTrafficSnapshot
+
+    /// `monotonicMs` at which the session entered `connected`, or 0 when it is
+    /// not connected. Elapsed time is `monotonicMs - connectedMonotonicMs`, so
+    /// it stays correct across an app process restart.
+    public var connectedMonotonicMs: UInt64
     public var lastError: RuntimeErrorSnapshot
 
     public init(
@@ -110,6 +131,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         muxActiveLinks: UInt16 = 0,
         muxFallbackReason: String = "",
         p2pState: P2PState = .disabled,
+        traffic: RuntimeTrafficSnapshot = RuntimeTrafficSnapshot(),
+        connectedMonotonicMs: UInt64 = 0,
         lastError: RuntimeErrorSnapshot = RuntimeErrorSnapshot()
     ) {
         self.generation = generation
@@ -125,6 +148,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         self.muxActiveLinks = muxActiveLinks
         self.muxFallbackReason = muxFallbackReason
         self.p2pState = p2pState
+        self.traffic = traffic
+        self.connectedMonotonicMs = connectedMonotonicMs
         self.lastError = lastError
     }
 
@@ -144,6 +169,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         case muxFallbackReason = "mux_fallback_reason"
         case p2pState = "p2p_state"
         case effectivePath = "effective_path"
+        case traffic
+        case connectedMonotonicMs = "connected_monotonic_ms"
         case lastError = "last_error"
     }
 
@@ -177,6 +204,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         p2pState = P2PState.parse(
             try container.decodeIfPresent(String.self, forKey: .p2pState) ?? "disabled"
         )
+        traffic = try container.decodeIfPresent(RuntimeTrafficSnapshot.self, forKey: .traffic) ?? RuntimeTrafficSnapshot()
+        connectedMonotonicMs = try container.decodeIfPresent(UInt64.self, forKey: .connectedMonotonicMs) ?? 0
         lastError = try container.decodeIfPresent(RuntimeErrorSnapshot.self, forKey: .lastError) ?? RuntimeErrorSnapshot()
     }
 
@@ -197,6 +226,8 @@ public struct RuntimeSnapshot: Codable, Equatable, Sendable {
         try container.encode(muxFallbackReason, forKey: .muxFallbackReason)
         try container.encode(p2pState.rawValue, forKey: .p2pState)
         try container.encode(effectivePath, forKey: .effectivePath)
+        try container.encode(traffic, forKey: .traffic)
+        try container.encode(connectedMonotonicMs, forKey: .connectedMonotonicMs)
         try container.encode(lastError, forKey: .lastError)
     }
 

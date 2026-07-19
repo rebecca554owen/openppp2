@@ -61,8 +61,10 @@ class PppVpnService : VpnService() {
     private var linkStateThread: HandlerThread? = null
     private var linkStateHandler: Handler? = null
     private var connectStartedAtMs: Long = 0L
-    private var lastReportedLinkState: Int = 6
-    private var lastReportedRuntimeSnapshot: String? = null
+    private var lastNotificationText: String? = null
+    private val snapshotOrdering = Any()
+    private var lastSnapshotGeneration = -1L
+    private var lastSnapshotMonotonicMs = -1L
     private var activeConfigJson: String? = null
     private var activeVpnOptionsJson: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -81,35 +83,89 @@ class PppVpnService : VpnService() {
                 6
             }
             publishLinkState(ls)
+            // The heartbeat above is this poller's real job now that snapshots
+            // are pushed from native; the read below is only a safety net.
             val runtimeSnapshot = try {
                 libopenppp2.get_runtime_snapshot()
             } catch (e: Throwable) {
                 PppLog.write(this@PppVpnService, "get_runtime_snapshot poller failed", e)
                 null
             }
-            publishRuntimeSnapshot(runtimeSnapshot)
+            if (runtimeSnapshot != null) {
+                onRuntimeSnapshot(runtimeSnapshot)
+            }
             linkStateHandler?.postDelayed(this, 1000L)
         }
     }
 
-    private fun publishRuntimeSnapshot(value: String?, forceEvent: Boolean = false) {
-        if (value.isNullOrBlank()) return
-        if (!forceEvent && value == lastReportedRuntimeSnapshot) return
-        lastReportedRuntimeSnapshot = value
-        MainActivity.sendEvent(mapOf("type" to "runtimeSnapshot", "value" to value))
+    /**
+     * Entry point for every snapshot, whether it was pushed from native or
+     * read by the poller. Native pushes arrive on whichever thread produced
+     * the transition and carry no cross-thread ordering guarantee, so they are
+     * ordered here by the snapshot's own generation and timestamp. Routing the
+     * poller through the same gate means a missed push is still picked up
+     * within a second, and a duplicate costs nothing.
+     */
+    fun onRuntimeSnapshot(json: String) {
+        if (json.isBlank()) return
+
+        val root = try {
+            JSONObject(json)
+        } catch (_: Throwable) {
+            return
+        }
+
+        val generation = root.optLong("generation", -1L)
+        val monotonicMs = root.optLong("monotonic_ms", -1L)
+        if (generation < 0L || monotonicMs < 0L) return
+        synchronized(snapshotOrdering) {
+            if (generation < lastSnapshotGeneration) return
+            if (generation == lastSnapshotGeneration && monotonicMs <= lastSnapshotMonotonicMs) {
+                return
+            }
+            lastSnapshotGeneration = generation
+            lastSnapshotMonotonicMs = monotonicMs
+        }
+        publishRuntimeSnapshot(json)
     }
 
-    private fun publishLinkState(value: Int, forceEvent: Boolean = false) {
+    private fun publishRuntimeSnapshot(value: String) {
+        PppStateStore.setRuntimeSnapshot(this, value)
+        updateNotificationForSnapshot(value)
+    }
+
+    private fun publishLinkState(value: Int) {
         PppStateStore.setLinkState(this, value)
-        if (!forceEvent && value == lastReportedLinkState) return
-        lastReportedLinkState = value
-        MainActivity.sendEvent(mapOf("type" to "linkState", "value" to value))
+    }
+
+    /**
+     * The notification is a second state surface. Its text mirrors the status
+     * labels the app derives from the same phase (see runtime_controls.dart),
+     * so the two cannot disagree.
+     */
+    private fun updateNotificationForSnapshot(json: String) {
+        val phase = try {
+            JSONObject(json).optString("phase")
+        } catch (_: Throwable) {
+            return
+        }
+        if (phase.isEmpty() || phase == "idle") return
+        val text = when (phase) {
+            "connected" -> "已连接"
+            "reconnecting" -> "重连中..."
+            "stopping" -> "断开中..."
+            "failed" -> "连接失败"
+            "unknown" -> "未知状态"
+            else -> "连接中..."
+        }
+        if (text == lastNotificationText) return
+        lastNotificationText = text
+        updateNotification(text)
     }
 
     private fun startLinkStatePoller() {
         if (linkStateThread != null) return
-        lastReportedLinkState = 6
-        lastReportedRuntimeSnapshot = null
+        lastNotificationText = null
         val t = HandlerThread("openppp2-linkstate").also { it.start() }
         linkStateThread = t
         val h = Handler(t.looper)
@@ -119,7 +175,7 @@ class PppVpnService : VpnService() {
 
     private fun stopLinkStatePoller() {
         try {
-            publishRuntimeSnapshot(libopenppp2.get_runtime_snapshot(), forceEvent = true)
+            libopenppp2.get_runtime_snapshot()?.let { onRuntimeSnapshot(it) }
         } catch (e: Throwable) {
             PppLog.write(this, "final get_runtime_snapshot failed", e)
         }
@@ -128,7 +184,7 @@ class PppVpnService : VpnService() {
         linkStateThread?.quitSafely()
         linkStateThread = null
         PppStateStore.clearLinkState(this)
-        publishLinkState(6, forceEvent = true)
+        publishLinkState(6)
     }
 
     override fun onCreate() {
@@ -141,6 +197,8 @@ class PppVpnService : VpnService() {
         // the UI sit on "Initializing" forever. Reset them so the user
         // sees a clean disconnected state.
         PppStateStore.clearLinkState(this)
+        PppStateStore.clearRuntimeSnapshot(this)
+        PppStateStore.clearLastError(this)
         PppStateStore.set(this, 0)
         currentState = 0
         isRunning = false
@@ -261,6 +319,10 @@ class PppVpnService : VpnService() {
     }
 
     private fun startVpn(configJson: String, vpnOptionsJson: String) {
+        // A new attempt owns the mirrored state: the previous session's error
+        // and snapshot carry a stale generation and must not be presented.
+        PppStateStore.clearLastError(this)
+        PppStateStore.clearRuntimeSnapshot(this)
         if (isRunning) {
             // A previous session is still live or wedged (common after the UI
             // process is killed while :vpn keeps running). Queue the new config
@@ -618,9 +680,8 @@ class PppVpnService : VpnService() {
         Log.i(TAG, "perf connect_established_ms=$connectElapsedMs")
         PppLog.write(this, "onStarted key=$key")
         PppLog.write(this, "VPN started with key=$key")
-        publishLinkState(0, forceEvent = true)
+        publishLinkState(0)
         notifyStateChanged(2) // connected
-        updateNotification("已连接")
     }
 
     @Volatile
@@ -631,7 +692,6 @@ class PppVpnService : VpnService() {
         if (json == lastStatisticsJson) return
         lastStatisticsJson = json
         PppStateStore.setStatistics(this, json)
-        MainActivity.sendEvent(mapOf("type" to "statistics", "value" to json))
         statsPerfLogTicks += 1
         if (statsPerfLogTicks % 10 == 0) {
             PppLog.write(this, "perf statistics=$json")
@@ -645,7 +705,6 @@ class PppVpnService : VpnService() {
             statsPerfLogTicks = 0
         }
         PppStateStore.set(this, state)
-        MainActivity.sendEvent(mapOf("type" to "state", "value" to state))
     }
 
     /**
@@ -668,7 +727,7 @@ class PppVpnService : VpnService() {
     private fun notifyError(message: String) {
         Log.e(TAG, message)
         PppLog.write(this, message)
-        MainActivity.sendEvent(mapOf("type" to "error", "value" to message))
+        PppStateStore.setLastError(this, message)
     }
 
     private fun buildConfigureIntent(): PendingIntent {

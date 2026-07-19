@@ -128,6 +128,15 @@ namespace
             runtime.generation,
             exchanger->GetMuxRuntimeState(),
             runtime_now_ms());
+        // Read the lifetime counters directly: the delta helper rebases its
+        // reference, so calling it here would zero the statistics reader.
+        if (std::shared_ptr<ITransmissionStatistics> statistics = client->GetStatistics(); statistics != nullptr)
+        {
+            ppp::app::runtime::RuntimeTraffic traffic;
+            traffic.rx_bytes = statistics->IncomingTraffic.load();
+            traffic.tx_bytes = statistics->OutgoingTraffic.load();
+            tap->runtime_lifecycle.UpdateTraffic(runtime.generation, traffic, runtime_now_ms());
+        }
         if (exchanger->GetNetworkState() == VEthernetExchanger::NetworkState_Reconnecting)
         {
             tap->runtime_lifecycle.Transition(

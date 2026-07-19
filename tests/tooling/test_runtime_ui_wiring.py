@@ -65,8 +65,9 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("decodeRuntimeOrdering", android)
         self.assertIn("runtimeStore.applyUnknown", android)
         self.assertIn("_markRuntimeUnavailable", android)
-        self.assertIn("onError:", android)
-        self.assertIn("onDone:", android)
+        # An unreadable mirror ends the session instead of leaving the last
+        # connected snapshot on screen.
+        self.assertIn("runtimeStore.endSession()", android)
         self.assertIn("decodeOrdering", ios)
         self.assertIn("runtimeStore.applyUnknown", ios)
         self.assertIn("runtimeStore.markUnknown()", ios)
@@ -82,6 +83,114 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("runtimeStore.state.generation", source[start:end])
         self.assertIn("controls.buttonEnabled = false", source)
         self.assertIn("controls.configEditable = false", source)
+
+    def test_android_state_is_not_derived_from_log_text(self) -> None:
+        activity = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/MainActivity.kt"
+        )
+        # The old getState scanned the log with lastIndexOf("failed") and friends,
+        # so any benign log line containing "failed" reported a disconnect.
+        self.assertNotIn("lastIndexOf", activity)
+        self.assertNotIn("vpnThread started", activity)
+        self.assertNotIn('"getState"', activity)
+        self.assertIn("getRuntimeSnapshotIfAlive", activity)
+        # Statics of a service running in `:vpn` are always zero here, and the
+        # EventChannel sink it wrote to never existed in that process.
+        self.assertNotIn("PppVpnService.isRunning", activity)
+        self.assertNotIn("PppVpnService.currentState", activity)
+        self.assertNotIn("EventChannel", activity)
+
+        home = self.source("android/lib/pages/home_page.dart")
+        self.assertNotIn("vpnThread started", home)
+
+        settings = self.source("android/lib/pages/settings_page.dart")
+        self.assertNotIn("VpnState", settings)
+        self.assertIn("controlsFor(_runtimeStore.state.phase)", settings)
+
+    def test_android_ui_reads_only_the_runtime_snapshot(self) -> None:
+        dart = self.source("android/lib/vpn_service.dart")
+        # The legacy four-value state, the key-guessing statistics parser, and
+        # the cross-process EventChannel are all gone.
+        self.assertNotIn("enum VpnState", dart)
+        self.assertNotIn("VpnStatistics", dart)
+        self.assertNotIn("EventChannel", dart)
+        self.assertNotIn("outgoingTraffic", dart)
+        self.assertIn("RuntimeTrafficRate", dart)
+
+        home = self.source("android/lib/pages/home_page.dart")
+        self.assertNotIn("VpnState", home)
+        self.assertNotIn("VpnStatistics", home)
+        self.assertNotIn("_connectedAt", home)
+        self.assertIn("connectedElapsedMs(_runtimeStore.state)", home)
+        self.assertIn("_vpnService.traffic.txBytesPerSecond", home)
+
+        service = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
+        )
+        self.assertNotIn("MainActivity.sendEvent", service)
+
+    def test_android_service_mirrors_runtime_state_across_processes(self) -> None:
+        service = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
+        )
+        # MainActivity.sendEvent touches a process-local sink, so every event
+        # published from `:vpn` needs a file mirror to reach the UI process.
+        self.assertIn("PppStateStore.setRuntimeSnapshot(this, value)", service)
+        self.assertIn("PppStateStore.setLastError(this, message)", service)
+        self.assertIn("updateNotificationForSnapshot(value)", service)
+        self.assertNotIn('updateNotification("已连接")', service)
+
+        store = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppStateStore.kt"
+        )
+        self.assertIn("createTempFile", store)
+        self.assertIn("renameTo", store)
+        self.assertNotIn("writeText(value.toString())", store)
+
+        dart = self.source("android/lib/vpn_service.dart")
+        self.assertIn("applyRuntimeSnapshotPoll", dart)
+        self.assertIn("runtimeStore.beginSession()", dart)
+        self.assertIn("runtimeStore.endSession()", dart)
+        self.assertIn("getRuntimeSnapshot", dart)
+        self.assertIn("getLastError", dart)
+
+        store_dart = self.source("android/lib/runtime/runtime_store.dart")
+        self.assertIn("resetForNewSession", store_dart)
+
+    def test_android_native_pushes_runtime_snapshots(self) -> None:
+        native = self.source("android/libopenppp2.cpp")
+        self.assertIn("runtime_lifecycle_.Subscribe(", native)
+        self.assertIn('GetStaticMethodID(clazz, "runtime_snapshot"', native)
+        # FindClass on an attached native thread cannot see application
+        # classes, so the class is resolved while JNI_OnLoad still holds the
+        # loader, and every publish attaches its own thread.
+        self.assertIn("libopenppp2_cache_runtime_snapshot_method(vm, env)", native)
+        self.assertIn("AttachCurrentThread", native)
+        self.assertIn("NewGlobalRef", native)
+
+        publish = native[
+            native.index("static void") :
+            native.index("JNIEXPORT jint JNICALL JNI_OnLoad")
+        ]
+        # PostJNI drops work once client_ is null, which is exactly the window
+        # the terminal Idle/Failed snapshot is published in.
+        self.assertNotIn("PostJNI", publish)
+
+        bridge = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt"
+        )
+        self.assertIn("fun runtime_snapshot(json: String)", bridge)
+
+        service = self.source(
+            "android/android/app/src/main/kotlin/supersocksr/ppp/android/PppVpnService.kt"
+        )
+        # Pushes carry no cross-thread ordering guarantee.
+        self.assertIn("fun onRuntimeSnapshot(json: String)", service)
+        self.assertIn("lastSnapshotGeneration", service)
+        self.assertIn("lastSnapshotMonotonicMs", service)
+
+        dart = self.source("android/lib/vpn_service.dart")
+        self.assertIn("didChangeAppLifecycleState", dart)
 
     def test_runtime_contract_docs_are_governed_and_indexed(self) -> None:
         paths = (
