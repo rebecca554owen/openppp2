@@ -98,6 +98,14 @@ jobs:
           cmake --build build-bench -j$(nproc)
           ctest --test-dir build-bench --output-on-failure -L correctness
 
+      - name: Client/server Android-key compat smoke
+        if: matrix.suffix == ''
+        run: |
+          sudo PPP_BIN="$PWD/bin/ppp" COMPAT_MODE=match \
+            bash tools/client_server_compat_smoke.sh
+          sudo PPP_BIN="$PWD/bin/ppp" COMPAT_MODE=mismatch \
+            bash tools/client_server_compat_smoke.sh
+
       - name: Collect artifacts
         run: |
           ARTIFACT="openppp2-linux-amd64${{ matrix.suffix }}.zip"

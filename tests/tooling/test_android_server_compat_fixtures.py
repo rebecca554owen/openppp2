@@ -57,6 +57,16 @@ class AndroidServerCompatFixtureTests(unittest.TestCase):
         for key in ("kf", "protocol-key", "transport-key"):
             self.assertEqual(android_key[key], minimal_key[key])
 
+    def test_linux_amd64_ci_runs_compat_smoke(self) -> None:
+        workflow = (ROOT / ".github/workflows/build-linux-amd64.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Client/server Android-key compat smoke", workflow)
+        self.assertIn("COMPAT_MODE=match", workflow)
+        self.assertIn("COMPAT_MODE=mismatch", workflow)
+        self.assertIn("tools/client_server_compat_smoke.sh", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
+
