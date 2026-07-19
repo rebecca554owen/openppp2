@@ -1,5 +1,6 @@
 use openppp2_client_desktop::manual_nodes::{
-    delete_manual_node, merge_nodes, upsert_manual_node, ManualNodeInput,
+    delete_manual_node, find_node, merge_nodes, node_source, upsert_manual_node, ManualNodeInput,
+    NodeSource,
 };
 use openppp2_client_desktop::subscription::SubscriptionNode;
 use serde_json::json;
@@ -63,6 +64,18 @@ fn manual_nodes_support_create_update_delete_and_merge() {
             .map(|node| node.id.as_str())
             .collect::<Vec<_>>(),
         [created.id.as_str(), "remote-1"]
+    );
+    assert_eq!(
+        find_node(&nodes, &[remote_node("remote-1")], &created.id)
+            .unwrap()
+            .name,
+        "Office 2"
+    );
+    assert_eq!(node_source(&nodes, &created.id), NodeSource::Manual);
+    assert_eq!(node_source(&nodes, "remote-1"), NodeSource::Subscription);
+    assert_eq!(
+        node_source(&nodes, "manual:remote-prefix"),
+        NodeSource::Subscription
     );
 
     delete_manual_node(&mut nodes, &updated.id).unwrap();

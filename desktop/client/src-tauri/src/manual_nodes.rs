@@ -6,6 +6,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use url::Url;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeSource {
+    Manual,
+    Subscription,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualNodeInput {
@@ -135,6 +142,22 @@ pub fn merge_nodes(
         .filter(|node| ids.insert(node.id.clone()))
         .cloned()
         .collect()
+}
+
+pub fn find_node<'a>(
+    manual: &'a [SubscriptionNode],
+    subscription: &'a [SubscriptionNode],
+    id: &str,
+) -> Option<&'a SubscriptionNode> {
+    manual.iter().chain(subscription).find(|node| node.id == id)
+}
+
+pub fn node_source(manual: &[SubscriptionNode], id: &str) -> NodeSource {
+    if manual.iter().any(|node| node.id == id) {
+        NodeSource::Manual
+    } else {
+        NodeSource::Subscription
+    }
 }
 
 fn next_manual_id(nodes: &[SubscriptionNode]) -> String {

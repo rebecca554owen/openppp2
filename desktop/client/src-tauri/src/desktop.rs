@@ -1,12 +1,17 @@
 use crate::config::{build_node_config_with_base, default_config_string};
+use crate::launch_options::{append_launch_args, merge_launch_options};
 use crate::lifecycle::{
     close_action, should_disconnect_on_exit, tray_primary_action, CloseAction, TrayPrimaryAction,
+};
+use crate::manual_nodes::{
+    delete_manual_node, find_node, merge_nodes, node_source, upsert_manual_node, ManualNodeInput,
+    NodeSource,
 };
 use crate::pinger::{probe_nodes, targets_for_nodes};
 use crate::preferences::{load_preferences, save_preferences, update_setting, Preferences};
 use crate::process::{CommandSpec, ProcessEvent, ProcessManager};
 use crate::subscription::{
-    refresh_with, RefreshResult, SubscriptionDocument, SubscriptionNode, MAX_SUBSCRIPTION_BYTES,
+    refresh_with, RefreshResult, SubscriptionDocument, MAX_SUBSCRIPTION_BYTES,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -60,6 +65,7 @@ impl From<RefreshResult> for StoredSubscription {
 struct BootstrapPayload {
     subscription: Option<SubscriptionPayload>,
     config: String,
+    launch_options: BTreeMap<String, Value>,
     settings: Value,
 }
 
@@ -84,6 +90,9 @@ struct NodePayload {
     address: String,
     latency_ms: Option<u32>,
     favorite: bool,
+    source: NodeSource,
+    config: Option<Value>,
+    options: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -151,21 +160,15 @@ fn client_bootstrap(state: State<'_, DesktopState>) -> Result<BootstrapPayload, 
         .lock()
         .map_err(|_| "订阅状态锁已损坏".to_string())?
         .as_ref()
-        .map(|stored| {
-            subscription_payload(
-                &stored.document,
-                &preferences,
-                stored.fetched_at_ms,
-                stored.cached,
-            )
-        });
+        .map(|stored| subscription_payload(Some(stored), &preferences));
     Ok(BootstrapPayload {
-        subscription,
+        subscription: subscription.or_else(|| Some(subscription_payload(None, &preferences))),
         config: if preferences.raw_config.is_empty() {
             default_config_string().into()
         } else {
             preferences.raw_config.clone()
         },
+        launch_options: preferences.launch_options.clone(),
         settings: json!({
             "autostart": preferences.settings.autostart,
             "closeToTray": preferences.settings.close_to_tray,
@@ -219,16 +222,12 @@ async fn subscription_refresh(
         .map_err(|_| "设置状态锁已损坏".to_string())?;
     preferences.subscription_url = url;
     state.save_preferences(&preferences)?;
-    let payload = subscription_payload(
-        &result.document,
-        &preferences,
-        result.fetched_at_ms,
-        result.cached,
-    );
+    let stored = StoredSubscription::from(result);
+    let payload = subscription_payload(Some(&stored), &preferences);
     *state
         .subscription
         .lock()
-        .map_err(|_| "订阅状态锁已损坏".to_string())? = Some(StoredSubscription::from(result));
+        .map_err(|_| "订阅状态锁已损坏".to_string())? = Some(stored);
     Ok(payload)
 }
 
@@ -238,13 +237,19 @@ async fn client_probe_latency(
     state: State<'_, DesktopState>,
     app: AppHandle,
 ) -> Result<BTreeMap<String, Option<u32>>, String> {
-    let nodes = state
+    let preferences = state
+        .preferences
+        .lock()
+        .map_err(|_| "设置状态锁已损坏".to_string())?
+        .clone();
+    let subscription_nodes = state
         .subscription
         .lock()
         .map_err(|_| "订阅状态锁已损坏".to_string())?
         .as_ref()
         .map(|stored| stored.document.nodes.clone())
         .unwrap_or_default();
+    let nodes = merge_nodes(&preferences.manual_nodes, &subscription_nodes);
     let targets = targets_for_nodes(&nodes, node_ids.as_deref());
     let latencies = tauri::async_runtime::spawn_blocking(move || {
         probe_nodes(targets, 4, Duration::from_secs(3)).map_err(|error| error.to_string())
@@ -264,19 +269,21 @@ fn client_connect(
 }
 
 fn connect_node(node_id: &str, state: &DesktopState) -> Result<ConnectPayload, String> {
-    let node = state
-        .subscription
-        .lock()
-        .map_err(|_| "订阅状态锁已损坏".to_string())?
-        .as_ref()
-        .and_then(|stored| stored.document.nodes.iter().find(|node| node.id == node_id))
-        .cloned()
-        .ok_or_else(|| "找不到所选节点，请先刷新订阅".to_string())?;
     let preferences = state
         .preferences
         .lock()
         .map_err(|_| "设置状态锁已损坏".to_string())?
         .clone();
+    let subscription_nodes = state
+        .subscription
+        .lock()
+        .map_err(|_| "订阅状态锁已损坏".to_string())?
+        .as_ref()
+        .map(|stored| stored.document.nodes.clone())
+        .unwrap_or_default();
+    let node = find_node(&preferences.manual_nodes, &subscription_nodes, node_id)
+        .cloned()
+        .ok_or_else(|| "找不到所选节点".to_string())?;
     let config = build_node_config_with_base(&node, Some(&preferences.raw_config))
         .map_err(|error| error.to_string())?;
     let runtime_dir = state.data_dir.join("runtime");
@@ -296,7 +303,9 @@ fn connect_node(node_id: &str, state: &DesktopState) -> Result<ConnectPayload, S
             format!("--stats-json={}", stats_path.display()),
         ],
     );
-    append_option_args(&node, &mut spec.args);
+    let launch_options = merge_launch_options(&preferences.launch_options, node.options.as_ref())
+        .map_err(|error| error.to_string())?;
+    append_launch_args(&launch_options, &mut spec.args).map_err(|error| error.to_string())?;
     spec.stats_path = Some(stats_path);
     let pid = state
         .process
@@ -311,7 +320,7 @@ fn connect_node(node_id: &str, state: &DesktopState) -> Result<ConnectPayload, S
     update_tray(state, true, Some(&node.name));
     Ok(ConnectPayload {
         pid,
-        network: network_payload(&node, &config),
+        network: network_payload(&launch_options, &config),
     })
 }
 
@@ -341,6 +350,83 @@ fn client_update_config(config: String, state: State<'_, DesktopState>) -> Resul
 }
 
 #[tauri::command]
+fn client_upsert_manual_node(
+    node: ManualNodeInput,
+    state: State<'_, DesktopState>,
+) -> Result<SubscriptionPayload, String> {
+    let mut preferences = state
+        .preferences
+        .lock()
+        .map_err(|_| "设置状态锁已损坏".to_string())?;
+    upsert_manual_node(&mut preferences.manual_nodes, node).map_err(|error| error.to_string())?;
+    state.save_preferences(&preferences)?;
+    let snapshot = preferences.clone();
+    drop(preferences);
+    current_subscription_payload(&state, &snapshot)
+}
+
+#[tauri::command]
+fn client_delete_manual_node(
+    node_id: String,
+    state: State<'_, DesktopState>,
+) -> Result<SubscriptionPayload, String> {
+    let running = state
+        .process
+        .lock()
+        .map_err(|_| "进程状态锁已损坏".to_string())?
+        .is_running();
+    let is_current = state
+        .last_node_id
+        .lock()
+        .map_err(|_| "最近节点状态锁已损坏".to_string())?
+        .as_deref()
+        == Some(&node_id);
+    if running && is_current {
+        return Err("正在使用的节点不能删除，请先断开连接".into());
+    }
+
+    let mut preferences = state
+        .preferences
+        .lock()
+        .map_err(|_| "设置状态锁已损坏".to_string())?;
+    delete_manual_node(&mut preferences.manual_nodes, &node_id)
+        .map_err(|error| error.to_string())?;
+    preferences.favorites.remove(&node_id);
+    state.save_preferences(&preferences)?;
+    let snapshot = preferences.clone();
+    drop(preferences);
+    if is_current {
+        *state
+            .last_node_id
+            .lock()
+            .map_err(|_| "最近节点状态锁已损坏".to_string())? = None;
+    }
+    current_subscription_payload(&state, &snapshot)
+}
+
+#[tauri::command]
+fn client_update_launch_options(
+    options: Value,
+    state: State<'_, DesktopState>,
+) -> Result<BTreeMap<String, Value>, String> {
+    let object = options
+        .as_object()
+        .ok_or_else(|| "启动参数必须是 JSON object".to_string())?;
+    let launch_options: BTreeMap<String, Value> = object
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    append_launch_args(&launch_options, &mut Vec::new()).map_err(|error| error.to_string())?;
+    let mut preferences = state
+        .preferences
+        .lock()
+        .map_err(|_| "设置状态锁已损坏".to_string())?;
+    preferences.launch_options = launch_options.clone();
+    state.save_preferences(&preferences)?;
+    Ok(launch_options)
+}
+
+#[tauri::command]
 fn client_update_setting(
     key: String,
     value: Value,
@@ -366,32 +452,45 @@ fn client_toggle_favorite(node_id: String, state: State<'_, DesktopState>) -> Re
     state.save_preferences(&preferences)
 }
 
-fn subscription_payload(
-    document: &SubscriptionDocument,
+fn current_subscription_payload(
+    state: &DesktopState,
     preferences: &Preferences,
-    fetched_at_ms: u64,
-    cached: bool,
+) -> Result<SubscriptionPayload, String> {
+    let subscription = state
+        .subscription
+        .lock()
+        .map_err(|_| "订阅状态锁已损坏".to_string())?;
+    Ok(subscription_payload(subscription.as_ref(), preferences))
+}
+
+fn subscription_payload(
+    stored: Option<&StoredSubscription>,
+    preferences: &Preferences,
 ) -> SubscriptionPayload {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
+    let subscription_nodes = stored
+        .map(|stored| stored.document.nodes.as_slice())
+        .unwrap_or_default();
+    let nodes = merge_nodes(&preferences.manual_nodes, subscription_nodes);
+    let fetched_at_ms = stored.map(|stored| stored.fetched_at_ms).unwrap_or(0);
     SubscriptionPayload {
         url: preferences.subscription_url.clone(),
-        name: document
-            .name
+        name: stored
+            .and_then(|stored| stored.document.name.clone())
             .clone()
-            .unwrap_or_else(|| "OPENPPP2 Subscription".into()),
-        updated_at: document.updated_at.clone(),
+            .unwrap_or_else(|| "本地节点".into()),
+        updated_at: stored.and_then(|stored| stored.document.updated_at.clone()),
         last_synced_at: fetched_at_ms,
-        cached,
+        cached: stored.is_some_and(|stored| stored.cached),
         cache_age_minutes: if fetched_at_ms == 0 {
             0
         } else {
             now.saturating_sub(fetched_at_ms) / 60_000
         },
-        nodes: document
-            .nodes
+        nodes: nodes
             .iter()
             .map(|node| NodePayload {
                 id: node.id.clone(),
@@ -400,6 +499,9 @@ fn subscription_payload(
                 address: display_address(node.server.as_deref().unwrap_or_default()),
                 latency_ms: None,
                 favorite: preferences.favorites.contains(&node.id),
+                source: node_source(&preferences.manual_nodes, &node.id),
+                config: node.config.clone(),
+                options: node.options.clone(),
             })
             .collect(),
     }
@@ -414,27 +516,7 @@ fn display_address(server: &str) -> String {
     body.split('/').next().unwrap_or(body).to_owned()
 }
 
-fn append_option_args(node: &SubscriptionNode, args: &mut Vec<String>) {
-    let Some(options) = node.options.as_ref().and_then(Value::as_object) else {
-        return;
-    };
-    for (field, flag) in [
-        ("tunIp", "--tun-ip"),
-        ("gateway", "--tun-gw"),
-        ("tunMask", "--tun-mask"),
-    ] {
-        if let Some(value) = options
-            .get(field)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            args.push(format!("{flag}={value}"));
-        }
-    }
-}
-
-fn network_payload(node: &SubscriptionNode, config: &Value) -> Value {
-    let options = node.options.as_ref().and_then(Value::as_object);
+fn network_payload(options: &BTreeMap<String, Value>, config: &Value) -> Value {
     let client = config.get("client");
     let proxy = |name: &str| {
         client
@@ -454,8 +536,8 @@ fn network_payload(node: &SubscriptionNode, config: &Value) -> Value {
             .unwrap_or_default()
     };
     json!({
-        "tunIp": options.and_then(|value| value.get("tunIp")).and_then(Value::as_str).unwrap_or(""),
-        "gateway": options.and_then(|value| value.get("gateway")).and_then(Value::as_str).unwrap_or(""),
+        "tunIp": options.get("tunIp").and_then(Value::as_str).unwrap_or(""),
+        "gateway": options.get("gateway").and_then(Value::as_str).unwrap_or(""),
         "httpProxy": proxy("http-proxy"), "socksProxy": proxy("socks-proxy"),
     })
 }
@@ -651,6 +733,9 @@ pub fn run() {
             client_connect,
             client_disconnect,
             client_update_config,
+            client_upsert_manual_node,
+            client_delete_manual_node,
+            client_update_launch_options,
             client_update_setting,
             client_toggle_favorite,
         ])
@@ -665,8 +750,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::StoredSubscription;
+    use super::{subscription_payload, StoredSubscription};
+    use crate::manual_nodes::upsert_manual_node;
+    use crate::manual_nodes::{ManualNodeInput, NodeSource};
+    use crate::preferences::Preferences;
     use crate::subscription::{parse_subscription, RefreshResult};
+    use serde_json::json;
 
     #[test]
     fn stored_subscription_keeps_cache_metadata() {
@@ -678,5 +767,32 @@ mod tests {
         });
         assert!(stored.cached);
         assert_eq!(stored.fetched_at_ms, 42);
+    }
+
+    #[test]
+    fn combined_payload_marks_manual_nodes_and_exposes_edit_data() {
+        let mut preferences = Preferences::default();
+        upsert_manual_node(
+            &mut preferences.manual_nodes,
+            ManualNodeInput {
+                id: None,
+                name: "Local".into(),
+                subtitle: "Desktop".into(),
+                config: json!({
+                    "key": { "protocol-key": "p" },
+                    "client": { "server": "ppp://127.0.0.1:20000/" }
+                }),
+                options: json!({ "mux": 2 }),
+            },
+        )
+        .unwrap();
+        let payload = subscription_payload(None, &preferences);
+        assert_eq!(payload.nodes.len(), 1);
+        assert_eq!(payload.nodes[0].source, NodeSource::Manual);
+        assert!(payload.nodes[0]
+            .config
+            .as_ref()
+            .is_some_and(|value| value.is_object()));
+        assert_eq!(payload.nodes[0].options.as_ref().unwrap()["mux"], 2);
     }
 }
