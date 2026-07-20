@@ -135,6 +135,15 @@ class PppVpnService : VpnService() {
 
     private fun publishRuntimeSnapshot(value: String) {
         PppStateStore.setRuntimeSnapshot(this, value)
+        // Native snapshot pushes can land before the 1s link-state poller has
+        // written its heartbeat. Touch the heartbeat here so the UI process's
+        // getRuntimeSnapshotIfAlive gate does not hide a live connected phase.
+        try {
+            val linkState = libopenppp2.get_link_state()
+            PppStateStore.setLinkState(this, linkState)
+        } catch (_: Throwable) {
+            // Snapshot file mtime alone is enough for the UI liveness gate.
+        }
         updateNotificationForSnapshot(value)
     }
 

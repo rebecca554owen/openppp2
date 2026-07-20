@@ -69,9 +69,21 @@ class PppStateStoreTest {
         assertTrue(PppStateStore.isVpnAlive(context))
         assertEquals(snapshot, PppStateStore.getRuntimeSnapshotIfAlive(context))
 
+        // Both liveness signals must be gone; a fresh snapshot alone still
+        // means the session is publishing (native push before link poll).
         PppStateStore.clearLinkState(context)
+        PppStateStore.clearRuntimeSnapshot(context)
         assertFalse(PppStateStore.isVpnAlive(context))
         assertNull(PppStateStore.getRuntimeSnapshotIfAlive(context))
+    }
+
+    @Test
+    fun aFreshSnapshotIsServedWithoutLinkHeartbeat() {
+        val snapshot = """{"schema_version":1,"generation":7,"monotonic_ms":10,"phase":"connected"}"""
+        PppStateStore.clearLinkState(context)
+        PppStateStore.setRuntimeSnapshot(context, snapshot)
+        assertFalse(PppStateStore.isVpnAlive(context))
+        assertEquals(snapshot, PppStateStore.getRuntimeSnapshotIfAlive(context))
     }
 
     @Test
@@ -81,8 +93,9 @@ class PppStateStoreTest {
         PppStateStore.setLinkState(context, 0)
 
         val heartbeat = File(context.filesDir, "openppp2-linkstate.txt")
+        val snapshotFile = File(context.filesDir, "openppp2-runtime-snapshot.json")
         val aged = System.currentTimeMillis() - PppStateStore.HEARTBEAT_STALE_MS - 5_000L
-        if (!heartbeat.setLastModified(aged)) {
+        if (!heartbeat.setLastModified(aged) || !snapshotFile.setLastModified(aged)) {
             return // filesystem refused the backdate; nothing to assert here
         }
 

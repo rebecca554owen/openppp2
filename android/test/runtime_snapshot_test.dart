@@ -182,4 +182,25 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('whole-number doubles from JSON decode as counters', () {
+    final snapshot = RuntimeSnapshot.fromJson(<String, dynamic>{
+      'schema_version': 1,
+      'generation': 3.0,
+      'monotonic_ms': 1000.0,
+      'phase': 'connected',
+      'mux_active_links': 2.0,
+      'connected_monotonic_ms': 500.0,
+      'traffic': <String, dynamic>{
+        'rx_bytes': 10485760.0,
+        'tx_bytes': 2097152.0,
+      },
+    });
+    expect(snapshot.generation, 3);
+    expect(snapshot.monotonicMs, 1000);
+    expect(snapshot.muxActiveLinks, 2);
+    expect(snapshot.connectedMonotonicMs, 500);
+    expect(snapshot.traffic.rxBytes, 10485760);
+    expect(snapshot.traffic.txBytes, 2097152);
+  });
 }
