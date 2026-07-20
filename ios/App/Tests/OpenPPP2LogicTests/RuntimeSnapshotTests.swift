@@ -42,6 +42,16 @@ final class RuntimeSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.muxActiveLinks, 2)
         XCTAssertEqual(snapshot.p2pState, .relay)
         XCTAssertEqual(snapshot.effectivePath, "relay")
+        XCTAssertEqual(snapshot.traffic.rxBytes, 10_485_760)
+        XCTAssertEqual(snapshot.traffic.txBytes, 2_097_152)
+        XCTAssertEqual(snapshot.connectedMonotonicMs, 30_000)
+    }
+
+    func testAbsentTrafficAndConnectTimeDefaultToZero() throws {
+        let snapshot = try decodeFixture("idle.json")
+        XCTAssertEqual(snapshot.traffic.rxBytes, 0)
+        XCTAssertEqual(snapshot.traffic.txBytes, 0)
+        XCTAssertEqual(snapshot.connectedMonotonicMs, 0)
     }
 
     func testP2PStateMappingIsStableCompleteAndFailClosed() {

@@ -159,11 +159,11 @@ The authoritative route table is `go/ppp/Admin.go`; persistence is `go/ppp/Local
 | Routes | Status | Preferred surface / risk |
 |---|---|---|
 | `/ppp/consumer/set`, `/new`, `/reload`, `/load` | **Internal**, legacy compatibility | Prefer `/api/v1/users`; handlers accept arbitrary methods and encode business errors in HTTP 200 responses |
-| `/ppp/server/all`, `/get`, `/load` | **Internal**, legacy compatibility | Prefer `/api/v1/servers`; these routes currently have no authentication |
+| `/ppp/server/all`, `/get`, `/load` | **Internal**, legacy compatibility | Prefer `/api/v1/servers`; the shared `key` query parameter is required, as it is for the consumer routes |
 
 The control WebSocket and all `/ppp/*` routes exist only in managed mode. No source-level removal schedule or formal deprecation policy currently exists.
 
-**Gaps:** legacy server routes are unauthenticated; origin policy is permissive; server secrets can be returned to the admin UI; a formal OpenAPI document and complete response/error schema are missing.
+**Gaps:** origin policy is permissive; server secrets can be returned to the admin UI; a formal OpenAPI document and complete response/error schema are missing.
 
 ## 8. Subscription And Admin UI Contracts
 
@@ -209,14 +209,16 @@ All Android entries below are **Internal** to the bundled Flutter application. C
 
 | Boundary | Operations / payload | Lifecycle | Source truth |
 |---|---|---|---|
-| Flutter MethodChannel `supersocksr.ppp/vpn` | `connect`, `disconnect`, `getState`, `getStatistics`, `readLog`, `getLogPath`, `clearLog`, `getVpnHeartbeatAgeMs`, `getLinkState`, installed-app query, diagnostics, `requestPermission` | UI process; asynchronous calls | `android/lib/vpn_service.dart`, `MainActivity.kt` |
-| EventChannel `supersocksr.ppp/vpn_events` | Link state, statistics, runtime snapshot events | UI event sink is process-local | same |
+| Flutter MethodChannel `supersocksr.ppp/vpn` | `connect`, `disconnect`, `getRuntimeSnapshot`, `getLastError`, `readLog`, `getLogPath`, `clearLog`, `getVpnHeartbeatAgeMs`, installed-app query, diagnostics, `requestPermission` | UI process; asynchronous calls | `android/lib/vpn_service.dart`, `MainActivity.kt` |
 | Activity → service Intent | connect/disconnect actions with `config_json`, `vpn_options_json` extras | Starts foreground non-exported `:vpn` service | `MainActivity.kt`, `PppVpnService.kt` |
 | Kotlin → JNI | native run/stop, state/statistics/error/snapshot, socket protection, telemetry HTTP callback | `run()` blocks a background thread; callbacks require live service | `android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt`, `android/libopenppp2.cpp` |
+| JNI → Kotlin | `runtime_snapshot`, `protect`, `start_exec`, `post_exec`, telemetry HTTP | Static callbacks on `libopenppp2`; invoked from arbitrary runtime threads, so each attaches the JVM and never caches `JNIEnv*` | same |
 | Profile storage | `profiles_v2`, active ID, options, bounded history | App-private SharedPreferences | `android/lib/services/profile_store.dart` |
-| Cross-process state | prefs plus `openppp2-statistics.json` and `openppp2-linkstate.txt` | Best-effort writes; heartbeat freshness is 30 seconds | `PppStateStore.kt`, `MainActivity.kt` |
+| Cross-process state | `openppp2-runtime-snapshot.json`, `openppp2-lasterror.txt`, `openppp2-linkstate.txt` | Atomic replace via temporary file plus rename; heartbeat freshness is 30 seconds | `PppStateStore.kt`, `MainActivity.kt` |
 
-**High-priority gap:** `PppVpnService` runs in `:vpn`, while `MainActivity.eventSink` is a process-local static. Events sent from the service process normally cannot reach the UI process's sink. Link state and statistics have file fallbacks, but runtime snapshot does not, so Android runtime snapshot delivery is likely unreachable in real multi-process operation. There is no end-to-end test for this path.
+`PppVpnService` runs in `:vpn`. The EventChannel it previously published to resolved a process-local static sink and delivered nothing, so it has been removed; the service now mirrors every runtime snapshot and error to the files above and the UI process polls them once per second while visible. Native publishes reach the service through the `runtime_snapshot` JNI callback and are ordered by the snapshot's own `generation` and `monotonic_ms`.
+
+**Gap:** debug builds strip `android:process` from the service (`app/src/debug/AndroidManifest.xml`), so instrumentation always runs single-process and cannot reproduce cross-process delivery. That override is why the defect above survived. The release layout is currently enforced by source-level checks in `tests/tooling/test_runtime_ui_wiring.py`, not by a device test.
 
 Other gaps: no centralized channel/JNI ABI version, no complete method/error schema, no service kill/recreate coverage, no full JNI signature test, and profile storage has no explicit migration version.
 
@@ -227,8 +229,8 @@ All iOS entries below are **Internal** to the bundled app and Packet Tunnel exte
 | Boundary | Operations / payload | Lifecycle | Source truth |
 |---|---|---|---|
 | App → Network Extension | Save/load manager, start/stop tunnel, provider configuration | System authorization and `NETunnelProviderManager` lifecycle | `VPNController.swift` |
-| Provider messages | `stats`, `linkState`, `lastError`, `diagnostics`, `crashReports`, `deleteCrashReports`, JSON `uploadCrashReports` | Only a connected `NETunnelProviderSession` can exchange messages | `VPNController.swift`, `PacketTunnelProvider.swift` |
-| Swift → C ABI | `openppp2_ios_version`; tap create/destroy/start/stop/input; link/snapshot/stat/stage queries; last error; telemetry; P2P datagram callbacks | Tap and callback ownership is explicit; provider close must stop callbacks synchronously | `ios/OpenPPP2PacketTunnelBridge.h` |
+| Provider messages | `linkState`, `lastError`, `diagnostics`, `crashReports`, `deleteCrashReports`, JSON `uploadCrashReports` | Only a connected `NETunnelProviderSession` can exchange messages | `VPNController.swift`, `PacketTunnelProvider.swift` |
+| Swift → C ABI | `openppp2_ios_version`; tap create/destroy/start/stop/input; link/snapshot/stage queries; last error; telemetry; P2P datagram callbacks | Tap and callback ownership is explicit; provider close must stop callbacks synchronously | `ios/OpenPPP2PacketTunnelBridge.h` |
 | App Group state | Link heartbeat, runtime snapshot, diagnostics, defaults | App and extension share entitled container; atomic file writes | `TunnelSharedState.swift` |
 | Profile bundle | `type=openppp2-profile-export`, `version=1`, active ID and profiles | User-selected security-scoped file; 2 MiB limit; secrets included | `ProfileImportExport.swift` |
 
@@ -321,8 +323,7 @@ Creating a supported native SDK would require a deliberately small installed hea
 
 | Priority | Gap | Affected surface | Completion evidence |
 |---|---|---|---|
-| P0 | Android `:vpn` service cannot reliably publish EventChannel runtime snapshots across processes | Android runtime UI | Explicit IPC or atomic snapshot file plus real multi-process instrumentation test |
-| P0 | Legacy `/ppp/server/*` manager routes are unauthenticated | Go manager | Authentication or removal, migration notice, and handler tests |
+| P1 | Android cross-process runtime delivery has no device test because debug builds collapse `:vpn` into the app process | Android runtime UI | An instrumentation variant that keeps `android:process`, or an equivalent multi-process harness |
 | P1 | No tunnel protocol version/opcode registry/cross-release matrix | Wire protocol | Version negotiation, registry, and compatibility fixtures |
 | P1 | Guardian binary paths can expose arbitrary host paths; config PUT ignores body | Guardian | Path policy, correct update behavior, and API tests |
 | P1 | iOS native bridge/Packet Tunnel is not built end-to-end in CI | iOS | Static library build plus provider-message integration test |
