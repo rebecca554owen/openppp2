@@ -17,14 +17,14 @@ namespace linux_route_platform_test {
     int RouteDeletes() noexcept;
 }
 
-BOOST_AUTO_TEST_CASE(interface_selection_uses_tap_known_nic_then_underlying) {
+BOOST_AUTO_TEST_CASE(interface_selection_uses_tap_known_nic_then_tap_fallback) {
     const std::unordered_map<uint32_t, std::string> nics = {
         { 20u, "wlan0" },
     };
 
     BOOST_TEST(route::SelectLinuxInterface(10u, 10u, "tap0", "eth0", nics) == "tap0");
     BOOST_TEST(route::SelectLinuxInterface(20u, 10u, "tap0", "eth0", nics) == "wlan0");
-    BOOST_TEST(route::SelectLinuxInterface(30u, 10u, "tap0", "eth0", nics) == "eth0");
+    BOOST_TEST(route::SelectLinuxInterface(30u, 10u, "tap0", "eth0", nics) == "tap0");
 }
 
 BOOST_AUTO_TEST_CASE(production_route_add_result_requires_exact_eexist) {

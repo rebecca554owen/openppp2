@@ -27,12 +27,12 @@ namespace ppp {
             public:
                 /** @brief Maximum QoS throughput in Kbps units; 0 means unlimited. */
                 Int64  BandwidthQoS    = 0; // Maximum Quality of Service (QoS) bandwidth throughput speed per second, 0 for unlimited, 1 for 1 Kbps.
-                /** @brief Remaining inbound traffic allowance; 0 means unlimited. */
-                UInt64 IncomingTraffic = 0; // The remaining network traffic allowance that can be allowed for incoming clients, 0 is unlimited.
-                /** @brief Remaining outbound traffic allowance; 0 means unlimited. */
-                UInt64 OutgoingTraffic = 0; // The remaining network traffic allowance that can be allowed for outgoing clients, 0 is unlimited.
-                /** @brief Expiration timestamp in seconds since epoch; 0 means no expiry. */
-                UInt32 ExpiredTime     = 0; // The time duration during which clients are expired time from using PPP (Point-to-Point Protocol) VPN services, 0 for no restrictions, measured in seconds.
+                /** @brief Remaining inbound traffic allowance; 0 means exhausted or invalid. */
+                UInt64 IncomingTraffic = 0; // The remaining network traffic allowance that can be allowed for incoming clients.
+                /** @brief Remaining outbound traffic allowance; 0 means exhausted or invalid. */
+                UInt64 OutgoingTraffic = 0; // The remaining network traffic allowance that can be allowed for outgoing clients.
+                /** @brief Expiration timestamp in seconds since epoch; 0 means unset or invalid. */
+                UInt32 ExpiredTime     = 0; // The time duration during which clients are expired time from using PPP (Point-to-Point Protocol) VPN services, measured in seconds.
 
             public:
                 /** @brief Constructs an information object with cleared defaults. */
@@ -65,13 +65,8 @@ namespace ppp {
                         return false;
                     }
 
-                    // Field docs: 0 traffic = unlimited; 0 ExpiredTime = no expiry.
-                    // Only reject when a non-zero expiry timestamp has passed.
-                    if (i->ExpiredTime != 0 && i->ExpiredTime <= now) {
-                        return false;
-                    }
-
-                    return true;
+                    return (i->IncomingTraffic > 0 && i->OutgoingTraffic > 0) &&
+                        (i->ExpiredTime != 0 && i->ExpiredTime > now);
                 }
 
             public:
