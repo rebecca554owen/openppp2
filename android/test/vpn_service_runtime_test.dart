@@ -89,5 +89,23 @@ void main() {
       expect(store.state.generation, 1);
       expect(store.state.phase, RuntimePhase.starting);
     });
+
+    test('empty polls during connect do not flip to unknown', () {
+      final store = service.runtimeStore;
+      store.endSession();
+      store.resetForNewSession();
+      service.connecting = true;
+
+      service.applyRuntimeSnapshotPoll(null, connecting: true);
+      expect(store.state.phase, RuntimePhase.idle);
+
+      service.applyRuntimeSnapshotPoll(
+        '{"schema_version":1,"generation":1,"monotonic_ms":10,'
+        '"phase":"connected"}',
+        connecting: true,
+      );
+      expect(store.state.phase, RuntimePhase.connected);
+      service.connecting = false;
+    });
   });
 }

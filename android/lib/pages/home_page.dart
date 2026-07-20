@@ -86,8 +86,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (pending != null &&
           (_runtimeStore.state.generation > pending ||
               phase == RuntimePhase.unknown ||
-              phase == RuntimePhase.failed)) {
+              phase == RuntimePhase.failed ||
+              phase == RuntimePhase.connected)) {
         _pendingStartGeneration = null;
+        _vpnService.connecting = false;
       }
       final pendingStop = _pendingStopGeneration;
       if (pendingStop != null &&
@@ -98,6 +100,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
       if (phase == RuntimePhase.connected) {
         _connectWatchdogTimer?.cancel();
+        _vpnService.connecting = false;
       }
     });
   }
@@ -198,6 +201,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() {
       _pendingStartGeneration = _runtimeStore.state.generation;
     });
+    _vpnService.connecting = true;
     try {
       await _vpnService.clearLog();
       final options = await _store.getProfileOptions(profile.id);
@@ -214,9 +218,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!accepted) {
         throw StateError('VPN start command was rejected');
       }
+      // Drop any previous session watermark so the first mirrored snapshot
+      // from the new `:vpn` generation is accepted even when its counter
+      // restarts at 1.
+      _runtimeStore.endSession();
       _startConnectWatchdog();
+      if (mounted) setState(() {});
     } catch (e) {
       if (!mounted) return;
+      _vpnService.connecting = false;
       final error = e.toString();
       setState(() {
         _pendingStartGeneration = null;
@@ -252,6 +262,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final totalSec = DateTime.now().difference(startedAt).inSeconds;
       if (!hbStale && totalSec < _connectMaxSeconds) return;
       timer.cancel();
+      _vpnService.connecting = false;
       final reason = totalSec >= _connectMaxSeconds
           ? '超过 ${_connectMaxSeconds}s 上限'
           : ':vpn 心跳已停 ${(hbAgeMs / 1000).toStringAsFixed(1)}s';
@@ -356,6 +367,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_pendingStopGeneration == generation) return;
     final forceStop = _runtimeStore.state.phase == RuntimePhase.unknown;
     _connectWatchdogTimer?.cancel();
+    _vpnService.connecting = false;
     if (mounted) {
       setState(() {
         _pendingStartGeneration = null;
@@ -457,8 +469,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final phase = _runtimeStore.state.phase;
+    final startPending = _pendingStartGeneration != null &&
+        (phase == RuntimePhase.idle ||
+            phase == RuntimePhase.failed ||
+            phase == RuntimePhase.unknown);
     final controls = controlsFor(
-      _runtimeStore.state.phase,
+      startPending ? RuntimePhase.starting : phase,
       stopTakingTooLong: _stopTakingTooLong,
     );
     final commandPending = _pendingStartGeneration != null ||

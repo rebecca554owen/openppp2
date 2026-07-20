@@ -93,8 +93,15 @@ class VpnService with WidgetsBindingObserver {
     unawaited(_pollRuntime());
   }
 
+  /// True while the UI has started a connect and is waiting for the first
+  /// non-idle runtime phase. Empty mirror polls must not mark unknown.
+  bool connecting = false;
+
   Future<void> _pollRuntime() async {
-    applyRuntimeSnapshotPoll(await getRuntimeSnapshot());
+    applyRuntimeSnapshotPoll(
+      await getRuntimeSnapshot(),
+      connecting: connecting,
+    );
     final error = await getLastError();
     if (error.isEmpty) {
       _lastReportedError = null;
@@ -107,8 +114,18 @@ class VpnService with WidgetsBindingObserver {
 
   /// Applies one mirror read. A null payload means the service is not alive,
   /// so the next payload is treated as a new session.
-  void applyRuntimeSnapshotPoll(String? raw) {
+  ///
+  /// During an in-flight connect the first polls often race the `:vpn`
+  /// heartbeat. Treat those empty reads as "not yet" rather than flipping the
+  /// UI to unknown and clearing the session baseline.
+  void applyRuntimeSnapshotPoll(
+    String? raw, {
+    bool connecting = false,
+  }) {
     if (raw == null || raw.trim().isEmpty) {
+      if (connecting) {
+        return;
+      }
       runtimeStore.endSession();
       _resetTraffic();
       _markRuntimeUnavailable();
