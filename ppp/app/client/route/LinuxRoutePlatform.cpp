@@ -45,7 +45,7 @@ namespace ppp {
                     uint32_t next_hop,
                     uint32_t tap_gateway,
                     const std::string& tap_interface,
-                    const std::string& underlying_interface,
+                    const std::string& /*underlying_interface*/,
                     const std::unordered_map<uint32_t, std::string>& nics) noexcept {
                     if (next_hop == tap_gateway) {
                         return tap_interface;
@@ -55,7 +55,7 @@ namespace ppp {
                     if (tail != nics.end() && !tail->second.empty()) {
                         return tail->second;
                     }
-                    return underlying_interface;
+                    return tap_interface;
                 }
 
                 LinuxRoutePlatform::LinuxRoutePlatform(
