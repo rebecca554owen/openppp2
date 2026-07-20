@@ -46,6 +46,32 @@ namespace ppp {
                     root["last_error"] = std::move(value);
                 }
 
+                inline void WriteRuntimeTraffic(
+                    Json::Value& root,
+                    const RuntimeTraffic& traffic) noexcept {
+                    Json::Value value(Json::objectValue);
+                    value["rx_bytes"] = Json::UInt64(traffic.rx_bytes);
+                    value["tx_bytes"] = Json::UInt64(traffic.tx_bytes);
+                    root["traffic"] = std::move(value);
+                }
+
+                inline void ReadRuntimeTraffic(
+                    const Json::Value& root,
+                    RuntimeTraffic& traffic) noexcept {
+                    traffic = RuntimeTraffic();
+                    if (!root.isMember("traffic") || !root["traffic"].isObject()) {
+                        return;
+                    }
+
+                    const Json::Value& value = root["traffic"];
+                    if (value.isMember("rx_bytes") && value["rx_bytes"].isUInt64()) {
+                        traffic.rx_bytes = value["rx_bytes"].asUInt64();
+                    }
+                    if (value.isMember("tx_bytes") && value["tx_bytes"].isUInt64()) {
+                        traffic.tx_bytes = value["tx_bytes"].asUInt64();
+                    }
+                }
+
                 inline void ReadRuntimeError(
                     const Json::Value& root,
                     RuntimeError& error) noexcept {
@@ -96,6 +122,8 @@ namespace ppp {
                 root["mux_fallback_reason"] = detail::ToRuntimeJsonString(snapshot.mux_fallback_reason);
                 root["p2p_state"] = ppp::p2p::ToString(snapshot.p2p_state);
                 root["effective_path"] = ppp::p2p::EffectivePath(snapshot.p2p_state);
+                detail::WriteRuntimeTraffic(root, snapshot.traffic);
+                root["connected_monotonic_ms"] = Json::UInt64(snapshot.connected_monotonic_ms);
                 detail::WriteRuntimeError(root, snapshot.last_error);
 
                 Json::FastWriter writer;
@@ -169,6 +197,11 @@ namespace ppp {
                     ? ppp::p2p::ParseP2PState(
                         detail::RuntimeJsonString(root, "p2p_state"))
                     : ppp::p2p::P2PState::Disabled;
+                detail::ReadRuntimeTraffic(root, parsed.traffic);
+                if (root.isMember("connected_monotonic_ms") &&
+                    root["connected_monotonic_ms"].isUInt64()) {
+                    parsed.connected_monotonic_ms = root["connected_monotonic_ms"].asUInt64();
+                }
                 detail::ReadRuntimeError(root, parsed.last_error);
 
                 snapshot = std::move(parsed);

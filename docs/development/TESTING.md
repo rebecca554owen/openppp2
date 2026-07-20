@@ -106,6 +106,14 @@ tests/
 
 Android Flutter tests also include native-service static regressions such as `android/test/vpn_ipv6_leak_protection_test.dart`, which verifies the Kotlin VPN builder keeps IPv6 leak protection fail-closed.
 
+## Android Instrumentation
+
+Instrumentation tests live in `android/android/app/src/androidTest/` and need an emulator or device. The `device-test` job in `build-android.yml` runs the whole suite through `gradle :app:connectedDebugAndroidTest` on pull requests and on `main`.
+
+The sibling `Build Flutter APK` job needs the release signing secrets. A fork does not inherit them, so the job reports a notice and skips the signed build instead of failing the workflow and masking the build and test results in the same run.
+
+`app/src/debug/AndroidManifest.xml` removes `android:process` from `PppVpnService`, so instrumentation always runs the service in the app process. Anything that depends on the release multi-process layout — cross-process state delivery in particular — cannot be reproduced there and is covered by the source checks in `tests/tooling/test_runtime_ui_wiring.py` instead. Keep that in mind before concluding a cross-process path is proven by a green device run.
+
 ## CMake Options
 
 | Option | Default | Description |

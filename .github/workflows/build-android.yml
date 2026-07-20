@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"abi":"arm64-v8a","ppp_abi":"aarch64"}]}' || '{"include":[{"abi":"arm64-v8a","ppp_abi":"aarch64"},{"abi":"armeabi-v7a","ppp_abi":"armv7a"},{"abi":"x86","ppp_abi":"x86"},{"abi":"x86_64","ppp_abi":"x64"}]}') }}
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"abi":"arm64-v8a","ppp_abi":"aarch64"},{"abi":"x86_64","ppp_abi":"x64"}]}' || '{"include":[{"abi":"arm64-v8a","ppp_abi":"aarch64"},{"abi":"armeabi-v7a","ppp_abi":"armv7a"},{"abi":"x86","ppp_abi":"x86"},{"abi":"x86_64","ppp_abi":"x64"}]}') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -89,8 +89,10 @@ jobs:
           if-no-files-found: error
 
   device-test:
+    # Runs the whole androidTest suite, not just P2P socket protection.
+    # It is not gated on the event: skipping pull requests meant an
+    # instrumentation regression only surfaced after the merge.
     name: Android P2P socket protection
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: build
 
@@ -207,17 +209,22 @@ jobs:
           cd android && flutter pub get
 
       - name: Configure Android release signing
+        id: signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          # A fork does not inherit the signing secrets. Report that and skip
+          # the release build rather than failing the Android workflow, which
+          # would mask the build and instrumentation results in the same run.
           required=(ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD)
           for name in "${required[@]}"; do
             if [ -z "${!name}" ]; then
-              echo "::error::Missing GitHub Actions secret: ${name}"
-              exit 1
+              echo "::notice::Release signing secret ${name} is not set; skipping the signed APK."
+              echo "signed=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
           done
 
@@ -229,18 +236,22 @@ jobs:
             echo "keyAlias=${ANDROID_KEY_ALIAS}"
             echo "keyPassword=${ANDROID_KEY_PASSWORD}"
           } > android/android/keystore/yav-release-key.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
 
       - name: Build release APK
+        if: steps.signing.outputs.signed == 'true'
         run: |
           cd android
           flutter build apk --release
 
       - name: Verify signed APK
+        if: steps.signing.outputs.signed == 'true'
         run: |
           ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | sort -V | tail -n 1)/apksigner verify \
             --verbose --print-certs android/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload signed APK
+        if: steps.signing.outputs.signed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: openppp2-android-signed-apk

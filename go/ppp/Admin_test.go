@@ -275,3 +275,74 @@ func TestStandaloneSubscriptionAPI(t *testing.T) {
 		t.Fatalf("delete unreferenced local server = %d %s", deletedServer.Code, deletedServer.Body.String())
 	}
 }
+
+func managedServerWithServerRecord(t *testing.T) *ManagedServer {
+	t.Helper()
+	cfg := defaultManagedServerConfiguration()
+	cfg.Key = "shared-secret"
+	server := &ManagedServer{
+		configuration: cfg,
+		managed:       true,
+		nodes:         make(map[int]*_vpn_server),
+		servers:       make(map[int]*tb_server),
+		users:         make(map[string]*_vpn_user),
+		dirty:         make(map[string]bool),
+	}
+	server.servers[1] = &tb_server{
+		Id: 1, Link: "ppp://vpn.example.com:20000/",
+		Protocol: "aes-128-cfb", ProtocolKey: "protocol-key",
+		Transport: "aes-256-cfb", TransportKey: "transport-key",
+	}
+	return server
+}
+
+func legacyRequest(server *ManagedServer, target string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	server.request(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	return recorder
+}
+
+func TestLegacyServerRoutesRejectRequestsWithoutTheKey(t *testing.T) {
+	server := managedServerWithServerRecord(t)
+
+	for _, target := range []string{
+		"/ppp/server/all",
+		"/ppp/server/get?node=1",
+		"/ppp/server/load",
+		"/ppp/server/all?key=wrong",
+	} {
+		body := legacyRequest(server, target).Body.String()
+
+		var response _HttpResponse
+		if err := json.Unmarshal([]byte(body), &response); err != nil {
+			t.Fatalf("%s response = %s (%v)", target, body, err)
+		}
+		if response.Code != _ERROR_ARG_KEY {
+			t.Fatalf("%s code = %d, want %d", target, response.Code, _ERROR_ARG_KEY)
+		}
+
+		// Node records carry the tunnel keys, so a rejected call must not
+		// disclose any part of them.
+		for _, secret := range []string{"protocol-key", "transport-key", "vpn.example.com"} {
+			if strings.Contains(body, secret) {
+				t.Fatalf("%s leaked %q: %s", target, secret, body)
+			}
+		}
+	}
+}
+
+func TestLegacyServerAllAcceptsTheConfiguredKey(t *testing.T) {
+	server := managedServerWithServerRecord(t)
+	body := legacyRequest(server, "/ppp/server/all?key=shared-secret").Body.String()
+
+	var response _HttpResponse
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		t.Fatalf("response = %s (%v)", body, err)
+	}
+	if response.Code != _ERROR_OK {
+		t.Fatalf("code = %d, want %d", response.Code, _ERROR_OK)
+	}
+	if !strings.Contains(response.Tag, "protocol-key") {
+		t.Fatalf("authorized response did not carry the record: %s", body)
+	}
+}

@@ -75,4 +75,53 @@ void main() {
     expect(store.state.effectivePath, 'relay');
     expect(store.apply(snapshot(8, 400, RuntimePhase.connected)), isFalse);
   });
+
+  test('restarted session with a lower generation is accepted after reset', () {
+    final store = RuntimeStore(initial: snapshot(9, 400, RuntimePhase.connected));
+    expect(store.apply(snapshot(1, 10, RuntimePhase.starting)), isFalse);
+
+    expect(store.resetForNewSession(), isTrue);
+    expect(store.state.generation, 0);
+    expect(store.state.phase, RuntimePhase.idle);
+
+    expect(store.apply(snapshot(1, 10, RuntimePhase.starting)), isTrue);
+    expect(store.state.generation, 1);
+    expect(store.state.phase, RuntimePhase.starting);
+  });
+
+  test('reset on an already idle baseline reports no change', () {
+    final store = RuntimeStore();
+    expect(store.resetForNewSession(), isFalse);
+  });
+
+  test('session restart clears the baseline exactly once', () {
+    final store = RuntimeStore();
+    expect(store.beginSession(), isFalse);
+    expect(store.apply(snapshot(9, 400, RuntimePhase.connected)), isTrue);
+
+    // Still the same session: the baseline must hold and reject stale events.
+    expect(store.beginSession(), isFalse);
+    expect(store.apply(snapshot(1, 10, RuntimePhase.starting)), isFalse);
+    expect(store.state.generation, 9);
+
+    // `:vpn` died and came back with a fresh generation counter.
+    store.endSession();
+    expect(store.beginSession(), isTrue);
+    expect(store.apply(snapshot(1, 10, RuntimePhase.starting)), isTrue);
+    expect(store.state.generation, 1);
+    expect(store.state.phase, RuntimePhase.starting);
+  });
+
+  test('reset restores bundled capabilities', () {
+    final store = RuntimeStore(
+      initial: RuntimeSnapshot(
+        generation: 4,
+        monotonicMs: 10,
+        phase: RuntimePhase.connected,
+        capabilities: const <String>['mux.compat'],
+      ),
+    );
+    store.resetForNewSession();
+    expect(store.state.capabilities, RuntimeSnapshot.bundledCapabilities);
+  });
 }

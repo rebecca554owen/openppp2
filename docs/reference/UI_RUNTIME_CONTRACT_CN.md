@@ -25,10 +25,13 @@
 | `requested_mux_mode`、`effective_mux_mode` | 请求及实际协商的 MUX 行为。 |
 | `mux_fallback_reason` | 实际 MUX 模式发生回退的原因。 |
 | `p2p_state`、`effective_path` | 类型化 P2P 状态和有效路径；路径始终为 `relay` 或 `direct`，且仅 `direct` 状态映射为 `direct`。 |
-| `last_error` | 错误码、严重度、可重试性、消息键和诊断详情。 |
+| `traffic` | 累计 `rx_bytes` 与 `tx_bytes`。消费者用两次 snapshot 的 `monotonic_ms` 求导得到速率，不得按 tick 累加增量。 |
+| `connected_monotonic_ms` | 进入 `connected` 时的 `monotonic_ms`，未连接时为 0。已连接时长为 `monotonic_ms - connected_monotonic_ms`。离开 `connected` 即清零，因此重连会重新开始计时。 |
+| `last_error` | 错误码、严重度、可重试性、消息键和诊断详情。在停止完成以及移动端启动失败时填充；会话中途的失败当前不会写入。 |
 
 消费者忽略未知可选字段。必需排序字段或 phase 缺失、phase 字符串未知、
-schema 版本不支持时必须报错。
+schema 版本不支持时必须报错。`traffic` 与 `connected_monotonic_ms` 为可选字段，
+缺省为 0。
 
 ## 阶段序列
 

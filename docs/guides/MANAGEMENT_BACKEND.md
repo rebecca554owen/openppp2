@@ -192,8 +192,17 @@ See `ppp/configurations/AppConfiguration.h` for the field definition.
 
 The Go backend exposes an HTTP management API for operators.
 
-The legacy `/ppp/*` query-string endpoints remain available. The JSON API below uses an independent
-admin token and does not reuse the C++ node credential in `key` / `server.backend-key`.
+The legacy `/ppp/*` query-string endpoints remain available. Every one of them, including
+`/ppp/server/all`, `/ppp/server/get` and `/ppp/server/load`, requires the shared `key` as a query
+parameter and answers `Code 14` without it. Those server endpoints return node records containing
+`protocol-key` and `transport-key`, so treat the shared key as tunnel credential material.
+
+`prefixes` binds every listed interface. `:10000` therefore exposes the admin API, the subscription
+URLs and the legacy endpoints on all addresses; bind to a loopback or management address, or
+firewall the port, unless the manager is meant to be publicly reachable.
+
+The JSON API below uses an independent admin token and does not reuse the C++ node credential in
+`key` / `server.backend-key`.
 
 The embedded console is served from `/admin/` by default:
 
