@@ -47,6 +47,22 @@ class RuntimeTrafficRate {
       txBytesPerSecond: (tx * 1000) ~/ elapsedMs,
     );
   }
+
+  /// Whether [current] should replace the traffic rate baseline.
+  ///
+  /// Phase/readiness snapshots advance [RuntimeSnapshot.monotonicMs] without
+  /// touching byte counters. Using those as the next baseline shrinks the
+  /// elapsed window for the following traffic sample and spikes the rate.
+  /// Keep the last counters sample until generation or rx/tx changes.
+  static bool advancesTrafficBaseline(
+    RuntimeSnapshot? previous,
+    RuntimeSnapshot current,
+  ) {
+    if (previous == null) return true;
+    if (previous.generation != current.generation) return true;
+    return previous.traffic.rxBytes != current.traffic.rxBytes ||
+        previous.traffic.txBytes != current.traffic.txBytes;
+  }
 }
 
 /// Milliseconds the session has been connected, or 0 when it is not.

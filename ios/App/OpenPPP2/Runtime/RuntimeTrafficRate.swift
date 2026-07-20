@@ -55,6 +55,21 @@ public struct RuntimeTrafficRate: Equatable, Sendable {
             txBytesPerSecond: (current.traffic.txBytes - previous.traffic.txBytes) * 1000 / elapsedMs
         )
     }
+
+    /// Whether `current` should replace the traffic rate baseline.
+    ///
+    /// Phase/readiness snapshots advance `monotonicMs` without changing byte
+    /// counters. Using those as the next baseline shrinks the elapsed window
+    /// for the following traffic sample and spikes the rate.
+    public static func advancesTrafficBaseline(
+        _ previous: RuntimeSnapshot?,
+        _ current: RuntimeSnapshot
+    ) -> Bool {
+        guard let previous else { return true }
+        if previous.generation != current.generation { return true }
+        return previous.traffic.rxBytes != current.traffic.rxBytes ||
+            previous.traffic.txBytes != current.traffic.txBytes
+    }
 }
 
 /// Milliseconds the session has been connected, or 0 when it is not.
