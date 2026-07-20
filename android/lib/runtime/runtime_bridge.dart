@@ -23,11 +23,12 @@ RuntimeSnapshot decodeRuntimeSnapshot(String payload) {
 
 RuntimeOrdering decodeRuntimeOrdering(String payload) {
   final decoded = _decodeRuntimeMap(payload);
-  final generation = decoded['generation'];
-  final monotonicMs = decoded['monotonic_ms'];
-  if (generation is! int || generation < 0 ||
-      monotonicMs is! int || monotonicMs < 0) {
+  try {
+    return RuntimeOrdering(
+      generation: runtimeNonNegInt(decoded['generation'], 'generation'),
+      monotonicMs: runtimeNonNegInt(decoded['monotonic_ms'], 'monotonic_ms'),
+    );
+  } on FormatException {
     throw const FormatException('Runtime ordering metadata is required');
   }
-  return RuntimeOrdering(generation: generation, monotonicMs: monotonicMs);
 }

@@ -107,6 +107,21 @@ object PppStateStore {
     }
 
     /**
+     * Milliseconds since the runtime snapshot file was rewritten, or -1 when
+     * no session has written one. Native snapshot pushes used to refresh only
+     * this file; the UI also treats a fresh snapshot as liveness so status is
+     * not stuck waiting for the 1s link-state poller.
+     */
+    fun snapshotAgeMs(context: Context): Long {
+        return try {
+            val f = File(context.filesDir, RUNTIME_SNAPSHOT_FILE)
+            if (!f.exists()) -1L else System.currentTimeMillis() - f.lastModified()
+        } catch (_: Throwable) {
+            -1L
+        }
+    }
+
+    /**
      * Runtime snapshot JSON produced by the native engine. The engine runs in
      * `:vpn`, so the UI process cannot read it directly; the service mirrors
      * every published snapshot here and the UI reads it back.
@@ -116,12 +131,16 @@ object PppStateStore {
     }
 
     /**
-     * Returns the mirrored snapshot only while `:vpn` is alive. A snapshot left
-     * behind by a dead session must not be presented as current state.
+     * Returns the mirrored snapshot while either the link-state heartbeat or
+     * the snapshot file itself is fresh. A snapshot left behind by a dead
+     * session must not be presented as current state.
      */
     fun getRuntimeSnapshotIfAlive(context: Context): String? {
         if (!isVpnAlive(context)) {
-            return null
+            val snapshotAge = snapshotAgeMs(context)
+            if (snapshotAge < 0L || snapshotAge > HEARTBEAT_STALE_MS) {
+                return null
+            }
         }
         return try {
             val f = File(context.filesDir, RUNTIME_SNAPSHOT_FILE)
