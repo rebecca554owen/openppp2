@@ -92,6 +92,24 @@ class RuntimeErrorSnapshot {
   }
 }
 
+class RuntimeTrafficSnapshot {
+  const RuntimeTrafficSnapshot({
+    this.rxBytes = 0,
+    this.txBytes = 0,
+  });
+
+  final int rxBytes;
+  final int txBytes;
+
+  factory RuntimeTrafficSnapshot.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const RuntimeTrafficSnapshot();
+    return RuntimeTrafficSnapshot(
+      rxBytes: json['rx_bytes'] as int? ?? 0,
+      txBytes: json['tx_bytes'] as int? ?? 0,
+    );
+  }
+}
+
 class RuntimeSnapshot {
   static const bundledCapabilities = <String>[
     'mux.compat',
@@ -114,6 +132,8 @@ class RuntimeSnapshot {
     this.muxActiveLinks = 0,
     this.muxFallbackReason = '',
     this.p2pState = P2PState.disabled,
+    this.traffic = const RuntimeTrafficSnapshot(),
+    this.connectedMonotonicMs = 0,
     this.lastError = const RuntimeErrorSnapshot(),
   });
 
@@ -133,6 +153,12 @@ class RuntimeSnapshot {
   final String muxFallbackReason;
   final P2PState p2pState;
   String get effectivePath => p2pState == P2PState.direct ? 'direct' : 'relay';
+  final RuntimeTrafficSnapshot traffic;
+
+  /// `monotonic_ms` at which the session entered `connected`, or 0 when it is
+  /// not connected. Elapsed time is `monotonicMs - connectedMonotonicMs`, so it
+  /// stays correct across a UI process restart.
+  final int connectedMonotonicMs;
   final RuntimeErrorSnapshot lastError;
 
   factory RuntimeSnapshot.fromJson(Map<String, dynamic> json) {
@@ -171,6 +197,10 @@ class RuntimeSnapshot {
       muxActiveLinks: json['mux_active_links'] as int? ?? 0,
       muxFallbackReason: json['mux_fallback_reason'] as String? ?? '',
       p2pState: P2PState.parse(json['p2p_state'] as String? ?? 'disabled'),
+      traffic: RuntimeTrafficSnapshot.fromJson(
+        json['traffic'] as Map<String, dynamic>?,
+      ),
+      connectedMonotonicMs: json['connected_monotonic_ms'] as int? ?? 0,
       lastError: RuntimeErrorSnapshot.fromJson(
         json['last_error'] as Map<String, dynamic>?,
       ),

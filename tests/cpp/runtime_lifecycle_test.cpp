@@ -9,6 +9,7 @@ using ppp::app::runtime::RuntimeLifecycle;
 using ppp::app::runtime::RuntimePhase;
 using ppp::app::runtime::RuntimeReadiness;
 using ppp::app::runtime::RuntimeSnapshot;
+using ppp::app::runtime::RuntimeTraffic;
 
 namespace {
 
@@ -187,6 +188,46 @@ BOOST_AUTO_TEST_CASE(p2p_state_publishes_only_for_the_live_generation) {
     BOOST_TEST(std::string(ppp::p2p::EffectivePath(
         lifecycle.GetSnapshot().p2p_state)) == "relay");
     lifecycle.Unsubscribe(subscription);
+}
+
+BOOST_AUTO_TEST_CASE(traffic_publishes_only_when_totals_change) {
+    RuntimeLifecycle lifecycle;
+    const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 1);
+
+    RuntimeTraffic traffic;
+    traffic.rx_bytes = 1024;
+    traffic.tx_bytes = 512;
+    BOOST_TEST(lifecycle.UpdateTraffic(generation, traffic, 2));
+    BOOST_TEST(lifecycle.GetSnapshot().traffic.rx_bytes == 1024u);
+    BOOST_TEST(lifecycle.GetSnapshot().traffic.tx_bytes == 512u);
+
+    const std::uint64_t published = lifecycle.GetSnapshot().monotonic_ms;
+    BOOST_TEST(lifecycle.UpdateTraffic(generation, traffic, 3));
+    BOOST_TEST(lifecycle.GetSnapshot().monotonic_ms == published);
+
+    BOOST_TEST(!lifecycle.UpdateTraffic(generation + 1, traffic, 4));
+}
+
+BOOST_AUTO_TEST_CASE(connected_time_is_stamped_once_and_cleared_on_leaving) {
+    RuntimeLifecycle lifecycle;
+    const std::uint64_t generation = lifecycle.Begin(RuntimeSnapshot(), 1);
+    BOOST_TEST(lifecycle.GetSnapshot().connected_monotonic_ms == 0u);
+
+    BOOST_TEST(lifecycle.Transition(generation, RuntimePhase::Connected, 2));
+    BOOST_TEST(lifecycle.GetSnapshot().connected_monotonic_ms == 0u);
+
+    BOOST_TEST(lifecycle.UpdateReadiness(generation, FullyReady(), 3));
+    const std::uint64_t connected_at = lifecycle.GetSnapshot().connected_monotonic_ms;
+    BOOST_TEST(connected_at != 0u);
+    BOOST_TEST(connected_at == lifecycle.GetSnapshot().monotonic_ms);
+
+    RuntimeTraffic traffic;
+    traffic.rx_bytes = 1;
+    BOOST_TEST(lifecycle.UpdateTraffic(generation, traffic, 4));
+    BOOST_TEST(lifecycle.GetSnapshot().connected_monotonic_ms == connected_at);
+
+    BOOST_TEST(lifecycle.Transition(generation, RuntimePhase::Reconnecting, 5));
+    BOOST_TEST(lifecycle.GetSnapshot().connected_monotonic_ms == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(one_hundred_generations_cancel_from_every_startup_phase) {

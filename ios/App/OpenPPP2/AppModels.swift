@@ -473,47 +473,6 @@ extension NSError {
     }
 }
 
-struct VpnStatistics: Equatable {
-    var txSpeedBytes: Int = 0
-    var rxSpeedBytes: Int = 0
-    var inBytes: Int = 0
-    var outBytes: Int = 0
-
-    static let empty = VpnStatistics()
-
-    init() {}
-
-    init(jsonText: String, previous: VpnStatistics = .empty) {
-        guard let data = jsonText.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let map = object as? [String: Any]
-        else {
-            self = previous
-            return
-        }
-
-        func value(_ keys: [String]) -> Int? {
-            for key in keys {
-                guard let raw = map[key] else { continue }
-                if let number = raw as? NSNumber { return number.intValue }
-                if let text = raw as? String, let parsed = Int(text) { return parsed }
-            }
-            return nil
-        }
-
-        let nativeTxSpeed = value(["tx", "txBytes", "outgoing", "outgoingTraffic"]) ?? 0
-        let nativeRxSpeed = value(["rx", "rxBytes", "incoming", "incomingTraffic"]) ?? 0
-        let nativeInTotal = value(["in", "inBytes", "incomingTotal", "incomingTrafficTotal"])
-        let nativeOutTotal = value(["out", "outBytes", "outgoingTotal", "outgoingTrafficTotal"])
-        let hasPreviousTotals = previous.inBytes > 0 || previous.outBytes > 0
-
-        inBytes = max(previous.inBytes, nativeInTotal ?? (previous.inBytes + nativeRxSpeed))
-        outBytes = max(previous.outBytes, nativeOutTotal ?? (previous.outBytes + nativeTxSpeed))
-        rxSpeedBytes = nativeInTotal != nil && hasPreviousTotals ? max(0, inBytes - previous.inBytes) : nativeRxSpeed
-        txSpeedBytes = nativeOutTotal != nil && hasPreviousTotals ? max(0, outBytes - previous.outBytes) : nativeTxSpeed
-    }
-}
-
 struct VpnDiagnostics: Equatable {
     var linkState: Int?
     var startStage: String = ""

@@ -673,6 +673,13 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         outgoing_traffic = 0;
     }
 
+    if (runtime.generation != 0 && NULLPTR != statistics_snapshot) {
+        ppp::app::runtime::RuntimeTraffic traffic;
+        traffic.rx_bytes = statistics_snapshot->IncomingTraffic.load();
+        traffic.tx_bytes = statistics_snapshot->OutgoingTraffic.load();
+        runtime_lifecycle_.UpdateTraffic(runtime.generation, traffic, now);
+    }
+
     runtime = runtime_lifecycle_.GetSnapshot();
     const std::vector<std::string> runtime_lines =
         ppp::app::tui::BuildStatusLines(runtime);

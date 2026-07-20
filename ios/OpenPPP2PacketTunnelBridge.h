@@ -14,7 +14,6 @@ typedef int (*openppp2_ios_packet_writer)(
     void*       packet_context,
     openppp2_ios_packet_release packet_release,
     void*       user_data);
-typedef void (*openppp2_ios_statistics_writer)(const char* statistics_json, void* user_data);
 typedef int (*openppp2_ios_http_post_fn)(const char* url, const void* body, int body_len, void* user_data);
 
 typedef void (*openppp2_ios_p2p_receive_fn)(
@@ -92,9 +91,7 @@ void openppp2_ios_tap_destroy(openppp2_ios_tap* tap);
 int openppp2_ios_tap_start(
     openppp2_ios_tap*                  tap,
     const char*                        configuration_json,
-    const openppp2_ios_tunnel_options* options,
-    openppp2_ios_statistics_writer     statistics_writer,
-    void*                              statistics_user_data);
+    const openppp2_ios_tunnel_options* options);
 
 int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason);
 
@@ -106,11 +103,6 @@ int openppp2_ios_tap_input(
 int openppp2_ios_tap_get_link_state(openppp2_ios_tap* tap);
 
 int openppp2_ios_tap_get_runtime_snapshot(
-    openppp2_ios_tap* tap,
-    char*             buffer,
-    int               buffer_size);
-
-int openppp2_ios_tap_get_statistics(
     openppp2_ios_tap* tap,
     char*             buffer,
     int               buffer_size);

@@ -14,6 +14,37 @@ class RuntimeStore extends ChangeNotifier {
 
   RuntimeSnapshot _state;
   RuntimeSnapshot get state => _state;
+  bool _sessionActive = false;
+
+  /// Drops the ordering baseline. A restarted `:vpn` service counts
+  /// generations from zero again, so the previous watermark would otherwise
+  /// reject every snapshot the new session publishes.
+  bool resetForNewSession() {
+    if (_state.generation == 0 && _state.phase == RuntimePhase.idle) {
+      return false;
+    }
+    _state = const RuntimeSnapshot(
+      generation: 0,
+      monotonicMs: 0,
+      phase: RuntimePhase.idle,
+      capabilities: RuntimeSnapshot.bundledCapabilities,
+    );
+    notifyListeners();
+    return true;
+  }
+
+  /// Clears the baseline once, on the first payload seen after a gap.
+  bool beginSession() {
+    if (_sessionActive) return false;
+    _sessionActive = true;
+    return resetForNewSession();
+  }
+
+  /// Records that the mirrored session is gone, so the next payload starts a
+  /// new generation sequence.
+  void endSession() {
+    _sessionActive = false;
+  }
 
   bool apply(RuntimeSnapshot incoming) {
     if (incoming.generation < _state.generation) {

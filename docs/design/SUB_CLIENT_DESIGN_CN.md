@@ -1,4 +1,7 @@
 # OpenPPP2 Sub / Client 方案设计
+> Status: Active
+> Type: Design
+> Last verified: a7e9b99
 
 > 状态：设计基线，待实现阶段重新核边界
 > 日期：2026-07-19

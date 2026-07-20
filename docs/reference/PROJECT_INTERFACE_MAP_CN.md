@@ -159,11 +159,11 @@ C++ 类中的 `public` 只表示仓库代码可以访问，并不等于稳定的
 | 路由 | 状态 | 首选接口 / 风险 |
 |---|---|---|
 | `/ppp/consumer/set`、`/new`、`/reload`、`/load` | **内部**，旧兼容接口 | 首选 `/api/v1/users`；handler 接受任意方法，业务错误放在 HTTP 200 内 |
-| `/ppp/server/all`、`/get`、`/load` | **内部**，旧兼容接口 | 首选 `/api/v1/servers`；这些路由当前没有鉴权 |
+| `/ppp/server/all`、`/get`、`/load` | **内部**，旧兼容接口 | 首选 `/api/v1/servers`；与 consumer 路由一样要求共享 `key` 查询参数 |
 
 控制 WebSocket 和全部 `/ppp/*` 路由只在托管模式存在。源码当前没有移除时间表或正式弃用政策。
 
-**缺口：**旧 server 路由未鉴权；origin 策略宽松；admin UI 可收到敏感 server key；缺少正式 OpenAPI 和完整的响应/错误 schema。
+**缺口：**origin 策略宽松；admin UI 可收到敏感 server key；缺少正式 OpenAPI 和完整的响应/错误 schema。
 
 ## 8. 订阅和管理 UI 契约
 
@@ -209,14 +209,16 @@ Guardian 配置和实例状态以 `0600` 模式写入 JSON；profiles/backups �
 
 | 边界 | 操作 / 载荷 | 生命周期 | 源码依据 |
 |---|---|---|---|
-| Flutter MethodChannel `supersocksr.ppp/vpn` | `connect`、`disconnect`、`getState`、`getStatistics`、`readLog`、`getLogPath`、`clearLog`、`getVpnHeartbeatAgeMs`、`getLinkState`、已安装 App 查询、诊断、`requestPermission` | UI 进程；异步调用 | `vpn_service.dart`、`MainActivity.kt` |
-| EventChannel `supersocksr.ppp/vpn_events` | link state、statistics、runtime snapshot 事件 | UI event sink 为进程内对象 | 同上 |
+| Flutter MethodChannel `supersocksr.ppp/vpn` | `connect`、`disconnect`、`getRuntimeSnapshot`、`getLastError`、`readLog`、`getLogPath`、`clearLog`、`getVpnHeartbeatAgeMs`、已安装 App 查询、诊断、`requestPermission` | UI 进程；异步调用 | `vpn_service.dart`、`MainActivity.kt` |
 | Activity → Service Intent | connect/disconnect action，extras 为 `config_json`、`vpn_options_json` | 启动前台、不导出的 `:vpn` Service | `MainActivity.kt`、`PppVpnService.kt` |
 | Kotlin → JNI | native run/stop、状态/统计/错误/快照、socket protect、telemetry HTTP 回调 | `run()` 阻塞后台线程；回调依赖 Service 存活 | `android/android/app/src/main/kotlin/supersocksr/ppp/android/c/libopenppp2.kt`、`android/libopenppp2.cpp` |
+| JNI → Kotlin | `runtime_snapshot`、`protect`、`start_exec`、`post_exec`、telemetry HTTP | `libopenppp2` 上的静态回调；由任意 runtime 线程触发，因此每次调用自行 attach JVM，且不缓存 `JNIEnv*` | 同上 |
 | 配置档存储 | `profiles_v2`、active ID、options、有限历史 | App 私有 SharedPreferences | `profile_store.dart` |
-| 跨进程状态 | prefs，加 `openppp2-statistics.json`、`openppp2-linkstate.txt` | best-effort 写；heartbeat 30 秒新鲜度 | `PppStateStore.kt`、`MainActivity.kt` |
+| 跨进程状态 | `openppp2-runtime-snapshot.json`、`openppp2-lasterror.txt`、`openppp2-linkstate.txt` | 临时文件加 rename 的原子替换；heartbeat 30 秒新鲜度 | `PppStateStore.kt`、`MainActivity.kt` |
 
-**高优先级缺口：**`PppVpnService` 运行在 `:vpn`，`MainActivity.eventSink` 却是进程内 static。从 Service 进程发出的事件通常无法抵达 UI 进程的 sink。link state 和 statistics 有文件兜底，但 runtime snapshot 没有，所以 Android Runtime Snapshot 在真实多进程环境中很可能不可达；当前没有端到端测试。
+`PppVpnService` 运行在 `:vpn`。它此前发布事件的 EventChannel 解析到的是进程内 static sink，什么也送不出去，现已移除；Service 改为把每个 runtime snapshot 与错误镜像到上述文件，UI 进程在可见时每秒轮询一次。native 侧的发布经 `runtime_snapshot` JNI 回调抵达 Service，并按 snapshot 自身的 `generation` 与 `monotonic_ms` 排序。
+
+**缺口：**debug 构建会去掉 Service 的 `android:process`（`app/src/debug/AndroidManifest.xml`），因此 instrumentation 始终单进程运行，无法复现跨进程投递。上述缺陷正是被这个覆盖掩盖的。release 布局目前由 `tests/tooling/test_runtime_ui_wiring.py` 的源码级检查保证，而非设备测试。
 
 其他缺口：没有统一的 Channel/JNI ABI 版本、完整的方法/错误 schema、Service kill/recreate 覆盖、完整 JNI 签名测试，配置档存储也没有显式迁移版本。
 
@@ -227,8 +229,8 @@ Guardian 配置和实例状态以 `0600` 模式写入 JSON；profiles/backups �
 | 边界 | 操作 / 载荷 | 生命周期 | 源码依据 |
 |---|---|---|---|
 | App → Network Extension | 保存/加载 manager、启动/停止隧道、provider configuration | 系统授权和 `NETunnelProviderManager` 生命周期 | `VPNController.swift` |
-| Provider 消息 | `stats`、`linkState`、`lastError`、`diagnostics`、`crashReports`、`deleteCrashReports`、JSON `uploadCrashReports` | 只有 connected `NETunnelProviderSession` 可交换消息 | `VPNController.swift`、`PacketTunnelProvider.swift` |
-| Swift → C ABI | `openppp2_ios_version`；tap create/destroy/start/stop/input；link/snapshot/stat/stage；last error；telemetry；P2P datagram 回调 | tap 和 callback 所有权明确；provider close 必须同步停止回调 | `OpenPPP2PacketTunnelBridge.h` |
+| Provider 消息 | `linkState`、`lastError`、`diagnostics`、`crashReports`、`deleteCrashReports`、JSON `uploadCrashReports` | 只有 connected `NETunnelProviderSession` 可交换消息 | `VPNController.swift`、`PacketTunnelProvider.swift` |
+| Swift → C ABI | `openppp2_ios_version`；tap create/destroy/start/stop/input；link/snapshot/stage；last error；telemetry；P2P datagram 回调 | tap 和 callback 所有权明确；provider close 必须同步停止回调 | `OpenPPP2PacketTunnelBridge.h` |
 | App Group 状态 | link heartbeat、runtime snapshot、diagnostics、defaults | App 和扩展共享 entitlement 容器；原子文件写 | `TunnelSharedState.swift` |
 | 配置档 bundle | `type=openppp2-profile-export`、`version=1`、active ID 和 profiles | 用户选择 security-scoped 文件；2 MiB 限制；包含 secret | `ProfileImportExport.swift` |
 
@@ -321,8 +323,7 @@ TUI 依赖 TTY，并受 `PPP_NO_TUI` 控制。命令在 ConsoleUI 生命周期�
 
 | 优先级 | 缺口 | 影响面 | 完成证据 |
 |---|---|---|---|
-| P0 | Android `:vpn` Service 无法可靠跨进程发布 EventChannel Runtime Snapshot | Android 运行 UI | 明确 IPC 或原子 snapshot 文件，加真实多进程 instrumentation test |
-| P0 | 旧 `/ppp/server/*` 管理路由未鉴权 | Go 管理器 | 增加鉴权或删除、迁移公告和 handler 测试 |
+| P1 | Android 跨进程运行时投递缺少设备测试，因为 debug 构建把 `:vpn` 合并进 App 进程 | Android 运行 UI | 保留 `android:process` 的 instrumentation 变体，或等价的多进程测试装置 |
 | P1 | 隧道没有协议版本/操作码注册表/跨版本矩阵 | 线上协议 | 版本协商、注册表和兼容 fixture |
 | P1 | Guardian binary 路径可暴露任意主机路径；config PUT 忽略 body | Guardian | 路径策略、正确更新行为和 API 测试 |
 | P1 | iOS native bridge/Packet Tunnel 未端到端 CI 构建 | iOS | static library 构建和 provider-message 集成测试 |
