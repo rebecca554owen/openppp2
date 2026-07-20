@@ -39,6 +39,16 @@ void main() {
     ]));
     expect(snapshot.p2pState, P2PState.relay);
     expect(snapshot.effectivePath, 'relay');
+    expect(snapshot.traffic.rxBytes, 10485760);
+    expect(snapshot.traffic.txBytes, 2097152);
+    expect(snapshot.connectedMonotonicMs, 30000);
+  });
+
+  test('absent traffic and connect time default to zero', () {
+    final snapshot = RuntimeSnapshot.fromJson(readFixture('idle.json'));
+    expect(snapshot.traffic.rxBytes, 0);
+    expect(snapshot.traffic.txBytes, 0);
+    expect(snapshot.connectedMonotonicMs, 0);
   });
 
   test('P2P state mapping is typed, complete, and fail closed', () {

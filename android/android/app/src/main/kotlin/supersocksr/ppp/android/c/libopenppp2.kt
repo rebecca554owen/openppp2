@@ -34,12 +34,13 @@ class libopenppp2 {
         fun isProtectReady(): Boolean = PppVpnService.instance != null
 
         /**
-         * Called from native code to report traffic statistics.
-         * json format: {"tx":"...", "rx":"...", "in":"...", "out":"..."}
+         * Called from native code whenever the runtime publishes a snapshot.
+         * Runs on whichever thread produced the transition, so delivery order
+         * is not guaranteed; the service orders by the snapshot's own fields.
          */
         @JvmStatic
-        fun statistics(json: String) {
-            PppVpnService.instance?.onStatistics(json)
+        fun runtime_snapshot(json: String) {
+            PppVpnService.instance?.onRuntimeSnapshot(json)
         }
 
         /**

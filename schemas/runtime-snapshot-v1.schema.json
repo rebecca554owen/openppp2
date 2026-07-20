@@ -27,11 +27,26 @@
     "role": { "type": "string" },
     "server": { "type": "string" },
     "transport": { "type": "string" },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "requested_mux_mode": { "type": "string" },
     "effective_mux_mode": { "type": "string" },
+    "mux_receiver_ordering": { "type": "string" },
+    "mux_active_links": { "type": "integer", "minimum": 0 },
     "mux_fallback_reason": { "type": "string" },
     "p2p_state": { "type": "string" },
     "effective_path": { "type": "string" },
+    "traffic": {
+      "type": "object",
+      "properties": {
+        "rx_bytes": { "type": "integer", "minimum": 0 },
+        "tx_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "connected_monotonic_ms": { "type": "integer", "minimum": 0 },
     "last_error": {
       "type": "object",
       "properties": {

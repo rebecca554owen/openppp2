@@ -126,6 +126,11 @@ jobs:
           mkdir -p build/coverage
           go test ./... -coverprofile=build/coverage/go.out -covermode=atomic
           go tool cover -func=build/coverage/go.out | tee build/coverage/go-summary.txt
+      - name: Vet and test the manager backend
+        working-directory: go
+        run: |
+          go vet ./ppp/...
+          go test ./ppp/...
       - name: Upload Go coverage
         uses: actions/upload-artifact@v4
         with:
