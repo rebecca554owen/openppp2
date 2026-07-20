@@ -83,7 +83,7 @@ class RuntimeErrorSnapshot {
   factory RuntimeErrorSnapshot.fromJson(Map<String, dynamic>? json) {
     if (json == null) return const RuntimeErrorSnapshot();
     return RuntimeErrorSnapshot(
-      code: json['code'] as int? ?? 0,
+      code: runtimeNonNegInt(json['code'], 'code', required: false),
       severity: json['severity'] as String? ?? '',
       retryable: json['retryable'] as bool? ?? false,
       userMessageKey: json['user_message_key'] as String? ?? '',
@@ -104,8 +104,16 @@ class RuntimeTrafficSnapshot {
   factory RuntimeTrafficSnapshot.fromJson(Map<String, dynamic>? json) {
     if (json == null) return const RuntimeTrafficSnapshot();
     return RuntimeTrafficSnapshot(
-      rxBytes: json['rx_bytes'] as int? ?? 0,
-      txBytes: json['tx_bytes'] as int? ?? 0,
+      rxBytes: runtimeNonNegInt(
+        json['rx_bytes'],
+        'rx_bytes',
+        required: false,
+      ),
+      txBytes: runtimeNonNegInt(
+        json['tx_bytes'],
+        'tx_bytes',
+        required: false,
+      ),
     );
   }
 }
@@ -166,14 +174,11 @@ class RuntimeSnapshot {
     if (version != schemaVersion) {
       throw FormatException('Unsupported runtime schema version: $version');
     }
-    final generation = json['generation'];
-    if (generation is! int || generation < 0) {
-      throw const FormatException('Runtime generation is required');
-    }
-    final monotonicMs = json['monotonic_ms'];
-    if (monotonicMs is! int || monotonicMs < 0) {
-      throw const FormatException('Runtime monotonic_ms is required');
-    }
+    // JsonCpp may emit large counters as JSON numbers that dart:convert keeps
+    // as double on some paths; accept int|num so a live connected snapshot is
+    // not rejected as "Invalid runtime snapshot".
+    final generation = runtimeNonNegInt(json['generation'], 'generation');
+    final monotonicMs = runtimeNonNegInt(json['monotonic_ms'], 'monotonic_ms');
     final phaseValue = json['phase'];
     if (phaseValue is! String) {
       throw const FormatException('Runtime phase is required');
@@ -194,13 +199,21 @@ class RuntimeSnapshot {
       requestedMuxMode: json['requested_mux_mode'] as String? ?? '',
       effectiveMuxMode: json['effective_mux_mode'] as String? ?? '',
       muxReceiverOrdering: json['mux_receiver_ordering'] as String? ?? '',
-      muxActiveLinks: json['mux_active_links'] as int? ?? 0,
+      muxActiveLinks: runtimeNonNegInt(
+        json['mux_active_links'],
+        'mux_active_links',
+        required: false,
+      ),
       muxFallbackReason: json['mux_fallback_reason'] as String? ?? '',
       p2pState: P2PState.parse(json['p2p_state'] as String? ?? 'disabled'),
       traffic: RuntimeTrafficSnapshot.fromJson(
         json['traffic'] as Map<String, dynamic>?,
       ),
-      connectedMonotonicMs: json['connected_monotonic_ms'] as int? ?? 0,
+      connectedMonotonicMs: runtimeNonNegInt(
+        json['connected_monotonic_ms'],
+        'connected_monotonic_ms',
+        required: false,
+      ),
       lastError: RuntimeErrorSnapshot.fromJson(
         json['last_error'] as Map<String, dynamic>?,
       ),
@@ -233,4 +246,32 @@ class RuntimeSnapshot {
         'P2P: ${p2pState.displayName}',
         'Effective path: $effectivePathDisplayName',
       ];
+}
+
+/// Accepts JSON ints and whole-number doubles (JsonCpp / dart:convert edge).
+int runtimeNonNegInt(
+  Object? value,
+  String field, {
+  bool required = true,
+}) {
+  if (value == null) {
+    if (required) {
+      throw FormatException('Runtime $field is required');
+    }
+    return 0;
+  }
+  if (value is int) {
+    if (value < 0) {
+      throw FormatException('Runtime $field must be non-negative');
+    }
+    return value;
+  }
+  if (value is num) {
+    final asInt = value.toInt();
+    if (asInt < 0 || value != asInt) {
+      throw FormatException('Runtime $field must be a non-negative integer');
+    }
+    return asInt;
+  }
+  throw FormatException('Runtime $field is required');
 }
