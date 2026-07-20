@@ -64,6 +64,25 @@ BOOST_AUTO_TEST_CASE(first_future_sequence_handles_wrap_with_standard_map_order)
     BOOST_TEST(selected == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(first_future_sequence_uses_ordered_lookup_after_reference_moves) {
+    mux::MuxFlowReorderBuffer<int> flow;
+    BOOST_REQUIRE(flow.TryInsert(20u, 10u, 20, 1, 64, 8));
+    BOOST_REQUIRE(flow.TryInsert(30u, 10u, 30, 1, 64, 8));
+    BOOST_REQUIRE(flow.TryInsert(40u, 10u, 40, 1, 64, 8));
+
+    std::uint32_t selected = 0;
+    BOOST_REQUIRE(flow.FirstSequence(25u, selected));
+    BOOST_TEST(selected == 30u);
+}
+
+BOOST_AUTO_TEST_CASE(first_future_sequence_rejects_ambiguous_ordered_candidate) {
+    mux::MuxFlowReorderBuffer<int> flow;
+    BOOST_REQUIRE(flow.TryInsert(0xffffffffu, 0xfffffffeu, 1, 1, 64, 8));
+
+    std::uint32_t selected = 0;
+    BOOST_TEST(!flow.FirstSequence(0x7fffffffu, selected));
+}
+
 BOOST_AUTO_TEST_CASE(half_circle_is_ambiguous_and_not_selected) {
     mux::MuxFlowReorderBuffer<int> ambiguous_only;
     BOOST_TEST(!ambiguous_only.TryInsert(0x80000000u, 0u, 1, 1, 64, 8));

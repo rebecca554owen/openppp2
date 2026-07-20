@@ -47,18 +47,23 @@ public:
     }
 
     bool FirstSequence(std::uint32_t reference, std::uint32_t& sequence) const noexcept {
-        std::uint32_t best_distance = 0x80000000u;
-        bool found = false;
-        for (const auto& packet : packets_) {
-            const std::uint32_t distance = packet.first - reference;
-            // Zero is not future; exactly half the sequence space is ambiguous.
-            if (distance != 0 && distance < best_distance) {
-                best_distance = distance;
-                sequence = packet.first;
-                found = true;
-            }
+        if (packets_.empty()) {
+            return false;
         }
-        return found;
+
+        auto packet = packets_.lower_bound(reference + 1);
+        if (packet == packets_.end()) {
+            packet = packets_.begin();
+        }
+
+        const std::uint32_t distance = packet->first - reference;
+        // Zero is not future; exactly half the sequence space is ambiguous.
+        if (distance == 0 || distance >= 0x80000000u) {
+            return false;
+        }
+
+        sequence = packet->first;
+        return true;
     }
 
     bool empty() const noexcept { return packets_.empty(); }
