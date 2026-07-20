@@ -59,7 +59,12 @@ class VpnService with WidgetsBindingObserver {
       final snapshot = decodeRuntimeSnapshot(raw);
       if (runtimeStore.apply(snapshot)) {
         _traffic = RuntimeTrafficRate.between(_previousTrafficSample, snapshot);
-        _previousTrafficSample = snapshot;
+        if (RuntimeTrafficRate.advancesTrafficBaseline(
+          _previousTrafficSample,
+          snapshot,
+        )) {
+          _previousTrafficSample = snapshot;
+        }
       }
     } catch (error) {
       try {

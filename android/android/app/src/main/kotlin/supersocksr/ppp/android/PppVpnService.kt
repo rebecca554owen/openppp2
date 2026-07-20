@@ -118,6 +118,10 @@ class PppVpnService : VpnService() {
         val generation = root.optLong("generation", -1L)
         val monotonicMs = root.optLong("monotonic_ms", -1L)
         if (generation < 0L || monotonicMs < 0L) return
+        // Ordering check and disk/notification publish must be one critical
+        // section: a second thread can otherwise pass the gate after we bump
+        // the watermark but before we finish writing, then land an older
+        // payload on top of a newer one (idle/failed lost to stale connected).
         synchronized(snapshotOrdering) {
             if (generation < lastSnapshotGeneration) return
             if (generation == lastSnapshotGeneration && monotonicMs <= lastSnapshotMonotonicMs) {
@@ -125,8 +129,8 @@ class PppVpnService : VpnService() {
             }
             lastSnapshotGeneration = generation
             lastSnapshotMonotonicMs = monotonicMs
+            publishRuntimeSnapshot(json)
         }
-        publishRuntimeSnapshot(json)
     }
 
     private fun publishRuntimeSnapshot(value: String) {

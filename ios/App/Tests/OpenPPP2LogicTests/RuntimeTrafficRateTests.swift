@@ -67,6 +67,30 @@ final class RuntimeTrafficRateTests: XCTestCase {
         XCTAssertEqual(RuntimeTrafficRate.between(previous, current).rxBytesPerSecond, 0)
     }
 
+    func testPhaseSnapshotBetweenTrafficSamplesDoesNotSpikeTheRate() {
+        let trafficA = sample(monotonicMs: 1_000, rxBytes: 1_000, txBytes: 500)
+        let phaseOnly = sample(
+            monotonicMs: 1_001,
+            rxBytes: 1_000,
+            txBytes: 500,
+            phase: .applyingPolicy
+        )
+        let trafficB = sample(monotonicMs: 3_000, rxBytes: 5_000, txBytes: 1_500)
+
+        XCTAssertFalse(RuntimeTrafficRate.advancesTrafficBaseline(trafficA, phaseOnly))
+        XCTAssertTrue(RuntimeTrafficRate.advancesTrafficBaseline(trafficA, trafficB))
+
+        let rate = RuntimeTrafficRate.between(trafficA, trafficB)
+        XCTAssertEqual(rate.rxBytesPerSecond, 2_000)
+        XCTAssertEqual(rate.txBytesPerSecond, 500)
+
+        let spiked = RuntimeTrafficRate.between(
+            phaseOnly,
+            sample(monotonicMs: 1_002, rxBytes: 3_000, txBytes: 500)
+        )
+        XCTAssertGreaterThan(spiked.rxBytesPerSecond, 100_000)
+    }
+
     func testConnectedElapsedIsMeasuredAgainstTheSnapshotClock() {
         let snapshot = sample(monotonicMs: 42_000, connectedMonotonicMs: 30_000)
         XCTAssertEqual(connectedElapsedMs(snapshot), 12_000)

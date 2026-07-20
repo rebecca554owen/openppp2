@@ -89,6 +89,34 @@ class RuntimeSnapshotDeliveryTest {
         assertTrue(mirrored() == good)
     }
 
+    @Test
+    fun concurrentSnapshotsCannotLeaveAnOlderMirror() {
+        val service = requireNotNull(PppVpnService.instance)
+        val newer = snapshot(7, 200, "failed")
+        val older = snapshot(7, 100, "connected")
+        val start = java.util.concurrent.CountDownLatch(1)
+        val done = java.util.concurrent.CountDownLatch(2)
+
+        Thread {
+            start.await()
+            service.onRuntimeSnapshot(older)
+            done.countDown()
+        }.start()
+        Thread {
+            start.await()
+            service.onRuntimeSnapshot(newer)
+            done.countDown()
+        }.start()
+
+        start.countDown()
+        assertTrue(done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+        // Gate + publish share one lock, so the mirror must end on the newer
+        // payload even when both threads race through onRuntimeSnapshot.
+        assertTrue(mirrored().contains("\"phase\":\"failed\""))
+        assertTrue(mirrored().contains("\"monotonic_ms\":200"))
+    }
+
     private fun waitUntil(condition: () -> Boolean) {
         val deadline = SystemClock.elapsedRealtime() + 5_000L
         while (!condition() && SystemClock.elapsedRealtime() < deadline) {

@@ -123,7 +123,12 @@ final class HomeViewController: UIViewController {
                 let snapshot = try TunnelRuntimeBridge.decodeSnapshot(json)
                 if runtimeStore.apply(snapshot) {
                     traffic = RuntimeTrafficRate.between(previousTrafficSample, snapshot)
-                    previousTrafficSample = snapshot
+                    if RuntimeTrafficRate.advancesTrafficBaseline(
+                        previousTrafficSample,
+                        snapshot
+                    ) {
+                        previousTrafficSample = snapshot
+                    }
                 }
                 runtimeDecodeError = nil
             } catch {

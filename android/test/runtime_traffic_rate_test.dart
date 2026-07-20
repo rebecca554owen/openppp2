@@ -69,6 +69,43 @@ void main() {
 
       expect(RuntimeTrafficRate.between(previous, current).rxBytesPerSecond, 0);
     });
+
+    test('phase snapshot between traffic samples does not spike the rate', () {
+      final trafficA =
+          sample(monotonicMs: 1000, rxBytes: 1000, txBytes: 500);
+      // Same counters, later clock: phase/readiness publish in the same tick.
+      final phaseOnly = sample(
+        monotonicMs: 1001,
+        rxBytes: 1000,
+        txBytes: 500,
+        phase: RuntimePhase.applyingPolicy,
+      );
+      final trafficB =
+          sample(monotonicMs: 3000, rxBytes: 5000, txBytes: 1500);
+
+      expect(
+        RuntimeTrafficRate.advancesTrafficBaseline(trafficA, phaseOnly),
+        isFalse,
+      );
+      expect(
+        RuntimeTrafficRate.advancesTrafficBaseline(trafficA, trafficB),
+        isTrue,
+      );
+
+      // Baseline stays on trafficA; rate uses the full 2s window.
+      final rate = RuntimeTrafficRate.between(trafficA, trafficB);
+      expect(rate.rxBytesPerSecond, 2000);
+      expect(rate.txBytesPerSecond, 500);
+
+      // If phaseOnly wrongly became the baseline, elapsed would be 1999ms and
+      // the displayed rate would jump (still ~2k here) — the real bug is the
+      // near-zero window when the next sample is only 1ms after phaseOnly.
+      final spiked = RuntimeTrafficRate.between(
+        phaseOnly,
+        sample(monotonicMs: 1002, rxBytes: 3000, txBytes: 500),
+      );
+      expect(spiked.rxBytesPerSecond, greaterThan(100000));
+    });
   });
 
   group('connected elapsed time', () {
