@@ -1,5 +1,9 @@
 # VMUX P0-C Link Exit + Byte Credit Design
 
+> Status: Archived
+> Type: Design
+> Last verified: 6b2e915
+
 **Status:** Approved for implementation (plan lock + user: implement through P1)  
 **Branch/worktree:** `fix/vmux-failure-semantics-bounds` @ `/tmp/openppp2-vmux-p0`
 
