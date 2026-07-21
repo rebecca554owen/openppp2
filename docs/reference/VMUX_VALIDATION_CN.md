@@ -8,7 +8,7 @@
 
 > Status: Stable
 > Type: Reference
-> Last verified: ded25d6
+> Last verified: 29ec28d
 
 [English version](VMUX_VALIDATION.md)
 
@@ -25,9 +25,15 @@
 |---|---|
 | 单流吞吐 | `flow-one-flow` 吞吐不低于对应 `off-one-flow` 基线的 95%。 |
 | 等质量链路尾时延 | 等质量链路下，`flow-one-flow` p99 不得超过对应 `off-one-flow` p99 的 110%。 |
-| 有界重排内存 | 缓冲字节始终不超过 `mux.flow.reorder.bytes`，且不超过派生的重排条目数上限。 |
+| 有界重排内存 | 每逻辑流缓冲字节始终不超过 `mux.flow.reorder.bytes`，且不超过派生的重排条目数上限。 |
+| 会话级 reorder / 打开上限（P0-B 硬门槛） | 会话 reorder 字节不超过 `mux.flow.session_reorder.bytes`；打开中的逻辑流不超过 `mux.flow.max_open`。最坏模型为 `min(session_reorder.bytes, max_open × reorder.bytes)`，**不是** `max_connections × reorder.bytes`。控制队列按 `mux.tx.ctrl.budget_frames` 预算排出，避免饿死数据。 |
+| 缺口失败语义（P0-A 硬门槛） | 不可恢复缺口必须 **fail 该流**（flow_v2：`fail_flow` / `mux.rx.flow.reset`）或 **重建会话**（compat：`compat_evict_expired` / `mux.rx.compat.gap_timeout`）；禁止 force-advance 后越过空洞继续交付。 |
+| Compat OOO 活性（P0-A） | 收到乱序成帧流量也刷新会话活性（`active(now)`），与 flow_v2 一致。 |
+| 未知 cid 有界（P0-A） | 无 skt 的 flow_v2 PUSH/FIN 不得无界创建 `flows_`（`mux.rx.unknown_cid`）；发起端在 `connected_` 前不得 post PUSH。 |
 | 旧 peer 兼容 | 对端不支持 FLOW_V2 时，`balance` / `stripe` 必须协商为 `effective_mode=compat`、`receiver_ordering=compat`，并给出 `fallback_reason=peer_missing_flow_v2`；`flow` 保持 `effective_mode=flow`，但使用 `receiver_ordering=compat`。 |
 | 链路 churn 安全 | 100 次 grow/shrink 在 ASan/UBSan 下完成，且无错误、泄漏、计数下溢、断线或在途链路提前 retire。 |
+| 载波退出隔离（P0-C） | 多链路用于**吞吐/时延，不是 HA**。`on_link_exit`：仍有存活载波则移除死链并继续；最后一条存活载波退出则关会话。 |
+| 每链路字节信用（P0-C） | 每链路跟踪本地在途写字节（`queued_bytes_`）；超过 `PPP_MUX_LINK_BYTE_HIGH_WATER` 拒绝新发送。写完成=本地 socket 接受，非对端 ACK。 |
 
 对比运行必须具有相同的环境指纹、除被测模式外相同的配置、时长、flow 数量和
 netem profile。harness smoke 只证明能够采集证据，不属于性能证据。
