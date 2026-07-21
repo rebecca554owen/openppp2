@@ -86,6 +86,8 @@ openppp2_add_cpp_test(vmux_negotiation_test SOURCES
     vmux_negotiation_test.cpp)
 openppp2_add_cpp_test(vmux_flow_reorder_test SOURCES
     vmux_flow_reorder_test.cpp)
+openppp2_add_cpp_test(vmux_flow_context_admission_test SOURCES
+    vmux_flow_context_admission_test.cpp)
 openppp2_add_cpp_test(vmux_link_churn_test SOURCES
     vmux_link_churn_test.cpp)
 openppp2_add_cpp_test(mux_transport_adapter_test SOURCES

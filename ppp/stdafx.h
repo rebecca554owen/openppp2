@@ -385,6 +385,8 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_DEFAULT_CONGESTIONS     = 128 << 20; /* 134217728 */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_BYTES      = 1 << 20;  /* 1 MiB per-connection reorder cap (flow v2) */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_TIMEOUT    = 400;      /* gap wait timeout in ms (flow v2); near link RTT to bound stuck->self-heal */
+static constexpr int                                                        PPP_MUX_FLOW_MAX_CONTEXTS       = 4096;     /* hard cap on concurrent flow-v2 receive contexts (DoS bound) */
+static constexpr int                                                        PPP_MUX_FLOW_AGGREGATE_BYTES    = 16 << 20; /* 16 MiB aggregate reorder memory across all flow contexts */
 static constexpr int                                                        PPP_MUX_TX_QUEUE_HIGH_WATER     = 4096;     /* data tx_queue_ depth at which the acceleration read-pump is throttled (D11 backpressure) */
 static constexpr int                                                        PPP_MUX_TX_BACKLOG_STALL_TIMEOUT = 8000;    /* ms the data tx queue may stay backlogged before the session is rebuilt (D11 watchdog) */
 static constexpr int                                                        PPP_MUX_TURBO_FACTOR_MAX        = 3;        /* turbo dynamic pool: max multiplier of the --tun-mux base (pool_hard_max = base * this) */
