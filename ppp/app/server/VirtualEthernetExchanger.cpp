@@ -584,10 +584,15 @@ namespace ppp {
                 vmux::vmux_net::mux_mode effective_mux_mode = NULLPTR != configuration
                     ? vmux::vmux_net::parse_mode(configuration->GetEffectiveMuxMode())
                     : vmux::vmux_net::mux_mode_compat;
-                bool local_supports_flow_v2 = effective_mux_mode != vmux::vmux_net::mux_mode_compat;
+                // Capability is implementation-level (always true here), not "current mode".
+                bool local_supports_flow_v2 = true;
                 bool peer_supports_flow_v2 = (ordering_caps & vmux::vmux_net::ordering_caps_flow_v2) != 0;
+                // Provisional agreed ordering; apply_negotiation is authoritative once mux exists.
+                bool turbo = NULLPTR != configuration && configuration->mux.turbo &&
+                    effective_mux_mode == vmux::vmux_net::mux_mode_flow;
+                bool need_flow_v2 = vmux::vmux_net::mode_requires_flow_v2(effective_mux_mode, turbo);
                 vmux::vmux_net::receiver_ordering_mode agreed =
-                    (local_supports_flow_v2 && peer_supports_flow_v2)
+                    (need_flow_v2 && local_supports_flow_v2 && peer_supports_flow_v2)
                         ? vmux::vmux_net::ordering_flow_v2
                         : vmux::vmux_net::ordering_compat;
 
