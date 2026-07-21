@@ -58,6 +58,15 @@ inline std::vector<std::string> BuildStatusLines(
     if (!snapshot.mux_receiver_ordering.empty()) {
         lines.emplace_back("receiver ordering=" + snapshot.mux_receiver_ordering);
     }
+    if (!snapshot.mux_scheduler.empty()) {
+        lines.emplace_back("scheduler=" + snapshot.mux_scheduler);
+    }
+    if (!snapshot.mux_pool_policy.empty()) {
+        lines.emplace_back("pool=" + snapshot.mux_pool_policy);
+    }
+    if (snapshot.mux_turbo) {
+        lines.emplace_back("turbo=on");
+    }
     if (snapshot.mux_active_links > 0) {
         lines.emplace_back("active mux links=" + std::to_string(snapshot.mux_active_links));
     }

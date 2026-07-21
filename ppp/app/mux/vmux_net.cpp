@@ -95,6 +95,7 @@ namespace vmux {
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
             runtime_state_.effective_mode = mode_name(mode_);
+            ppp::app::mux::FillMuxPresentation(runtime_state_);
         }
         stripe_cursor_ = 0;
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "scheduler mode switched to %s", mode_name(mode_));
@@ -127,6 +128,11 @@ namespace vmux {
             tx_backlog_stall_ms_ = (qstall > 0) ? (uint64_t)qstall : (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT;
             // flow turbo: only meaningful under flow mode; harmless to latch always.
             turbo_ = AppConfiguration->mux.turbo && (mode_ == mux_mode_flow);
+            {
+                std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+                runtime_state_.turbo = turbo_;
+                ppp::app::mux::FillMuxPresentation(runtime_state_);
+            }
         }
 
         // Latch gap-timeout for both ordering modes (flow_v2 per-flow; compat global).
@@ -164,20 +170,35 @@ namespace vmux {
         ppp::app::mux::MuxRuntimeState state;
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            // turbo_ may already be latched from config; include it so flow+turbo
+            // negotiates ordering correctly and presentation shows adaptive pool.
             state = ppp::app::mux::NegotiateMuxRuntimeState(
                 runtime_state_.requested_mode,
                 local_supports_flow_v2,
                 peer_supports_flow_v2,
-                runtime_state_.active_links);
+                runtime_state_.active_links,
+                turbo_ || runtime_state_.turbo);
             runtime_state_ = state;
         }
         set_mode(parse_mode(ppp::string(state.effective_mode.data(), state.effective_mode.size())));
         set_ordering_mode(state.receiver_ordering == "flow_v2" ? ordering_flow_v2 : ordering_compat);
+        // Keep presentation fields in sync after ordering/turbo latch.
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            runtime_state_.turbo = turbo_;
+            ppp::app::mux::FillMuxPresentation(runtime_state_);
+        }
     }
 
     ppp::app::mux::MuxRuntimeState vmux_net::get_runtime_state() const noexcept {
         std::lock_guard<std::mutex> scope(runtime_state_mutex_);
-        return runtime_state_;
+        ppp::app::mux::MuxRuntimeState state = runtime_state_;
+        state.turbo = turbo_;
+        if (state.effective_mode.empty()) {
+            state.effective_mode = mode_name(mode_);
+        }
+        ppp::app::mux::FillMuxPresentation(state);
+        return state;
     }
 
     void vmux_net::refresh_runtime_active_links() noexcept {
@@ -293,6 +314,8 @@ namespace vmux {
         m->runtime_state_.requested_mode = mode_name(m->mode_);
         m->runtime_state_.effective_mode = mode_name(m->mode_);
         m->runtime_state_.receiver_ordering = "compat";
+        m->runtime_state_.turbo = false;
+        ppp::app::mux::FillMuxPresentation(m->runtime_state_);
 
         ppp::telemetry::Log(Level::kInfo, "mux", "mode=%s", mode_name(m->mode_));
         uint64_t now                  = now_tick();

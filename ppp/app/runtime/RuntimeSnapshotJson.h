@@ -118,6 +118,9 @@ namespace ppp {
                 root["requested_mux_mode"] = detail::ToRuntimeJsonString(snapshot.requested_mux_mode);
                 root["effective_mux_mode"] = detail::ToRuntimeJsonString(snapshot.effective_mux_mode);
                 root["mux_receiver_ordering"] = detail::ToRuntimeJsonString(snapshot.mux_receiver_ordering);
+                root["mux_scheduler"] = detail::ToRuntimeJsonString(snapshot.mux_scheduler);
+                root["mux_pool_policy"] = detail::ToRuntimeJsonString(snapshot.mux_pool_policy);
+                root["mux_turbo"] = snapshot.mux_turbo;
                 root["mux_active_links"] = snapshot.mux_active_links;
                 root["mux_fallback_reason"] = detail::ToRuntimeJsonString(snapshot.mux_fallback_reason);
                 root["p2p_state"] = ppp::p2p::ToString(snapshot.p2p_state);
@@ -188,6 +191,11 @@ namespace ppp {
                 parsed.requested_mux_mode = detail::RuntimeJsonString(root, "requested_mux_mode");
                 parsed.effective_mux_mode = detail::RuntimeJsonString(root, "effective_mux_mode");
                 parsed.mux_receiver_ordering = detail::RuntimeJsonString(root, "mux_receiver_ordering");
+                parsed.mux_scheduler = detail::RuntimeJsonString(root, "mux_scheduler");
+                parsed.mux_pool_policy = detail::RuntimeJsonString(root, "mux_pool_policy");
+                if (root.isMember("mux_turbo") && root["mux_turbo"].isBool()) {
+                    parsed.mux_turbo = root["mux_turbo"].asBool();
+                }
                 if (root.isMember("mux_active_links") && root["mux_active_links"].isUInt()) {
                     parsed.mux_active_links = static_cast<std::uint16_t>(
                         std::min<unsigned int>(root["mux_active_links"].asUInt(), UINT16_MAX));

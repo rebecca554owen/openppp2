@@ -15,6 +15,9 @@ BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mux_state) {
     snapshot.effective_mux_mode = "compat";
     snapshot.mux_fallback_reason = "peer_missing_flow_v2";
     snapshot.mux_receiver_ordering = "compat";
+    snapshot.mux_scheduler = "competition";
+    snapshot.mux_pool_policy = "fixed";
+    snapshot.mux_turbo = false;
     snapshot.mux_active_links = 2;
 
     const auto lines = BuildStatusLines(snapshot);
@@ -23,6 +26,8 @@ BOOST_AUTO_TEST_CASE(connected_snapshot_renders_effective_mux_state) {
     BOOST_TEST(ContainsLine(lines, "requested VMUX: balance"));
     BOOST_TEST(ContainsLine(lines, "fallback reason: peer_missing_flow_v2"));
     BOOST_TEST(ContainsLine(lines, "receiver ordering=compat"));
+    BOOST_TEST(ContainsLine(lines, "scheduler=competition"));
+    BOOST_TEST(ContainsLine(lines, "pool=fixed"));
     BOOST_TEST(ContainsLine(lines, "active mux links=2"));
 }
 
