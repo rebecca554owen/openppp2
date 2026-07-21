@@ -411,7 +411,9 @@ class UdpBenchmarkContractTests(unittest.TestCase):
         readme = (ROOT / "tools" / "bench" / "README.md").read_text(
             encoding="utf-8"
         )
-        design = (ROOT / "docs" / "UDP_PERF_BASELINE_DESIGN.md").read_text(
+        design = (
+            ROOT / "docs" / "archive" / "designs" / "UDP_PERF_BASELINE_DESIGN.md"
+        ).read_text(
             encoding="utf-8"
         )
         for document in (readme, design):
