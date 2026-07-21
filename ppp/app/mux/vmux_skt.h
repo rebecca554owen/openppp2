@@ -16,6 +16,7 @@ namespace vmux {
      */
     class vmux_skt final : public std::enable_shared_from_this<vmux_skt> {
         friend class                                    vmux_net;
+        friend struct                                   vmux_net_test_access;
 
         /** @brief Shared packet buffer pointer type. */
         typedef std::shared_ptr<Byte>                   buffer_array_ptr;

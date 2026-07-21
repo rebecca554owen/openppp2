@@ -83,41 +83,76 @@ struct flow_rx_context {
     rx_packet_ssqueue flow_reorder_;                // map<DSN, 帧>，packet_less 处理回绕
     uint64_t          oldest_buffered_tick_ = 0;     // 最老缓冲帧入队 tick（超时基准）
     size_t            buffered_bytes_       = 0;     // 当前缓冲字节（内存上界）
-    bool              primed_               = false; // 已用首帧初始化 flow_rx_next_
+    bool              primed_               = false; // 已将 flow_rx_next_ 初始化为协议起始值 1
     bool              fin_seen_             = false; // 已交付 FIN
 };
 ```
 
-`packet_input_flow()`：控制帧旁路（不进 DSN 闸门）；数据帧首帧 priming（以首个 DSN 初始化）；命中 `flow_rx_next_` 立即交付并连续回放；未来帧入有界 reorder 缓冲；过期/重复帧丢弃。一条慢链路只卡它自己那个连接，不影响其它连接。
+`packet_input_flow()`：控制帧旁路（不进 DSN 闸门）；新流从协议固定起始 DSN `1` 开始定序，首个观测帧若为未来 DSN 也必须等待缺口；命中 `flow_rx_next_` 立即交付并连续回放；未来帧入有界 reorder 缓冲；过期/重复帧丢弃。一条慢链路只卡它自己那个连接，不影响其它连接。
 
-### 5. 有界内存 + 超时驱逐（活性）
+### 5. 有界内存 + 缺口失败语义（活性）
 
-- 每连接缓冲 `buffered_bytes_ <= mux.flow.reorder.bytes`；超限时 `flow_force_advance` 跳过最老缺口。
-- `update()` 周期调用 `flow_evict_expired`：缺口超过 `mux.flow.reorder.timeout`（毫秒）就跳过缺口推进 `flow_rx_next_`。
-- 每次实际跳过递增遥测 `mux.rx.flow.evict`。
-- 第一版**无重传**：被跳过的缺口字节由被隧道的上层 TCP 重传补偿。
+`flows_`（以及发送侧 `tx_flow_seq_`）按 **`connection_id`（逻辑流）** 索引，**不是**按 carrier / `max_connections`（承载链路数）索引。把“最坏内存”写成 `max_connections × reorder.bytes` 是错误的。
+
+**当前代码（待 P0-A 修正）：** 超限/`flow_evict_expired` 仍可能通过 `flow_force_advance` 跳过缺口并继续交付后续帧；`flow_evict_expired` **只推进** `flow_rx_next_`，**不会**释放 `flows_` 表项。这会造成静默字节空洞，目标语义禁止。
+
+**目标语义（P0-A / P0-B）：**
+
+- 每逻辑流 reorder：`buffered_bytes_ <= mux.flow.reorder.bytes`。
+- 会话级 reorder 硬上界：`mux.flow.session_reorder.bytes`（P0-B）。
+- 逻辑流 + pre-open 数量硬上界：`mux.flow.max_open`（P0-B）。
+- 未知 `connection_id` 预算：`mux.flow.unknown_cid.max`（P0-A/B）。
+- 缺口不可恢复（超时、reorder 溢出、单帧超限）时：**reset/close 该逻辑流**（flow_v2）或 **session rebuild**（compat 全局 gap），**禁止** `force_advance` 后静默交付后续帧。
+- 遥测：流重置计为 `mux.rx.flow.reset`（或等价名）；`mux.rx.flow.evict` **不得**再表示“跳过字节并已交付”。
+- 第一版仍**无 mux 层重传**；丢失/重置由上层 TCP（或会话重建）处理，而不是在 mux 层造空洞。
+
+**最坏 reorder 内存模型：**
+
+```text
+per_flow_reorder_bytes   = mux.flow.reorder.bytes
+max_open_flows           = mux.flow.max_open          // 逻辑连接 + pre-open（P0-B）
+session_reorder_bytes    = mux.flow.session_reorder.bytes  // P0-B
+unknown_cid_budget       = mux.flow.unknown_cid.max   // P0-A/B
+
+worst_case_reorder ≈ min(
+  session_reorder_bytes,
+  max_open_flows × per_flow_reorder_bytes
+)
+```
 
 ### 6. 发送侧不绑定，接收状态不回退
 
-当前 `balance` 发送侧保持竞争法，不做 per-connection link binding；`stripe` 才是实验性逐包轮询。承载链路掉线或 runtime shrink 时，发送侧后续帧继续由剩余可用链路竞争发送。接收侧 `flow_rx_context` 保留、`flow_rx_next_` 不回退；在途丢帧表现为该连接自己的 DSN 缺口，由超时驱逐保活。
+当前 `balance` 发送侧保持竞争法，不做 per-connection link binding；`stripe` 才是实验性逐包轮询。承载链路掉线或 runtime shrink 时，发送侧后续帧继续由剩余可用链路竞争发送。接收侧 `flow_rx_context` 保留、`flow_rx_next_` 不回退；在途丢帧表现为该连接自己的 DSN 缺口，超时后 **fail 该流**（不再 skip 后继续交付）。
 
 ## 配置项
 
 | 键 | 类型 | 默认 | 作用 |
 |---|---|---|---|
-| `mux.flow.reorder.bytes` | int (>0) | 1048576 | 每连接 reorder 缓冲字节上界 |
-| `mux.flow.reorder.timeout` | int (>0, ms) | 400 | 缺口等待超时 |
+| `mux.flow.reorder.bytes` | int (>0) | 1048576 | 每逻辑流 reorder 缓冲字节上界（已实现） |
+| `mux.flow.reorder.timeout` | int (>0, ms) | 400 | 缺口等待超时；超时后应 **fail flow/session**，不是 skip（P0-A） |
+| `mux.flow.session_reorder.bytes` | int (>0) | （P0-B 计划） | 会话级 reorder 字节硬上界 |
+| `mux.flow.max_open` | int (>0) | （P0-B 计划） | 逻辑流 + pre-open 数量硬上界 |
+| `mux.flow.unknown_cid.max` | int (>0) | （P0-A/B 计划） | 未知 cid 缓冲/记账预算，禁止 `flows_` 无界增长 |
 
 不再有独立 `mux.flow-v2` 配置项；所有非 `compat` 模式（`flow` / `balance` / `stripe`）都会声明 flow v2，`compat` 不声明。双方都支持能力字节时启用 flow v2；`balance` / `stripe` 遇到旧 peer 会回退到 `compat`，而 `flow` 保持其调度模式并使用兼容接收顺序。
 
 ## 第一版明确不保证
 
-- 不在 mux 层重传（靠上层 TCP）。
+- 不在 mux 层重传（靠上层 TCP 或 session rebuild）。
 - 无拥塞控制 / 无 per-flow ACK 反馈。
 - `seq` 字段二义，无独立链路质量序号。
-- 内存换吞吐：最坏 `max_connections × flow.reorder.bytes`。
+- 内存有界，但上界按**逻辑流**计：`worst_case_reorder ≈ min(session_reorder.bytes, max_open × reorder.bytes)`，**不是** `max_connections × reorder.bytes`（`max_connections` 是 carrier 数）。
 - `stripe` 仍实验性；本特性只为其提供接收端定序基础。
 - 协商是会话级一次性，建链后不热切换。
+- 多链路不宣称 HA：单 carrier 丢失在途帧时，P0 以明确 fail（流/会话）为准，不做无 ACK 的无损迁移。
+
+## 接收失败语义（仅三种结局）
+
+对任一逻辑流的数据路径，只允许：
+
+1. **交付**按序、连续的 DSN 数据；
+2. **丢弃**重复/过期帧（不推进交付游标以外的副作用）；
+3. **失败**——flow_v2 下 reset/close 该流，compat 下全局 gap 超时则 session rebuild——**禁止**静默制造字节空洞后继续交付。
 
 ## 验证与默认值门槛
 
@@ -130,7 +165,7 @@ benchmark artifacts 与 compatibility results 并满足该参考，才允许讨�
 
 ## 代码触点
 
-- `ppp/app/mux/vmux_net.h` / `.cpp`：`receiver_ordering_mode`、`flow_rx_context`、`packet_input_flow`、`deliver_one`、`flow_force_advance`、`flow_evict_expired`、`maybe_release_flow`、`set_ordering_mode`、`post_internal` 的 DSN 分支、`forwarding` 分流。
+- `ppp/app/mux/vmux_net.h` / `.cpp`：`receiver_ordering_mode`、`flow_rx_context`、`packet_input_flow`、`deliver_one`、`flow_force_advance`（P0-A 起改为 fail_flow，禁止 skip-and-deliver）、`flow_evict_expired`、`maybe_release_flow` / `fail_flow`、`set_ordering_mode`、`post_internal` 的 DSN 分支、`forwarding` 分流。
 - `ppp/app/protocol/VirtualEthernetLinklayer.h` / `.cpp`：MUX_IL 追加 `ordering_caps`，`DoMux`/`OnMux` 增参与长度容忍解析。
 - `ppp/app/server/VirtualEthernetExchanger.cpp` / `ppp/app/client/VEthernetExchanger.cpp`：协商 `agreed` 并 `set_ordering_mode`。
 - `ppp/configurations/AppConfiguration.h` / `.cpp`：`mux.mode` / `mux.flow.reorder.*`。

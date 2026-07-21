@@ -27,6 +27,9 @@ namespace ppp {
                 std::string requested_mux_mode;
                 std::string effective_mux_mode;
                 std::string mux_receiver_ordering;
+                std::string mux_scheduler;       ///< competition|round_robin
+                std::string mux_pool_policy;     ///< fixed|adaptive
+                bool mux_turbo = false;
                 std::uint16_t mux_active_links = 0;
                 std::string mux_fallback_reason;
                 ppp::p2p::P2PState p2p_state = ppp::p2p::P2PState::Disabled;

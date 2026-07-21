@@ -298,8 +298,12 @@ namespace ppp {
             config.mux.turbo = false;
             config.mux.flow.reorder.bytes = PPP_MUX_FLOW_REORDER_BYTES;
             config.mux.flow.reorder.timeout = PPP_MUX_FLOW_REORDER_TIMEOUT;
+            config.mux.flow.session_reorder.bytes = PPP_MUX_FLOW_SESSION_REORDER_BYTES;
+            config.mux.flow.max_open = PPP_MUX_FLOW_MAX_OPEN;
+            config.mux.flow.unknown_cid.max = PPP_MUX_FLOW_UNKNOWN_CID_MAX;
             config.mux.tx.queue.max = PPP_MUX_TX_QUEUE_HIGH_WATER;
             config.mux.tx.queue.stall = PPP_MUX_TX_BACKLOG_STALL_TIMEOUT;
+            config.mux.tx.ctrl.budget_frames = PPP_MUX_TX_CTRL_BUDGET_FRAMES;
             config.mux.debug.key = "";
             config.mux.debug.set_mode = "";
 
@@ -717,12 +721,28 @@ namespace ppp {
                 config.mux.flow.reorder.timeout = PPP_MUX_FLOW_REORDER_TIMEOUT;
             }
 
+            if (config.mux.flow.session_reorder.bytes <= 0) {
+                config.mux.flow.session_reorder.bytes = PPP_MUX_FLOW_SESSION_REORDER_BYTES;
+            }
+
+            if (config.mux.flow.max_open <= 0) {
+                config.mux.flow.max_open = PPP_MUX_FLOW_MAX_OPEN;
+            }
+
+            if (config.mux.flow.unknown_cid.max <= 0) {
+                config.mux.flow.unknown_cid.max = PPP_MUX_FLOW_UNKNOWN_CID_MAX;
+            }
+
             if (config.mux.tx.queue.max <= 0) {
                 config.mux.tx.queue.max = PPP_MUX_TX_QUEUE_HIGH_WATER;
             }
 
             if (config.mux.tx.queue.stall <= 0) {
                 config.mux.tx.queue.stall = PPP_MUX_TX_BACKLOG_STALL_TIMEOUT;
+            }
+
+            if (config.mux.tx.ctrl.budget_frames <= 0) {
+                config.mux.tx.ctrl.budget_frames = PPP_MUX_TX_CTRL_BUDGET_FRAMES;
             }
 
             if (config.udp.static_.aggligator < 0) {
@@ -1686,8 +1706,12 @@ namespace ppp {
             config.mux.turbo = JsonAuxiliary::AsValue<bool>(json["mux"]["turbo"]);
             config.mux.flow.reorder.bytes = JsonAuxiliary::AsValue<int>(json["mux"]["flow"]["reorder"]["bytes"]);
             config.mux.flow.reorder.timeout = JsonAuxiliary::AsValue<int>(json["mux"]["flow"]["reorder"]["timeout"]);
+            config.mux.flow.session_reorder.bytes = JsonAuxiliary::AsValue<int>(json["mux"]["flow"]["session_reorder"]["bytes"]);
+            config.mux.flow.max_open = JsonAuxiliary::AsValue<int>(json["mux"]["flow"]["max_open"]);
+            config.mux.flow.unknown_cid.max = JsonAuxiliary::AsValue<int>(json["mux"]["flow"]["unknown_cid"]["max"]);
             config.mux.tx.queue.max = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["queue"]["max"]);
             config.mux.tx.queue.stall = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["queue"]["stall"]);
+            config.mux.tx.ctrl.budget_frames = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["ctrl"]["budget_frames"]);
             config.mux.debug.key = JsonAuxiliary::AsValue<ppp::string>(json["mux"]["debug"]["key"]);
             config.mux.keep_alived[0] = JsonAuxiliary::AsValue<int>(json["mux"]["keep-alived"][0]);
             config.mux.keep_alived[1] = JsonAuxiliary::AsValue<int>(json["mux"]["keep-alived"][1]);
@@ -2021,8 +2045,12 @@ namespace ppp {
             mux["turbo"] = config.mux.turbo;
             mux["flow"]["reorder"]["bytes"] = config.mux.flow.reorder.bytes;
             mux["flow"]["reorder"]["timeout"] = config.mux.flow.reorder.timeout;
+            mux["flow"]["session_reorder"]["bytes"] = config.mux.flow.session_reorder.bytes;
+            mux["flow"]["max_open"] = config.mux.flow.max_open;
+            mux["flow"]["unknown_cid"]["max"] = config.mux.flow.unknown_cid.max;
             mux["tx"]["queue"]["max"] = config.mux.tx.queue.max;
             mux["tx"]["queue"]["stall"] = config.mux.tx.queue.stall;
+            mux["tx"]["ctrl"]["budget_frames"] = config.mux.tx.ctrl.budget_frames;
             if (!config.mux.debug.key.empty()) {
                 mux["debug"]["key"] = config.mux.debug.key;
             }
