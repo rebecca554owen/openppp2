@@ -12,8 +12,8 @@
 - Worktree: `/tmp/openppp2-vmux-p0` (symlink: `openppp2/.worktrees/vmux-failure-semantics-bounds`)
 - Branch: `fix/vmux-failure-semantics-bounds`
 - Last green: `./bin/vmux_receive_semantics_test` → `ok` (10/10, 2026-07-21)
-- Packages landed: **P0-Doc**, **P0-A**, **P0-B**, **P0-C**, **P1 (minimal)**
-- Remaining: **P2** (hygiene), full P1-1 DRR if needed later
+- Packages landed: **P0-Doc/A/B/C**, **P1-lite**, **P2-1..P2-4**, **P2-6**, **P2-2/3 presentation+caps**
+- Remaining: full P1 DRR (optional); P2-5 deeper strand migration (snapshot path already lock-safe)
 - Note: main checkout on other branches may not contain these commits — use this worktree.
 
 **Tech Stack:** C++17, Boost.Asio strand, existing `ppp/app/mux/*`, Boost.Test under `tests/cpp`, config in `AppConfiguration`, docs EN+CN where paired.
@@ -477,12 +477,12 @@ Each P1 task: own failing tests, own commit series, own verification skill run.
 
 | Task | Intent |
 |------|--------|
-| P2-1 | Delete dead affinity API/state (`select_affinity_*`, `select_balanced_*`, `affinity_links_`) and all cleanups |
-| P2-2 | Split runtime presentation: scheduler × ordering × pool (UI/TUI snapshot fields); keep user presets |
-| P2-3 | Negotiate `supported_caps` vs `requested` features (not “non-compat ⇒ advertise”) |
-| P2-4 | CID epoch or session-local non-reuse policy + wrap tests |
+| P2-1 DONE | Delete dead affinity API/state (`select_affinity_*`, `select_balanced_*`, `affinity_links_`) and all cleanups |
+| P2-2 DONE | Split runtime presentation: scheduler × ordering × pool (UI/TUI snapshot fields); keep user presets |
+| P2-3 DONE | Negotiate `supported_caps` vs `requested` features (not “non-compat ⇒ advertise”) |
+| P2-4 DONE | CID epoch or session-local non-reuse policy + wrap tests |
 | P2-5 | Strand-owned mutability audit; snapshot for cross-thread reads |
-| P2-6 | Harden `cmd_mux_mode_set` (default off, rate limit); forbid hot ordering switch without session rebuild |
+| P2-6 DONE | Harden `cmd_mux_mode_set` (default off, rate limit); forbid hot ordering switch without session rebuild |
 
 P2-1 is safe early **only** as a pure delete PR with compile + tests green—may land after P0-A if it reduces confusion (ponytail: yes, delete early).
 
