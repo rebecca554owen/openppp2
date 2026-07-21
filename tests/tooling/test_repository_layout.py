@@ -5,6 +5,9 @@ from pathlib import Path
 from tools import check_repository_layout
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
 class RepositoryLayoutTests(unittest.TestCase):
     def fixture(self, files: dict[str, str]) -> Path:
         temporary = tempfile.TemporaryDirectory()
@@ -42,6 +45,21 @@ class RepositoryLayoutTests(unittest.TestCase):
             }
         )
         self.assert_violation(root, "client -> server")
+
+    def test_peer_route_snapshot_uses_authenticated_gateway(self) -> None:
+        source = (
+            ROOT / "ppp/app/server/VirtualEthernetSwitcher.cpp"
+        ).read_text(encoding="utf-8")
+        snapshot = source[
+            source.index("void VirtualEthernetSwitcher::BuildPeerRouteTableSnapshot"):
+            source.index("uint32_t VirtualEthernetSwitcher::FindGatewayVirtualIPForDestination")
+        ]
+
+        self.assertIn(
+            "route.via = IPEndPoint::ToAddressString(record.VirtualIP);",
+            snapshot,
+        )
+        self.assertNotIn("route.via.empty()", snapshot)
 
     def test_route_public_header_cannot_expose_switcher(self) -> None:
         root = self.fixture(
