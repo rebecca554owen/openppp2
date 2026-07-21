@@ -10,8 +10,8 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         return (ROOT / relative).read_text(encoding="utf-8")
 
     def test_manual_validation_tracks_gate_and_device_evidence(self) -> None:
-        manual = self.source("docs/P2P_MANUAL_VALIDATION.md")
-        plan = self.source("docs/P2P_NETWORKING_PLAN.md")
+        manual = self.source("docs/archive/status/P2P_MANUAL_VALIDATION.md")
+        plan = self.source("docs/archive/plans/P2P_NETWORKING_PLAN.md")
 
         self.assertIn("ProductionAuthenticatedControlV1Ready = false", manual)
         self.assertIn("29526592987", manual)
