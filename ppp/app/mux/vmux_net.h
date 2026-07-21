@@ -438,6 +438,14 @@ namespace vmux {
         void                                                                        flow_force_advance(uint32_t connection_id, flow_rx_context& fx, uint64_t now) noexcept;
         /** @brief Release a flow context once its FIN was delivered and buffer drained. */
         void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
+        /**
+         * @brief Look up or create a flow receive context for an active socket only.
+         * @return nullptr when the connection_id is unknown, the context table is
+         *         full, or the id is zero. Fake attacker-chosen IDs must not retain state.
+         */
+        flow_rx_context*                                                            try_get_or_create_flow(uint32_t connection_id) noexcept;
+        void                                                                        note_flow_buffered(size_t bytes) noexcept;
+        void                                                                        note_flow_unbuffered(size_t bytes) noexcept;
 
         /** @brief Process SYN request and create connecting vmux socket state. */
         bool                                                                        process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept;
@@ -615,6 +623,9 @@ namespace vmux {
         vmux_flow_map                                                               flows_;             ///< connection_id -> per-flow receive context (flow v2 only).
         vmux::unordered_map<uint32_t, uint32_t>                                     tx_flow_seq_;       ///< connection_id -> next per-flow DSN to send (flow v2 only).
         size_t                                                                      flow_reorder_cap_bytes_ = 0; ///< Per-connection reorder buffer byte cap (from config).
+        size_t                                                                      flow_context_cap_       = 0; ///< Max concurrent flow receive contexts (DoS bound).
+        size_t                                                                      flow_aggregate_cap_bytes_ = 0; ///< Aggregate reorder bytes across all flow contexts.
+        size_t                                                                      flow_aggregate_bytes_   = 0; ///< Live sum of buffered reorder bytes across flows_.
         uint64_t                                                                    flow_reorder_timeout_   = 0; ///< Per-connection gap wait timeout in ms (from config).
         uint64_t                                                                    tx_backlog_since_       = 0; ///< Tick the data tx queue first stayed at/over high-water (0 = not backlogged); drives the D11 stall watchdog.
         size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Data tx-queue high-water depth (from config; D11 backpressure).

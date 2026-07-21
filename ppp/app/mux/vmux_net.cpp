@@ -1,6 +1,7 @@
 #include "vmux.h"
 #include "vmux_net.h"
 #include "vmux_skt.h"
+#include "MuxFlowContextAdmission.h"
 #include <ppp/configurations/AppConfiguration.h>
 #include <chrono>
 #include <openssl/crypto.h>
@@ -138,6 +139,12 @@ namespace vmux {
             int timeout_ms = (NULLPTR != AppConfiguration) ? AppConfiguration->mux.flow.reorder.timeout : 0;
             flow_reorder_cap_bytes_ = (cap_bytes > 0) ? (size_t)cap_bytes : (size_t)PPP_MUX_FLOW_REORDER_BYTES;
             flow_reorder_timeout_   = (timeout_ms > 0) ? (uint64_t)timeout_ms : (uint64_t)PPP_MUX_FLOW_REORDER_TIMEOUT;
+            flow_context_cap_ = (size_t)PPP_MUX_FLOW_MAX_CONTEXTS;
+            flow_aggregate_cap_bytes_ = (size_t)PPP_MUX_FLOW_AGGREGATE_BYTES;
+            // Aggregate must never be below a single-flow cap, or buffering is impossible.
+            if (flow_aggregate_cap_bytes_ < flow_reorder_cap_bytes_) {
+                flow_aggregate_cap_bytes_ = flow_reorder_cap_bytes_;
+            }
         }
 
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "ordering mode=%s",
@@ -332,6 +339,8 @@ namespace vmux {
             affinity_links_.clear();
             stripe_cursor_ = 0;
             flows_.clear();
+            flow_aggregate_bytes_ = 0;
+            tx_flow_seq_.clear();
             tx_flow_seq_.clear();
             break;
         }
@@ -1016,6 +1025,57 @@ namespace vmux {
         }
     }
 
+    void vmux_net::note_flow_buffered(size_t bytes) noexcept {
+        flow_aggregate_bytes_ += bytes;
+    }
+
+    void vmux_net::note_flow_unbuffered(size_t bytes) noexcept {
+        if (bytes >= flow_aggregate_bytes_) {
+            flow_aggregate_bytes_ = 0;
+        }
+        else {
+            flow_aggregate_bytes_ -= bytes;
+        }
+    }
+
+    /**
+     * @brief Look up or create a flow receive context only for an active socket.
+     * @details Unconditionally doing flows_[cid] retained attacker-chosen fake
+     *          connection_ids and enabled unbounded memory growth under flow-v2.
+     *          Require an existing logical socket (or an already-tracked flow)
+     *          and enforce a hard context-count cap.
+     */
+    vmux_net::flow_rx_context* vmux_net::try_get_or_create_flow(uint32_t connection_id) noexcept {
+        const bool already_tracked = flows_.find(connection_id) != flows_.end();
+        const bool socket_exists = NULLPTR != get_connection(connection_id);
+        const size_t cap = flow_context_cap_ > 0
+            ? flow_context_cap_
+            : (size_t)PPP_MUX_FLOW_MAX_CONTEXTS;
+        const ppp::app::mux::FlowContextAdmission decision =
+            ppp::app::mux::AdmitFlowContext(
+                connection_id,
+                already_tracked,
+                socket_exists,
+                flows_.size(),
+                cap);
+
+        switch (decision) {
+        case ppp::app::mux::FlowContextAdmission::AllowExisting:
+            return &flows_[connection_id];
+        case ppp::app::mux::FlowContextAdmission::AllowCreate:
+            return &flows_[connection_id];
+        case ppp::app::mux::FlowContextAdmission::RejectUnknown:
+            ppp::telemetry::Count("mux.rx.flow.unknown_cid", 1);
+            return NULLPTR;
+        case ppp::app::mux::FlowContextAdmission::RejectCap:
+            ppp::telemetry::Count("mux.rx.flow.context_cap", 1);
+            return NULLPTR;
+        case ppp::app::mux::FlowContextAdmission::RejectZero:
+        default:
+            return NULLPTR;
+        }
+    }
+
     /**
      * @brief Skips the current gap of one flow and replays contiguous buffered frames.
      * @details Advances flow_rx_next_ to the smallest buffered DSN (acknowledging
@@ -1036,6 +1096,7 @@ namespace vmux {
         for (;;) {
             rx_packet pk;
             if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
+                note_flow_unbuffered((size_t)pk.length);
                 vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                 Byte pcmd = ph->cmd;
                 if (pcmd == cmd_fin) {
@@ -1091,7 +1152,16 @@ namespace vmux {
         uint32_t cid = ntohl(h->connection_id);
         uint32_t seq = ntohl(h->seq);
 
-        flow_rx_context& fx = flows_[cid];
+        // Never create flow state for attacker-chosen fake connection_ids.
+        // Only active logical sockets (or an already-tracked flow for that
+        // socket) may retain a receive context.
+        flow_rx_context* fxp = try_get_or_create_flow(cid);
+        if (NULLPTR == fxp) {
+            active(now);
+            linklayer_update(linklayer);
+            return true;
+        }
+        flow_rx_context& fx = *fxp;
         if (!fx.primed_) {
             fx.primed_ = true;
             fx.flow_rx_next_ = seq; // prime from the first observed DSN.
@@ -1111,6 +1181,7 @@ namespace vmux {
             for (;;) {
                 rx_packet pk;
                 if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
+                    note_flow_unbuffered((size_t)pk.length);
                     vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                     Byte pcmd = ph->cmd;
                     if (pcmd == cmd_fin) {
@@ -1152,6 +1223,7 @@ namespace vmux {
                     for (;;) {
                         rx_packet pk;
                         if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
+                            note_flow_unbuffered((size_t)pk.length);
                             vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                             Byte pcmd = ph->cmd;
                             if (pcmd == cmd_fin) {
@@ -1173,8 +1245,14 @@ namespace vmux {
                 return true;
             }
 
-            // Evict oldest gaps until this frame fits within the per-connection cap.
-            while (fx.flow_reorder_.buffered_bytes() + (size_t)length > flow_reorder_cap_bytes_ && !fx.flow_reorder_.empty()) {
+            // Evict oldest gaps until this frame fits within the per-connection
+            // and aggregate reorder caps.
+            const size_t aggregate_cap = flow_aggregate_cap_bytes_ > 0
+                ? flow_aggregate_cap_bytes_
+                : (size_t)PPP_MUX_FLOW_AGGREGATE_BYTES;
+            while (!fx.flow_reorder_.empty() &&
+                (fx.flow_reorder_.buffered_bytes() + (size_t)length > flow_reorder_cap_bytes_ ||
+                 flow_aggregate_bytes_ + (size_t)length > aggregate_cap)) {
                 flow_force_advance(cid, fx, now);
                 // If forcing advance made seq become the next expected, fall through is
                 // not needed; re-check below by comparing again on next loop iteration.
@@ -1195,6 +1273,7 @@ namespace vmux {
                 for (;;) {
                     rx_packet pk;
                     if (fx.flow_reorder_.Take(fx.flow_rx_next_, pk)) {
+                        note_flow_unbuffered((size_t)pk.length);
                         vmux_hdr* ph = (vmux_hdr*)pk.buffer.get();
                         Byte pcmd = ph->cmd;
                         if (pcmd == cmd_fin) {
@@ -1222,6 +1301,15 @@ namespace vmux {
                 return true; // became stale after eviction; drop.
             }
 
+            // Still over the aggregate budget after local eviction: drop rather
+            // than retain attacker-driven memory across many real sockets.
+            if (flow_aggregate_bytes_ + (size_t)length > aggregate_cap) {
+                ppp::telemetry::Count("mux.rx.flow.aggregate_cap", 1);
+                active(now);
+                linklayer_update(linklayer);
+                return true;
+            }
+
             std::shared_ptr<Byte> buf = make_byte_array(length);
             if (NULLPTR == buf) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetReorderPacketBufferAllocFailed);
@@ -1241,6 +1329,7 @@ namespace vmux {
                 flow_reorder_cap_bytes_,
                 entry_cap);
             if (inserted) {
+                note_flow_buffered((size_t)length);
                 if (fx.oldest_buffered_tick_ == 0) {
                     fx.oldest_buffered_tick_ = now;
                 }
@@ -1348,7 +1437,13 @@ namespace vmux {
                 if (skt.get() == refer_pointer) {
                     skts_.erase(tail);
                     affinity_links_.erase(connection_id); // drop sticky binding (balance mode)
-                    flows_.erase(connection_id);          // drop per-flow receive context (flow v2)
+                    {
+                        vmux_flow_map::iterator flow = flows_.find(connection_id);
+                        if (flow != flows_.end()) {
+                            note_flow_unbuffered(flow->second.flow_reorder_.buffered_bytes());
+                            flows_.erase(flow);
+                        }
+                    }
                     tx_flow_seq_.erase(connection_id);    // drop per-flow send DSN counter (flow v2)
                 }
             }
