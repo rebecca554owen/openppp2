@@ -1353,6 +1353,7 @@ namespace ppp {
             route.network = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["network"])));
             route.prefix = static_cast<int>(JsonAuxiliary::AsInt64(json["prefix"], 0));
             route.via = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["via"])));
+            route.guid = LTrim(RTrim(JsonAuxiliary::AsValue<ppp::string>(json["guid"])));
             return !route.network.empty() && route.prefix > 0 && route.prefix <= ppp::net::native::MAX_PREFIX_VALUE_V4;
         }
 
@@ -1758,6 +1759,9 @@ namespace ppp {
                 if (peer_routing_json.isObject()) {
                     AssignBoolIfPresent(config.server.peer_routing.enabled, peer_routing_json["enabled"]);
                     AssignBoolIfPresent(config.server.peer_routing.distribute, peer_routing_json["distribute"]);
+                    LoadAllPeerPrefixRoutes(
+                        config.server.peer_routing.allowed_routes,
+                        peer_routing_json["allowed-routes"]);
                 }
             }
 
@@ -2105,10 +2109,25 @@ namespace ppp {
                 server["ipv4-pool"] = ipv4_pool;
             }
 
-            if (config.server.peer_routing.enabled) {
+            if (config.server.peer_routing.enabled ||
+                !config.server.peer_routing.allowed_routes.empty()) {
                 Json::Value peer_routing;
                 peer_routing["enabled"] = config.server.peer_routing.enabled;
                 peer_routing["distribute"] = config.server.peer_routing.distribute;
+                Json::Value& allowed_routes = peer_routing["allowed-routes"];
+                for (const PeerPrefixRouteConfiguration& route :
+                    config.server.peer_routing.allowed_routes) {
+                    Json::Value jo;
+                    jo["network"] = route.network;
+                    jo["prefix"] = route.prefix;
+                    if (!route.via.empty()) {
+                        jo["via"] = route.via;
+                    }
+                    if (!route.guid.empty()) {
+                        jo["guid"] = route.guid;
+                    }
+                    allowed_routes.append(jo);
+                }
                 server["peer-routing"] = peer_routing;
             }
             root["server"] = server;
