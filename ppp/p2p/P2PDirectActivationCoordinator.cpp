@@ -33,6 +33,27 @@ bool P2PDirectActivationCoordinator::Activate(
     return state_machine_.AcceptProbeAck(std::move(ack));
 }
 
+bool P2PDirectActivationCoordinator::MarkSuspect(
+    std::uint64_t generation) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (generation != generation_) return false;
+    return state_machine_.MarkSuspect();
+}
+
+bool P2PDirectActivationCoordinator::AcceptRecoveryAck(
+    P2PAuthenticatedProbeAck&& ack, std::uint64_t generation) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (generation != generation_) return false;
+    return state_machine_.AcceptRecoveryAck(std::move(ack));
+}
+
+bool P2PDirectActivationCoordinator::RecoverFromAuthenticatedData(
+    std::uint64_t generation) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (generation != generation_) return false;
+    return state_machine_.RecoverFromAuthenticatedData();
+}
+
 bool P2PDirectActivationCoordinator::Fallback(P2PFallbackReason reason,
     bool relay_prerequisites_available, std::uint64_t generation) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);

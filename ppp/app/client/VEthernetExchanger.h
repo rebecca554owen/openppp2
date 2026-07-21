@@ -56,6 +56,7 @@
 #include <ppp/p2p/P2PDatagramTransport.h>
 #include <ppp/p2p/P2PDirectDataPath.h>
 #include <ppp/p2p/P2PState.h>
+#include <ppp/p2p/P2PZeroRTTCache.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
@@ -971,6 +972,18 @@ namespace ppp {
                 void                                                                    HandleP2PRelayOffer(const ITransmissionPtr& transmission, const ppp::app::protocol::P2PControlMessage& message) noexcept;
                 void                                                                    HandleP2PDatagram(const ITransmissionPtr& transmission, uint64_t generation, uint64_t transport_registration, ppp::p2p::P2PDatagramReceiveStatus status, const boost::asio::ip::udp::endpoint& sender, const std::uint8_t* packet, int packet_size) noexcept;
                 void                                                                    ResetP2PCandidateTransport() noexcept;
+                void                                                                    StartP2PStunGatherAsync(
+                                                                                            const ITransmissionPtr& transmission,
+                                                                                            uint64_t generation,
+                                                                                            uint64_t transport_registration,
+                                                                                            uint32_t local_virtual_ip,
+                                                                                            ppp::vector<ppp::string> stun_servers) noexcept;
+                void                                                                    ApplyP2PStunMappedCandidate(
+                                                                                            const ITransmissionPtr& transmission,
+                                                                                            uint64_t generation,
+                                                                                            uint64_t transport_registration,
+                                                                                            uint32_t local_virtual_ip,
+                                                                                            const boost::asio::ip::udp::endpoint& mapped) noexcept;
                 /** @brief Guards datagrams_, datagram_handlers_, and deadline_timers_ tables. */
                 SynchronizedObject                                                      syncobj_;
                 /** @brief Commits network and P2P projection as one runtime snapshot. */
@@ -1008,9 +1021,14 @@ namespace ppp {
                 boost::asio::ip::udp::endpoint                                          p2p_local_candidate_;
                 boost::asio::ip::udp::endpoint                                          p2p_peer_candidate_;
                 ppp::p2p::P2PDirectDataPath                                             p2p_direct_data_path_;
+                ppp::p2p::P2PZeroRTTCache                                               p2p_zero_rtt_cache_;
                 uint64_t                                                                p2p_transport_registration_id_ = 0;
                 uint32_t                                                                p2p_registered_virtual_ip_ = 0;
                 uint32_t                                                                p2p_peer_virtual_ip_ = 0;
+                uint64_t                                                                p2p_last_heartbeat_tx_ms_ = 0;
+                int                                                                     p2p_heartbeat_misses_ = 0;
+                uint64_t                                                                p2p_suspect_since_ms_ = 0;
+                uint64_t                                                                p2p_migrate_started_ms_ = 0;
                 /** @brief Invalidates queued offer work across reconnect and teardown. */
                 std::atomic<uint64_t>                                                   p2p_offer_generation_{1};
                 std::atomic<uint64_t>                                                   p2p_transport_registration_sequence_{1};

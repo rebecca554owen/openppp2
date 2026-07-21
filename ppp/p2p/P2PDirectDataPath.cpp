@@ -58,6 +58,20 @@ bool P2PDirectDataPath::Activate(
     return activation_.Activate(transport_ready, generation);
 }
 
+bool P2PDirectDataPath::MarkSuspect(std::uint64_t generation) noexcept {
+    return activation_.MarkSuspect(generation);
+}
+
+bool P2PDirectDataPath::AcceptRecoveryAck(
+    P2PAuthenticatedProbeAck&& ack, std::uint64_t generation) noexcept {
+    return activation_.AcceptRecoveryAck(std::move(ack), generation);
+}
+
+bool P2PDirectDataPath::RecoverFromAuthenticatedData(
+    std::uint64_t generation) noexcept {
+    return activation_.RecoverFromAuthenticatedData(generation);
+}
+
 bool P2PDirectDataPath::Fallback(P2PFallbackReason reason,
     bool relay_prerequisites_available, std::uint64_t generation) noexcept {
     return activation_.Fallback(
@@ -94,8 +108,17 @@ bool P2PDirectDataPath::Open(P2PClientOfferSession& session,
     std::uint64_t generation,
     std::vector<std::uint8_t>& output) noexcept {
     const P2PState state = activation_.State();
-    return (state == P2PState::Probing || state == P2PState::Direct) &&
-        session.OpenData(datagram, now_ms, generation, output);
+    if (state != P2PState::Probing && state != P2PState::Direct &&
+        state != P2PState::Suspect) {
+        return false;
+    }
+    if (!session.OpenData(datagram, now_ms, generation, output)) {
+        return false;
+    }
+    if (state == P2PState::Suspect) {
+        activation_.RecoverFromAuthenticatedData(generation);
+    }
+    return true;
 }
 
 P2PState P2PDirectDataPath::State() const noexcept {

@@ -102,6 +102,7 @@ bool P2PClientOfferSession::Accept(
             received_at_ms_ = received_at_ms;
             deadline_ms_ = deadline_ms;
             generation_ = generation;
+            last_receive_activity_ms_ = received_at_ms;
             RememberLocked(opened.offer.offer_id);
             accepted = true;
         }
@@ -111,26 +112,40 @@ bool P2PClientOfferSession::Accept(
     return accepted;
 }
 
-bool P2PClientOfferSession::CreateAuthenticatedProbe(
+bool P2PClientOfferSession::CreateSignedControlLocked(
+    P2PControlType type,
     const P2PCandidateEndpoint& source,
     const P2PCandidateEndpoint& destination,
     std::uint64_t now_ms,
     std::uint64_t generation,
+    bool track_outstanding,
     P2PControlPacket& output) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || has_outstanding_probe_ || generation_ != generation ||
+    if (!active_ || generation_ != generation ||
         now_ms < received_at_ms_ || now_ms >= deadline_ms_ ||
-        probe_rounds_ >= MaxProbeRounds ||
         next_tx_sequence_ == std::numeric_limits<std::uint32_t>::max() ||
         !IsCanonicalP2PCandidate(source) ||
         !IsCanonicalP2PCandidate(destination)) {
+        return false;
+    }
+    if (type == P2PControlType::Probe) {
+        if (has_outstanding_probe_ || probe_rounds_ >= MaxProbeRounds) {
+            return false;
+        }
+    }
+    else if (type == P2PControlType::MigrateChallenge) {
+        if (!data_authorized_ || has_outstanding_migrate_ ||
+            migrate_rounds_ >= MaxProbeRounds) {
+            return false;
+        }
+    }
+    else {
         return false;
     }
 
     auto directional = SelectP2PV1Direction(key_material_, local_role_);
     P2PControlPacket packet;
     packet.version = 1;
-    packet.type = P2PControlType::Probe;
+    packet.type = type;
     packet.offer_hash = offer_hash_;
     packet.sender_role = static_cast<std::uint8_t>(local_role_);
     packet.receiver_role = packet.sender_role == 0 ? 1 : 0;
@@ -150,13 +165,46 @@ bool P2PClientOfferSession::CreateAuthenticatedProbe(
         return false;
     }
 
-    outstanding_probe_ = binding;
-    has_outstanding_probe_ = true;
-    ++probe_rounds_;
+    if (track_outstanding) {
+        if (type == P2PControlType::Probe) {
+            outstanding_probe_ = binding;
+            has_outstanding_probe_ = true;
+            ++probe_rounds_;
+        }
+        else {
+            outstanding_migrate_ = binding;
+            has_outstanding_migrate_ = true;
+            ++migrate_rounds_;
+        }
+    }
     ++next_tx_sequence_;
     output = packet;
     Cleanse(directional);
     return true;
+}
+
+bool P2PClientOfferSession::CreateAuthenticatedProbe(
+    const P2PCandidateEndpoint& source,
+    const P2PCandidateEndpoint& destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    P2PControlPacket& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return CreateSignedControlLocked(
+        P2PControlType::Probe, source, destination,
+        now_ms, generation, true, output);
+}
+
+bool P2PClientOfferSession::CreateAuthenticatedMigrateChallenge(
+    const P2PCandidateEndpoint& source,
+    const P2PCandidateEndpoint& destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    P2PControlPacket& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return CreateSignedControlLocked(
+        P2PControlType::MigrateChallenge, source, destination,
+        now_ms, generation, true, output);
 }
 
 bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
@@ -245,6 +293,7 @@ bool P2PClientOfferSession::CreateAuthenticatedProbeAck(
     ++received_probe_rounds_;
     ++next_tx_sequence_;
     data_authorized_ = true;
+    last_receive_activity_ms_ = now_ms;
     output = ack;
     Cleanse(directional);
     return true;
@@ -276,6 +325,108 @@ P2PClientOfferSession::AuthenticateProbeAck(
         outstanding_probe_ = {};
         has_outstanding_probe_ = false;
         data_authorized_ = true;
+        last_receive_activity_ms_ = now_ms;
+    }
+    Cleanse(directional);
+    return proof;
+}
+
+bool P2PClientOfferSession::CreateAuthenticatedMigrateAck(
+    const P2PControlPacket& challenge,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    P2PControlPacket& output) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !data_authorized_ || generation_ != generation ||
+        now_ms < received_at_ms_ || now_ms >= deadline_ms_ ||
+        next_tx_sequence_ == std::numeric_limits<std::uint32_t>::max() ||
+        received_migrate_rounds_ >= MaxProbeRounds) {
+        return false;
+    }
+
+    const auto received = BuildBinding(offer_, challenge);
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    auto expected_packet = challenge;
+    expected_packet.version = 1;
+    expected_packet.type = P2PControlType::MigrateChallenge;
+    expected_packet.offer_hash = offer_hash_;
+    expected_packet.sender_role = local_role_ == P2PPeerRole::Initiator ? 1 : 0;
+    expected_packet.receiver_role = static_cast<std::uint8_t>(local_role_);
+    expected_packet.direction = expected_packet.sender_role;
+    expected_packet.connection_epoch = offer_.connection_epoch;
+    expected_packet.source = observed_source;
+    expected_packet.destination = observed_destination;
+    expected_packet.ttl_seconds = offer_.ttl_seconds;
+    expected_packet.probe_transcript_hash = {};
+
+    auto replay = rx_replay_window_;
+    if (!ValidateP2POfferToken(
+            key_material_.offer_token_key, received,
+            BuildBinding(offer_, expected_packet),
+            observed_source, observed_destination,
+            now_ms - received_at_ms_, challenge.token,
+            directional.rx_nonce_prefix, replay)) {
+        Cleanse(directional);
+        return false;
+    }
+
+    P2PControlPacket ack;
+    ack.version = 1;
+    ack.type = P2PControlType::MigrateAck;
+    ack.offer_hash = offer_hash_;
+    ack.sender_role = static_cast<std::uint8_t>(local_role_);
+    ack.receiver_role = ack.sender_role == 0 ? 1 : 0;
+    ack.direction = ack.sender_role;
+    ack.connection_epoch = offer_.connection_epoch;
+    ack.source = observed_destination;
+    ack.destination = observed_source;
+    ack.sequence = next_tx_sequence_;
+    ack.nonce = BuildP2PV1Nonce(directional.tx_nonce_prefix, ack.sequence);
+    ack.ttl_seconds = offer_.ttl_seconds;
+    auto ack_binding = BuildBinding(offer_, ack);
+    if (!CreateP2POfferToken(
+            key_material_.offer_token_key, ack_binding, ack.token)) {
+        Cleanse(directional);
+        return false;
+    }
+
+    rx_replay_window_ = replay;
+    ++received_migrate_rounds_;
+    ++next_tx_sequence_;
+    last_receive_activity_ms_ = now_ms;
+    output = ack;
+    Cleanse(directional);
+    return true;
+}
+
+std::optional<P2PAuthenticatedProbeAck>
+P2PClientOfferSession::AuthenticateMigrateAck(
+    const P2PControlPacket& packet,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !has_outstanding_migrate_ || generation_ != generation ||
+        now_ms < received_at_ms_ || now_ms >= deadline_ms_) {
+        return std::nullopt;
+    }
+
+    auto directional = SelectP2PV1Direction(key_material_, local_role_);
+    auto replay = rx_replay_window_;
+    auto proof = AuthenticateP2PMigrateAck(
+        key_material_.offer_token_key,
+        BuildBinding(offer_, packet),
+        outstanding_migrate_, observed_source, observed_destination,
+        now_ms - received_at_ms_, packet.token,
+        directional.rx_nonce_prefix, replay);
+    if (proof) {
+        rx_replay_window_ = replay;
+        outstanding_migrate_ = {};
+        has_outstanding_migrate_ = false;
+        last_receive_activity_ms_ = now_ms;
     }
     Cleanse(directional);
     return proof;
@@ -309,7 +460,9 @@ bool P2PClientOfferSession::SealData(
     const bool sealed = SealP2PDataDatagram(
         header, directional.tx_key, nonce,
         payload, payload_length, output);
-    if (sealed) ++next_tx_sequence_;
+    if (sealed) {
+        ++next_tx_sequence_;
+    }
     Cleanse(directional);
     return sealed;
 }
@@ -343,9 +496,26 @@ bool P2PClientOfferSession::OpenData(
         directional.rx_nonce_prefix, parsed.sequence);
     const bool opened = OpenP2PDataDatagram(
         datagram, expected, directional.rx_key, nonce, output);
-    if (opened) rx_replay_window_ = replay;
+    if (opened) {
+        rx_replay_window_ = replay;
+        last_receive_activity_ms_ = now_ms;
+    }
     Cleanse(directional);
     return opened;
+}
+
+bool P2PClientOfferSession::SealHeartbeat(
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    std::vector<std::uint8_t>& output) noexcept {
+    static constexpr std::uint8_t kHeartbeatPayload[1] = {0};
+    return SealData(kHeartbeatPayload, sizeof(kHeartbeatPayload),
+        now_ms, generation, output);
+}
+
+std::uint64_t P2PClientOfferSession::LastReceiveActivityMs() const noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return last_receive_activity_ms_;
 }
 
 bool P2PClientOfferSession::Expire(
@@ -451,7 +621,9 @@ void P2PClientOfferSession::ClearActiveLocked() noexcept {
     received_at_ms_ = 0;
     deadline_ms_ = 0;
     generation_ = 0;
+    last_receive_activity_ms_ = 0;
     outstanding_probe_ = {};
+    outstanding_migrate_ = {};
     cached_received_probe_ = {};
     cached_received_probe_token_ = {};
     cached_probe_ack_ = {};
@@ -459,7 +631,10 @@ void P2PClientOfferSession::ClearActiveLocked() noexcept {
     next_tx_sequence_ = 0;
     probe_rounds_ = 0;
     received_probe_rounds_ = 0;
+    migrate_rounds_ = 0;
+    received_migrate_rounds_ = 0;
     has_outstanding_probe_ = false;
+    has_outstanding_migrate_ = false;
     has_cached_probe_ack_ = false;
     data_authorized_ = false;
 }

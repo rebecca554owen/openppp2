@@ -182,6 +182,16 @@ target_link_libraries(p2p_nat_classifier_test PRIVATE OpenSSL::SSL OpenSSL::Cryp
 openppp2_add_cpp_test(p2p_capability_gate_test SOURCES
     p2p_capability_gate_test.cpp)
 target_link_libraries(p2p_capability_gate_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_zero_rtt_cache_test SOURCES
+    p2p_zero_rtt_cache_test.cpp)
+target_link_libraries(p2p_zero_rtt_cache_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_stun_client_test SOURCES
+    p2p_stun_client_test.cpp
+    "${OPENPPP2_ROOT}/ppp/p2p/P2PStunClient.cpp")
+target_link_libraries(p2p_stun_client_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(p2p_coalesce_frames_test SOURCES
+    p2p_coalesce_frames_test.cpp)
+target_link_libraries(p2p_coalesce_frames_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(tls_session_exporter_test SOURCES
     tls_session_exporter_test.cpp
     "${OPENPPP2_ROOT}/ppp/ssl/TlsSessionExporter.cpp")
