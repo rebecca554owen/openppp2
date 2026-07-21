@@ -102,4 +102,29 @@ inline MuxRuntimeState NegotiateMuxRuntimeState(
     return state;
 }
 
+/** Apply the ordering selected by the peer's authoritative handshake reply. */
+inline MuxRuntimeState ApplyAgreedMuxRuntimeState(
+    std::string requested_mode,
+    bool agreed_flow_v2,
+    std::uint16_t active_links = 0,
+    bool turbo = false) {
+    const bool known = requested_mode == "compat" ||
+        requested_mode == "flow" ||
+        requested_mode == "balance" ||
+        requested_mode == "stripe";
+    if (!known || !agreed_flow_v2) {
+        return NegotiateMuxRuntimeState(
+            std::move(requested_mode), true, false, active_links, turbo);
+    }
+
+    MuxRuntimeState state;
+    state.requested_mode = std::move(requested_mode);
+    state.effective_mode = state.requested_mode;
+    state.receiver_ordering = "flow_v2";
+    state.active_links = active_links;
+    state.turbo = turbo && state.requested_mode == "flow";
+    FillMuxPresentation(state);
+    return state;
+}
+
 } // namespace ppp::app::mux

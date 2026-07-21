@@ -1715,9 +1715,9 @@ namespace ppp {
                             // or older peer falls back to
                             // compat global ordering.
                             // Capability is always true on this build; usage depends on mode+turbo.
-                            bool local_supports_flow_v2 = true;
-                            bool peer_supports_flow_v2 = (ordering_caps & vmux::vmux_net::ordering_caps_flow_v2) != 0;
-                            mux->apply_negotiation(local_supports_flow_v2, peer_supports_flow_v2);
+                            const bool agreed_flow_v2 =
+                                (ordering_caps & vmux::vmux_net::ordering_caps_flow_v2) != 0;
+                            mux->apply_agreed_ordering(agreed_flow_v2);
 
                             successed = MuxConnectAllLinklayers(allocator, mux);
                         }

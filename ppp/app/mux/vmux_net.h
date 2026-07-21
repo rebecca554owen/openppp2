@@ -181,7 +181,7 @@ namespace vmux {
             uint32_t                                                                flow_rx_next_         = 0;     ///< Next expected per-flow DSN.
             ppp::app::mux::MuxFlowReorderBuffer<rx_packet>                         flow_reorder_;                ///< Strictly bounded reorder buffer for this flow only.
             uint64_t                                                                oldest_buffered_tick_ = 0;     ///< Tick the oldest buffered frame was queued; 0 = no active gap timer.
-            bool                                                                    primed_               = false; ///< True once flow_rx_next_ has been initialized from the first frame.
+            bool                                                                    primed_               = false; ///< True once the initial expected DSN (1) has been established.
             bool                                                                    fin_seen_             = false; ///< True once a cmd_fin has been delivered for this connection.
         };
 
@@ -195,6 +195,7 @@ namespace vmux {
             tx_packet_ssqueue                                                       queue;                 ///< Pending frames for this connection_id.
             size_t                                                                  bytes = 0;             ///< Sum of packet lengths in queue.
             int64_t                                                                  deficit = 0;           ///< DRR deficit (bytes of send credit remaining this round).
+            bool                                                                    quantum_due = true;     ///< Add a quantum before the next turn.
             bool                                                                    active = false;        ///< True while this cid is in active_tx_flows_.
         };
 
@@ -280,6 +281,8 @@ namespace vmux {
         void                                                                        set_ordering_mode(receiver_ordering_mode m) noexcept;
         /** @brief Applies peer capability negotiation before establishment. */
         void                                                                        apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2) noexcept;
+        /** @brief Applies the peer's authoritative ordering result on the client. */
+        void                                                                        apply_agreed_ordering(bool agreed_flow_v2) noexcept;
         /** @brief Returns the latest observable scheduler/link state. */
         ppp::app::mux::MuxRuntimeState                                               get_runtime_state() const noexcept;
         /** @brief True for session-level control frames (keep-alive / mux-mode-set). */
