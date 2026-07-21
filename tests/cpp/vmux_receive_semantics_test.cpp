@@ -245,35 +245,51 @@ struct vmux_net_test_access {
         if (payload_len > 0) {
             std::memset(h + 1, 'd', static_cast<std::size_t>(payload_len));
         }
-        mux.tx_queue_.emplace_back(vmux_net::tx_packet{ buf, frame_len, nullptr });
+        mux.enqueue_flow_tx(cid, vmux_net::tx_packet{ buf, frame_len, nullptr });
     }
 
-    static std::uint32_t ApplyTxQuantumSelectedCid(vmux_net& mux) {
-        auto it = mux.tx_queue_.begin();
-        mux.apply_tx_flow_quantum(it);
-        if (it == mux.tx_queue_.end()) {
+    /** Pop next DRR frame and return its cid (0 if empty). Leaves queue unchanged by requeue. */
+    static std::uint32_t DrrPeekNextCid(vmux_net& mux) {
+        vmux_net::tx_packet pkt;
+        if (!mux.drr_pop_next(pkt)) {
             return 0;
         }
-        return vmux_net::peek_connection_id(it->buffer, it->length);
+        const std::uint32_t cid = vmux_net::peek_connection_id(pkt.buffer, pkt.length);
+        mux.drr_requeue_front(std::move(pkt));
+        return cid;
     }
 
-    static std::uint32_t PeekTxHeadCid(const vmux_net& mux) {
-        if (mux.tx_queue_.empty()) {
-            return 0;
+    /** Drain one quantum from head cid repeatedly until DRR switches or empty. */
+    static std::uint32_t DrrSelectAfterQuantum(vmux_net& mux, std::uint32_t burn_cid, std::size_t burn_bytes) {
+        // Burn deficit for burn_cid by popping frames until DRR would need a new quantum
+        // and another cid is selected. Simpler: set deficit low by popping until switch.
+        std::uint32_t last = 0;
+        std::size_t burned = 0;
+        while (burned < burn_bytes) {
+            vmux_net::tx_packet pkt;
+            if (!mux.drr_pop_next(pkt)) {
+                break;
+            }
+            last = vmux_net::peek_connection_id(pkt.buffer, pkt.length);
+            burned += (std::size_t)(pkt.length > 0 ? pkt.length : 0);
+            // Do not requeue burned frames — they are "sent".
+            if (last != burn_cid) {
+                // First frame of another cid after burning — requeue it as the selected next.
+                mux.drr_requeue_front(std::move(pkt));
+                return last;
+            }
         }
-        return vmux_net::peek_connection_id(mux.tx_queue_.begin()->buffer, mux.tx_queue_.begin()->length);
+        // After burning, next pop is the selected cid.
+        return DrrPeekNextCid(mux);
     }
 
-    static void SetTxQuantum(vmux_net& mux, std::uint32_t cid, std::size_t bytes) {
-        mux.tx_quantum_cid_ = cid;
-        mux.tx_quantum_bytes_ = bytes;
+    static std::uint32_t PeekTxHeadCid(vmux_net& mux) {
+        return DrrPeekNextCid(mux);
     }
 
     static void ClearTxQueue(vmux_net& mux) noexcept {
-        mux.tx_queue_.clear();
+        mux.clear_flow_tx();
         mux.tx_ctrl_queue_.clear();
-        mux.tx_quantum_cid_ = 0;
-        mux.tx_quantum_bytes_ = 0;
     }
 };
 
@@ -538,22 +554,30 @@ void TestLinkByteCreditHighWater() {
     Require(!vmux::vmux_net_test_access::LinkHasByteCredit(link, 17), "over denies");
 }
 
-void TestTxFlowQuantumPrefersOtherCid() {
+void TestTxFlowDrrPrefersOtherCidAfterQuantum() {
     auto mux = MakeMux();
     vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000);
-    for (int i = 0; i < 4; ++i) {
-        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 1, 100);
+    // Enqueue many frames for cid=1 then one for cid=2.
+    // With quantum Q, after draining ~Q bytes from cid1, DRR must serve cid2.
+    constexpr int frame_payload = 100;
+    constexpr int frame_hdr = 9; // sizeof(vmux_hdr); private type, keep in sync
+    constexpr int frame_len = frame_hdr + frame_payload;
+    const int frames_to_fill_quantum =
+        (int)((PPP_MUX_TX_FLOW_QUANTUM_BYTES + frame_len - 1) / frame_len) + 1;
+    for (int i = 0; i < frames_to_fill_quantum; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 1, frame_payload);
     }
-    vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 2, 100);
-    Require(vmux::vmux_net_test_access::PeekTxHeadCid(*mux) == 1, "head is cid1");
-    vmux::vmux_net_test_access::SetTxQuantum(*mux, 1, static_cast<std::size_t>(PPP_MUX_TX_FLOW_QUANTUM_BYTES));
-    Require(vmux::vmux_net_test_access::ApplyTxQuantumSelectedCid(*mux) == 2, "quantum yields to cid2");
+    vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 2, frame_payload);
+    Require(vmux::vmux_net_test_access::PeekTxHeadCid(*mux) == 1, "first DRR pick is cid1");
+    const auto next = vmux::vmux_net_test_access::DrrSelectAfterQuantum(
+        *mux, 1, (std::size_t)PPP_MUX_TX_FLOW_QUANTUM_BYTES);
+    Require(next == 2, "after one quantum of cid1, DRR serves cid2");
     vmux::vmux_net_test_access::ClearTxQueue(*mux);
 }
 
 int main() {
     try {
-        TestTxFlowQuantumPrefersOtherCid();
+        TestTxFlowDrrPrefersOtherCidAfterQuantum();
         TestInOrderStillDelivers();
         TestGapTimeoutResetsFlowWithoutHoleDelivery();
         TestReorderOverflowResetsFlow();

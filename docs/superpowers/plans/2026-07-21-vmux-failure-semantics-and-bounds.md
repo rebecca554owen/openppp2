@@ -13,7 +13,7 @@
 - Branch: `fix/vmux-failure-semantics-bounds`
 - Last green: `./bin/vmux_receive_semantics_test` → `ok` (10/10, 2026-07-21)
 - Packages landed: **P0-Doc/A/B/C**, **P1-lite**, **P2-1..P2-4**, **P2-6**, **P2-2/3 presentation+caps**
-- Remaining: full P1 DRR (optional); P2-5 deeper strand migration (snapshot path already lock-safe)
+- Remaining: P2-5 deeper strand migration beyond snapshot (optional); P1 full DRR landed
 - Note: main checkout on other branches may not contain these commits — use this worktree.
 
 **Tech Stack:** C++17, Boost.Asio strand, existing `ppp/app/mux/*`, Boost.Test under `tests/cpp`, config in `AppConfiguration`, docs EN+CN where paired.
@@ -453,7 +453,7 @@ Selection among free links: prefer lowest `queued_bytes` (still competition, not
 
 # Package P1 — Controllability (after P0)
 
-> **Status: PARTIAL** — turbo dual-threshold hold, turbo select by queued_bytes, soft TX quantum, finalize residual metric. Full per-flow DRR deferred.
+> **Status: DONE (P1-lite + full DRR)** — turbo dual-threshold hold, turbo select by queued_bytes, per-flow DRR (`tx_flows_`/`active_tx_flows_`), finalize residual metric. Soft single-queue quantum removed.
 
 > **Before coding each task:** superpowers + ponytail.
 
@@ -577,3 +577,10 @@ When implementing, for every package header above, the worker must literally:
 3) Re-read package section + current code
 4) Then execute tasks
 ```
+
+
+## Progress notes (2026-07-21)
+
+- Full per-flow byte DRR replaces session-global `tx_queue_` (`enqueue_flow_tx` / `drr_pop_next` / `drr_requeue_front`).
+- P2-5 snapshot: `runtime_snapshot_` published under mutex/strand; `get_runtime_state()` prefers atomic load.
+- Verified: `vmux_receive_semantics_test` (includes DRR yield after quantum).
