@@ -1,5 +1,9 @@
 # VMUX Failure Semantics and Resource Bounds Implementation Plan
 
+> Status: Active
+> Type: Plan
+> Last verified: 6b2e915
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-subagent-driven-development (recommended) or superpowers-executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make VMUX failure and resource behavior explicit and safe: no silent stream corruption, no unbounded memory, no multi-link single-point session death without a designed policy—without inventing new scheduler modes.
