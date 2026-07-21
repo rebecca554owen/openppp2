@@ -83,12 +83,12 @@ struct flow_rx_context {
     rx_packet_ssqueue flow_reorder_;                // map<DSN, 帧>，packet_less 处理回绕
     uint64_t          oldest_buffered_tick_ = 0;     // 最老缓冲帧入队 tick（超时基准）
     size_t            buffered_bytes_       = 0;     // 当前缓冲字节（内存上界）
-    bool              primed_               = false; // 已用首帧初始化 flow_rx_next_
+    bool              primed_               = false; // 已将 flow_rx_next_ 初始化为协议起始值 1
     bool              fin_seen_             = false; // 已交付 FIN
 };
 ```
 
-`packet_input_flow()`：控制帧旁路（不进 DSN 闸门）；数据帧首帧 priming（以首个 DSN 初始化）；命中 `flow_rx_next_` 立即交付并连续回放；未来帧入有界 reorder 缓冲；过期/重复帧丢弃。一条慢链路只卡它自己那个连接，不影响其它连接。
+`packet_input_flow()`：控制帧旁路（不进 DSN 闸门）；新流从协议固定起始 DSN `1` 开始定序，首个观测帧若为未来 DSN 也必须等待缺口；命中 `flow_rx_next_` 立即交付并连续回放；未来帧入有界 reorder 缓冲；过期/重复帧丢弃。一条慢链路只卡它自己那个连接，不影响其它连接。
 
 ### 5. 有界内存 + 缺口失败语义（活性）
 

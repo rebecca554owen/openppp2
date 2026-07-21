@@ -143,9 +143,12 @@ struct vmux_net_test_access {
 
     static void ConfigureCompat(
         vmux_net& mux,
-        std::uint64_t gap_timeout_ms) noexcept {
+        std::uint64_t gap_timeout_ms,
+        std::size_t session_reorder_cap_bytes = 0) noexcept {
         mux.ordering_mode_ = vmux_net::ordering_compat;
         mux.flow_reorder_timeout_ = gap_timeout_ms;
+        mux.session_reorder_cap_bytes_ = session_reorder_cap_bytes;
+        mux.session_reorder_bytes_ = 0;
         mux.rx_gap_oldest_tick_ = 0;
         mux.base_.established_ = true;
         mux.base_.disposed_.store(false, std::memory_order_release);
@@ -186,6 +189,11 @@ struct vmux_net_test_access {
 
     static bool IsDisposed(const vmux_net& mux) noexcept {
         return mux.base_.disposed_.load(std::memory_order_acquire);
+    }
+
+    static bool ConnectRequire(vmux_net& mux) {
+        auto socket = std::make_shared<boost::asio::ip::tcp::socket>(*mux.context_);
+        return mux.connect_require(socket, "127.0.0.1", 80);
     }
 
     static bool SendToPeerBeforeOpen(
@@ -285,6 +293,14 @@ struct vmux_net_test_access {
 
     static std::uint32_t PeekTxHeadCid(vmux_net& mux) {
         return DrrPeekNextCid(mux);
+    }
+
+    static std::uint32_t PopTxCid(vmux_net& mux) {
+        vmux_net::tx_packet pkt;
+        if (!mux.drr_pop_next(pkt)) {
+            return 0;
+        }
+        return vmux_net::peek_connection_id(pkt.buffer, pkt.length);
     }
 
     static void ClearTxQueue(vmux_net& mux) noexcept {
@@ -406,6 +422,22 @@ void TestInOrderStillDelivers() {
     Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "flow remains without gap fail");
 }
 
+void TestFirstObservedFutureDsnWaitsForDsnOne() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 14;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000);
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    const char a[] = "A";
+    const char b[] = "B";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 2, b, 1, 4100), "dsn2 first");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 0, "dsn2 must wait for initial dsn1");
+    Require(vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid) > 0, "dsn2 buffered");
+
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, a, 1, 4101), "dsn1 closes gap");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 2, "dsn1 then dsn2 delivered contiguously");
+}
+
 } // namespace
 
 void TestCompatOooRefreshesActivity() {
@@ -438,6 +470,21 @@ void TestCompatGapTimeoutClosesSession() {
     ctx->poll();
     ctx->restart();
     Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must dispose session");
+}
+
+void TestCompatReorderCapClosesSession() {
+    auto mux = MakeMux();
+    constexpr std::size_t frame_size = 9;
+    vmux::vmux_net_test_access::ConfigureCompat(*mux, 1000, frame_size);
+
+    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 3, 1, 11000), "first future frame");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "first frame fits cap");
+    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "overflow schedules close");
+    auto ctx = mux->get_context();
+    Require(static_cast<bool>(ctx), "ctx");
+    ctx->poll();
+    ctx->restart();
+    Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must close session");
 }
 
 void TestUnknownCidDoesNotGrowFlowsUnbounded() {
@@ -489,6 +536,7 @@ void TestMaxOpenFlowsEnforced() {
     (void)vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 1);
     Require(vmux::vmux_net_test_access::SktCount(*mux) == 1, "one skt");
     Require(!vmux::vmux_net_test_access::ProcessRxConnecting(mux, 2, "127.0.0.1:81"), "second open rejected");
+    Require(!vmux::vmux_net_test_access::ConnectRequire(*mux), "locally initiated open must use the same cap");
     Require(vmux::vmux_net_test_access::SktCount(*mux) == 1, "still one skt");
 }
 
@@ -575,15 +623,30 @@ void TestTxFlowDrrPrefersOtherCidAfterQuantum() {
     vmux::vmux_net_test_access::ClearTxQueue(*mux);
 }
 
+void TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000);
+    vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 1, 100);
+    vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 1, 100);
+    vmux::vmux_net_test_access::EmplaceDataFrame(*mux, 2, 100);
+
+    Require(vmux::vmux_net_test_access::PopTxCid(*mux) == 1, "cid1 begins its quantum");
+    Require(vmux::vmux_net_test_access::PopTxCid(*mux) == 1, "cid1 keeps the turn while deficit remains");
+    Require(vmux::vmux_net_test_access::PopTxCid(*mux) == 2, "cid2 runs after cid1 queue drains");
+}
+
 int main() {
     try {
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
+        TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating();
         TestInOrderStillDelivers();
+        TestFirstObservedFutureDsnWaitsForDsnOne();
         TestGapTimeoutResetsFlowWithoutHoleDelivery();
         TestReorderOverflowResetsFlow();
         TestFrameOversizeResetsFlow();
         TestCompatOooRefreshesActivity();
         TestCompatGapTimeoutClosesSession();
+        TestCompatReorderCapClosesSession();
         TestUnknownCidDoesNotGrowFlowsUnbounded();
         TestInitiatorOpenBarrierBlocksPush();
         TestSessionReorderCapResetsFlow();

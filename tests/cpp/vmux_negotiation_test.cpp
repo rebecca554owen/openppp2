@@ -54,3 +54,23 @@ BOOST_AUTO_TEST_CASE(stripe_reports_round_robin_scheduler) {
     BOOST_TEST(state.scheduler == "round_robin");
     BOOST_TEST(state.receiver_ordering == "flow_v2");
 }
+
+BOOST_AUTO_TEST_CASE(server_agreed_ordering_is_authoritative_across_mode_mismatch) {
+    const auto server = mux::NegotiateMuxRuntimeState("balance", true, true, 2);
+    const auto client = mux::ApplyAgreedMuxRuntimeState(
+        "compat", server.receiver_ordering == "flow_v2", 2);
+
+    BOOST_TEST(server.receiver_ordering == "flow_v2");
+    BOOST_TEST(client.effective_mode == "compat");
+    BOOST_TEST(client.receiver_ordering == server.receiver_ordering);
+}
+
+BOOST_AUTO_TEST_CASE(server_compat_result_downgrades_client_balance) {
+    const auto server = mux::NegotiateMuxRuntimeState("compat", true, true, 2);
+    const auto client = mux::ApplyAgreedMuxRuntimeState(
+        "balance", server.receiver_ordering == "flow_v2", 2);
+
+    BOOST_TEST(server.receiver_ordering == "compat");
+    BOOST_TEST(client.effective_mode == "compat");
+    BOOST_TEST(client.receiver_ordering == server.receiver_ordering);
+}

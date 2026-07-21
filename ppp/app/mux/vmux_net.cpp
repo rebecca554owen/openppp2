@@ -194,6 +194,31 @@ namespace vmux {
         }
     }
 
+    void vmux_net::apply_agreed_ordering(bool agreed_flow_v2) noexcept {
+        ppp::app::mux::MuxRuntimeState state;
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            state = ppp::app::mux::ApplyAgreedMuxRuntimeState(
+                runtime_state_.requested_mode,
+                agreed_flow_v2,
+                runtime_state_.active_links,
+                turbo_ || runtime_state_.turbo);
+            runtime_state_ = state;
+            publish_runtime_snapshot_locked();
+        }
+
+        set_mode(parse_mode(ppp::string(state.effective_mode.data(), state.effective_mode.size())));
+        set_ordering_mode(state.receiver_ordering == "flow_v2"
+            ? ordering_flow_v2
+            : ordering_compat);
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            runtime_state_.turbo = turbo_;
+            ppp::app::mux::FillMuxPresentation(runtime_state_);
+            publish_runtime_snapshot_locked();
+        }
+    }
+
     ppp::app::mux::MuxRuntimeState vmux_net::get_runtime_state() const noexcept {
         // Prefer lock-free snapshot published on the vmux strand (P2-5).
         if (auto snap = std::atomic_load_explicit(&runtime_snapshot_, std::memory_order_acquire)) {
@@ -526,6 +551,7 @@ namespace vmux {
         if (!fx.active) {
             fx.active = true;
             fx.deficit = 0;
+            fx.quantum_due = true;
             active_tx_flows_.emplace_back(connection_id);
         }
     }
@@ -545,6 +571,8 @@ namespace vmux {
         fx.bytes += nbytes;
         tx_data_frames_++;
         tx_data_bytes_total_ += nbytes;
+        fx.deficit += static_cast<int64_t>(nbytes);
+        fx.quantum_due = false;
         if (!fx.active) {
             fx.active = true;
             // Do not reset deficit — preserve remaining credit for this round.
@@ -571,6 +599,7 @@ namespace vmux {
                 if (it != tx_flows_.end()) {
                     it->second.active = false;
                     it->second.deficit = 0;
+                    it->second.quantum_due = true;
                     if (it->second.queue.empty() && it->second.bytes == 0) {
                         tx_flows_.erase(it);
                     }
@@ -579,13 +608,17 @@ namespace vmux {
             }
 
             flow_tx_context& fx = it->second;
-            fx.deficit += (int64_t)q;
+            if (fx.quantum_due) {
+                fx.deficit += static_cast<int64_t>(q);
+                fx.quantum_due = false;
+            }
 
             // Skip this flow for this round if the head frame exceeds remaining deficit.
             // (Classic DRR: only send when deficit >= packet size.)
             const int head_len = fx.queue.front().length;
             if (head_len > 0 && fx.deficit < (int64_t)head_len) {
-                // Keep active, rotate to back with reduced deficit.
+                // Preserve unused credit and add another quantum next round.
+                fx.quantum_due = true;
                 active_tx_flows_.emplace_back(cid);
                 continue;
             }
@@ -616,10 +649,16 @@ namespace vmux {
             if (fx.queue.empty()) {
                 fx.active = false;
                 fx.deficit = 0;
+                fx.quantum_due = true;
                 // Leave empty context; cleaned on next miss or finalize.
             }
+            else if (fx.queue.front().length <= 0 ||
+                fx.deficit >= static_cast<int64_t>(fx.queue.front().length)) {
+                // Continue this flow's turn until its byte deficit is exhausted.
+                active_tx_flows_.emplace_front(cid);
+            }
             else {
-                // Still has data: stay in the ring.
+                fx.quantum_due = true;
                 active_tx_flows_.emplace_back(cid);
             }
             return true;
@@ -1047,6 +1086,8 @@ namespace vmux {
                     vmux_hdr* p = (vmux_hdr*)i.buffer.get();
                     rx_queue_.erase(packet_tail);
 
+                    note_flow_unbuffered(static_cast<size_t>(i.length));
+
                     if (packet_input(p->cmd, (Byte*)p, i.length, now)) {
                         status_.rx_ack_++;
                     }
@@ -1082,6 +1123,19 @@ namespace vmux {
                 return false;
             }
 
+            if (session_reorder_cap_bytes_ > 0 &&
+                session_reorder_bytes_ + static_cast<size_t>(length) > session_reorder_cap_bytes_) {
+                ppp::telemetry::Count("mux.rx.compat.reorder_cap", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                    "compat reorder cap exceeded: buffered=%u incoming=%u cap=%u; rebuilding session",
+                    (unsigned)session_reorder_bytes_, (unsigned)length,
+                    (unsigned)session_reorder_cap_bytes_);
+                close_exec();
+                active(now);
+                linklayer_update(linklayer);
+                return true;
+            }
+
             std::shared_ptr<Byte> buf = make_byte_array(length);
             if (NULLPTR == buf) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetReorderPacketBufferAllocFailed);
@@ -1095,8 +1149,11 @@ namespace vmux {
             if (!inserted) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
             }
-            else if (rx_gap_oldest_tick_ == 0) {
-                rx_gap_oldest_tick_ = now;
+            else {
+                note_flow_buffered(static_cast<size_t>(length));
+                if (rx_gap_oldest_tick_ == 0) {
+                    rx_gap_oldest_tick_ = now;
+                }
             }
 
             // Any valid framed traffic (including OOO) proves peer liveness.
@@ -1446,7 +1503,7 @@ namespace vmux {
         flow_rx_context& fx = *fxp;
         if (!fx.primed_) {
             fx.primed_ = true;
-            fx.flow_rx_next_ = seq; // prime from the first observed DSN.
+            fx.flow_rx_next_ = 1; // Sender DSNs are session-local and start at one.
         }
 
         if (seq == fx.flow_rx_next_) {
@@ -2838,6 +2895,12 @@ namespace vmux {
 
         if (NULLPTR == sk) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetConnectRequireNullSocket);
+            return false;
+        }
+
+        if (max_open_flows_ > 0 && skts_.size() >= max_open_flows_) {
+            ppp::telemetry::Count("mux.tx.flow.max_open", 1);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionQuotaExceeded);
             return false;
         }
 
