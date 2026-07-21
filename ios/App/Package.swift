@@ -19,6 +19,7 @@ let package = Package(
                 "Runtime/RuntimeTrafficRate.swift",
                 "Runtime/RuntimeControls.swift",
                 "Runtime/TunnelRuntimeBridge.swift",
+                "SubscriptionUrlPolicy.swift",
             ]
         ),
         .testTarget(
