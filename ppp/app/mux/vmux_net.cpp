@@ -1114,11 +1114,17 @@ namespace vmux {
 
         const ppp::string& debug_key = AppConfiguration->mux.debug.key;
         if (debug_key.empty()) {
-            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "mux-mode-set rejected: remote control disabled (no debug key)");
+            // Default-off: no debug key means remote scheduler control is disabled.
+            if ((++mux_mode_set_reject_streak_ % 32) == 1) {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                    "mux-mode-set rejected: remote control disabled (no debug key)");
+            }
+            ppp::telemetry::Count("mux.debug.mode_set.reject", 1);
             return;
         }
 
         if (NULLPTR == buffer || buffer_size < 2) {
+            ppp::telemetry::Count("mux.debug.mode_set.reject", 1);
             ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "mux-mode-set rejected: malformed control frame");
             return;
         }
@@ -1126,6 +1132,7 @@ namespace vmux {
         Byte requested = buffer[0];
         int key_length = static_cast<int>(buffer[1]);
         if (key_length <= 0 || (2 + key_length) > buffer_size) {
+            ppp::telemetry::Count("mux.debug.mode_set.reject", 1);
             ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "mux-mode-set rejected: invalid key length");
             return;
         }
@@ -1134,22 +1141,39 @@ namespace vmux {
             key_length == static_cast<int>(debug_key.size()) &&
             CRYPTO_memcmp(buffer + 2, debug_key.data(), key_length) == 0;
         if (!key_matched) {
-            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "mux-mode-set rejected: debug key mismatch");
+            ppp::telemetry::Count("mux.debug.mode_set.reject", 1);
+            if ((++mux_mode_set_reject_streak_ % 16) == 1) {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "mux-mode-set rejected: debug key mismatch");
+            }
+            return;
+        }
+
+        // Rate limit accepted changes (and successful-auth attempts) to reduce abuse.
+        const uint64_t now = now_tick();
+        const uint64_t min_interval_ms = 1000;
+        if (mux_mode_set_last_accept_ != 0 && (now - mux_mode_set_last_accept_) < min_interval_ms) {
+            ppp::telemetry::Count("mux.debug.mode_set.rate_limited", 1);
             return;
         }
 
         mux_mode mode = parse_mode_byte(requested);
-        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "mux-mode-set accepted from peer: mode=%s", mode_name(mode));
+        // set_mode only switches the transmit scheduler (compat/flow/balance/stripe).
+        // Receiver ordering remains session-immutable after establishment (see set_ordering_mode).
+        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+            "mux-mode-set accepted from peer: scheduler=%s (ordering unchanged=%s)",
+            mode_name(mode),
+            ordering_mode_ == ordering_flow_v2 ? "flow_v2" : "compat");
 
         // Apply to the live session and record a lock-free runtime override on the
         // shared runtime config so the change survives mux session rebuilds (link
         // flap, idle/heartbeat timeout). The exchanger reconstructs a vmux_net via
         // AppConfiguration->GetEffectiveMuxMode() on reconnect; without this the
         // pushed mode would be lost and silently revert to the configured value.
-        // A plain atomic is used (not the mux.mode string) to avoid a data race
-        // with the exchanger thread that reads the mode during rebuilds.
         AppConfiguration->SetMuxModeRuntimeOverride(static_cast<int>(mode));
         set_mode(mode);
+        mux_mode_set_last_accept_ = now;
+        mux_mode_set_reject_streak_ = 0;
+        ppp::telemetry::Count("mux.debug.mode_set.accept", 1);
     }
 
     /**
@@ -1553,16 +1577,49 @@ namespace vmux {
         return skt->accept(template_string(host, host_size));
     }
 
-    /** @brief Generates a non-zero vmux connection identifier. */
+    /** @brief Generates a non-zero session-local connection identifier.
+     *  @details IDs are allocated from a per-session counter and never reused
+     *           within the session. When the 32-bit space wraps, further
+     *           allocation fails (returns 0) so callers rebuild the session
+     *           rather than risk delayed frames landing on a recycled cid.
+     */
     uint32_t vmux_net::generate_id() noexcept {
-        static std::atomic<uint32_t> aid = ftt_random_aid(1, INT32_MAX);
+        if (connection_id_wrap_) {
+            return 0;
+        }
 
-        for (;;) {
-            uint32_t n = ++aid;
-            if (n != 0) {
-                return n;
+        // First call: pick a random non-zero start so peers do not share a fixed pattern.
+        if (next_connection_id_ == 0) {
+            next_connection_id_ = ftt_random_aid(1, INT32_MAX);
+            if (next_connection_id_ == 0) {
+                next_connection_id_ = 1;
             }
         }
+
+        for (uint32_t attempts = 0; attempts < 0xffffffffu; ++attempts) {
+            uint32_t n = next_connection_id_++;
+            if (next_connection_id_ == 0) {
+                // Exhausted; mark wrap so we do not recycle within this session.
+                connection_id_wrap_ = true;
+                if (n != 0 && skts_.find(n) == skts_.end()) {
+                    return n;
+                }
+                ppp::telemetry::Count("mux.cid.wrap", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                    "connection id space exhausted; refuse new logical connections until session rebuild");
+                return 0;
+            }
+            if (n == 0) {
+                continue;
+            }
+            if (skts_.find(n) == skts_.end()) {
+                return n;
+            }
+            // Extremely unlikely collision with an in-flight id; try next.
+        }
+
+        connection_id_wrap_ = true;
+        return 0;
     }
 
     /** @brief Looks up a vmux socket by logical connection identifier. */
@@ -2765,7 +2822,8 @@ namespace vmux {
         for (;;) {
             uint32_t connection_id = generate_id();
             if (connection_id == 0) {
-                continue;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionQuotaExceeded);
+                return false;
             }
 
             vmux_skt_map::iterator skt_tail = skts_.find(connection_id);

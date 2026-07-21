@@ -402,7 +402,7 @@ namespace vmux {
         }
         
         /** @brief Generate a globally unique vmux connection identifier. */
-        static uint32_t                                                             generate_id() noexcept;
+        uint32_t                                                                    generate_id() noexcept;
 
         /** @brief Return current monotonic tick count in milliseconds. */
         static uint64_t                                                             now_tick() noexcept { return ppp::threading::Executors::GetTickCount(); }
@@ -623,6 +623,10 @@ namespace vmux {
 
         mux_mode                                                                    mode_               = mux_mode_compat; ///< Transmit scheduler policy.
         bool                                                                        mux_mode_set_pushed_ = false; ///< One-shot guard for the debug mux-mode-set push.
+        uint64_t                                                                    mux_mode_set_last_accept_ = 0; ///< Tick of last accepted mux-mode-set (rate limit).
+        int                                                                         mux_mode_set_reject_streak_ = 0; ///< Consecutive rejected mux-mode-set frames (rate-limit log spam).
+        uint32_t                                                                    next_connection_id_ = 0; ///< Session-local connection_id allocator (never reuses within a session until wrap).
+        bool                                                                        connection_id_wrap_ = false; ///< True after connection id space exhausted; refuse new logical connects.
         size_t                                                                      stripe_cursor_ = 0; ///< Round-robin cursor over rx_links_ (stripe mode).
 
         receiver_ordering_mode                                                      ordering_mode_ = ordering_compat; ///< Negotiated receiver ordering mode (flow v2).
