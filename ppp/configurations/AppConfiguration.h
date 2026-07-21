@@ -50,6 +50,7 @@ namespace ppp {
                 ppp::string                                                 network; ///< Prefix network, e.g. "10.0.0.0".
                 int                                                         prefix = 0; ///< Prefix length, e.g. 24.
                 ppp::string                                                 via;     ///< Gateway peer virtual IPv4, e.g. "10.1.0.2"; empty for announce-only.
+                ppp::string                                                 guid;    ///< Server allowlist owner client GUID; empty for client static routes.
             };
 
             /**
@@ -216,6 +217,7 @@ namespace ppp {
                 struct {
                     bool                                                    enabled;    ///< Enable peer prefix routing on the server.
                     bool                                                    distribute; ///< Push route snapshots to all connected clients.
+                    ppp::vector<PeerPrefixRouteConfiguration>               allowed_routes; ///< Fail-closed per-client announce allowlist (guid+network+prefix).
                 }                                                           peer_routing;
             }                                                               server;         ///< Server-mode specific parameters.
             struct {
