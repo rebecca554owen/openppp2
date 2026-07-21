@@ -1,4 +1,5 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
+#include <ppp/app/server/PeerRouteAnnouncePolicy.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/server/VirtualEthernetExchanger.h>
 #include <ppp/app/server/VirtualEthernetNetworkTcpipConnection.h>
@@ -4639,16 +4640,53 @@ namespace ppp {
                 record.SessionId = session_id;
                 record.VirtualIP = virtual_ip;
                 record.Exchanger = exchanger;
-                for (const auto& prefix : request.PeerRouteAnnounce.prefixes) {
-                    if (prefix.HasAny()) {
-                        record.Prefixes.emplace_back(prefix);
+
+                const ppp::string session_guid =
+                    auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
+                ppp::vector<PeerRouteAllowEntry> allowed_routes;
+                if (NULLPTR != configuration_) {
+                    allowed_routes.reserve(
+                        configuration_->server.peer_routing.allowed_routes.size());
+                    for (const auto& route : configuration_->server.peer_routing.allowed_routes) {
+                        PeerRouteAllowEntry row;
+                        row.network = route.network;
+                        row.prefix = route.prefix;
+                        row.guid = route.guid;
+                        allowed_routes.emplace_back(std::move(row));
                     }
+                }
+                int dropped = 0;
+                for (const auto& prefix : request.PeerRouteAnnounce.prefixes) {
+                    if (!prefix.HasAny()) {
+                        continue;
+                    }
+                    PeerRouteAnnounceEntry announced;
+                    announced.network = prefix.network;
+                    announced.prefix = prefix.prefix;
+                    if (!IsPeerRouteAnnouncementAllowed(allowed_routes, session_guid, announced)) {
+                        ++dropped;
+                        continue;
+                    }
+                    record.Prefixes.emplace_back(prefix);
                 }
 
                 if (record.Prefixes.empty()) {
                     response.PeerRouteAnnounce.action = "reject";
+                    response.PeerRouteAnnounce.prefixes.clear();
+                    if (dropped > 0) {
+                        ppp::telemetry::Count("server.peer_route.announce_rejected", dropped);
+                    }
                     return false;
                 }
+
+                if (dropped > 0) {
+                    ppp::telemetry::Count("server.peer_route.announce_rejected", dropped);
+                }
+
+                // Echo only accepted prefixes so the client cannot believe a
+                // filtered announcement was fully installed.
+                response.PeerRouteAnnounce.prefixes = record.Prefixes;
+                response.PeerRouteAnnounce.action = "registered";
 
                 {
                     SynchronizedObjectScope scope(syncobj_);
@@ -4656,7 +4694,6 @@ namespace ppp {
                     RebuildPeerPrefixRibLocked();
                 }
 
-                response.PeerRouteAnnounce.action = "registered";
                 BuildPeerRouteTableSnapshot(response.PeerRouteTable, &session_id);
 
                 if (NULLPTR != configuration_ && configuration_->server.peer_routing.distribute) {
