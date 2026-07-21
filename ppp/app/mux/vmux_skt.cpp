@@ -506,6 +506,12 @@ namespace vmux {
             return false;
         }
 
+        // Open barrier: do not post PUSH until local open completes (syn_ok / connected_).
+        if (!status_.connected_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
+            return false;
+        }
+
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket || NULLPTR == tx_buffer_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
@@ -842,6 +848,11 @@ namespace vmux {
                         }
 
                         if (ec == boost::system::errc::success) {
+                            // Open barrier: no data until connected_ (syn_ok observed).
+                            if (!status_.connected_) {
+                                close();
+                                return false;
+                            }
                             bool forwarding = 
                                 mux_->post(vmux_net::cmd_push, tx_buffer_.get(), bytes_transferred, connection_id_, status_.tx_acceleration_,
                                     [self, this](bool successed) noexcept {

@@ -130,12 +130,22 @@ namespace ppp {
                         int                                                 bytes;          ///< Per-connection reorder buffer byte cap (flow v2); strictly > 0.
                         int                                                 timeout;        ///< Per-connection gap wait timeout in milliseconds (flow v2); strictly > 0.
                     }                                                       reorder;
+                    struct {
+                        int                                                 bytes;          ///< Session-wide reorder buffer byte cap across all flows; strictly > 0.
+                    }                                                       session_reorder;
+                    int                                                     max_open;       ///< Max open logical flows (skts + pre-open); strictly > 0.
+                    struct {
+                        int                                                 max;            ///< Unknown-cid receive budget; strictly > 0 (P0 drops beyond this count).
+                    }                                                       unknown_cid;
                 }                                                           flow;           ///< Per-flow (flow v2) receiver ordering parameters.
                 struct {
                     struct {
                         int                                                 max;            ///< Data tx-queue high-water depth; acceleration read-pump throttles at/above it (D11). > 0.
                         int                                                 stall;          ///< Milliseconds the data tx-queue may stay backlogged before the session is rebuilt (D11 watchdog). > 0.
                     }                                                       queue;
+                    struct {
+                        int                                                 budget_frames;  ///< Max control frames drained before data per process_tx_all_packets turn; strictly > 0.
+                    }                                                       ctrl;
                 }                                                           tx;             ///< Transmit-side flow-control / backpressure parameters.
                 struct {
                     ppp::string                                             key;            ///< Shared debug secret (`--debug-key`); empty disables remote mux-mode control.

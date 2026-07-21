@@ -385,6 +385,16 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_DEFAULT_CONGESTIONS     = 128 << 20; /* 134217728 */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_BYTES      = 1 << 20;  /* 1 MiB per-connection reorder cap (flow v2) */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_TIMEOUT    = 400;      /* gap wait timeout in ms (flow v2); near link RTT to bound stuck->self-heal */
+static constexpr int                                                        PPP_MUX_TX_FLOW_QUANTUM_BYTES  = 64 << 10; /* soft per-flow drain quantum before yielding to another cid */
+static constexpr int                                                        PPP_MUX_LINK_BYTE_HIGH_WATER   = 256 << 10; /* per-link outstanding write bytes before refusing new sends */
+static constexpr int                                                        PPP_MUX_TURBO_SHRINK_DEPTH_RATIO = 10;      /* percent of tx high-water that arms shrink hold */
+static constexpr int                                                        PPP_MUX_TURBO_GROW_DEPTH_RATIO  = 50;       /* percent of tx high-water that arms grow hold */
+static constexpr int                                                        PPP_MUX_TURBO_SHRINK_HOLD_MS    = 5000;     /* ms tx backlog must stay low before shrink */
+static constexpr int                                                        PPP_MUX_TURBO_GROW_HOLD_MS      = 1500;     /* ms tx backlog must stay high before grow */
+static constexpr int                                                        PPP_MUX_TX_CTRL_BUDGET_FRAMES     = 32;       /* max ctrl frames drained before data per turn */
+static constexpr int                                                        PPP_MUX_FLOW_UNKNOWN_CID_MAX      = 64;       /* unknown-cid budget (P0 drop path) */
+static constexpr int                                                        PPP_MUX_FLOW_MAX_OPEN             = 4096;     /* max open logical flows + pre-open */
+static constexpr int                                                        PPP_MUX_FLOW_SESSION_REORDER_BYTES = 16 << 20; /* 16 MiB session-wide reorder cap */
 static constexpr int                                                        PPP_MUX_FLOW_MAX_CONTEXTS       = 4096;     /* hard cap on concurrent flow-v2 receive contexts (DoS bound) */
 static constexpr int                                                        PPP_MUX_FLOW_AGGREGATE_BYTES    = 16 << 20; /* 16 MiB aggregate reorder memory across all flow contexts */
 static constexpr int                                                        PPP_MUX_TX_QUEUE_HIGH_WATER     = 4096;     /* data tx_queue_ depth at which the acceleration read-pump is throttled (D11 backpressure) */

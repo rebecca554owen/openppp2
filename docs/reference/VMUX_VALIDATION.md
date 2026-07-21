@@ -8,7 +8,7 @@
 
 > Status: Stable
 > Type: Reference
-> Last verified: ded25d6
+> Last verified: 29ec28d
 
 [中文版本](VMUX_VALIDATION_CN.md)
 
@@ -25,9 +25,15 @@ repeatable harness in [`../../benchmarks/vmux/`](../../benchmarks/vmux/README.md
 |---|---|
 | Single-flow throughput | `flow-one-flow` throughput is at least 95% of the matching `off-one-flow` baseline. |
 | Equal-link tail latency | `flow-one-flow` p99 latency is no more than 110% of the matching `off-one-flow` p99 on equal links. |
-| Bounded reorder memory | Buffered bytes never exceed `mux.flow.reorder.bytes`, and the derived reorder-entry cap is never exceeded. |
+| Bounded reorder memory | Per-flow buffered bytes never exceed `mux.flow.reorder.bytes`, and the derived reorder-entry cap is never exceeded. |
+| Session reorder / open bounds (P0-B hard gate) | Session reorder bytes never exceed `mux.flow.session_reorder.bytes`; open logical flows never exceed `mux.flow.max_open`. Worst-case model is `min(session_reorder.bytes, max_open × reorder.bytes)`, **not** `max_connections × reorder.bytes`. Ctrl drain is budgeted by `mux.tx.ctrl.budget_frames` so data is not starved. |
+| Gap failure semantics (P0-A hard gate) | Unrecovered gaps must **fail the flow** (flow_v2: `fail_flow` / `mux.rx.flow.reset`) or **rebuild the session** (compat: `compat_evict_expired` / `mux.rx.compat.gap_timeout`); never force-advance and deliver past a hole. |
+| Compat OOO activity (P0-A) | Receiving out-of-order framed traffic refreshes session activity (`active(now)`), matching flow_v2. |
+| Unknown-cid bound (P0-A) | flow_v2 PUSH/FIN for a cid with no skt does not create unbounded `flows_` entries (`mux.rx.unknown_cid`); initiator must not post PUSH before `connected_`. |
 | Old-peer compatibility | Against a peer without FLOW_V2, `balance` / `stripe` negotiate `effective_mode=compat`, `receiver_ordering=compat`, and `fallback_reason=peer_missing_flow_v2`; `flow` keeps `effective_mode=flow` but uses `receiver_ordering=compat`. |
 | Link churn safety | 100 grow/shrink cycles complete under ASan/UBSan without an error, leak, underflow, disconnect, or premature in-flight link retirement. |
+| Carrier exit isolation (P0-C) | Multi-link is **throughput/latency, not HA**. `on_link_exit`: if other live carriers remain, remove the dead link and continue; if last live carrier exits, close the session. Turbo extras and base links share this rule. |
+| Per-link byte credit (P0-C) | Outstanding local write bytes per link are tracked (`queued_bytes_`); new sends denied above `PPP_MUX_LINK_BYTE_HIGH_WATER`. Write-complete is local socket acceptance, not peer ACK. |
 
 Comparisons must use the same environment fingerprint, configuration except
 for the mode under test, duration, flow count, and netem profile. A harness
