@@ -137,5 +137,12 @@ docs/superpowers/
 # Local feature worktrees
 .worktrees/
 
+# Desktop client generated dependencies and build output
+/desktop/**/node_modules/
+/desktop/**/.vite/
+/desktop/**/dist/
+/desktop/**/target/
+/desktop/**/gen/
+
 # Python tooling caches
 __pycache__/
