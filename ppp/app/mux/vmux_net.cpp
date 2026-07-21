@@ -96,8 +96,6 @@ namespace vmux {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
             runtime_state_.effective_mode = mode_name(mode_);
         }
-        primary_linklayer_.reset();
-        affinity_links_.clear();
         stripe_cursor_ = 0;
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "scheduler mode switched to %s", mode_name(mode_));
     }
@@ -357,8 +355,6 @@ namespace vmux {
             rx_links_.clear();
             refresh_runtime_active_links();
             tx_links_.clear();
-            primary_linklayer_.reset();
-            affinity_links_.clear();
             stripe_cursor_ = 0;
             flows_.clear();
             tx_flow_seq_.clear();
@@ -425,18 +421,6 @@ namespace vmux {
             }
         }
 
-        if (primary_linklayer_ == linklayer) {
-            primary_linklayer_.reset();
-        }
-
-        for (auto it = affinity_links_.begin(); it != affinity_links_.end();) {
-            if (it->second == linklayer) {
-                it = affinity_links_.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
     }
 
     size_t vmux_net::count_live_carriers(const vmux_linklayer_ptr& except) const noexcept {
@@ -1607,7 +1591,6 @@ namespace vmux {
                 skt = tail->second;
                 if (skt.get() == refer_pointer) {
                     skts_.erase(tail);
-                    affinity_links_.erase(connection_id); // drop sticky binding (balance mode)
                     flows_.erase(connection_id);          // drop per-flow receive context (flow v2)
                     tx_flow_seq_.erase(connection_id);    // drop per-flow send DSN counter (flow v2)
                 }
@@ -1743,24 +1726,6 @@ namespace vmux {
         return NULLPTR != connection && connection->IsLinked();
     }
 
-    /** @brief Picks or refreshes the primary link-layer endpoint for flow mode. */
-    vmux_net::vmux_linklayer_ptr vmux_net::select_primary_linklayer() noexcept {
-        if (is_linklayer_active(primary_linklayer_)) {
-            return primary_linklayer_;
-        }
-
-        primary_linklayer_.reset();
-        for (const vmux_linklayer_ptr& linklayer : rx_links_) {
-            if (is_linklayer_active(linklayer)) {
-                primary_linklayer_ = linklayer;
-                ppp::telemetry::Log(Level::kDebug, "mux", "primary link selected");
-                return primary_linklayer_;
-            }
-        }
-
-        return NULLPTR;
-    }
-
     /** @brief Drains queued packets across currently available transmit linklayers. */
     bool vmux_net::process_tx_compat_packets() noexcept {
         vmux_linklayer_list::iterator linklayer_tail = tx_links_.begin();
@@ -1850,62 +1815,6 @@ namespace vmux {
 
         const vmux_hdr* h = (const vmux_hdr*)packet.get();
         return ntohl(h->connection_id);
-    }
-
-    /**
-     * @brief Picks a least-loaded active link-layer for a new connection.
-     * @details "Load" is approximated by the number of connections currently
-     *          bound to each link in the affinity map; ties keep the first seen.
-     */
-    vmux_net::vmux_linklayer_ptr vmux_net::select_balanced_linklayer() noexcept {
-        vmux_linklayer_ptr best;
-        size_t best_load = 0;
-
-        for (const vmux_linklayer_ptr& linklayer : rx_links_) {
-            if (!is_linklayer_active(linklayer)) {
-                continue;
-            }
-
-            size_t load = 0;
-            for (const std::pair<const uint32_t, vmux_linklayer_ptr>& kv : affinity_links_) {
-                if (kv.second == linklayer) {
-                    load++;
-                }
-            }
-
-            if (NULLPTR == best || load < best_load) {
-                best = linklayer;
-                best_load = load;
-            }
-        }
-
-        return best;
-    }
-
-    /**
-     * @brief Returns the sticky link-layer bound to a connection.
-     * @details Binds the connection to a balanced link on first use, and
-     *          re-binds (migrates) when the previously bound link went away.
-     *          connection_id 0 (session-global control frames) is not pinned.
-     */
-    vmux_net::vmux_linklayer_ptr vmux_net::select_affinity_linklayer(uint32_t connection_id) noexcept {
-        if (connection_id != 0) {
-            auto tail = affinity_links_.find(connection_id);
-            if (tail != affinity_links_.end()) {
-                if (is_linklayer_active(tail->second)) {
-                    return tail->second;
-                }
-
-                affinity_links_.erase(tail); // bound link is gone; migrate below.
-            }
-        }
-
-        vmux_linklayer_ptr linklayer = select_balanced_linklayer();
-        if (NULLPTR != linklayer && connection_id != 0) {
-            affinity_links_[connection_id] = linklayer;
-        }
-
-        return linklayer;
     }
 
     /** @brief Picks the next active link-layer round-robin for stripe mode. */

@@ -487,12 +487,6 @@ namespace vmux {
         bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
         /** @brief True when an underlying link-layer endpoint is usable. */
         static bool                                                                 is_linklayer_active(const vmux_linklayer_ptr& linklayer) noexcept;
-        /** @brief Pick or refresh the primary link-layer endpoint for flow mode. */
-        vmux_linklayer_ptr                                                          select_primary_linklayer() noexcept;
-        /** @brief Pick a least-loaded active link-layer (balance link selection). */
-        vmux_linklayer_ptr                                                          select_balanced_linklayer() noexcept;
-        /** @brief Pick the sticky link-layer bound to a connection, binding one if needed. */
-        vmux_linklayer_ptr                                                          select_affinity_linklayer(uint32_t connection_id) noexcept;
         /** @brief Pick the next active link-layer round-robin (stripe distribution). */
         vmux_linklayer_ptr                                                          select_striped_linklayer() noexcept;
         /** @brief Pick the most-recently-active link for a turbo first packet.
@@ -628,9 +622,7 @@ namespace vmux {
         rx_packet_ssqueue                                                           rx_queue_;          ///< Out-of-order inbound packet reorder queue.
 
         mux_mode                                                                    mode_               = mux_mode_compat; ///< Transmit scheduler policy.
-        vmux_linklayer_ptr                                                          primary_linklayer_; ///< Primary link used by flow mode.
         bool                                                                        mux_mode_set_pushed_ = false; ///< One-shot guard for the debug mux-mode-set push.
-        vmux::unordered_map<uint32_t, vmux_linklayer_ptr>                           affinity_links_;    ///< connection_id -> sticky link-layer (balance mode).
         size_t                                                                      stripe_cursor_ = 0; ///< Round-robin cursor over rx_links_ (stripe mode).
 
         receiver_ordering_mode                                                      ordering_mode_ = ordering_compat; ///< Negotiated receiver ordering mode (flow v2).
