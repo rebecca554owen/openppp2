@@ -43,9 +43,13 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("#include <ppp/app/tui/TuiRuntimeAdapter.h>", source)
         self.assertIn("BuildStatusLines(runtime)", source)
 
+        on_tick = source.index("bool PppApplication::OnTick")
+        statistics = source.index(
+            "const bool has_transmission_statistics = GetTransmissionStatistics",
+            on_tick,
+        )
         status_path = source[
-            source.index("if (!GetTransmissionStatistics"):
-            source.index("ConsoleUI::GetInstance().UpdateStatus")
+            statistics:source.index("ConsoleUI::GetInstance().UpdateStatus", statistics)
         ]
         self.assertNotIn("GetNetworkState()", status_path)
         self.assertNotIn("vpn_state", status_path)
