@@ -98,6 +98,9 @@ public:
             if (current_.requested_mux_mode == state.requested_mode &&
                 current_.effective_mux_mode == state.effective_mode &&
                 current_.mux_receiver_ordering == state.receiver_ordering &&
+                current_.mux_scheduler == state.scheduler &&
+                current_.mux_pool_policy == state.pool_policy &&
+                current_.mux_turbo == state.turbo &&
                 current_.mux_active_links == state.active_links &&
                 current_.mux_fallback_reason == state.fallback_reason) {
                 return true;
@@ -105,6 +108,9 @@ public:
             current_.requested_mux_mode = state.requested_mode;
             current_.effective_mux_mode = state.effective_mode;
             current_.mux_receiver_ordering = state.receiver_ordering;
+            current_.mux_scheduler = state.scheduler;
+            current_.mux_pool_policy = state.pool_policy;
+            current_.mux_turbo = state.turbo;
             current_.mux_active_links = state.active_links;
             current_.mux_fallback_reason = state.fallback_reason;
             current_.monotonic_ms = NextTimestamp(now);

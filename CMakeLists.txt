@@ -192,6 +192,7 @@ ENDIF()
 
 OPTION(ENABLE_TESTS "Build unit tests (GTest)" OFF)
 OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
+OPTION(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST "Build the root-linked VMUX receive-semantics test" OFF)
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
 IF(ENABLE_COVERAGE AND NOT MSVC)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Coverage.cmake)
@@ -595,6 +596,19 @@ IF(ENABLE_VMUX_CHURN_TEST)
             "-Wl,--exclude-libs,ALL")
     ENDIF()
     ADD_TEST(NAME vmux_net_churn_integration_test COMMAND vmux_net_churn_integration_test)
+ENDIF()
+
+
+IF(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(vmux_receive_semantics_test
+        tests/cpp/vmux_receive_semantics_test.cpp)
+    TARGET_LINK_LIBRARIES(vmux_receive_semantics_test openppp2_lib)
+    IF(PLATFORM_SYSTEM_LINUX)
+        TARGET_LINK_OPTIONS(vmux_receive_semantics_test PRIVATE
+            "-Wl,--exclude-libs,ALL")
+    ENDIF()
+    ADD_TEST(NAME vmux_receive_semantics_test COMMAND vmux_receive_semantics_test)
 ENDIF()
 
 IF(ENABLE_TESTS)

@@ -8,6 +8,7 @@
 
 #include "vmux.h"
 #include <ppp/app/mux/MuxFlowReorderBuffer.h>
+#include <ppp/app/mux/MuxFlowContextAdmission.h>
 #include <ppp/app/mux/IMuxTransport.h>
 #include <ppp/app/mux/MuxLinkDrainState.h>
 #include <ppp/app/mux/MuxRuntimeState.h>
@@ -44,6 +45,8 @@ namespace vmux {
             IMuxTransportPtr                                                        connection;
             uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Strand-affine.
             uint64_t                                                                last_active_ = 0; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Strand-affine.
+            size_t                                                                  queued_bytes_ = 0; ///< Outstanding local write bytes (not peer ACK). Strand-affine.
+            uint64_t                                                                total_sent_bytes_ = 0; ///< Lifetime bytes accepted by local write path. Strand-affine.
             ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
             bool                                                                    handshake_complete_ = false; ///< True only after the carrier handshake succeeds. Protected by syncobj_.
         }                                                                           vmux_linklayer;
@@ -178,12 +181,28 @@ namespace vmux {
             uint32_t                                                                flow_rx_next_         = 0;     ///< Next expected per-flow DSN.
             ppp::app::mux::MuxFlowReorderBuffer<rx_packet>                         flow_reorder_;                ///< Strictly bounded reorder buffer for this flow only.
             uint64_t                                                                oldest_buffered_tick_ = 0;     ///< Tick the oldest buffered frame was queued; 0 = no active gap timer.
-            bool                                                                    primed_               = false; ///< True once flow_rx_next_ has been initialized from the first frame.
+            bool                                                                    primed_               = false; ///< True once the initial expected DSN (1) has been established.
             bool                                                                    fin_seen_             = false; ///< True once a cmd_fin has been delivered for this connection.
+        };
+
+        /**
+         * @brief Per-connection transmit queue for byte-based DRR fairness.
+         * @details Deficit Round-Robin: each active flow gets a byte quantum per
+         *          round; large flows cannot monopolize the global send path.
+         *          Strand-affine — only touched on the vmux strand.
+         */
+        struct flow_tx_context {
+            tx_packet_ssqueue                                                       queue;                 ///< Pending frames for this connection_id.
+            size_t                                                                  bytes = 0;             ///< Sum of packet lengths in queue.
+            int64_t                                                                  deficit = 0;           ///< DRR deficit (bytes of send credit remaining this round).
+            bool                                                                    quantum_due = true;     ///< Add a quantum before the next turn.
+            bool                                                                    active = false;        ///< True while this cid is in active_tx_flows_.
         };
 
         typedef vmux::unordered_map<uint32_t, vmux_skt_ptr>                         vmux_skt_map;
         typedef vmux::unordered_map<uint32_t, flow_rx_context>                      vmux_flow_map;
+        typedef vmux::unordered_map<uint32_t, flow_tx_context>                      vmux_tx_flow_map;
+        typedef vmux::list<uint32_t>                                                vmux_tx_active_list;
     public:
         enum mux_mode {
             mux_mode_compat  = 0,
@@ -262,6 +281,8 @@ namespace vmux {
         void                                                                        set_ordering_mode(receiver_ordering_mode m) noexcept;
         /** @brief Applies peer capability negotiation before establishment. */
         void                                                                        apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2) noexcept;
+        /** @brief Applies the peer's authoritative ordering result on the client. */
+        void                                                                        apply_agreed_ordering(bool agreed_flow_v2) noexcept;
         /** @brief Returns the latest observable scheduler/link state. */
         ppp::app::mux::MuxRuntimeState                                               get_runtime_state() const noexcept;
         /** @brief True for session-level control frames (keep-alive / mux-mode-set). */
@@ -399,7 +420,7 @@ namespace vmux {
         }
         
         /** @brief Generate a globally unique vmux connection identifier. */
-        static uint32_t                                                             generate_id() noexcept;
+        uint32_t                                                                    generate_id() noexcept;
 
         /** @brief Return current monotonic tick count in milliseconds. */
         static uint64_t                                                             now_tick() noexcept { return ppp::threading::Executors::GetTickCount(); }
@@ -432,20 +453,17 @@ namespace vmux {
         bool                                                                        packet_input_flow(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept;
         /** @brief Deliver one framed packet (push/fin) to its logical connection. */
         bool                                                                        deliver_one(Byte cmd, vmux_hdr* h, int length, uint64_t now) noexcept;
-        /** @brief Periodically advance per-flow contexts whose gap timed out. */
+        /** @brief Periodically fail per-flow contexts whose gap timed out. */
         void                                                                        flow_evict_expired(uint64_t now) noexcept;
-        /** @brief Skip the current gap of one flow and replay contiguous buffered frames. */
-        void                                                                        flow_force_advance(uint32_t connection_id, flow_rx_context& fx, uint64_t now) noexcept;
-        /** @brief Release a flow context once its FIN was delivered and buffer drained. */
-        void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
-        /**
-         * @brief Look up or create a flow receive context for an active socket only.
-         * @return nullptr when the connection_id is unknown, the context table is
-         *         full, or the id is zero. Fake attacker-chosen IDs must not retain state.
-         */
+        /** @brief Fail the session when a compat global reorder gap timed out. */
+        void                                                                        compat_evict_expired(uint64_t now) noexcept;
+        /** @brief Fail one logical flow without delivering past an unrecovered gap. */
+        void                                                                        fail_flow(uint32_t connection_id, const char* reason) noexcept;
         flow_rx_context*                                                            try_get_or_create_flow(uint32_t connection_id) noexcept;
         void                                                                        note_flow_buffered(size_t bytes) noexcept;
         void                                                                        note_flow_unbuffered(size_t bytes) noexcept;
+        /** @brief Release a flow context once its FIN was delivered and buffer drained. */
+        void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
 
         /** @brief Process SYN request and create connecting vmux socket state. */
         bool                                                                        process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept;
@@ -487,12 +505,6 @@ namespace vmux {
         bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
         /** @brief True when an underlying link-layer endpoint is usable. */
         static bool                                                                 is_linklayer_active(const vmux_linklayer_ptr& linklayer) noexcept;
-        /** @brief Pick or refresh the primary link-layer endpoint for flow mode. */
-        vmux_linklayer_ptr                                                          select_primary_linklayer() noexcept;
-        /** @brief Pick a least-loaded active link-layer (balance link selection). */
-        vmux_linklayer_ptr                                                          select_balanced_linklayer() noexcept;
-        /** @brief Pick the sticky link-layer bound to a connection, binding one if needed. */
-        vmux_linklayer_ptr                                                          select_affinity_linklayer(uint32_t connection_id) noexcept;
         /** @brief Pick the next active link-layer round-robin (stripe distribution). */
         vmux_linklayer_ptr                                                          select_striped_linklayer() noexcept;
         /** @brief Pick the most-recently-active link for a turbo first packet.
@@ -517,7 +529,7 @@ namespace vmux {
          *           carry seq=0 under flow v2 and are delivered inline by the
          *           receiver (not DSN-gated), so they may be sent ahead of data on
          *           any free link. This keeps new-connection setup and heartbeats
-         *           alive even when tx_queue_ is backlogged. No-op under compat,
+         *           alive even when data TX is backlogged. No-op under compat,
          *           where global ordering forbids reordering control ahead of data. */
         bool                                                                        process_tx_ctrl_packets() noexcept;
         /** @brief Drain queued transmit packets through one primary link. */
@@ -542,6 +554,32 @@ namespace vmux {
         IMuxTransportPtr                                                            get_linklayer() noexcept;
         /** @brief Remove one link-layer endpoint from scheduling tables. */
         void                                                                        remove_linklayer(const vmux_linklayer_ptr& linklayer) noexcept;
+        /**
+         * @brief Handle one carrier exit on the vmux strand.
+         * @details Removes the link. If no other live carriers remain, closes the
+         *          session; otherwise isolates the failure and continues draining.
+         *          Multi-link is throughput/latency, not HA — in-flight frames on
+         *          the dead link are lost without VMUX-layer replay.
+         */
+        void                                                                        on_link_exit(const vmux_linklayer_ptr& linklayer, const char* reason) noexcept;
+        /** @brief Count handshake-complete non-retiring carriers (strand-affine). */
+        size_t                                                                      count_live_carriers(const vmux_linklayer_ptr& except = NULLPTR) const noexcept;
+        /** @brief True when the link still has room under the per-link byte high-water. */
+        static bool                                                                 link_has_byte_credit(const vmux_linklayer_ptr& linklayer, int packet_length) noexcept;
+        /** @brief Enqueue one data frame into the per-flow DRR queue (strand-affine). */
+        void                                                                        enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept;
+        /** @brief Total queued data frames across all per-flow TX queues. */
+        size_t                                                                      tx_data_depth() const noexcept;
+        /** @brief Total queued data bytes across all per-flow TX queues. */
+        size_t                                                                      tx_data_bytes() const noexcept;
+        /** @brief Pop next data frame via deficit round-robin; false if none/credit. */
+        bool                                                                        drr_pop_next(tx_packet& out) noexcept;
+        /** @brief Return a frame to the front of its flow queue (send failed). */
+        void                                                                        drr_requeue_front(tx_packet&& packet) noexcept;
+        /** @brief Drop all per-flow TX state (finalize). */
+        void                                                                        clear_flow_tx() noexcept;
+        /** @brief Publish a lock-free runtime snapshot (call on strand or under mutex). */
+        void                                                                        publish_runtime_snapshot_locked() noexcept;
 
         /** @brief Validate and post outgoing connect request command. */
         bool                                                                        connect_require(
@@ -602,36 +640,49 @@ namespace vmux {
         }                                                                           status_;
 
         SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map.
-        mutable std::mutex                                                          runtime_state_mutex_;
-        ppp::app::mux::MuxRuntimeState                                               runtime_state_;
+        mutable std::mutex                                                          runtime_state_mutex_; ///< Guards runtime_state_ writes; prefer strand.
+        ppp::app::mux::MuxRuntimeState                                               runtime_state_;       ///< Authoritative runtime facts.
+        mutable std::shared_ptr<const ppp::app::mux::MuxRuntimeState>               runtime_snapshot_;    ///< Lock-free published copy for cross-thread reads.
 
         vmux_skt_map                                                                skts_;              ///< Active logical socket map keyed by connection_id.
         StrandPtr                                                                   strand_;            ///< Serialized strand for vmux event loop.
         ContextPtr                                                                  context_;           ///< ASIO execution context.
 
-        tx_packet_ssqueue                                                           tx_queue_;          ///< Pending outbound data packet queue.
-        tx_packet_ssqueue                                                           tx_ctrl_queue_;     ///< High-priority control-frame queue (flow v2 only); drained before tx_queue_ so new-connection SYN / heartbeats are never starved by a data backlog.
+        vmux_tx_flow_map                                                            tx_flows_;          ///< connection_id -> per-flow TX queue + DRR deficit (strand-affine).
+        vmux_tx_active_list                                                         active_tx_flows_;   ///< RR ring of cids with non-empty TX queues (strand-affine).
+        size_t                                                                      tx_data_frames_ = 0; ///< Aggregate data frame count across tx_flows_ (for high-water / turbo).
+        size_t                                                                      tx_data_bytes_total_ = 0; ///< Aggregate data byte count across tx_flows_.
+        tx_packet_ssqueue                                                           tx_ctrl_queue_;     ///< High-priority control-frame queue (flow v2 only); drained before data so SYN / heartbeats are never starved.
         rx_packet_ssqueue                                                           rx_queue_;          ///< Out-of-order inbound packet reorder queue.
 
         mux_mode                                                                    mode_               = mux_mode_compat; ///< Transmit scheduler policy.
-        vmux_linklayer_ptr                                                          primary_linklayer_; ///< Primary link used by flow mode.
         bool                                                                        mux_mode_set_pushed_ = false; ///< One-shot guard for the debug mux-mode-set push.
-        vmux::unordered_map<uint32_t, vmux_linklayer_ptr>                           affinity_links_;    ///< connection_id -> sticky link-layer (balance mode).
+        uint64_t                                                                    mux_mode_set_last_accept_ = 0; ///< Tick of last accepted mux-mode-set (rate limit).
+        int                                                                         mux_mode_set_reject_streak_ = 0; ///< Consecutive rejected mux-mode-set frames (rate-limit log spam).
+        uint32_t                                                                    next_connection_id_ = 0; ///< Session-local connection_id allocator (never reuses within a session until wrap).
+        bool                                                                        connection_id_wrap_ = false; ///< True after connection id space exhausted; refuse new logical connects.
         size_t                                                                      stripe_cursor_ = 0; ///< Round-robin cursor over rx_links_ (stripe mode).
 
         receiver_ordering_mode                                                      ordering_mode_ = ordering_compat; ///< Negotiated receiver ordering mode (flow v2).
         vmux_flow_map                                                               flows_;             ///< connection_id -> per-flow receive context (flow v2 only).
         vmux::unordered_map<uint32_t, uint32_t>                                     tx_flow_seq_;       ///< connection_id -> next per-flow DSN to send (flow v2 only).
         size_t                                                                      flow_reorder_cap_bytes_ = 0; ///< Per-connection reorder buffer byte cap (from config).
+        size_t                                                                      session_reorder_cap_bytes_ = 0; ///< Session-wide reorder byte cap (from config).
+        size_t                                                                      session_reorder_bytes_ = 0; ///< Current session-wide buffered reorder bytes.
         size_t                                                                      flow_context_cap_       = 0; ///< Max concurrent flow receive contexts (DoS bound).
         size_t                                                                      flow_aggregate_cap_bytes_ = 0; ///< Aggregate reorder bytes across all flow contexts.
         size_t                                                                      flow_aggregate_bytes_   = 0; ///< Live sum of buffered reorder bytes across flows_.
-        uint64_t                                                                    flow_reorder_timeout_   = 0; ///< Per-connection gap wait timeout in ms (from config).
+        size_t                                                                      max_open_flows_ = 0; ///< Max open logical flows (from config).
+        size_t                                                                      tx_ctrl_budget_frames_ = (size_t)PPP_MUX_TX_CTRL_BUDGET_FRAMES; ///< Ctrl frames per drain turn.
+        uint64_t                                                                    flow_reorder_timeout_   = 0; ///< Gap wait timeout in ms (flow_v2 per-flow; compat global rx_queue_).
+        uint64_t                                                                    rx_gap_oldest_tick_     = 0; ///< Compat: tick of oldest buffered OOO frame (0 = no global gap).
         uint64_t                                                                    tx_backlog_since_       = 0; ///< Tick the data tx queue first stayed at/over high-water (0 = not backlogged); drives the D11 stall watchdog.
-        size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Data tx-queue high-water depth (from config; D11 backpressure).
+        size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Aggregate data-frame high-water (tx_data_frames_) for D11 backpressure.
         uint64_t                                                                    tx_backlog_stall_ms_    = (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT; ///< Backlog stall timeout in ms (from config; D11 watchdog).
         bool                                                                        turbo_                  = false; ///< flow-mode turbo enabled (from config; best-link-first first packet).
         uint64_t                                                                    turbo_last_adjust_      = 0;     ///< Tick of the last turbo pool grow/shrink step (cooldown base).
+        uint64_t                                                                    turbo_grow_hold_since_  = 0;     ///< When backlog first crossed grow threshold (0 = not armed).
+        uint64_t                                                                    turbo_shrink_hold_since_ = 0;    ///< When backlog first crossed shrink threshold (0 = not armed).
         int                                                                         turbo_pending_grow_     = 0;     ///< Carrier links the turbo controller wants the exchanger to add (consumed by client DoMuxEvents). Strand-affine.
 
         vmux_linklayer_vector                                                       rx_links_;          ///< All link-layer endpoints available for inbound.
