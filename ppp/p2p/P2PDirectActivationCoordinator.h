@@ -14,6 +14,10 @@ public:
     bool StageAuthenticatedAck(P2PAuthenticatedProbeAck&& ack,
         std::uint64_t generation) noexcept;
     bool Activate(bool data_channel_ready, std::uint64_t generation) noexcept;
+    bool MarkSuspect(std::uint64_t generation) noexcept;
+    bool AcceptRecoveryAck(P2PAuthenticatedProbeAck&& ack,
+        std::uint64_t generation) noexcept;
+    bool RecoverFromAuthenticatedData(std::uint64_t generation) noexcept;
     bool Fallback(P2PFallbackReason reason, bool relay_prerequisites_available,
         std::uint64_t generation) noexcept;
     bool Reset(std::uint64_t generation) noexcept;

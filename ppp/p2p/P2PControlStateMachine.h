@@ -45,6 +45,16 @@ public:
 
     bool AcceptRecoveryAck(bool) noexcept { return false; }
 
+    bool AcceptRecoveryAck(P2PAuthenticatedProbeAck&& ack) noexcept {
+        if (state_ != P2PState::Suspect) return false;
+        if (!ack.Consume()) return false;
+        return Move(P2PState::Suspect, P2PState::Direct);
+    }
+
+    bool RecoverFromAuthenticatedData() noexcept {
+        return Move(P2PState::Suspect, P2PState::Direct);
+    }
+
     bool BeginFallback(P2PFallbackReason reason) noexcept {
         if (reason == P2PFallbackReason::None) return false;
         if (state_ != P2PState::Eligible && state_ != P2PState::Probing &&

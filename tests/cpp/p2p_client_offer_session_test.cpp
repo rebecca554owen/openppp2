@@ -835,13 +835,26 @@ BOOST_AUTO_TEST_CASE(direct_data_path_requires_ready_transport_and_falls_back) {
         initiator, reverse_datagram, 1007, 7, opened));
     BOOST_TEST(opened == reverse);
 
-    transport.send_success = false;
+    BOOST_REQUIRE(path.MarkSuspect(7));
+    BOOST_TEST(static_cast<int>(path.State()) ==
+        static_cast<int>(P2PState::Suspect));
+    BOOST_TEST(std::string(path.EffectivePath()) == "relay");
     BOOST_TEST(!path.Send(
         initiator, transport, peer, frame, 1008, 7));
+    BOOST_REQUIRE(path.AcceptRecoveryAck(
+        detail::P2PAuthenticatedProbeAckFactory::Create(), 7));
+    BOOST_TEST(static_cast<int>(path.State()) ==
+        static_cast<int>(P2PState::Direct));
+    BOOST_REQUIRE(path.Send(
+        initiator, transport, peer, frame, 1009, 7));
+
+    transport.send_success = false;
+    BOOST_TEST(!path.Send(
+        initiator, transport, peer, frame, 1010, 7));
     BOOST_REQUIRE(path.Fallback(
         P2PFallbackReason::SocketError, true, 7));
     BOOST_TEST(!path.Send(
-        initiator, transport, peer, frame, 1009, 7));
+        initiator, transport, peer, frame, 1011, 7));
     BOOST_TEST(std::string(path.EffectivePath()) == "relay");
 }
 
@@ -887,4 +900,93 @@ BOOST_AUTO_TEST_CASE(direct_data_path_only_accepts_the_bound_virtual_peer) {
         length_mismatch.data(), static_cast<int>(length_mismatch.size()),
         local, peer));
     BOOST_TEST(length_mismatch == unchanged);
+}
+
+BOOST_AUTO_TEST_CASE(authenticated_migrate_challenge_ack_round_trip) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    const auto old_local = Endpoint(10, 4000);
+    const auto peer = Endpoint(40, 5000);
+    const auto new_local = Endpoint(11, 4001);
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        old_local, peer, 1001, 7, probe));
+    P2PControlPacket probe_ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, probe_ack));
+    BOOST_REQUIRE(initiator.AuthenticateProbeAck(
+        probe_ack, probe_ack.source, probe_ack.destination, 1003, 7));
+
+    P2PControlPacket challenge;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedMigrateChallenge(
+        new_local, peer, 1004, 7, challenge));
+    BOOST_TEST(static_cast<int>(challenge.type) ==
+        static_cast<int>(P2PControlType::MigrateChallenge));
+
+    std::vector<std::uint8_t> challenge_bytes;
+    BOOST_REQUIRE(SerializeP2PControlPacket(challenge, challenge_bytes));
+    P2PControlDatagramResult handled;
+    BOOST_REQUIRE(HandleAuthenticatedControlDatagram(
+        responder, challenge_bytes, challenge.source, challenge.destination,
+        1005, 7, handled));
+    BOOST_TEST(static_cast<int>(handled.action) ==
+        static_cast<int>(P2PControlDatagramAction::Reply));
+
+    P2PControlPacket migrate_ack;
+    BOOST_REQUIRE(ParseP2PControlPacket(handled.reply, migrate_ack));
+    BOOST_TEST(static_cast<int>(migrate_ack.type) ==
+        static_cast<int>(P2PControlType::MigrateAck));
+    auto proof = initiator.AuthenticateMigrateAck(
+        migrate_ack, migrate_ack.source, migrate_ack.destination, 1006, 7);
+    BOOST_REQUIRE(proof.has_value());
+
+    P2PDirectDataPath path;
+    BOOST_REQUIRE(path.Begin(7));
+    BOOST_REQUIRE(path.StageAuthenticatedAck(
+        detail::P2PAuthenticatedProbeAckFactory::Create(), 7));
+    BOOST_REQUIRE(path.Activate(true, 7));
+    BOOST_REQUIRE(path.MarkSuspect(7));
+    BOOST_REQUIRE(path.AcceptRecoveryAck(std::move(*proof), 7));
+    BOOST_TEST(static_cast<int>(path.State()) ==
+        static_cast<int>(P2PState::Direct));
+}
+
+BOOST_AUTO_TEST_CASE(heartbeat_payload_round_trips_and_notes_receive_activity) {
+    const auto initiator_fixture = MakeFixture(1, false);
+    const auto responder_fixture = MakeFixture(1, true);
+    P2PClientOfferSession initiator;
+    P2PClientOfferSession responder;
+    BOOST_REQUIRE(initiator.Accept(
+        initiator_fixture.encoded, initiator_fixture.context,
+        Exporter(Bytes<32>(7)), 1000, 7));
+    BOOST_REQUIRE(responder.Accept(
+        responder_fixture.encoded, responder_fixture.context,
+        Exporter(Bytes<32>(47)), 1000, 7));
+
+    P2PControlPacket probe;
+    BOOST_REQUIRE(initiator.CreateAuthenticatedProbe(
+        Endpoint(10, 4000), Endpoint(40, 5000), 1001, 7, probe));
+    P2PControlPacket ack;
+    BOOST_REQUIRE(responder.CreateAuthenticatedProbeAck(
+        probe, probe.source, probe.destination, 1002, 7, ack));
+    BOOST_REQUIRE(initiator.AuthenticateProbeAck(
+        ack, ack.source, ack.destination, 1003, 7));
+
+    std::vector<std::uint8_t> heartbeat;
+    BOOST_REQUIRE(initiator.SealHeartbeat(1004, 7, heartbeat));
+    BOOST_TEST(initiator.LastReceiveActivityMs() == 1003u);
+    std::vector<std::uint8_t> opened;
+    BOOST_REQUIRE(responder.OpenData(heartbeat, 1005, 7, opened));
+    BOOST_REQUIRE(opened.size() == 1);
+    BOOST_TEST(opened[0] == 0);
+    BOOST_TEST(responder.LastReceiveActivityMs() == 1005u);
 }

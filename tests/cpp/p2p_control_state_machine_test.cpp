@@ -114,3 +114,23 @@ BOOST_AUTO_TEST_CASE(fallback_rejects_missing_reason) {
     BOOST_TEST(!machine.BeginFallback(P2PFallbackReason::None));
     BOOST_TEST(static_cast<int>(machine.State()) == static_cast<int>(P2PState::Eligible));
 }
+
+BOOST_AUTO_TEST_CASE(authenticated_recovery_returns_direct_from_suspect) {
+    P2PControlStateMachine machine;
+    BOOST_REQUIRE(machine.MarkEligible());
+    BOOST_REQUIRE(machine.AcceptOffer());
+    auto first = detail::P2PAuthenticatedProbeAckFactory::Create();
+    BOOST_REQUIRE(machine.AcceptProbeAck(std::move(first)));
+    BOOST_REQUIRE(machine.MarkSuspect());
+    BOOST_TEST(static_cast<int>(machine.State()) ==
+        static_cast<int>(P2PState::Suspect));
+    BOOST_TEST(std::string(machine.EffectivePath()) == "relay");
+    BOOST_TEST(!machine.AcceptRecoveryAck(false));
+    BOOST_TEST(!machine.AcceptRecoveryAck(true));
+    auto recovery = detail::P2PAuthenticatedProbeAckFactory::Create();
+    BOOST_REQUIRE(machine.AcceptRecoveryAck(std::move(recovery)));
+    BOOST_TEST(static_cast<int>(machine.State()) ==
+        static_cast<int>(P2PState::Direct));
+    BOOST_TEST(std::string(machine.EffectivePath()) == "direct");
+    BOOST_TEST(P2PControlStateMachine::CanForwardDataFor(machine.State()));
+}

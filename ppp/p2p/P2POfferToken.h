@@ -79,4 +79,15 @@ std::optional<P2PAuthenticatedProbeAck> AuthenticateP2PProbeAck(
     const std::array<std::uint8_t, 8>& expected_nonce_prefix,
     P2PReplayWindow& replay_window) noexcept;
 
+std::optional<P2PAuthenticatedProbeAck> AuthenticateP2PMigrateAck(
+    const std::array<std::uint8_t, 32>& token_key,
+    const P2POfferBinding& received,
+    const P2POfferBinding& outstanding_challenge,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t elapsed_milliseconds,
+    const P2POfferToken& token,
+    const std::array<std::uint8_t, 8>& expected_nonce_prefix,
+    P2PReplayWindow& replay_window) noexcept;
+
 }

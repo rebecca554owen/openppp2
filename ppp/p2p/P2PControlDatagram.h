@@ -12,6 +12,7 @@ enum class P2PControlDatagramAction : std::uint8_t {
     None,
     Reply,
     AuthenticatedAck,
+    AuthenticatedMigrateAck,
 };
 
 struct P2PControlDatagramResult {
@@ -21,6 +22,14 @@ struct P2PControlDatagramResult {
 };
 
 bool CreateAuthenticatedProbeDatagram(
+    P2PClientOfferSession& session,
+    const P2PCandidateEndpoint& source,
+    const P2PCandidateEndpoint& destination,
+    std::uint64_t now_ms,
+    std::uint64_t generation,
+    std::vector<std::uint8_t>& output) noexcept;
+
+bool CreateAuthenticatedMigrateChallengeDatagram(
     P2PClientOfferSession& session,
     const P2PCandidateEndpoint& source,
     const P2PCandidateEndpoint& destination,

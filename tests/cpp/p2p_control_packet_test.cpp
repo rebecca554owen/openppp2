@@ -157,6 +157,26 @@ BOOST_AUTO_TEST_CASE(probe_ack_requires_and_preserves_probe_transcript_hash) {
     BOOST_TEST(!ParseP2PControlPacket(zero_hash, packet));
 }
 
+BOOST_AUTO_TEST_CASE(migrate_challenge_and_ack_round_trip) {
+    auto challenge = ValidProbe();
+    challenge[1] = static_cast<std::uint8_t>(P2PControlType::MigrateChallenge);
+    P2PControlPacket packet;
+    BOOST_REQUIRE(ParseP2PControlPacket(challenge, packet));
+    BOOST_TEST(static_cast<int>(packet.type) ==
+        static_cast<int>(P2PControlType::MigrateChallenge));
+    std::vector<std::uint8_t> encoded;
+    BOOST_REQUIRE(SerializeP2PControlPacket(packet, encoded));
+    BOOST_TEST(encoded == challenge);
+
+    auto ack = challenge;
+    ack[1] = static_cast<std::uint8_t>(P2PControlType::MigrateAck);
+    BOOST_REQUIRE(ParseP2PControlPacket(ack, packet));
+    BOOST_TEST(static_cast<int>(packet.type) ==
+        static_cast<int>(P2PControlType::MigrateAck));
+    BOOST_REQUIRE(SerializeP2PControlPacket(packet, encoded));
+    BOOST_TEST(encoded == ack);
+}
+
 BOOST_AUTO_TEST_CASE(serializes_strict_probe_and_probe_ack_round_trips) {
     for (const auto& bytes : {ValidProbe(), ValidProbeAck()}) {
         P2PControlPacket packet;

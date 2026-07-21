@@ -31,4 +31,13 @@ private:
     bool valid_ = true;
 };
 
+namespace detail {
+class P2PAuthenticatedProbeAckFactory final {
+public:
+    static P2PAuthenticatedProbeAck Create() noexcept {
+        return P2PAuthenticatedProbeAck{};
+    }
+};
+}
+
 }

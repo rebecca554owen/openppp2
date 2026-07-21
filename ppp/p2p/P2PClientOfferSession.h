@@ -70,6 +70,25 @@ public:
         const P2PCandidateEndpoint& observed_destination,
         std::uint64_t now_ms,
         std::uint64_t generation) noexcept;
+    bool CreateAuthenticatedMigrateChallenge(
+        const P2PCandidateEndpoint& source,
+        const P2PCandidateEndpoint& destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        P2PControlPacket& output) noexcept;
+    bool CreateAuthenticatedMigrateAck(
+        const P2PControlPacket& challenge,
+        const P2PCandidateEndpoint& observed_source,
+        const P2PCandidateEndpoint& observed_destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        P2PControlPacket& output) noexcept;
+    std::optional<P2PAuthenticatedProbeAck> AuthenticateMigrateAck(
+        const P2PControlPacket& packet,
+        const P2PCandidateEndpoint& observed_source,
+        const P2PCandidateEndpoint& observed_destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation) noexcept;
     bool SealData(
         const std::uint8_t* payload,
         std::size_t payload_length,
@@ -89,6 +108,11 @@ public:
         std::uint64_t now_ms,
         std::uint64_t generation,
         std::vector<std::uint8_t>& output) noexcept;
+    bool SealHeartbeat(
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        std::vector<std::uint8_t>& output) noexcept;
+    std::uint64_t LastReceiveActivityMs() const noexcept;
 
 private:
     static constexpr std::size_t ReplayCapacity = 256;
@@ -97,6 +121,14 @@ private:
     void RememberLocked(const P2PId& offer_id) noexcept;
     void ClearReplayLocked() noexcept;
     void ClearActiveLocked() noexcept;
+    bool CreateSignedControlLocked(
+        P2PControlType type,
+        const P2PCandidateEndpoint& source,
+        const P2PCandidateEndpoint& destination,
+        std::uint64_t now_ms,
+        std::uint64_t generation,
+        bool track_outstanding,
+        P2PControlPacket& output) noexcept;
 
     mutable std::mutex mutex_;
     bool active_ = false;
@@ -111,7 +143,9 @@ private:
     std::uint64_t deadline_ms_ = 0;
     std::uint64_t generation_ = 0;
     std::uint64_t generation_floor_ = 0;
+    std::uint64_t last_receive_activity_ms_ = 0;
     P2POfferBinding outstanding_probe_{};
+    P2POfferBinding outstanding_migrate_{};
     P2POfferBinding cached_received_probe_{};
     P2POfferToken cached_received_probe_token_{};
     P2PControlPacket cached_probe_ack_{};
@@ -119,7 +153,10 @@ private:
     std::uint32_t next_tx_sequence_ = 0;
     std::uint8_t probe_rounds_ = 0;
     std::uint8_t received_probe_rounds_ = 0;
+    std::uint8_t migrate_rounds_ = 0;
+    std::uint8_t received_migrate_rounds_ = 0;
     bool has_outstanding_probe_ = false;
+    bool has_outstanding_migrate_ = false;
     bool has_cached_probe_ack_ = false;
     bool data_authorized_ = false;
     std::array<P2PId, ReplayCapacity> seen_offer_ids_{};

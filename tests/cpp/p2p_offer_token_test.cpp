@@ -463,3 +463,33 @@ BOOST_AUTO_TEST_CASE(fallback_and_generation_reset_discard_pending_proof) {
     BOOST_REQUIRE(coordinator.Reset(8));
     BOOST_TEST(!coordinator.Begin(7));
 }
+
+BOOST_AUTO_TEST_CASE(suspect_recovery_requires_authenticated_ack) {
+    const auto key = Bytes<32>(9);
+    const auto probe = Binding();
+    const auto ack = ProbeAckBinding(probe);
+    P2POfferToken token{};
+    BOOST_REQUIRE(CreateP2POfferToken(key, ack, token));
+    P2PReplayWindow replay;
+    auto activate_proof = AuthenticateP2PProbeAck(key, ack, probe,
+        ack.source, ack.destination, 0, token, Bytes<8>(210), replay);
+    BOOST_REQUIRE(activate_proof.has_value());
+
+    P2PDirectActivationCoordinator coordinator;
+    BOOST_REQUIRE(coordinator.Begin(7));
+    BOOST_REQUIRE(coordinator.StageAuthenticatedAck(
+        std::move(*activate_proof), 7));
+    BOOST_REQUIRE(coordinator.Activate(true, 7));
+    BOOST_REQUIRE(coordinator.MarkSuspect(7));
+    BOOST_TEST(static_cast<int>(coordinator.State()) ==
+        static_cast<int>(P2PState::Suspect));
+    BOOST_TEST(std::string(coordinator.EffectivePath()) == "relay");
+    BOOST_TEST(!coordinator.MarkSuspect(6));
+    BOOST_TEST(!coordinator.AcceptRecoveryAck(
+        detail::P2PAuthenticatedProbeAckFactory::Create(), 6));
+    BOOST_REQUIRE(coordinator.AcceptRecoveryAck(
+        detail::P2PAuthenticatedProbeAckFactory::Create(), 7));
+    BOOST_TEST(static_cast<int>(coordinator.State()) ==
+        static_cast<int>(P2PState::Direct));
+    BOOST_TEST(std::string(coordinator.EffectivePath()) == "direct");
+}

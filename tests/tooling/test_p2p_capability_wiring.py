@@ -83,11 +83,16 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             "candidate_transport->Start",
             "HandleP2PDatagram",
             "candidate_transport->LocalEndpoint()",
-            "request.P2P.candidates.emplace_back",
+            "request.P2P.candidates = gathered",
+            "StartP2PStunGatherAsync",
+            "p2p_zero_rtt_cache_.Lookup",
             "p2p_candidate_transport_",
         ):
             self.assertIn(required, register)
         self.assertNotIn("P2PStunClient::Query", register)
+        self.assertIn("P2PStunClient::Query", exchanger)
+        self.assertIn("std::thread(", exchanger)
+        self.assertIn("ApplyP2PStunMappedCandidate", exchanger)
         self.assertIn("p2p_registered_candidates_ = request.P2P.candidates", register)
         self.assertIn("p2p_direct_data_path_.Reset(candidate_generation)", register)
 

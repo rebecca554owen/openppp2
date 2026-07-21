@@ -7,15 +7,6 @@
 #include <array>
 
 namespace ppp::p2p {
-namespace detail {
-class P2PAuthenticatedProbeAckFactory final {
-public:
-    static P2PAuthenticatedProbeAck Create() noexcept {
-        return P2PAuthenticatedProbeAck{};
-    }
-};
-}
-
 namespace {
 constexpr std::size_t BaseCanonicalSize = 107;
 constexpr std::size_t ProbeAckCanonicalSize = BaseCanonicalSize + 32;
@@ -76,6 +67,27 @@ bool AckMatchesProbe(const P2POfferBinding& ack,
         ack.direction == ack.sender_role &&
         ack.source == probe.destination && ack.destination == probe.source &&
         ack.ttl_seconds == probe.ttl_seconds;
+}
+
+bool AckMatchesMigrate(const P2POfferBinding& ack,
+                       const P2POfferBinding& challenge) noexcept {
+    return challenge.message_type == P2PControlType::MigrateChallenge &&
+        ack.message_type == P2PControlType::MigrateAck &&
+        ack.version == challenge.version && ack.offer_id == challenge.offer_id &&
+        ack.offer_hash == challenge.offer_hash &&
+        ack.initiator_session_id == challenge.initiator_session_id &&
+        ack.responder_session_id == challenge.responder_session_id &&
+        ack.initiator_peer_id == challenge.initiator_peer_id &&
+        ack.responder_peer_id == challenge.responder_peer_id &&
+        ack.connection_epoch == challenge.connection_epoch &&
+        ack.sender_role == challenge.receiver_role &&
+        ack.receiver_role == challenge.sender_role &&
+        ack.direction == ack.sender_role &&
+        ack.source == challenge.destination &&
+        ack.destination == challenge.source &&
+        ack.ttl_seconds == challenge.ttl_seconds &&
+        ack.probe_transcript_hash == std::array<std::uint8_t, 32>{} &&
+        challenge.probe_transcript_hash == std::array<std::uint8_t, 32>{};
 }
 
 void AppendEndpoint(std::array<std::uint8_t, ProbeAckCanonicalSize>& bytes,
@@ -183,6 +195,25 @@ std::optional<P2PAuthenticatedProbeAck> AuthenticateP2PProbeAck(
     if (!AckMatchesProbe(received, outstanding_probe) ||
         !CreateP2PProbeTranscriptHash(outstanding_probe, expected_probe_hash) ||
         received.probe_transcript_hash != expected_probe_hash ||
+        !ValidateP2POfferToken(token_key, received, received,
+            observed_source, observed_destination, elapsed_milliseconds,
+            token, expected_nonce_prefix, replay_window)) {
+        return std::nullopt;
+    }
+    return detail::P2PAuthenticatedProbeAckFactory::Create();
+}
+
+std::optional<P2PAuthenticatedProbeAck> AuthenticateP2PMigrateAck(
+    const std::array<std::uint8_t, 32>& token_key,
+    const P2POfferBinding& received,
+    const P2POfferBinding& outstanding_challenge,
+    const P2PCandidateEndpoint& observed_source,
+    const P2PCandidateEndpoint& observed_destination,
+    std::uint64_t elapsed_milliseconds,
+    const P2POfferToken& token,
+    const std::array<std::uint8_t, 8>& expected_nonce_prefix,
+    P2PReplayWindow& replay_window) noexcept {
+    if (!AckMatchesMigrate(received, outstanding_challenge) ||
         !ValidateP2POfferToken(token_key, received, received,
             observed_source, observed_destination, elapsed_milliseconds,
             token, expected_nonce_prefix, replay_window)) {
