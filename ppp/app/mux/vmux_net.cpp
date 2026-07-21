@@ -96,6 +96,7 @@ namespace vmux {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
             runtime_state_.effective_mode = mode_name(mode_);
             ppp::app::mux::FillMuxPresentation(runtime_state_);
+            publish_runtime_snapshot_locked();
         }
         stripe_cursor_ = 0;
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "scheduler mode switched to %s", mode_name(mode_));
@@ -132,6 +133,7 @@ namespace vmux {
                 std::lock_guard<std::mutex> scope(runtime_state_mutex_);
                 runtime_state_.turbo = turbo_;
                 ppp::app::mux::FillMuxPresentation(runtime_state_);
+                publish_runtime_snapshot_locked();
             }
         }
 
@@ -179,6 +181,7 @@ namespace vmux {
                 runtime_state_.active_links,
                 turbo_ || runtime_state_.turbo);
             runtime_state_ = state;
+            publish_runtime_snapshot_locked();
         }
         set_mode(parse_mode(ppp::string(state.effective_mode.data(), state.effective_mode.size())));
         set_ordering_mode(state.receiver_ordering == "flow_v2" ? ordering_flow_v2 : ordering_compat);
@@ -187,10 +190,16 @@ namespace vmux {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
             runtime_state_.turbo = turbo_;
             ppp::app::mux::FillMuxPresentation(runtime_state_);
+            publish_runtime_snapshot_locked();
         }
     }
 
     ppp::app::mux::MuxRuntimeState vmux_net::get_runtime_state() const noexcept {
+        // Prefer lock-free snapshot published on the vmux strand (P2-5).
+        if (auto snap = std::atomic_load_explicit(&runtime_snapshot_, std::memory_order_acquire)) {
+            return *snap;
+        }
+        // Cold path: first read before any publish, or mid-construction.
         std::lock_guard<std::mutex> scope(runtime_state_mutex_);
         ppp::app::mux::MuxRuntimeState state = runtime_state_;
         state.turbo = turbo_;
@@ -212,6 +221,7 @@ namespace vmux {
         std::lock_guard<std::mutex> scope(runtime_state_mutex_);
         runtime_state_.active_links = static_cast<std::uint16_t>(
             std::min<std::size_t>(active_links, UINT16_MAX));
+        publish_runtime_snapshot_locked();
     }
 
     /**
@@ -316,6 +326,7 @@ namespace vmux {
         m->runtime_state_.receiver_ordering = "compat";
         m->runtime_state_.turbo = false;
         ppp::app::mux::FillMuxPresentation(m->runtime_state_);
+        m->runtime_snapshot_ = std::make_shared<const ppp::app::mux::MuxRuntimeState>(m->runtime_state_);
 
         ppp::telemetry::Log(Level::kInfo, "mux", "mode=%s", mode_name(m->mode_));
         uint64_t now                  = now_tick();
@@ -342,7 +353,6 @@ namespace vmux {
      */
     void vmux_net::finalize() noexcept {
         vmux_linklayer_vector rx_links;
-        tx_packet_ssqueue tx_queue;
         rx_packet_ssqueue rx_queue;
         vmux_skt_map skts;
         std::shared_ptr<boost::asio::ip::tcp::resolver> tx_resolver;
@@ -357,22 +367,22 @@ namespace vmux {
             status_.last_ = now_tick();
 
             rx_links = std::move(rx_links_);
-            tx_queue = std::move(tx_queue_);
+            const size_t residual_frames = tx_data_frames_;
             rx_queue = std::move(rx_queue_);
 
             // Early-ACK observability: residual data still queued when the session dies.
-            if (!tx_queue.empty()) {
-                ppp::telemetry::Count("mux.tx.residual.frames", (int64_t)tx_queue.size());
-                ppp::telemetry::Gauge("mux.tx.residual.depth", (int64_t)tx_queue.size());
+            if (residual_frames > 0) {
+                ppp::telemetry::Count("mux.tx.residual.frames", (int64_t)residual_frames);
+                ppp::telemetry::Gauge("mux.tx.residual.depth", (int64_t)residual_frames);
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
-                    "finalize residual tx_queue frames=%u (local write may have been early-acked)",
-                    (unsigned)tx_queue.size());
+                    "finalize residual tx data frames=%u (local write may have been early-acked)",
+                    (unsigned)residual_frames);
             }
 
             skts = std::move(skts_);
             skts_.clear();
 
-            tx_queue_.clear();
+            clear_flow_tx();
             tx_ctrl_queue_.clear();
             rx_queue_.clear();
             rx_links_.clear();
@@ -381,8 +391,6 @@ namespace vmux {
             stripe_cursor_ = 0;
             flows_.clear();
             tx_flow_seq_.clear();
-            tx_quantum_cid_ = 0;
-            tx_quantum_bytes_ = 0;
             break;
         }
 
@@ -498,43 +506,132 @@ namespace vmux {
         process_tx_all_packets();
     }
 
-    void vmux_net::apply_tx_flow_quantum(tx_packet_ssqueue::iterator& packet_tail) noexcept {
-        if (packet_tail == tx_queue_.end()) {
-            return;
+    size_t vmux_net::tx_data_depth() const noexcept {
+        return tx_data_frames_;
+    }
+
+    size_t vmux_net::tx_data_bytes() const noexcept {
+        return tx_data_bytes_total_;
+    }
+
+    void vmux_net::enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept {
+        // connection_id 0 is session control; data frames use non-zero cids.
+        // Still route cid=0 through DRR as a single "control-data" bucket if needed.
+        flow_tx_context& fx = tx_flows_[connection_id];
+        const size_t nbytes = packet.length > 0 ? (size_t)packet.length : 0;
+        fx.queue.emplace_back(std::move(packet));
+        fx.bytes += nbytes;
+        tx_data_frames_++;
+        tx_data_bytes_total_ += nbytes;
+        if (!fx.active) {
+            fx.active = true;
+            fx.deficit = 0;
+            active_tx_flows_.emplace_back(connection_id);
+        }
+    }
+
+    void vmux_net::clear_flow_tx() noexcept {
+        tx_flows_.clear();
+        active_tx_flows_.clear();
+        tx_data_frames_ = 0;
+        tx_data_bytes_total_ = 0;
+    }
+
+    void vmux_net::drr_requeue_front(tx_packet&& packet) noexcept {
+        const uint32_t cid = peek_connection_id(packet.buffer, packet.length);
+        flow_tx_context& fx = tx_flows_[cid];
+        const size_t nbytes = packet.length > 0 ? (size_t)packet.length : 0;
+        fx.queue.emplace_front(std::move(packet));
+        fx.bytes += nbytes;
+        tx_data_frames_++;
+        tx_data_bytes_total_ += nbytes;
+        if (!fx.active) {
+            fx.active = true;
+            // Do not reset deficit — preserve remaining credit for this round.
+            active_tx_flows_.emplace_front(cid);
+        }
+    }
+
+    bool vmux_net::drr_pop_next(tx_packet& out) noexcept {
+        if (active_tx_flows_.empty()) {
+            return false;
         }
 
         const size_t quantum = (size_t)PPP_MUX_TX_FLOW_QUANTUM_BYTES;
-        if (quantum == 0) {
-            return;
-        }
+        const size_t q = quantum > 0 ? quantum : (size_t)1;
+        const size_t n = active_tx_flows_.size();
 
-        const uint32_t head_cid = peek_connection_id(packet_tail->buffer, packet_tail->length);
-        if (head_cid == 0) {
-            return;
-        }
+        // Walk at most one full cycle of the active ring.
+        for (size_t scanned = 0; scanned < n; ++scanned) {
+            uint32_t cid = active_tx_flows_.front();
+            active_tx_flows_.pop_front();
 
-        if (tx_quantum_cid_ != head_cid) {
-            tx_quantum_cid_ = head_cid;
-            tx_quantum_bytes_ = 0;
-            return;
-        }
-
-        if (tx_quantum_bytes_ < quantum) {
-            return;
-        }
-
-        // Head cid already consumed a quantum: prefer another cid if present.
-        auto it = packet_tail;
-        ++it;
-        for (; it != tx_queue_.end(); ++it) {
-            const uint32_t cid = peek_connection_id(it->buffer, it->length);
-            if (cid != 0 && cid != head_cid) {
-                packet_tail = it;
-                tx_quantum_cid_ = cid;
-                tx_quantum_bytes_ = 0;
-                return;
+            auto it = tx_flows_.find(cid);
+            if (it == tx_flows_.end() || it->second.queue.empty()) {
+                if (it != tx_flows_.end()) {
+                    it->second.active = false;
+                    it->second.deficit = 0;
+                    if (it->second.queue.empty() && it->second.bytes == 0) {
+                        tx_flows_.erase(it);
+                    }
+                }
+                continue;
             }
+
+            flow_tx_context& fx = it->second;
+            fx.deficit += (int64_t)q;
+
+            // Skip this flow for this round if the head frame exceeds remaining deficit.
+            // (Classic DRR: only send when deficit >= packet size.)
+            const int head_len = fx.queue.front().length;
+            if (head_len > 0 && fx.deficit < (int64_t)head_len) {
+                // Keep active, rotate to back with reduced deficit.
+                active_tx_flows_.emplace_back(cid);
+                continue;
+            }
+
+            out = std::move(fx.queue.front());
+            fx.queue.pop_front();
+            const size_t nbytes = out.length > 0 ? (size_t)out.length : 0;
+            if (nbytes <= fx.bytes) {
+                fx.bytes -= nbytes;
+            }
+            else {
+                fx.bytes = 0;
+            }
+            if (tx_data_frames_ > 0) {
+                tx_data_frames_--;
+            }
+            if (nbytes <= tx_data_bytes_total_) {
+                tx_data_bytes_total_ -= nbytes;
+            }
+            else {
+                tx_data_bytes_total_ = 0;
+            }
+            fx.deficit -= (int64_t)(nbytes > 0 ? nbytes : 0);
+            if (fx.deficit < 0) {
+                fx.deficit = 0;
+            }
+
+            if (fx.queue.empty()) {
+                fx.active = false;
+                fx.deficit = 0;
+                // Leave empty context; cleaned on next miss or finalize.
+            }
+            else {
+                // Still has data: stay in the ring.
+                active_tx_flows_.emplace_back(cid);
+            }
+            return true;
         }
+
+        return false;
+    }
+
+    void vmux_net::publish_runtime_snapshot_locked() noexcept {
+        // Caller holds runtime_state_mutex_ OR is the sole strand mutator of runtime_state_.
+        auto snap = std::make_shared<const ppp::app::mux::MuxRuntimeState>(runtime_state_);
+        std::atomic_store_explicit(&runtime_snapshot_, std::move(snap), std::memory_order_release);
     }
 
     /**
@@ -691,7 +788,7 @@ namespace vmux {
 
                 // Teardown guard: a send may complete after the session has been
                 // finalized (link flap, idle timeout, or peer close). finalize()
-                // clears tx_links_/tx_queue_ under syncobj_; touching them again
+                // clears tx_links_/tx_flows_ under syncobj_; touching them again
                 // from this strand callback (emplace_back / erase / re-drain) would
                 // race the teardown and operate on freed list nodes. Once disposed,
                 // drop the completion: there is nothing left to schedule.
@@ -727,33 +824,18 @@ namespace vmux {
                     }
                 }
                 else {
-                    tx_packet_ssqueue::iterator packet_tail = tx_queue_.begin();
-                    tx_packet_ssqueue::iterator packet_endl = tx_queue_.end();
-                    apply_tx_flow_quantum(packet_tail);
-                    if (packet_tail == packet_endl) {
+                    tx_packet packet;
+                    if (!drr_pop_next(packet)) {
                         tx_links_.emplace_back(linklayer);
                     }
-                    else if (!link_has_byte_credit(linklayer, packet_tail->length)) {
+                    else if (!link_has_byte_credit(linklayer, packet.length)) {
+                        drr_requeue_front(std::move(packet));
                         tx_links_.emplace_back(linklayer);
                         process_tx_all_packets();
                     }
-                    else {
-                        tx_packet packet = *packet_tail;
-                        const uint32_t cid = peek_connection_id(packet.buffer, packet.length);
-                        tx_queue_.erase(packet_tail);
-                        if (cid != 0) {
-                            if (tx_quantum_cid_ != cid) {
-                                tx_quantum_cid_ = cid;
-                                tx_quantum_bytes_ = 0;
-                            }
-                            tx_quantum_bytes_ += (size_t)packet.length;
-                        }
-
-                        if (!underlyin_sent(linklayer, packet.buffer, packet.length, packet.ac)) {
-                            // Put the frame back and try another free link.
-                            tx_queue_.emplace_front(std::move(packet));
-                            process_tx_all_packets();
-                        }
+                    else if (!underlyin_sent(linklayer, packet.buffer, packet.length, packet.ac)) {
+                        drr_requeue_front(std::move(packet));
+                        process_tx_all_packets();
                     }
                 }
             },
@@ -887,7 +969,7 @@ namespace vmux {
                     // rather than hang forever serving nothing. Control frames have
                     // their own priority queue, so this only triggers on a genuine
                     // data-path wedge.
-                    size_t tx_depth = tx_queue_.size();
+                    size_t tx_depth = tx_data_frames_;
                     if (tx_depth >= tx_queue_high_water_) {
                         if (tx_backlog_since_ == 0) {
                             tx_backlog_since_ = now;
@@ -905,7 +987,7 @@ namespace vmux {
                     }
 
                     ppp::telemetry::Gauge("mux.sched.mode", static_cast<int64_t>(mode_));
-                    ppp::telemetry::Gauge("mux.tx.queue.depth", static_cast<int64_t>(tx_queue_.size()));
+                    ppp::telemetry::Gauge("mux.tx.queue.depth", static_cast<int64_t>(tx_data_frames_));
                     ppp::telemetry::Gauge("mux.rx.reorder.depth", static_cast<int64_t>(rx_queue_.size()));
                     ppp::telemetry::Gauge("mux.link.count", static_cast<int64_t>(rx_links_.size()));
                 }
@@ -1673,6 +1755,26 @@ namespace vmux {
                     skts_.erase(tail);
                     flows_.erase(connection_id);          // drop per-flow receive context (flow v2)
                     tx_flow_seq_.erase(connection_id);    // drop per-flow send DSN counter (flow v2)
+                    // Drop any remaining TX frames for this cid (DRR fairness state).
+                    auto txit = tx_flows_.find(connection_id);
+                    if (txit != tx_flows_.end()) {
+                        if (tx_data_frames_ >= txit->second.queue.size()) {
+                            tx_data_frames_ -= txit->second.queue.size();
+                        }
+                        else {
+                            tx_data_frames_ = 0;
+                        }
+                        if (txit->second.bytes <= tx_data_bytes_total_) {
+                            tx_data_bytes_total_ -= txit->second.bytes;
+                        }
+                        else {
+                            tx_data_bytes_total_ = 0;
+                        }
+                        if (txit->second.active) {
+                            active_tx_flows_.remove(connection_id);
+                        }
+                        tx_flows_.erase(txit);
+                    }
                 }
             }
         }
@@ -1764,17 +1866,18 @@ namespace vmux {
                 // D11 backpressure: normally the acceleration fast-path fires the
                 // completion immediately so the skt read-pump reads the next chunk
                 // without waiting for the send to finish. That decouples reading
-                // from draining and lets tx_queue_ grow unbounded when the carrier
+                // from draining and lets data TX grow unbounded when the carrier
                 // stalls. Once the data queue reaches the high-water mark, fall back
                 // to attaching the completion to the frame so it fires only when the
                 // frame is actually sent — this re-couples the read-pump to drain
                 // progress and throttles ingestion until the backlog clears.
-                bool throttle = tx_queue_.size() >= tx_queue_high_water_;
+                const uint32_t cid = peek_connection_id(packet, packet_length);
+                bool throttle = tx_data_frames_ >= tx_queue_high_water_;
                 if (throttle) {
-                    tx_queue_.emplace_back(tx_packet{ packet, packet_length, posted_ac });
+                    enqueue_flow_tx(cid, tx_packet{ packet, packet_length, posted_ac });
                 }
                 else {
-                    tx_queue_.emplace_back(tx_packet{ packet, packet_length });
+                    enqueue_flow_tx(cid, tx_packet{ packet, packet_length, nullptr });
                     if (NULLPTR != posted_ac) {
                         vmux_post_exec(context_, strand_,
                             [posted_ac]() noexcept {
@@ -1787,7 +1890,10 @@ namespace vmux {
             }
         }
 
-        tx_queue_.emplace_back(tx_packet{ packet, packet_length, posted_ac });
+        {
+            const uint32_t cid = peek_connection_id(packet, packet_length);
+            enqueue_flow_tx(cid, tx_packet{ packet, packet_length, posted_ac });
+        }
         return process_tx_all_packets();
     }
 
@@ -1806,67 +1912,35 @@ namespace vmux {
         return NULLPTR != connection && connection->IsLinked();
     }
 
-    /** @brief Drains queued packets across currently available transmit linklayers. */
+    /** @brief Drains queued packets across free links using per-flow byte DRR. */
     bool vmux_net::process_tx_compat_packets() noexcept {
-        vmux_linklayer_list::iterator linklayer_tail = tx_links_.begin();
-        vmux_linklayer_list::iterator linklayer_endl = tx_links_.end();
-
-        while (linklayer_tail != linklayer_endl) {
-
-            tx_packet_ssqueue::iterator packet_tail = tx_queue_.begin();
-            tx_packet_ssqueue::iterator packet_endl = tx_queue_.end();
-
-            if (packet_tail == packet_endl) {
-                break;
-            }
-
-            apply_tx_flow_quantum(packet_tail);
-            if (packet_tail == packet_endl) {
+        while (!tx_links_.empty() && tx_data_frames_ > 0) {
+            tx_packet nexting_packet;
+            if (!drr_pop_next(nexting_packet)) {
                 break;
             }
 
             // Prefer a free link that still has byte credit for this frame.
-            vmux_linklayer_list::iterator chosen = linklayer_endl;
-            for (auto it = linklayer_tail; it != linklayer_endl; ++it) {
-                if (link_has_byte_credit(*it, packet_tail->length)) {
+            vmux_linklayer_list::iterator chosen = tx_links_.end();
+            for (auto it = tx_links_.begin(); it != tx_links_.end(); ++it) {
+                if (link_has_byte_credit(*it, nexting_packet.length)) {
                     chosen = it;
                     break;
                 }
             }
-            if (chosen == linklayer_endl) {
-                break; // no credit; wait for completions
+            if (chosen == tx_links_.end()) {
+                drr_requeue_front(std::move(nexting_packet));
+                break; // no credit; a completion will re-drive us
             }
 
             vmux_linklayer_ptr linklayer = *chosen;
-            if (chosen == linklayer_tail) {
-                linklayer_tail = tx_links_.erase(chosen);
-            }
-            else {
-                tx_links_.erase(chosen);
-                linklayer_tail = tx_links_.begin();
-                linklayer_endl = tx_links_.end();
-            }
+            tx_links_.erase(chosen);
 
-            tx_packet nexting_packet = *packet_tail;
-            const uint32_t cid = peek_connection_id(nexting_packet.buffer, nexting_packet.length);
-            tx_queue_.erase(packet_tail);
-            if (cid != 0) {
-                if (tx_quantum_cid_ != cid) {
-                    tx_quantum_cid_ = cid;
-                    tx_quantum_bytes_ = 0;
-                }
-                tx_quantum_bytes_ += (size_t)nexting_packet.length;
-            }
-
-            bool forwarding = underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac);
-            if (!forwarding) {
-                // Frame not accepted: requeue and try remaining free links.
-                tx_queue_.emplace_front(std::move(nexting_packet));
+            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac)) {
+                drr_requeue_front(std::move(nexting_packet));
                 if (tx_links_.empty()) {
                     return true;
                 }
-                linklayer_tail = tx_links_.begin();
-                linklayer_endl = tx_links_.end();
                 continue;
             }
         }
@@ -1995,15 +2069,11 @@ namespace vmux {
         return process_tx_compat_packets();
     }
 
-    /** @brief Drains queued packets striped round-robin across links (stripe). */
+    /** @brief Drains DRR-ordered packets; prefers striped link when it has credit. */
     bool vmux_net::process_tx_stripe_packets() noexcept {
-        for (;;) {
-            tx_packet_ssqueue::iterator packet_tail = tx_queue_.begin();
-            if (packet_tail == tx_queue_.end()) {
-                return true;
-            }
-
-            if (tx_links_.empty()) {
+        while (!tx_links_.empty() && tx_data_frames_ > 0) {
+            tx_packet nexting_packet;
+            if (!drr_pop_next(nexting_packet)) {
                 return true;
             }
 
@@ -2013,28 +2083,35 @@ namespace vmux {
             vmux_linklayer_list::iterator link_tail = tx_links_.end();
             if (NULLPTR != preferred) {
                 for (auto it = tx_links_.begin(); it != tx_links_.end(); ++it) {
-                    if (*it == preferred) {
+                    if (*it == preferred && link_has_byte_credit(*it, nexting_packet.length)) {
                         link_tail = it;
                         break;
                     }
                 }
             }
-
             if (link_tail == tx_links_.end()) {
-                link_tail = tx_links_.begin();
+                for (auto it = tx_links_.begin(); it != tx_links_.end(); ++it) {
+                    if (link_has_byte_credit(*it, nexting_packet.length)) {
+                        link_tail = it;
+                        break;
+                    }
+                }
+            }
+            if (link_tail == tx_links_.end()) {
+                drr_requeue_front(std::move(nexting_packet));
+                return true;
             }
 
             vmux_linklayer_ptr linklayer = *link_tail;
             tx_links_.erase(link_tail);
 
-            tx_packet nexting_packet = *packet_tail;
-            tx_queue_.erase(packet_tail);
-
             if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac)) {
+                drr_requeue_front(std::move(nexting_packet));
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
         }
+        return true;
     }
 
     /** @brief Drains the high-priority control-frame queue (flow v2). */
@@ -2449,7 +2526,7 @@ namespace vmux {
 
         // Dual-threshold hold: backlog must stay high/low for a hold window before
         // arming grow/shrink. Avoids expand/collapse on short bursts.
-        size_t depth = tx_queue_.size();
+        size_t depth = tx_data_frames_;
         size_t hw = (tx_queue_high_water_ > 0) ? tx_queue_high_water_ : (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER;
         const size_t grow_depth = (hw * (size_t)PPP_MUX_TURBO_GROW_DEPTH_RATIO) / 100u;
         const size_t shrink_depth = (hw * (size_t)PPP_MUX_TURBO_SHRINK_DEPTH_RATIO) / 100u;
