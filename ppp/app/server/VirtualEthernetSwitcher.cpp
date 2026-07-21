@@ -4561,9 +4561,7 @@ namespace ppp {
                     const PeerPrefixGatewayRecord& record = kv.second;
                     for (const auto& prefix : record.Prefixes) {
                         ppp::app::protocol::PeerPrefixRouteEntry route = prefix;
-                        if (route.via.empty() && record.VirtualIP != 0) {
-                            route.via = IPEndPoint::ToAddressString(record.VirtualIP);
-                        }
+                        route.via = IPEndPoint::ToAddressString(record.VirtualIP);
                         table.routes.emplace_back(std::move(route));
                     }
                 }
