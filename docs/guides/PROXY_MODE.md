@@ -1,34 +1,49 @@
 # Proxy-only mode
-> Status: Active
-> Type: Guide
-> Last verified: 63fc030
 
-> **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
-> **Audience:** OPENPPP2 users, operators, and developers.
-> **Status:** Current.
-> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-18.
-> **Parent index:** [Back to index](README.md)
+> **Status:** Current; desktop behavior is source-backed, Android behavior is platform-specific
+> **Type:** Guide
+> **Last verified:** Application mode, client bootstrap, configuration, and Android VPN-service sources, 2026-07-22
+> **Parent index:** [Task Guides](README.md) · **Chinese:** [Proxy-only 模式](PROXY_MODE_CN.md)
 
+## Use the right switch
 
-Proxy-only mode connects to an OpenPPP2 server and exposes **local HTTP and SOCKS5 forward proxies** without changing OS routes or requiring root on desktop platforms.
-
-## Quick start
+For desktop use, choose the process mode explicitly:
 
 ```bash
-./ppp --mode=proxy --config=./appsettings.json
-curl -x socks5h://127.0.0.1:1080 https://example.com
-curl -x http://127.0.0.1:8080 https://example.com
+./ppp --mode=proxy --config=./client.json
 ```
 
-## Configuration
+`--mode=proxy` is not just shorthand for `client.proxy-only=true`:
 
-Set `client.proxy-only` to `true`, or pass `--mode=proxy` on the command line:
+| Choice | What the application does |
+|---|---|
+| `--mode=proxy` | Selects the client proxy runtime, uses `TapStub` on non-mobile builds, skips ordinary TUN route/DNS-rule/bypass/geo-rule setup, and follows the proxy-mode elevation path. |
+| `--mode=client` plus `client.proxy-only: true` | Enables proxy-only behavior inside a client configuration, but does not itself select client mode or set the application `proxy_mode_` flag. |
+
+Prefer `--mode=proxy` when the operator intent is a desktop local-proxy session.
+
+## Local listeners
+
+Proxy-only mode exposes local HTTP and SOCKS5 forwarding listeners after it connects to the configured VPN server.
+
+| Listener | Configuration fields | Proxy-mode default |
+|---|---|---|
+| HTTP | `client.http-proxy.bind`, `client.http-proxy.port` | `127.0.0.1:8080` |
+| SOCKS5 | `client.socks-proxy.bind`, `client.socks-proxy.port` | `127.0.0.1:1080` |
+| SOCKS5 credentials | `client.socks-proxy.username`, `client.socks-proxy.password` | Optional configuration fields |
+
+For desktop CLI proxy mode, the runtime forces both listener addresses to loopback and normalizes missing/invalid ports to `8080` and `1080`. Do not treat this mode as a LAN-facing proxy service or try to expose it through a public bind address.
+
+`client.server-proxy` is different: it configures an upstream proxy for reaching the VPN server; it does not configure either local listener.
+
+## Safe configuration shape
+
+Keep endpoint and credentials out of version control. This example uses a documentation-only endpoint:
 
 ```json
 {
   "client": {
-    "guid": "{...}",
-    "server": "ppp://your-server:20000/",
+    "server": "ppp://vpn.example.invalid:20000/",
     "proxy-only": true,
     "http-proxy": { "bind": "127.0.0.1", "port": 8080 },
     "socks-proxy": { "bind": "127.0.0.1", "port": 1080 }
@@ -36,34 +51,26 @@ Set `client.proxy-only` to `true`, or pass `--mode=proxy` on the command line:
 }
 ```
 
-When ports or bind addresses are omitted, defaults are applied automatically:
+The JSON field can be useful for a client configuration, but it does not replace the recommended desktop `--mode=proxy` invocation.
 
-| Listener | Default bind | Default port |
-|----------|--------------|--------------|
-| HTTP     | 127.0.0.1    | 8080         |
-| SOCKS5   | 127.0.0.1    | 1080         |
+## Verify locally
 
-## Platform behavior
+After the client reaches its connected state, test only loopback endpoints:
 
-| Platform | TUN / routes | Root / admin |
-|----------|--------------|--------------|
-| Linux / macOS / Windows | Uses `TapStub` (no kernel interface) | Not required |
-| Android | Minimal VPN route for socket protect | VpnService permission |
+```bash
+curl -x http://127.0.0.1:8080 https://example.com
+curl -x socks5h://127.0.0.1:1080 https://example.com
+```
 
-On Android, enable **仅代理模式** in profile options (`vpnOptions.proxyOnly=true`). The app still creates a minimal TUN for `protect()`, but skips full routing, DNS hijack, and geo bypass.
+A listener being open does not prove that the tunnel, upstream server, credentials, or remote routing are healthy. Use runtime diagnostics if a request fails.
 
-## CLI flags
+## Android boundary
 
-| Flag | Description |
-|------|-------------|
-| `--mode=proxy` | Select proxy-only runtime |
-| `--proxy-http-port=N` | Override HTTP listen port |
-| `--proxy-socks-port=N` | Override SOCKS listen port |
+Android uses `vpnOptions.proxyOnly` in its bundled VPN application. It still establishes a `VpnService` interface and applies platform-specific narrow-route/DNS handling. Do not copy the desktop claim of “no route or DNS work” to Android.
 
-See [CLI_REFERENCE.md](../reference/CLI_REFERENCE.md) and [CONFIGURATION.md](../reference/CONFIGURATION.md) for full details.
+## Related pages
 
-## Related docs
-
-- [PROXY_ONLY_MODE_PLAN.md](../archive/plans/PROXY_ONLY_MODE_PLAN.md) — implementation and test plan
-- [PROXY_MODE_TEST_PLAN.md](../archive/plans/PROXY_MODE_TEST_PLAN.md) — test matrix
-- [TESTING.md](../development/TESTING.md) — unit tests and coverage
+- [Routing and DNS](ROUTING_AND_DNS.md)
+- [Configuration reference](../reference/CONFIGURATION.md)
+- [CLI reference](../reference/CLI_REFERENCE.md)
+- [Operations and troubleshooting](../operations/OPERATIONS.md)

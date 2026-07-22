@@ -25,3 +25,4 @@
 - [逐帧读取超时设计](PER_FRAME_READ_TIMEOUT_DESIGN_CN.md)
 - [SSL_CTX 全局初始化锁缩小设计文档](SSL_CTX_INIT_LOCK_REDUCTION_DESIGN_CN.md)
 - [Shell 命令执行路径（`system()` / `popen()`）治理设计文档](SYSTEM_CALL_GOVERNANCE_DESIGN_CN.md)
+- [VMUX P0-C 链路退出与字节信用设计（英文历史工作区记录）](2026-07-21-vmux-p0c-link-credit-design.md)

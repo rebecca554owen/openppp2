@@ -1,98 +1,95 @@
 # VMUX Validation and Rollout Gate
 
-> **Purpose:** Define the current validation evidence and rollout gates for VMUX modes.
-> **Audience:** Runtime, performance, release, and platform maintainers.
-> **Status:** Current.
-> **Last verified against:** Latest main VMUX implementation and evidence, 2026-07-18.
-> **Parent index:** [Reference](README.md) · **Chinese:** [VMUX 验证与发布门槛](VMUX_VALIDATION_CN.md)
-
-> Status: Stable
+> Status: Active
 > Type: Reference
-> Last verified: 29ec28d
+> Last verified: 8c8a888
+> Parent index: [Reference index](README.md)
+> Peer link: [中文](VMUX_VALIDATION_CN.md)
+> Related: [UI runtime contract](UI_RUNTIME_CONTRACT.md)
 
-[中文版本](VMUX_VALIDATION_CN.md)
+`compat` is the current VMUX default. `stripe` is experimental. This page
+states implemented negotiation/presentation behavior and the evidence required
+for a default change; it does not claim that a performance gate has passed.
 
-This reference defines the evidence required to change the production VMUX
-scheduler default. It does not claim that the performance gates have passed.
-`compat` remains the default, and `stripe` remains experimental.
+## Runtime state contract
 
-## Acceptance gates
+`ppp::app::mux::MuxRuntimeState` reports these facts:
 
-All gates are mandatory and must be evaluated from artifacts produced by the
-repeatable harness in [`../../benchmarks/vmux/`](../../benchmarks/vmux/README.md).
-
-| Gate | Required result |
+| Field | Meaning |
 |---|---|
-| Single-flow throughput | `flow-one-flow` throughput is at least 95% of the matching `off-one-flow` baseline. |
-| Equal-link tail latency | `flow-one-flow` p99 latency is no more than 110% of the matching `off-one-flow` p99 on equal links. |
-| Bounded reorder memory | Per-flow buffered bytes never exceed `mux.flow.reorder.bytes`, and the derived reorder-entry cap is never exceeded. |
-| Session reorder / open bounds (P0-B hard gate) | Session reorder bytes never exceed `mux.flow.session_reorder.bytes`; open logical flows never exceed `mux.flow.max_open`. Worst-case model is `min(session_reorder.bytes, max_open × reorder.bytes)`, **not** `max_connections × reorder.bytes`. Ctrl drain is budgeted by `mux.tx.ctrl.budget_frames` so data is not starved. |
-| Gap failure semantics (P0-A hard gate) | Unrecovered gaps must **fail the flow** (flow_v2: `fail_flow` / `mux.rx.flow.reset`) or **rebuild the session** (compat: `compat_evict_expired` / `mux.rx.compat.gap_timeout`); never force-advance and deliver past a hole. |
-| Compat OOO activity (P0-A) | Receiving out-of-order framed traffic refreshes session activity (`active(now)`), matching flow_v2. |
-| Unknown-cid bound (P0-A) | flow_v2 PUSH/FIN for a cid with no skt does not create unbounded `flows_` entries (`mux.rx.unknown_cid`); initiator must not post PUSH before `connected_`. |
-| Old-peer compatibility | Against a peer without FLOW_V2, `balance` / `stripe` negotiate `effective_mode=compat`, `receiver_ordering=compat`, and `fallback_reason=peer_missing_flow_v2`; `flow` keeps `effective_mode=flow` but uses `receiver_ordering=compat`. |
-| Link churn safety | 100 grow/shrink cycles complete under ASan/UBSan without an error, leak, underflow, disconnect, or premature in-flight link retirement. |
-| Carrier exit isolation (P0-C) | Multi-link is **throughput/latency, not HA**. `on_link_exit`: if other live carriers remain, remove the dead link and continue; if last live carrier exits, close the session. Turbo extras and base links share this rule. |
-| Per-link byte credit (P0-C) | Outstanding local write bytes per link are tracked (`queued_bytes_`); new sends denied above `PPP_MUX_LINK_BYTE_HIGH_WATER`. Write-complete is local socket acceptance, not peer ACK. |
+| `requested_mode` | Configured/requested preset: `compat`, `flow`, `balance`, or `stripe`. |
+| `effective_mode` | Negotiated preset after capability handling. |
+| `receiver_ordering` | Separately negotiated `compat` or `flow_v2` receive ordering. |
+| `scheduler` | Derived presentation: `round_robin` for `stripe`, otherwise `competition`. |
+| `pool_policy` | Derived presentation: `adaptive` only for effective `flow` with turbo; otherwise `fixed`. |
+| `turbo` | Active flow-turbo flag; it is an option, not a fifth mode. |
+| `active_links` | Handshake-complete, non-retiring links, clamped for presentation. |
+| `fallback_reason` | Machine-readable reason for a capability or inactive-session fallback. |
 
-Comparisons must use the same environment fingerprint, configuration except
-for the mode under test, duration, flow count, and netem profile. A harness
-smoke run proves only that evidence can be collected; it is not performance
-evidence.
+`receiver_ordering` is not a synonym for `effective_mode`; consumers must use
+the separately reported ordering fact.
 
-## Required platforms and artifacts
+## Fallback behavior
 
-Before changing the default, attach real results from both:
+The implementation distinguishes these cases:
 
-1. Linux desktop on the fixed Linux x86-64 benchmark host; and
-2. at least one real mobile platform, Android or iOS.
+| Request/condition | Effective result |
+|---|---|
+| Unknown requested mode | `compat` with `receiver_ordering=compat`, `turbo=false`, and `unsupported_requested_mode`. |
+| `balance` or `stripe` without local or peer FLOW_V2 | `compat` and compat ordering, with `local_missing_flow_v2` or `peer_missing_flow_v2`. |
+| Plain `flow` | Remains effective `flow`; ordering may be `compat`. |
+| `flow` with turbo but no required FLOW_V2 support | Remains effective `flow`, uses compat ordering, and reports the missing-FLOW_V2 reason. |
+| No active client VMUX session | Effective/ordering are `compat`; a non-compat configured request reports `mux_inactive`. |
 
-The evidence bundle must contain the raw result JSON, environment and
-configuration fingerprints, parser output, sanitizer logs, old-peer
-compatibility results, and the tested commits for both endpoints. Shared CI,
-WSL, virtual machines, dry-runs, and synthetic telemetry may be used for
-correctness diagnostics but do not satisfy this gate.
+An authoritative peer handshake reply supplies its negotiated ordering, so UI
+and operators must inspect both `effective_mode` and `receiver_ordering`.
 
-Each real result must carry the `--endpoint-manifest` attestation described by
-the benchmark README. Before promotion, validate the complete physical Linux
-and Android/iOS result bundle with:
+## Rollout evidence required for a default change
+
+The harness and parser in `benchmarks/vmux/` define a rollout gate. Qualifying
+results require, at minimum:
+
+- physical Linux x86-64 (not WSL) and physical Android or iOS client evidence;
+- endpoint manifest attestation, raw result JSON, matching environment
+  fingerprints and durations, and a Linux client commit matching the runner;
+- paired `off-one-flow` and `flow-one-flow` results for each client;
+- `flow-one-flow` mean throughput at least 95% of mux-off;
+- `flow-one-flow` mean p99 latency no more than 110% of mux-off;
+- zero disconnects and buffered-byte/reorder-entry values within submitted
+  configured bounds.
+
+Run the validator against a complete result bundle:
 
 ```bash
 python3 benchmarks/vmux/parse_results.py --rollout-gate <results...>
 ```
 
-This executable gate checks endpoint class and commits, paired environments and
-durations, throughput/p99 thresholds, zero disconnects, and configured reorder
-byte/entry bounds. Linux client evidence must be x86-64, non-WSL, and use the
-same commit as the runner checkout. The gate does not replace the sanitizer and
-old-peer artifacts.
+The current benchmark matrix covers `off`, `compat`, `flow`, and `balance`
+scenarios; it does not provide a `stripe` promotion scenario.
+
+## What the harness proves
+
+The default `run.sh` invocation is a dry-run: it validates a plan but changes
+no network state and writes no result. A real run requires `--execute`, an
+external `iperf3` server, executable preparation hook, endpoint manifest, and
+telemetry captured from that run. The parser validates supplied artifacts and
+thresholds; it does not itself establish that a physical-device measurement or
+tunnel setup occurred.
+
+Repository sources provide the harness, parser, and correctness/tooling tests.
+They do not contain a qualifying Linux-plus-mobile throughput/p99 evidence
+bundle. Therefore this reference makes no performance-pass claim and cites no
+historical raw commit or sanitizer-run result as rollout evidence.
 
 ## Default-change rule
 
-`compat` stays the production default until every gate above has qualifying
-two-platform evidence. Changing the default requires a separate pull request
-that attaches the benchmark artifacts and compatibility results and explains
-any exclusions. It must not be bundled with scheduler implementation work.
-`stripe` is excluded from the default gate and remains experimental.
+Keep `compat` as the default until qualifying evidence satisfies the rollout
+gate. Treat `stripe` as experimental unless a separately defined and evidenced
+promotion decision changes that status.
 
-## Current evidence boundary
+## Source references
 
-The implementation baseline provides:
-
-- negotiated requested/effective state and old-peer fallback (`7719c5f`);
-- UI presentation of effective mode and fallback diagnostics (`b991cd1`);
-- the benchmark harness, schema, parser, and tooling tests (`62c7441`); and
-- negotiation, bounded reorder, and in-flight retirement tests (`2566750`); and
-- a 100-cycle production `vmux_net` carrier-container churn test (`ded25d6`).
-
-The `ded25d6` integration test drives the production attach helper, live RX/TX
-containers, in-flight retirement gate, reap, exactly-once transport disposal,
-and runtime active-link count for 100 grow/shrink cycles. It passed both the
-normal jemalloc build and the ASan/UBSan build with leak detection on
-2026-07-15. This closes the carrier-container lifecycle sanitizer gate, but it
-does not drive real network carrier I/O or satisfy the Linux-plus-mobile
-performance artifact gates.
-
-These commits establish the measurement and compatibility mechanisms. No real
-Linux-plus-mobile baseline demonstrating the throughput or p99 thresholds is
-stored yet, so the production default must not change.
+- `ppp/configurations/AppConfiguration.cpp`
+- `ppp/app/mux/MuxRuntimeState.h`
+- `ppp/app/client/VEthernetExchanger.cpp`
+- `benchmarks/vmux/README.md`, `run.sh`, and `parse_results.py`

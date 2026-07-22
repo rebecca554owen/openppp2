@@ -4,18 +4,23 @@
 > **Audience:** Runtime, platform, and UI maintainers.
 > **Status:** Current architecture decision.
 > **Last verified against:** Latest main implementation evidence, 2026-07-22.
-> **Parent index:** [Architecture Decision Records](README.md)
+> **Parent index:** [Architecture Decision Records](README.md) · **Chinese:** [ADR 0001](0001-runtime-ui-contract_CN.md)
 
 > Status: Accepted
 > Type: ADR
-> Last verified: d8ddd71
+> Last verified: 8c8a888
 
 ## Decision
 
 `PppApplication` owns one `RuntimeLifecycle`, which publishes immutable versioned
-`RuntimeSnapshot` values. The desktop TUI, Android UI, and iOS UI render those
-snapshots and send commands; they do not derive lifecycle state from exchanger
-enums, VPN service callbacks, logs, or optimistic widget mutations.
+`RuntimeSnapshot` values. The C++ desktop TUI, Android UI, and iOS UI render
+those snapshots and send commands; they do not derive lifecycle state from
+exchanger enums, VPN service callbacks, logs, or optimistic widget mutations.
+
+The separate process-managed `desktop/client` currently derives its local state
+from telemetry/process events and exit status. It is not yet a `RuntimeSnapshot`
+consumer and must not be cited as evidence that this decision applies to every
+desktop surface.
 
 The v1 phases are `idle`, `starting`, `preparing_host`, `connecting`,
 `handshaking`, `applying_policy`, `connected`, `reconnecting`, `stopping`,
@@ -24,8 +29,9 @@ The v1 phases are `idle`, `starting`, `preparing_host`, `connecting`,
 ## Readiness rule
 
 The runtime may publish `connected` only when session, adapter, route, DNS, and
-explicit or implicit compatibility policy are ready. Optional INFO is not a
-readiness requirement. A client adapter must be open, not merely allocated.
+client-open policy readiness are true. Optional INFO is not a readiness
+requirement; the current client policy bit is set when the session is
+established after Open(). A client adapter must be open, not merely allocated.
 Route and DNS may be marked ready only after successful application, or when the
 current mode explicitly does not require them. Server readiness is derived from
 active accept loops, not constant flags.
@@ -57,9 +63,11 @@ reports an error without mutating newer state.
 
 ## Consequences
 
-The runtime contract adds one stable boundary shared by all surfaces. Transport
-state remains available for data-plane decisions and diagnostics, but cannot be
-used as a second lifecycle authority.
+The runtime contract adds one stable boundary for its current consumers: the C++
+desktop TUI, Android UI, and iOS UI. Transport state remains available for
+data-plane decisions and diagnostics, but cannot be used as a second lifecycle
+authority. A process-managed desktop Client either needs an explicit separate
+contract or must migrate to `RuntimeSnapshot` before it can claim this boundary.
 
 See the [runtime UI contract](../reference/UI_RUNTIME_CONTRACT.md) and its
 [Chinese translation](../reference/UI_RUNTIME_CONTRACT_CN.md).

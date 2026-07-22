@@ -4,8 +4,16 @@
 > Type: Design
 > Last verified: 6b2e915
 
-**Status:** Approved for implementation (plan lock + user: implement through P1)  
-**Branch/worktree:** `fix/vmux-failure-semantics-bounds` @ `/tmp/openppp2-vmux-p0`
+> **Purpose:** Preserve the P0-C link-exit and byte-credit design snapshot.
+> **Audience:** Maintainers investigating VMUX design history.
+> **Status:** Archived worktree-specific design evidence; not current runtime guidance.
+> **Last verified against:** Preserved 2026-07-21 worktree record and archive placement, 2026-07-22.
+> **Parent index:** [Archived Designs](README.md) · **Related working record:** [status-bound specification](../../superpowers/specs/2026-07-21-vmux-p0c-link-credit-design.md)
+
+> **Archive notice:** Branch, worktree, implementation, and test claims below are historical evidence. Confirm the current checkout and tests before relying on them.
+
+**Recorded status (2026-07-21):** Approved for implementation (plan lock + user: implement through P1)
+**Recorded branch/worktree:** `fix/vmux-failure-semantics-bounds` @ `/tmp/openppp2-vmux-p0`
 
 ## Goals
 

@@ -2,17 +2,19 @@
 
 > **Purpose:** Define P2P direct-channel states, transitions, and failure behavior.
 > **Audience:** Protocol, networking, and platform maintainers.
-> **Status:** Current design evidence.
-> **Last verified against:** Latest main P2P integration evidence, 2026-07-18.
+> **Status:** Current design evidence; not an enabled production data path.
+> **Last verified against:** P2P integration and fail-closed production capability gate, 2026-07-22.
 > **Parent index:** [Design Documents](../README.md)
 
 > Status: Draft
 > Type: Design
-> Last verified: 889a0a3
+> Last verified: 8c8a888
 
 ## States
 
-The runtime contract uses these stable values:
+The direct-channel design reserves these stable values. The current
+fail-closed scaffold does not expose an enabled production path or currently
+emit `Failed`; do not read every listed transition as present runtime behavior.
 
 | State | Meaning | Effective path |
 |---|---|---|
@@ -24,13 +26,13 @@ The runtime contract uses these stable values:
 | `Direct` | An authenticated probe ACK established the UDP channel | `direct` |
 | `Suspect` | Direct liveness is uncertain | `relay` |
 | `FallingBack` | Direct state is being discarded | `relay` |
-| `Failed` | The latest direct attempt failed; relay remains healthy | `relay` |
+| `Failed` | Target state for a recorded failed attempt; relay remains healthy | `relay` |
 
 `effective_path` has only `relay` or `direct`. `Direct` is the only state that
 may publish `direct`. P2P failure does not change a healthy base runtime phase
 from `Connected`.
 
-## Transitions
+## Target Transitions
 
 ```text
 Disabled -> Relay                 experimental flag enabled
@@ -42,7 +44,7 @@ Eligible -> Probing              valid unexpired relay offer accepted
 Probing -> Direct                authenticated probe ACK accepted
 Probing -> FallingBack           timeout, auth failure, UDP blocked, cancellation
 Direct -> Suspect                liveness loss, endpoint change, socket warning
-Suspect -> Direct                authenticated recovery ACK on valid endpoint
+Suspect -> Direct                authenticated recovery ACK or valid authenticated peer data
 Suspect -> FallingBack           timeout, auth failure, migration failure
 FallingBack -> Relay             state erased and prerequisites remain available
 FallingBack -> Unavailable       state erased and a prerequisite is unavailable

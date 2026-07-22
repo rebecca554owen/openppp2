@@ -1,519 +1,86 @@
 # 系统架构
 > Status: Active
 > Type: Architecture
-> Last verified: 63fc030
+> Last verified: native entry, runtime, transport, and platform source paths, 2026-07-22
+>
+> **用途：**给出当前 `ppp` 运行时的、已按源码核对的总览。
+> **适用对象：**贡献者与运维。
+> **当前范围：**原生可执行程序与本树内的配套表面；本文不是稳定 SDK 契约。
+> **上一层索引：**[架构](README_CN.md) · **English:** [System Architecture](ARCHITECTURE.md)
 
-> **用途：**说明本主题的当前行为、配置或实现边界。
-> **适用对象：**OPENPPP2 用户、运维人员与开发者。
-> **当前状态：**当前有效。
-> **最后核对依据：**当前仓库结构、实现路径与文档链接，2026-07-18。
-> **上一层索引：**[返回索引](README_CN.md) · **English：**[System Architecture](ARCHITECTURE.md)
+## 运行时概览
 
+根 CMake 目标构建原生 `ppp` 可执行程序，并链接树内的 `openppp2_lib` 静态库。可执行入口刻意保持很薄：
 
-[English Version](ARCHITECTURE.md)
-
-## 范围
-
-本文是 OPENPPP2 的顶层架构地图，说明仓库如何分层、共享核心和宿主后果如何分开。
-
-本文基于 `main.cpp`、`ppp/configurations/AppConfiguration.*`、`ppp/transmissions/*`、`ppp/app/protocol/*`、`ppp/app/client/*`、`ppp/app/server/*` 和各平台目录来说明系统边界。
-
----
-
-## 核心思想
-
-OPENPPP2 是一套虚拟以太网基础设施运行时。它由共享协议核心和宿主特化后果组成。
-
-共享核心使用同一套隧道动作词汇（`VirtualEthernetLinklayer`）、同一套受保护传输抽象（`ITransmission`），以及同一套配置模型（`AppConfiguration`）。宿主后果——路由变更、DNS 变更、适配器生命周期、防火墙行为、socket 保护——被委托给平台相关的实现，共享核心通过良好定义的接口驱动它们。
-
----
-
-## 核心布局
-
-```mermaid
-graph TD
-    A[main.cpp] --> B[AppConfiguration]
-    A --> C[ITransmission]
-    A --> D[客户端运行时]
-    A --> E[服务端运行时]
-    B --> C
-    C --> F[VirtualEthernetLinklayer]
-    D --> G[VEthernetNetworkSwitcher]
-    D --> H[VEthernetExchanger]
-    E --> I[VirtualEthernetSwitcher]
-    E --> J[VirtualEthernetExchanger]
-    G --> K[平台层]
-    I --> K
-    I --> L[go/* 可选后端]
+```text
+main.cpp
+  -> ppp::facade::RunApplication(argc, argv)
+  -> PppApplication::GetInstance().Run(argc, argv)
+  -> 参数与配置准备
+  -> Executors::Run(...)
+  -> PppApplication::Main(...)
+  -> client 或 server bootstrap
 ```
 
----
+`main.cpp` 不负责网络、配置或关闭。`PppApplication` 持有进程级配置、运行时对象、周期维护以及 `RuntimeLifecycle` 发布。
 
-## 完整模块依赖图
+## 主要实现区域
 
-```mermaid
-graph TD
-    subgraph 入口
-        MAIN[main.cpp]
-        APP[PppApplication]
-    end
+| 区域 | 树内路径 | 当前职责 |
+|---|---|---|
+| 原生运行时 | `ppp/` | 应用生命周期、client/server 角色、协议、传输、DNS、路由、诊断 |
+| 共享底层代码 | `common/` | 原生目标使用的嵌入式与共享支持代码 |
+| 平台适配 | `windows/`、`linux/`、`darwin/` | 由构建目标选择的设备、路由和宿主集成 |
+| Android / iOS 集成 | `android/`、`ios/` | 嵌入或桥接原生运行时的平台宿主 |
+| 桌面客户端 | `desktop/client/` | 启动原生进程并消费统计输出的独立桌面 UI |
+| Go 服务 | `go/` | 可选的管理相关服务；非托管原生隧道并不依赖它 |
 
-    subgraph 配置
-        CFG[AppConfiguration]
-    end
+它们都在本树中，但不是 C++ 隧道运行时的可互换 owner。规范的会话 owner 仍是原生的 `VEthernet*` 与 `VirtualEthernet*` 类。
 
-    subgraph 传输层
-        ITRANS[ITransmission]
-        TCP[ITcpipTransmission]
-        WS[IWebsocketTransmission]
-        ITRANS --> TCP
-        ITRANS --> WS
-    end
+## 角色选择与 owner
 
-    subgraph 协议层
-        LINKLAYER[VirtualEthernetLinklayer]
-        PACKET[VirtualEthernetPacket]
-        INFO[VirtualEthernetInformation]
-        LINKLAYER --> PACKET
-        LINKLAYER --> INFO
-    end
+命令行模式选择应用角色；不传 `--mode` 时解析为 `server`。
 
-    subgraph 客户端运行时
-        CSWITCHER[VEthernetNetworkSwitcher]
-        CEXCHANGER[VEthernetExchanger]
-        CSWITCHER --> CEXCHANGER
-    end
+| 角色 | 选择方式 | 主要运行时 owner |
+|---|---|---|
+| Server | `--mode=server` 或不传 mode | `VirtualEthernetSwitcher` |
+| Client | `--mode=client` | `VEthernetNetworkSwitcher` |
+| Proxy | `--mode=proxy` | 代理形态的 client 运行时 |
 
-    subgraph 服务端运行时
-        SSWITCHER[VirtualEthernetSwitcher]
-        SEXCHANGER[VirtualEthernetExchanger]
-        SSWITCHER --> SEXCHANGER
-    end
+`client.proxy-only` 在模式解析后应用代理默认值；它**不会**自行选择 client 或 proxy 模式。`--mode=proxy` 与设置 `client.proxy-only: true` 的 client 角色在权限和 Windows 预检上也不同。
 
-    subgraph 平台适配层
-        LINUX[linux/]
-        WIN[windows/]
-        ANDROID[android/]
-        MACOS[darwin/]
-    end
+client switcher 持有宿主侧工作，例如隧道设备、路由、DNS 策略、本地代理监听器与活跃 exchanger。server switcher 持有监听器和按会话创建的 `VirtualEthernetExchanger`。当相关功能被配置时，server 还可能创建 Linux IPv6 transit 设备，因此“server 没有 TAP/TUN”的说法过于绝对。
 
-    subgraph 可选后端
-        GO[go/ 管理后端]
-    end
+## 运行时状态与展示
 
-    MAIN --> APP
-    APP --> CFG
-    APP --> ITRANS
-    APP --> CSWITCHER
-    APP --> SSWITCHER
-    CFG --> ITRANS
-    ITRANS --> LINKLAYER
-    LINKLAYER --> CEXCHANGER
-    LINKLAYER --> SEXCHANGER
-    CSWITCHER --> LINUX
-    CSWITCHER --> WIN
-    CSWITCHER --> ANDROID
-    CSWITCHER --> MACOS
-    SSWITCHER --> LINUX
-    SSWITCHER --> WIN
-    SSWITCHER --> GO
+`RuntimeLifecycle` 发布可复制的 `RuntimeSnapshot`。`OnTick()` 采样 client 或 server 状态，更新 readiness、流量、MUX 和 P2P 展示，然后更新终端 UI 与可选统计输出。
+
+可观察到的正常进展包括 `starting`、`preparing_host`、`connecting`、`handshaking`、`applying_policy`、`connected`、`reconnecting`、`stopping`，以及在清理报告完成后得到的 `idle` 或 `failed`。这是展示与协调模型，不是强制的状态迁移表：`RuntimeLifecycle::Transition()` 校验 generation/stop 状态，并通过 readiness 门控 `connected`，但没有编码完整的合法迁移矩阵。
+
+对 client，`connected` 由 session、adapter、route、DNS 和 policy readiness 共同门控。对 server，进程级信号取决于监听运行时是否在运行；它不是全部客户端会话或可选管理后端连接的汇总。
+
+## 数据面分层
+
+```text
+TCP / WS / WSS 承载
+  -> ITransmission（握手与帧保护/变换）
+  -> VirtualEthernetLinklayer（opcode 派发）
+  -> client 或按会话创建的 server exchanger
+  -> 宿主设备 / 虚拟协议栈 / 中继 / 转发路径
 ```
 
----
+`ITransmission` 位于隧道动作层之下。共享的 `VirtualEthernetLinklayer` 从每个已解码 payload 中解析动作 opcode，具体的 client/server exchanger 实现两侧处理。活跃承载、握手和帧行为见[传输与受保护会话层](TRANSMISSION_CN.md)；opcode 细节应以参考文档为准，而不是本文总览。
 
-## 并发模型
+## 重要限制
 
-OPENPPP2 使用 Boost.Asio `io_context` 作为事件循环核心，结合 Boost.Coroutine 实现异步-同步混合编程范式。
+- 正常运行时的直连 P2P 数据面仍 fail-closed：`ProductionAuthenticatedControlV1Ready` 为 `false`。源码包含 P2P 工作，但不能将其写成生产直连路径。
+- 桌面 proxy-only 运行时可能使用 `TapStub`，其输出会被有意丢弃。Android/iOS 的平台设备路径不同，不能把桌面 stub 行为推广到它们。
+- 本树含有可选 UI 与管理表面，但它们的存在并不使 C++ 运行时成为稳定的跨语言 SDK 或远程控制 API。
+- 支持的配置与接口应以[参考](../reference/README_CN.md)为准；历史理由应查看 [ADR](../adr/README.md) 或[归档](../archive/README.md)。
 
-```mermaid
-graph TD
-    subgraph 线程池
-        T1[io_context 线程 1]
-        T2[io_context 线程 2]
-        TN[io_context 线程 N]
-    end
+## 下一步
 
-    subgraph 协程层
-        CO1[boost::asio::spawn 协程]
-        CO2[YieldContext 封装]
-    end
-
-    subgraph 任务分发
-        POST[asio::post]
-        STRAND[asio::strand]
-    end
-
-    T1 --> POST
-    T2 --> POST
-    TN --> POST
-    POST --> CO1
-    CO1 --> CO2
-    CO2 --> STRAND
-    STRAND --> T1
-```
-
-核心并发规则：
-- 跨线程对象生命周期通过 `std::shared_ptr` 和 `std::weak_ptr` 管理。
-- 跨线程状态标志使用 `std::atomic<bool>` 和 `compare_exchange_strong`。
-- IO 线程严禁阻塞；阻塞操作通过 `asio::post` 投递。
-- 协程在每个异步边界通过 `YieldContext` 挂起。
-
----
-
-## 共享核心与宿主后果
-
-最重要的分割是：
-
-| 区域 | 责任 |
-|---|---|
-| 共享核心 | 配置、传输、握手、帧化、链路动作 |
-| 宿主后果 | 适配器、路由、DNS、防火墙、平台 IPv6 与 socket 行为 |
-
-共享核心可以复用。宿主后果不能假定跨系统一致。
-
-```mermaid
-flowchart LR
-    SharedCore["共享核心\n（ppp/ 平台无关）"]
-    HostConsequences["宿主后果\n（平台相关）"]
-    SharedCore -->|"通过接口驱动"| HostConsequences
-    SharedCore --> Protocol["协议：opcode 分发"]
-    SharedCore --> Transport["传输：握手、分帧"]
-    SharedCore --> Config["配置：规范化"]
-    HostConsequences --> Route["路由表管理"]
-    HostConsequences --> DNS["DNS 重定向"]
-    HostConsequences --> Adapter["虚拟网卡生命周期"]
-    HostConsequences --> Firewall["防火墙 / socket 保护"]
-```
-
----
-
-## 共享核心
-
-共享核心负责 tunnel semantics：
-
-- `AppConfiguration` 决定运行形态
-- `ITransmission` 负责承载、握手、帧保护和密钥状态
-- `VirtualEthernetLinklayer` 负责隧道动作词汇
-- client/server exchanger 负责会话级行为
-
-```mermaid
-flowchart TD
-    A[配置加载] --> B[规范化 AppConfiguration]
-    B --> C[选择承载与角色]
-    C --> D[ITransmission]
-    D --> E[握手]
-    E --> F[VirtualEthernetLinklayer]
-    F --> G[客户端 exchanger]
-    F --> H[服务端 exchanger]
-```
-
----
-
-## 宿主后果
-
-平台层负责本地操作系统上的实际副作用：
-
-- 虚拟网卡
-- 路由表变更
-- DNS 变更
-- socket 保护
-- 平台特化 IPv6
-
-这些都不是"辅助代码"，而是可观测的运行时行为。
-
-### 平台接口切入点
-
-```mermaid
-classDiagram
-    class ITap {
-        +Open() bool
-        +Read(buffer) int
-        +Write(buffer) int
-        +Close()
-    }
-    class NetworkInterface {
-        +NICName string
-        +IPAddress uint32
-        +GatewayServer uint32
-    }
-    class LinuxTap {
-        +Open() bool
-        +Read(buffer) int
-    }
-    class WindowsTap {
-        +Open() bool
-        +Read(buffer) int
-    }
-    ITap <|-- LinuxTap
-    ITap <|-- WindowsTap
-```
-
----
-
-## 运行时入口
-
-`main.cpp` 是 C++ 入口与进程协调器。流程是：
-
-1. 解析参数
-2. 加载配置
-3. 规范化配置
-4. 选择角色
-5. 准备宿主环境
-6. 启动 client 或 server
-7. 运行维护 tick loop
-8. 输出状态
-9. 清理退出
-
-```mermaid
-stateDiagram-v2
-    [*] --> 参数解析
-    参数解析 --> 配置加载
-    配置加载 --> 配置规范化
-    配置规范化 --> 角色选择
-    角色选择 --> 宿主准备
-    宿主准备 --> 运行时启动
-    运行时启动 --> 维护循环
-    维护循环 --> 关闭
-    关闭 --> [*]
-```
-
----
-
-## 对象所有权
-
-| 层级 | 所有者 |
-|---|---|
-| 进程 | `PppApplication` |
-| 环境 | `VEthernetNetworkSwitcher` 或 `VirtualEthernetSwitcher` |
-| 会话 | `VEthernetExchanger` 或 `VirtualEthernetExchanger` |
-| 连接 | `ITransmission` |
-
-### 所有权转移时序
-
-```mermaid
-sequenceDiagram
-    participant App as PppApplication
-    participant Switcher as Switcher
-    participant Exchanger as Exchanger
-    participant Trans as ITransmission
-
-    App->>Switcher: 创建并持有
-    Switcher->>Trans: 创建承载连接
-    Trans-->>Switcher: 握手完成
-    Switcher->>Exchanger: 创建并转移所有权
-    Exchanger->>Exchanger: 运行会话（协程）
-    Exchanger->>Switcher: 会话结束（通知）
-    Switcher->>Exchanger: 释放
-```
-
----
-
-## 角色非对称
-
-client 和 server 不是对称的：
-
-- client：宿主集成、路由、DNS、代理、映射、可选 static 和 mux
-- server：监听、会话交换、转发、映射、IPv6、可选后端集成
-
-```mermaid
-graph LR
-    A[客户端] --> B[路由/DNS steering]
-    A --> C[本地代理入口]
-    A --> D[远端会话交换]
-    E[服务端] --> F[监听器设置]
-    E --> G[会话交换]
-    E --> H[转发]
-    E --> I[可选管理后端]
-```
-
-### 操作码方向非对称
-
-| 操作码 | 客户端发起 | 服务端发起 |
-|--------|-----------|-----------|
-| `SYN` | 是 | 否 |
-| `SYNOK` | 否 | 是 |
-| `PSH` | 双向 | 双向 |
-| `FIN` | 双向 | 双向 |
-| `SENDTO` | 是 | 是（响应） |
-| `INFO` | 否 | 是 |
-| `KEEPALIVED` | 是（echo） | 是（ack） |
-| `FRP_ENTRY` | 是 | 否 |
-| `FRP_CONNECT` | 否 | 是 |
-| `MUX` | 是 | 否 |
-| `MUXON` | 否 | 是 |
-
----
-
-## 配置即架构
-
-`AppConfiguration` 是架构组件，不只是解析器。它决定哪些传输启用、哪些监听器打开、密钥怎么用，以及 client/server 策略如何落地。
-
-### AppConfiguration 关键字段
-
-| 字段 | 效果 |
-|------|------|
-| `mode` | `client` 或 `server` |
-| `key.kf`、`key.kx`、`key.kl`、`key.kh` | 会话密钥参数 |
-| `ip`、`mask`、`gw` | 客户端虚拟网络分配 |
-| `dns.redirect` | DNS 是否重定向到隧道 |
-| `server.node` | 服务器地址和端口 |
-| `server.protocol` | `tcp`、`websocket`、`websocket-ssl` |
-| `tcp.turbo` | TCP 性能调优 |
-| `udp.static.*` | Static UDP 路径配置 |
-
----
-
-## 传输层与协议层
-
-| 层 | 负责什么 |
-|---|---|
-| Transmission | 承载选择、握手、帧保护、密钥状态 |
-| Protocol | 会话语义、opcode 语义、隧道动作语义 |
-
-```mermaid
-flowchart TD
-    A[ITransmission：承载 + 握手 + 分帧 + 外层密钥]
-    B[VirtualEthernetLinklayer：opcode 分发 + Do/On 方法 + 内层会话密钥]
-    C[VEthernetExchanger / VirtualEthernetExchanger：角色专属行为]
-    A --> B
-    B --> C
-```
-
----
-
-## 数据流：客户端到服务端
-
-```mermaid
-sequenceDiagram
-    participant App as 宿主应用
-    participant TAP as 虚拟 TAP 设备
-    participant lwIP as lwIP 协议栈
-    participant Exchanger as VEthernetExchanger
-    participant Linklayer as VirtualEthernetLinklayer
-    participant Trans as ITransmission
-    participant Server as 服务端
-
-    App->>TAP: IP 数据包
-    TAP->>lwIP: 注入帧
-    lwIP->>Exchanger: 新 TCP 连接（SYN）
-    Exchanger->>Linklayer: DoConnect
-    Linklayer->>Trans: 写入 SYN 帧
-    Trans->>Server: 加密 + 分帧字节
-    Server-->>Trans: SYNOK 帧
-    Trans-->>Linklayer: 读取帧
-    Linklayer-->>Exchanger: OnConnectOK
-    Exchanger-->>lwIP: 连接已建立
-    lwIP->>Exchanger: 数据（PSH）
-    Exchanger->>Linklayer: DoPush
-    Linklayer->>Trans: 写入 PSH 帧
-    Trans->>Server: 加密 + 分帧字节
-```
-
----
-
-## 数据流：服务端到互联网
-
-```mermaid
-sequenceDiagram
-    participant Client as 客户端
-    participant Trans as ITransmission
-    participant Linklayer as VirtualEthernetLinklayer
-    participant Switcher as VirtualEthernetSwitcher
-    participant Socket as 真实 TCP/UDP socket
-    participant Internet as 互联网
-
-    Client->>Trans: SYN 帧
-    Trans->>Linklayer: 解码后的帧
-    Linklayer->>Switcher: OnConnect
-    Switcher->>Socket: TCP 连接到目标
-    Socket-->>Switcher: 已连接
-    Switcher->>Linklayer: DoConnectOK
-    Linklayer->>Trans: SYNOK 帧
-    Trans->>Client: 加密字节
-    Client->>Trans: PSH 帧
-    Trans->>Linklayer: 解码后的帧
-    Linklayer->>Switcher: OnPush
-    Switcher->>Socket: 转发数据
-    Socket->>Internet: 真实 TCP 包
-    Internet-->>Socket: 响应
-    Socket-->>Switcher: 数据
-    Switcher->>Linklayer: DoPush
-    Linklayer->>Trans: PSH 帧
-    Trans->>Client: 加密字节
-```
-
----
-
-## 错误码参考
-
-架构层面的错误码（来自 `ppp/diagnostics/ErrorCodes.def`，节选）：
-
-| ErrorCode | 说明 |
-|-----------|------|
-| `AppPrivilegeRequired` | 进程未以 root/管理员权限运行 |
-| `TunnelOpenFailed` | TAP/TUN 或监听器创建失败 |
-| `TunnelListenFailed` | TAP 打开或监听器启动失败 |
-| `NetworkInterfaceUnavailable` | 指定网卡不存在 |
-| `IPv6ServerPrepareFailed` | 服务端 IPv6 环境设置失败 |
-| `SessionHandshakeFailed` | 会话级握手未完成 |
-| `KeepaliveTimeout` | 对端心跳超时 |
-| `RuntimeTimerStartFailed` | 维护定时器无法启动 |
-
----
-
-## 客户端 Switcher 解耦（Wave B，PR4–PR7）
-
-2026-07 在 `main` 上完成一轮客户端 switcher 编译边界瘦身，目标是把 **helper 实现** 与 **公共头文件** 拆开，并收窄 DNS / 配置类型的传递依赖。
-
-### 分层结果
-
-| 阶段 | 内容 | 关键产物 |
-|------|------|----------|
-| PR4 | `VEthernetNetworkSwitcher.h` 瘦身至 ≤150 行；helper 用 `unique_ptr`；move-only | `.inc` 片段、`117` 行 shell |
-| PR4b | 去掉 shell 中的重 include | `rib_fwd.h`、`VirtualEthernetInformationFwd.h`、`VEthernet.h` 传递 include 修剪 |
-| PR5 | DNS 窄接口 | `dns::IDnsHost`；`ClientPacketDispatchHandler` 走公开 DNS API |
-| PR6a | 路由窄接口脚手架 | `route::RouteHostPorts` + `IRouteBackend`；switcher 实现；route helper 尚未迁移 |
-| PR7 | `ppp/*.h` 零 `AppConfiguration.h` | `AppConfigurationFwd.h`、`MappingConfiguration.h`；server/client exchanger 头瘦身 |
-| Facade | 应用引导层 | `ppp/facade/ApplicationBootstrap.h`；`main.cpp` 仅 include facade |
-
-### 硬边界（路径级，可脚本验证）
-
-- `ppp/app/client/` → `ppp/app/server/` 跨路径 **CALLS = 0**
-- `protocol/` → `server/` includes **= 0**
-- `ppp/**/*.h` 中 **`AppConfiguration.h` include = 0**
-- `check_include_boundaries.sh` **PASS**；ctest **26/26**
-
-### 仍保留在 shell 的 include（有意为之）
-
-- `VEthernet.h`：公有继承基类，必须完整类型
-- `DnsController.h`：DNS 查询上下文与 session 生命周期边界
-- `rib_fwd.h` / `VirtualEthernetInformationFwd.h`：仅前向声明，完整定义在 `.cpp`
-
-### 暂缓
-
-- **后续解耦**：继续拆分 Exchanger 职责与 VMUX 依赖；Route/DNS 宿主服务定位器已经移除
-- **`ppp/facade/` 扩展**：`ApplicationBootstrap` 已抽出；更深层的配置/模式解析仍留在 `PppApplication`
-
----
-
-## 客户端 Route / DNS 所有权
-
-`VEthernetNetworkSwitcher` 现在是组合根，不再重复持有 Route / DNS 领域状态。所有权单向流动：
-
-`Switcher -> RouteCoordinator/DnsController -> RouteState/DnsSessionContext`。
-
-`RouteState` 是 RIB/FIB、peer-prefix 投影、DNS 可达路由、NIC 快照和应用状态的唯一所有者。`RouteCoordinator` 通过 `IRoutePlatform` 执行事务化应用与逆序回滚；Linux、Windows、Darwin、移动端适配器分别封装平台副作用和原生恢复快照。
-
-`DnsController` 持有查询上下文和 session generation。异步回调复制不可变 `DnsSessionContext`，context 只弱引用 `IDnsTunnelTransport`，因此关闭 Controller 后不会延长或误用 Exchanger 生命周期。
-
----
-
-## 相关文档
-
-- [`CLIENT_ARCHITECTURE_CN.md`](CLIENT_ARCHITECTURE_CN.md)
-- [`SERVER_ARCHITECTURE_CN.md`](SERVER_ARCHITECTURE_CN.md)
-- [`TUNNEL_DESIGN_CN.md`](TUNNEL_DESIGN_CN.md)
-- [`STARTUP_AND_LIFECYCLE_CN.md`](STARTUP_AND_LIFECYCLE_CN.md)
-- [`ENGINEERING_CONCEPTS_CN.md`](ENGINEERING_CONCEPTS_CN.md)
-- [`CONCURRENCY_MODEL_CN.md`](CONCURRENCY_MODEL_CN.md)
-- [`PLATFORMS_CN.md`](../guides/PLATFORMS_CN.md)
+- [启动与生命周期](STARTUP_AND_LIFECYCLE_CN.md)
+- [客户端架构](CLIENT_ARCHITECTURE_CN.md) 与[服务端架构](SERVER_ARCHITECTURE_CN.md)
+- [隧道设计](TUNNEL_DESIGN_CN.md) 与[数据包生命周期](PACKET_LIFECYCLE_CN.md)
+- [EDSM 状态机](EDSM_STATE_MACHINES_CN.md) 与 [TUI 设计](TUI_DESIGN_CN.md)

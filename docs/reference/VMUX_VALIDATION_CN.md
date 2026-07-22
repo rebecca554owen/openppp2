@@ -1,86 +1,79 @@
 # VMUX 验证与发布门槛
 
-> **用途：**定义 VMUX 模式当前所需的验证证据和发布门槛。
-> **适用对象：**运行时、性能、发布与平台维护者。
-> **当前状态：**当前有效。
-> **最后核对依据：**main 最新 VMUX 实现与验证记录，2026-07-18。
-> **上一层索引：**[参考手册](README_CN.md) · **English:** [VMUX Validation and Rollout Gate](VMUX_VALIDATION.md)
-
-> Status: Stable
+> Status: Active
 > Type: Reference
-> Last verified: 29ec28d
+> Last verified: 8c8a888
+> Parent index: [参考索引](README_CN.md)
+> Peer link: [English](VMUX_VALIDATION.md)
+> Related: [UI Runtime 契约](UI_RUNTIME_CONTRACT_CN.md)
 
-[English version](VMUX_VALIDATION.md)
+`compat` 是当前 VMUX 默认值。`stripe` 仍为实验性功能。本文说明已实现的协商/展示行为，以及修改默认值所需的证据；并不表示性能门槛已经通过。
 
-本文定义修改 VMUX 生产调度默认值所需的证据，不代表当前已通过性能门槛。
-`compat` 继续作为默认值，`stripe` 继续保持实验性。
+## 运行时状态契约
 
-## 验收门槛
+`ppp::app::mux::MuxRuntimeState` 报告以下事实：
 
-以下门槛必须全部满足，并由
-[`../../benchmarks/vmux/`](../../benchmarks/vmux/README.md) 中的可重复 harness
-生成工件：
-
-| 门槛 | 必须达到的结果 |
+| 字段 | 含义 |
 |---|---|
-| 单流吞吐 | `flow-one-flow` 吞吐不低于对应 `off-one-flow` 基线的 95%。 |
-| 等质量链路尾时延 | 等质量链路下，`flow-one-flow` p99 不得超过对应 `off-one-flow` p99 的 110%。 |
-| 有界重排内存 | 每逻辑流缓冲字节始终不超过 `mux.flow.reorder.bytes`，且不超过派生的重排条目数上限。 |
-| 会话级 reorder / 打开上限（P0-B 硬门槛） | 会话 reorder 字节不超过 `mux.flow.session_reorder.bytes`；打开中的逻辑流不超过 `mux.flow.max_open`。最坏模型为 `min(session_reorder.bytes, max_open × reorder.bytes)`，**不是** `max_connections × reorder.bytes`。控制队列按 `mux.tx.ctrl.budget_frames` 预算排出，避免饿死数据。 |
-| 缺口失败语义（P0-A 硬门槛） | 不可恢复缺口必须 **fail 该流**（flow_v2：`fail_flow` / `mux.rx.flow.reset`）或 **重建会话**（compat：`compat_evict_expired` / `mux.rx.compat.gap_timeout`）；禁止 force-advance 后越过空洞继续交付。 |
-| Compat OOO 活性（P0-A） | 收到乱序成帧流量也刷新会话活性（`active(now)`），与 flow_v2 一致。 |
-| 未知 cid 有界（P0-A） | 无 skt 的 flow_v2 PUSH/FIN 不得无界创建 `flows_`（`mux.rx.unknown_cid`）；发起端在 `connected_` 前不得 post PUSH。 |
-| 旧 peer 兼容 | 对端不支持 FLOW_V2 时，`balance` / `stripe` 必须协商为 `effective_mode=compat`、`receiver_ordering=compat`，并给出 `fallback_reason=peer_missing_flow_v2`；`flow` 保持 `effective_mode=flow`，但使用 `receiver_ordering=compat`。 |
-| 链路 churn 安全 | 100 次 grow/shrink 在 ASan/UBSan 下完成，且无错误、泄漏、计数下溢、断线或在途链路提前 retire。 |
-| 载波退出隔离（P0-C） | 多链路用于**吞吐/时延，不是 HA**。`on_link_exit`：仍有存活载波则移除死链并继续；最后一条存活载波退出则关会话。 |
-| 每链路字节信用（P0-C） | 每链路跟踪本地在途写字节（`queued_bytes_`）；超过 `PPP_MUX_LINK_BYTE_HIGH_WATER` 拒绝新发送。写完成=本地 socket 接受，非对端 ACK。 |
+| `requested_mode` | 配置/请求的预设：`compat`、`flow`、`balance` 或 `stripe`。 |
+| `effective_mode` | 经能力处理后的协商预设。 |
+| `receiver_ordering` | 独立协商的 `compat` 或 `flow_v2` 接收排序。 |
+| `scheduler` | 推导的展示字段：`stripe` 为 `round_robin`，其他为 `competition`。 |
+| `pool_policy` | 推导的展示字段：仅有效 `flow` 且启用 turbo 时为 `adaptive`，其他为 `fixed`。 |
+| `turbo` | 生效的 flow-turbo 标志；它是选项，不是第五种模式。 |
+| `active_links` | 已完成握手且未 retire 的链路数，展示时会被钳制。 |
+| `fallback_reason` | 能力回退或会话未激活的机器可读原因。 |
 
-对比运行必须具有相同的环境指纹、除被测模式外相同的配置、时长、flow 数量和
-netem profile。harness smoke 只证明能够采集证据，不属于性能证据。
+`receiver_ordering` 不是 `effective_mode` 的同义词；消费者必须单独使用该排序事实。
 
-## 平台与工件要求
+## 回退行为
 
-修改默认值前，必须同时附上以下真实平台结果：
+实现会区分以下情况：
 
-1. 固定 Linux x86-64 基准机上的 Linux desktop；
-2. 至少一个真实移动平台，即 Android 或 iOS。
+| 请求/条件 | 实际结果 |
+|---|---|
+| 未知请求模式 | `compat`、`receiver_ordering=compat`、`turbo=false`，并给出 `unsupported_requested_mode`。 |
+| `balance` 或 `stripe` 缺少本地或 peer FLOW_V2 | `compat` 和 compat 排序，并给出 `local_missing_flow_v2` 或 `peer_missing_flow_v2`。 |
+| 普通 `flow` | 保持有效 `flow`；排序可能为 `compat`。 |
+| `flow` 启用 turbo 但缺少所需 FLOW_V2 | 保持有效 `flow`，使用 compat 排序，并报告缺少 FLOW_V2 的原因。 |
+| client VMUX session 未激活 | 有效模式/排序均为 `compat`；非 compat 配置请求会报告 `mux_inactive`。 |
 
-证据包必须包含原始结果 JSON、环境与配置指纹、parser 输出、sanitizer 日志、
-旧 peer 兼容结果，以及两端被测 commit。共享 CI、WSL、虚拟机、dry-run 和合成
-telemetry 可用于正确性诊断，但不能满足此门槛。
+权威 peer 握手回复会提供协商后的排序，因此 UI 和运维必须同时检查
+`effective_mode` 与 `receiver_ordering`。
 
-每个真实结果必须携带 benchmark README 定义的 `--endpoint-manifest` attestation。
-晋级前，对完整的物理 Linux 与 Android/iOS 结果包执行：
+## 修改默认值所需的发布证据
+
+`benchmarks/vmux/` 中的 harness 和 parser 定义了发布门槛。合格结果至少需要：
+
+- 物理 Linux x86-64（非 WSL）和物理 Android 或 iOS client 的证据；
+- endpoint manifest 证明、原始结果 JSON、匹配的环境指纹和时长，以及与 runner 一致的 Linux client commit；
+- 每个 client 均有配对的 `off-one-flow` 和 `flow-one-flow` 结果；
+- `flow-one-flow` 平均吞吐至少为 mux-off 的 95%；
+- `flow-one-flow` 平均 p99 延迟至多为 mux-off 的 110%；
+- 零断线，且 buffered-byte/reorder-entry 数值不超过提交的配置上限。
+
+对完整结果包运行验证器：
 
 ```bash
 python3 benchmarks/vmux/parse_results.py --rollout-gate <results...>
 ```
 
-该可执行门禁检查端点类型与 commit、配对环境与时长、吞吐/p99 阈值、零断线，
-以及配置的 reorder byte/entry 上限。Linux client 证据必须来自 x86-64、非 WSL
-环境，且 commit 与 runner checkout 一致；该门禁不能替代 sanitizer 和旧 peer 工件。
+当前 benchmark 矩阵覆盖 `off`、`compat`、`flow` 和 `balance` 场景；没有
+`stripe` 晋级场景。
+
+## Harness 能证明的内容
+
+默认 `run.sh` 调用是 dry-run：它校验计划，但不会改变网络状态，也不会写结果。真实运行需要 `--execute`、外部 `iperf3` server、可执行的 preparation hook、endpoint manifest，以及本次运行采集的 telemetry。parser 校验提交工件和阈值；它本身不证明物理设备测量或 tunnel 配置确实发生。
+
+仓库源码提供了 harness、parser 和正确性/tooling 测试，但没有合格的 Linux + mobile 吞吐/p99 证据包。因此本文不声称性能已通过，也不把任何历史 raw commit 或 sanitizer 运行结果作为发布证据。
 
 ## 默认值变更规则
 
-在所有门槛均有合格的双平台证据前，`compat` 保持生产默认值。修改默认值必须使用
-独立 PR，附 benchmark artifacts 和 compatibility results，并说明任何排除项；不得
-与调度器实现修改捆绑。`stripe` 不参与默认值门槛，继续保持实验性。
+在合格证据满足发布门槛前，保持 `compat` 为默认值。除非有单独定义并提供证据的晋级决策，否则将 `stripe` 视为实验性功能。
 
-## 当前证据边界
+## 源码参考
 
-当前实现基线已经提供：
-
-- 协商后的 requested/effective 状态与旧 peer fallback（`7719c5f`）；
-- effective mode 与 fallback 诊断 UI（`b991cd1`）；
-- benchmark harness、schema、parser 与 tooling tests（`62c7441`）；
-- negotiation、有界重排和 in-flight retire 测试（`2566750`）；
-- 100-cycle 生产 `vmux_net` carrier-container churn 测试（`ded25d6`）。
-
-`ded25d6` 集成测试驱动生产 attach helper、实时 RX/TX 容器、in-flight retire
-门禁、reap、transport exactly-once dispose 和 runtime active-link count，完成 100 次
-grow/shrink。它在 2026-07-15 同时通过普通 jemalloc 构建和启用 leak detection 的
-ASan/UBSan 构建。这关闭了 carrier-container 生命周期 sanitizer 门槛，但没有驱动
-真实网络 carrier I/O，也不满足 Linux + mobile 性能工件门槛。
-
-这些 commit 建立了测量和兼容机制。仓库中尚无证明吞吐与 p99 门槛达标的真实
-Linux + mobile baseline，因此不得修改生产默认值。
+- `ppp/configurations/AppConfiguration.cpp`
+- `ppp/app/mux/MuxRuntimeState.h`
+- `ppp/app/client/VEthernetExchanger.cpp`
+- `benchmarks/vmux/README.md`、`run.sh` 和 `parse_results.py`

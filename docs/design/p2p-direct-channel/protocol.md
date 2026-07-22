@@ -2,13 +2,13 @@
 
 > **Purpose:** Define the authenticated P2P direct-channel wire protocol.
 > **Audience:** Protocol, networking, and security maintainers.
-> **Status:** Current design evidence.
-> **Last verified against:** Latest main P2P integration evidence, 2026-07-18.
+> **Status:** Current design evidence; not an enabled production data path.
+> **Last verified against:** P2P integration and fail-closed production capability gate, 2026-07-22.
 > **Parent index:** [Design Documents](../README.md)
 
 > Status: Draft
 > Type: Design
-> Last verified: 889a0a3
+> Last verified: 8c8a888
 
 ## Scope And Eligibility
 
@@ -22,12 +22,13 @@ A peer advertises `p2p.direct.v1` only when all of these are true:
 - the experimental configuration flag is enabled;
 - the authenticated relay session exposes a session exporter;
 - socket protection is available for the platform;
+- the final authenticated-control production gate is enabled (it is currently false);
 - the peer implements this version and its required cipher and parser rules.
 
-Missing capability, missing exporter, raw TCP, plaintext WebSocket, exporter
-failure, or policy denial means relay-only. An old peer ignores the optional
-capability and offer fields. No downgrade can enable an older or unbound direct
-protocol.
+Missing capability, missing exporter, a disabled production gate, raw TCP,
+plaintext WebSocket, exporter failure, or policy denial means relay-only. An old
+peer ignores the optional capability and offer fields. No downgrade can enable
+an older or unbound direct protocol.
 
 ## Version And Messages
 
@@ -208,7 +209,11 @@ challenge to the new endpoint while the old direct path and relay remain
 available. Migration succeeds only after an authenticated challenge/ACK bound to
 the offer, epoch, new endpoint pair, and fresh nonce. Failure returns to relay.
 
-## Resource Limits
+## Required Resource Limits Before Enablement
+
+The following are design requirements for a future enabled direct channel. They
+are not evidence that the current fail-closed receive path enforces every limit,
+particularly the per-source and per-session rate limits.
 
 - At most 4 candidates and 2 probe rounds per offer.
 - At most one outstanding offer per peer pair and one migration challenge per
