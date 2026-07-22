@@ -1,9 +1,11 @@
 #define BOOST_TEST_MODULE peer_route_announce_policy_test
 #include <boost/test/included/unit_test.hpp>
 
+#include <ppp/app/protocol/PeerPrefixRoute.h>
 #include <ppp/app/server/PeerRouteAnnouncePolicy.h>
 
 namespace server = ppp::app::server;
+namespace protocol = ppp::app::protocol;
 
 static server::PeerRouteAnnounceEntry entry(const char* network, int prefix) {
     server::PeerRouteAnnounceEntry e;
@@ -82,4 +84,18 @@ BOOST_AUTO_TEST_CASE(parse_masks_host_bits) {
     BOOST_REQUIRE(server::ParsePeerPrefixNetwork("10.20.1.5", 24, network));
     // 10.20.1.5/24 -> 10.20.1.0
     BOOST_TEST(network == 0x0a140100u);
+}
+
+BOOST_AUTO_TEST_CASE(snapshot_gateway_replaces_client_controlled_via) {
+    protocol::PeerPrefixRouteEntry announced;
+    announced.network = "10.20.0.0";
+    announced.prefix = 24;
+    announced.via = "10.0.0.99";
+
+    const protocol::PeerPrefixRouteEntry snapshot =
+        server::BindPeerRouteGateway(announced, htonl(0x0a000007u));
+
+    BOOST_TEST(snapshot.network == "10.20.0.0");
+    BOOST_TEST(snapshot.prefix == 24);
+    BOOST_TEST(snapshot.via == "10.0.0.7");
 }
