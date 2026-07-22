@@ -1,4 +1,7 @@
 # OpenPPP2 Client 管理器 UI/UX 设计
+> Status: Active
+> Type: Design
+> Last verified: 169943b
 
 > 状态：v2，证据驱动重写（替代初版）
 > 日期：2026-07-19
