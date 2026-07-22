@@ -60,6 +60,8 @@ class PppVpnService : VpnService() {
 
     private var linkStateThread: HandlerThread? = null
     private var linkStateHandler: Handler? = null
+    private var heartbeatThread: HandlerThread? = null
+    private var heartbeatHandler: Handler? = null
     private var connectStartedAtMs: Long = 0L
     private var lastNotificationText: String? = null
     private val snapshotOrdering = Any()
@@ -95,6 +97,13 @@ class PppVpnService : VpnService() {
                 onRuntimeSnapshot(runtimeSnapshot)
             }
             linkStateHandler?.postDelayed(this, 1000L)
+        }
+    }
+    private val heartbeatPoller = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            PppStateStore.touchHeartbeat(this@PppVpnService)
+            heartbeatHandler?.postDelayed(this, 1000L)
         }
     }
 
@@ -135,15 +144,10 @@ class PppVpnService : VpnService() {
 
     private fun publishRuntimeSnapshot(value: String) {
         PppStateStore.setRuntimeSnapshot(this, value)
-        // Native snapshot pushes can land before the 1s link-state poller has
-        // written its heartbeat. Touch the heartbeat here so the UI process's
-        // getRuntimeSnapshotIfAlive gate does not hide a live connected phase.
-        try {
-            val linkState = libopenppp2.get_link_state()
-            PppStateStore.setLinkState(this, linkState)
-        } catch (_: Throwable) {
-            // Snapshot file mtime alone is enough for the UI liveness gate.
-        }
+        // Snapshot callbacks can run on the native executor. Calling
+        // get_link_state() here would post back to that executor and wait,
+        // deadlocking both the callback and the link-state poller.
+        PppStateStore.touchHeartbeat(this)
         updateNotificationForSnapshot(value)
     }
 
@@ -186,6 +190,23 @@ class PppVpnService : VpnService() {
         h.post(linkStatePoller)
     }
 
+    private fun startHeartbeatPoller() {
+        if (heartbeatThread != null) return
+        val t = HandlerThread("openppp2-heartbeat").also { it.start() }
+        heartbeatThread = t
+        val h = Handler(t.looper)
+        heartbeatHandler = h
+        h.post(heartbeatPoller)
+    }
+
+    private fun stopHeartbeatPoller() {
+        heartbeatHandler?.removeCallbacksAndMessages(null)
+        heartbeatHandler = null
+        heartbeatThread?.quitSafely()
+        heartbeatThread = null
+        PppStateStore.clearHeartbeat(this)
+    }
+
     private fun stopLinkStatePoller() {
         try {
             libopenppp2.get_runtime_snapshot()?.let { onRuntimeSnapshot(it) }
@@ -210,6 +231,7 @@ class PppVpnService : VpnService() {
         // the UI sit on "Initializing" forever. Reset them so the user
         // sees a clean disconnected state.
         PppStateStore.clearLinkState(this)
+        PppStateStore.clearHeartbeat(this)
         PppStateStore.clearRuntimeSnapshot(this)
         PppStateStore.clearLastError(this)
         PppStateStore.set(this, 0)
@@ -316,6 +338,7 @@ class PppVpnService : VpnService() {
         currentState = 0
         PppStateStore.set(this, 0)
         stopLinkStatePoller()
+        stopHeartbeatPoller()
         stopNetworkMonitor()
         releaseWakeLock()
         activeConfigJson = null
@@ -336,6 +359,7 @@ class PppVpnService : VpnService() {
         // and snapshot carry a stale generation and must not be presented.
         PppStateStore.clearLastError(this)
         PppStateStore.clearRuntimeSnapshot(this)
+        PppStateStore.clearHeartbeat(this)
         if (isRunning) {
             // A previous session is still live or wedged (common after the UI
             // process is killed while :vpn keeps running). Queue the new config
@@ -597,6 +621,7 @@ class PppVpnService : VpnService() {
             // Start VPN in background thread (run() is blocking)
             PppLog.write(this, "before libopenppp2.run(0)")
             isRunning = true
+            startHeartbeatPoller()
             // Begin polling native link state across processes (PppStateStore
             // file-backed) so the UI process can read the real handshake state.
             startLinkStatePoller()
@@ -625,6 +650,7 @@ class PppVpnService : VpnService() {
                 } finally {
                     isRunning = false
                     stopLinkStatePoller()
+                    stopHeartbeatPoller()
                     stopNetworkMonitor()
                     releaseWakeLock()
                     vpnInterface?.close()
@@ -668,6 +694,7 @@ class PppVpnService : VpnService() {
             resetNativeSession("stopVpn_idle")
             PppStateStore.set(this, 0)
             stopLinkStatePoller()
+            stopHeartbeatPoller()
             currentState = 0
             return
         }

@@ -7,6 +7,7 @@ object PppStateStore {
     private const val PREFS = "openppp2_vpn_state"
     private const val KEY_STATE = "state"
     private const val KEY_UPDATED_AT = "updated_at"
+    private const val HEARTBEAT_FILE = "openppp2-heartbeat.txt"
     private const val LINK_STATE_FILE = "openppp2-linkstate.txt"
     private const val RUNTIME_SNAPSHOT_FILE = "openppp2-runtime-snapshot.json"
     private const val LAST_ERROR_FILE = "openppp2-lasterror.txt"
@@ -59,8 +60,8 @@ object PppStateStore {
      * `:vpn` process; the UI/Flutter process cannot call get_link_state()
      * directly because each process has its own copy of the loaded library.
      * Instead, [PppVpnService] polls the native value and writes it here, which
-     * doubles as the liveness heartbeat; [MainActivity] reads it back for the
-     * UI process.
+     * The state sample is separate from the liveness heartbeat because native
+     * state collection can block independently of the service process.
      *
      * Values mirror the native enum in libopenppp2.cpp:
      *   0 ESTABLISHED, 1 UNKNOWN, 2 CLIENT_UNINITIALIZED,
@@ -89,16 +90,34 @@ object PppStateStore {
     }
 
     /**
-     * Milliseconds since [PppVpnService] last rewrote the link-state file, or
-     * -1 when no session has written one. The poller rewrites it every second
-     * while the tunnel is alive, so a stale age means `:vpn` died.
+     * Milliseconds since [PppVpnService] last rewrote its dedicated heartbeat,
+     * or -1 when no session has written one.
      */
     fun heartbeatAgeMs(context: Context): Long {
         return try {
-            val f = File(context.filesDir, LINK_STATE_FILE)
+            val f = File(context.filesDir, HEARTBEAT_FILE)
             if (!f.exists()) -1L else System.currentTimeMillis() - f.lastModified()
         } catch (_: Throwable) {
             -1L
+        }
+    }
+
+    fun touchHeartbeat(context: Context) {
+        try {
+            val f = File(context.filesDir, HEARTBEAT_FILE)
+            if (!f.exists()) {
+                f.writeText("1")
+            } else if (!f.setLastModified(System.currentTimeMillis())) {
+                f.writeText("1")
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun clearHeartbeat(context: Context) {
+        try {
+            File(context.filesDir, HEARTBEAT_FILE).delete()
+        } catch (_: Throwable) {
         }
     }
 
