@@ -3,7 +3,7 @@
 > **Purpose:** Record the durable runtime-to-UI authority decision.
 > **Audience:** Runtime, platform, and UI maintainers.
 > **Status:** Current architecture decision.
-> **Last verified against:** Latest main implementation evidence, 2026-07-18.
+> **Last verified against:** Latest main implementation evidence, 2026-07-22.
 > **Parent index:** [Architecture Decision Records](README.md)
 
 > Status: Accepted
@@ -24,7 +24,8 @@ The v1 phases are `idle`, `starting`, `preparing_host`, `connecting`,
 ## Readiness rule
 
 The runtime may publish `connected` only when session, adapter, route, DNS, and
-negotiated policy are ready. A client adapter must be open, not merely allocated.
+explicit or implicit compatibility policy are ready. Optional INFO is not a
+readiness requirement. A client adapter must be open, not merely allocated.
 Route and DNS may be marked ready only after successful application, or when the
 current mode explicitly does not require them. Server readiness is derived from
 active accept loops, not constant flags.

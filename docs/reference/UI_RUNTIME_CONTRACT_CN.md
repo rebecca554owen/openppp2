@@ -3,7 +3,7 @@
 > **用途：**定义各用户界面使用的当前运行时状态契约。
 > **适用对象：**运行时、Android、iOS 与 TUI 开发者。
 > **当前状态：**当前有效。
-> **最后核对依据：**main 最新运行时与平台接线，2026-07-18。
+> **最后核对依据：**main 最新运行时与平台接线，2026-07-22。
 > **上一层索引：**[参考手册](README_CN.md) · **English:** [UI Runtime Contract](UI_RUNTIME_CONTRACT.md)
 
 > Status: Stable
@@ -50,7 +50,8 @@ schema 版本不支持时必须报错。`traffic` 与 `connected_monotonic_ms` �
 2. TAP/TUN adapter 已创建且处于 open 状态；
 3. Route 策略已应用，或当前模式明确不需要 Route；
 4. DNS 策略已配置且 session 活跃，或当前模式明确不需要 DNS 拦截；
-5. 协商策略信息已就绪。
+5. 客户端 Open 已完成，并已应用显式协商策略或隐式兼容策略；可选 INFO
+   载荷不是进入 `connected` 的前置条件。
 
 在此之前，对 `connected` 的请求会发布为 `applying_policy`。任一 readiness
 事实丢失后，展示态也会回到 `applying_policy`。

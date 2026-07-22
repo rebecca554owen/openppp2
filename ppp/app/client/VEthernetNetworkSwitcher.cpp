@@ -217,7 +217,9 @@ namespace ppp {
                 facts.dns_required = !proxy_only_;
                 facts.dns_configured = dns_controller_ && dns_controller_->IsConfigured();
                 facts.dns_session_active = dns_controller_ && dns_controller_->HasActiveSession();
-                facts.policy_negotiated = exchanger && NULLPTR != exchanger->GetInformation();
+                // INFO is optional for unmanaged compatibility sessions. The
+                // switcher is published only after Open() has applied policy.
+                facts.policy_negotiated = facts.session_established;
                 return ppp::app::runtime::BuildClientRuntimeReadiness(facts);
             }
 
