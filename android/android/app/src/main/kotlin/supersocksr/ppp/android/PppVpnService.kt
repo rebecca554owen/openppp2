@@ -11,7 +11,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -558,26 +557,16 @@ class PppVpnService : VpnService() {
             }
 
             // ---- System HTTP proxy ----
-            // When `autoAppendApps` (UI label: 系统 HTTP 代理) is on, publish
-            // the local HTTP proxy as the system-wide proxy so well-behaved
-            // apps under the VPN automatically use it. Requires API 29+.
-            // The proxy is reachable at 127.0.0.1:<client.http-proxy.port>;
-            // the port is parsed from the AppConfiguration JSON we just sent
-            // to the native engine so it always matches what's actually
-            // listening.
+            // Do not publish the native proxy through VpnService.Builder. The
+            // native listener cannot own its port until after establish() has
+            // supplied the TUN descriptor and run() has started, so publishing
+            // it here would let another local app win the bind race.
             val systemHttpProxy = options.optBoolean("autoAppendApps", false) || proxyOnly
             if (systemHttpProxy) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val port = parseHttpProxyPort(configJson)
-                    try {
-                        builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", port))
-                        PppLog.write(this, "system http proxy set 127.0.0.1:$port")
-                    } catch (e: Throwable) {
-                        PppLog.write(this, "setHttpProxy failed", e)
-                    }
-                } else {
-                    PppLog.write(this, "system http proxy skipped (requires API 29+)")
-                }
+                PppLog.write(
+                    this,
+                    "system http proxy disabled: native listener ownership is unavailable before VPN setup"
+                )
             }
 
             vpnInterface = builder.establish()
@@ -727,23 +716,6 @@ class PppVpnService : VpnService() {
     private fun notifyStateChanged(state: Int) {
         currentState = state
         PppStateStore.set(this, state)
-    }
-
-    /**
-     * Pulls `client.http-proxy.port` out of the AppConfiguration JSON; falls
-     * back to 8080 when the field is missing/invalid. We do not assume the
-     * default config because users may rebind the HTTP proxy port.
-     */
-    private fun parseHttpProxyPort(configJson: String): Int {
-        return try {
-            val root = JSONObject(configJson)
-            val client = root.optJSONObject("client") ?: return 8080
-            val hp = client.optJSONObject("http-proxy") ?: return 8080
-            val port = hp.optInt("port", 8080)
-            if (port in 1..65535) port else 8080
-        } catch (_: Throwable) {
-            8080
-        }
     }
 
     private fun notifyError(message: String) {

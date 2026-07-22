@@ -159,12 +159,10 @@ cdnst.net          /cloudflare/tun''';
     // When [perAppProxyEnabled] is true, the VpnService.Builder restricts
     // proxied traffic to the package list in [perAppProxyApps]. Mode picks
     // between Builder.addAllowedApplication (allow) and addDisallowedApplication
-    // (deny). [autoAppendApps] makes newly installed apps automatically join
-    // the proxy whitelist when the VPN is (re)started.
+    // (deny).
     'perAppProxyEnabled': false,
     'perAppProxyMode': 'allow', // 'allow' | 'deny'
     'perAppProxyApps': <String>[],
-    'autoAppendApps': false,
     // ---- LAN proxy ----
     // When true, the openppp2 local http/socks proxy listeners bind to
     // 0.0.0.0 so other LAN devices can use this device as a proxy. When
