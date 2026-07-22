@@ -3,7 +3,7 @@
 > **Purpose:** Specify the current runtime state contract consumed by user interfaces.
 > **Audience:** Runtime, Android, iOS, and TUI developers.
 > **Status:** Current.
-> **Last verified against:** Latest main runtime and platform wiring, 2026-07-18.
+> **Last verified against:** Latest main runtime and platform wiring, 2026-07-22.
 > **Parent index:** [Reference](README.md) · **Chinese:** [UI Runtime 契约](UI_RUNTIME_CONTRACT_CN.md)
 
 > Status: Stable
@@ -51,7 +51,8 @@ All five readiness facts must be true:
 3. Route policy is applied, or routing is explicitly not required.
 4. DNS policy is configured with an active session, or DNS interception is
    explicitly not required.
-5. The negotiated policy information is present.
+5. Client open has completed and applied either explicit negotiated policy or
+   the implicit compatibility policy. An optional INFO payload is not required.
 
 Until then, a request for `connected` is published as `applying_policy`. Losing
 a readiness fact moves the presentation back to `applying_policy`.

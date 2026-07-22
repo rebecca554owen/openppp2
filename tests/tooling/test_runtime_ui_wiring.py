@@ -14,6 +14,14 @@ class RuntimeUIWiringTests(unittest.TestCase):
         self.assertIn("tap->IsOpen()", source)
         self.assertIn("tap->IsHostedNetwork()", source)
         self.assertIn("facts.route_applied = route_snapshot.applied", source)
+        self.assertIn(
+            "facts.policy_negotiated = facts.session_established", source
+        )
+        readiness = source[
+            source.index("VEthernetNetworkSwitcher::GetRuntimeReadiness") :
+            source.index("void VEthernetNetworkSwitcher::RequestedIPv6")
+        ]
+        self.assertNotIn("GetInformation()", readiness)
         self.assertIn("BuildClientRuntimeReadiness(facts)", source)
 
         mobile = self.source("ppp/app/client/route/RouteCoordinator_mobile.cpp")
