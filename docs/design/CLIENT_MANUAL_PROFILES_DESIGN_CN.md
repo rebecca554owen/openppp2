@@ -1,4 +1,7 @@
 # 桌面客户端手动节点与启动参数设计
+> Status: Active
+> Type: Design
+> Last verified: 169943b
 
 ## 目标
 
