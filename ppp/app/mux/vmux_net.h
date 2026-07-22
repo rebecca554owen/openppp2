@@ -645,8 +645,8 @@ namespace vmux {
         mutable std::shared_ptr<const ppp::app::mux::MuxRuntimeState>               runtime_snapshot_;    ///< Lock-free published copy for cross-thread reads.
 
         vmux_skt_map                                                                skts_;              ///< Active logical socket map keyed by connection_id.
+        ContextPtr                                                                  context_;           ///< ASIO execution context; outlives strand_.
         StrandPtr                                                                   strand_;            ///< Serialized strand for vmux event loop.
-        ContextPtr                                                                  context_;           ///< ASIO execution context.
 
         vmux_tx_flow_map                                                            tx_flows_;          ///< connection_id -> per-flow TX queue + DRR deficit (strand-affine).
         vmux_tx_active_list                                                         active_tx_flows_;   ///< RR ring of cids with non-empty TX queues (strand-affine).
