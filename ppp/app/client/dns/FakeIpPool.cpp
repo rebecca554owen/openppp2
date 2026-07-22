@@ -114,14 +114,20 @@ namespace ppp {
                     }
 
                     uint32_t candidate = cursor_host_;
+                    bool available = false;
                     for (std::size_t i = 0; i <= (pool_end_host_ - pool_start_host_); ++i) {
                         if (candidate > pool_end_host_) {
                             candidate = pool_start_host_;
                         }
                         if (by_fake_ip_.find(candidate) == by_fake_ip_.end()) {
+                            available = true;
                             break;
                         }
                         ++candidate;
+                    }
+
+                    if (!available) {
+                        return 0;
                     }
 
                     cursor_host_ = candidate + 1;
