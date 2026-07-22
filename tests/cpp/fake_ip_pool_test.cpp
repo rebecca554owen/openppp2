@@ -39,6 +39,21 @@ BOOST_AUTO_TEST_CASE(set_and_lookup_real_ip) {
     BOOST_TEST(pool.LookupHostname(fake_host) == "api.example.com");
 }
 
+BOOST_AUTO_TEST_CASE(pool_exhaustion_rejects_new_hostnames) {
+    client_dns::FakeIpPool pool;
+    BOOST_REQUIRE(pool.Configure("198.18.0.0/30"));
+
+    const uint32_t first = pool.Allocate("first.example.com");
+    const uint32_t second = pool.Allocate("second.example.com");
+    const uint32_t third = pool.Allocate("third.example.com");
+    BOOST_REQUIRE(first != 0);
+    BOOST_REQUIRE(second != 0);
+    BOOST_REQUIRE(third != 0);
+
+    BOOST_TEST(pool.Allocate("overflow.example.com") == 0u);
+    BOOST_TEST(pool.Allocate("first.example.com") == first);
+}
+
 BOOST_AUTO_TEST_CASE(invalid_cidr_disables_pool) {
     client_dns::FakeIpPool pool;
     BOOST_TEST(!pool.Configure("not-a-cidr"));
