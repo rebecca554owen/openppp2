@@ -39,7 +39,6 @@ class _OptionsAdvancedPageState extends State<OptionsAdvancedPage> {
   bool _perAppProxyEnabled = false;
   String _perAppProxyMode = 'allow';
   List<String> _perAppProxyApps = const <String>[];
-  bool _autoAppendApps = false;
   bool _experimentalMode = false;
   String _muxMode = 'compat';
 
@@ -115,7 +114,6 @@ class _OptionsAdvancedPageState extends State<OptionsAdvancedPage> {
     _perAppProxyApps = (apps is List)
         ? apps.whereType<String>().where((s) => s.isNotEmpty).toList()
         : const <String>[];
-    _autoAppendApps = m['autoAppendApps'] == true;
 
     final geo = (m['geoRules'] is Map)
         ? Map<String, dynamic>.from(m['geoRules'] as Map)
@@ -145,8 +143,8 @@ class _OptionsAdvancedPageState extends State<OptionsAdvancedPage> {
       ..['proxyOnly'] = _proxyOnly
       ..['perAppProxyEnabled'] = _perAppProxyEnabled
       ..['perAppProxyMode'] = _perAppProxyMode
-      ..['perAppProxyApps'] = List<String>.from(_perAppProxyApps)
-      ..['autoAppendApps'] = _autoAppendApps;
+      ..['perAppProxyApps'] = List<String>.from(_perAppProxyApps);
+    options.remove('autoAppendApps');
 
     final geo = (options['geoRules'] is Map)
         ? Map<String, dynamic>.from(options['geoRules'] as Map)
@@ -302,13 +300,10 @@ class _OptionsAdvancedPageState extends State<OptionsAdvancedPage> {
                         ),
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
-                          value: _autoAppendApps,
+                          value: false,
                           title: const Text('系统 HTTP 代理'),
-                          subtitle: const Text('注入系统级 HTTP 代理 · Android 10+'),
-                          onChanged: (v) => setState(() {
-                            _autoAppendApps = v;
-                            _markDirty();
-                          }),
+                          subtitle: const Text('为防止本地端口被抢占，Android 上不可用'),
+                          onChanged: null,
                         ),
                       ],
                     ),
