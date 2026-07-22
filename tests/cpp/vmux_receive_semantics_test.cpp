@@ -307,6 +307,27 @@ struct vmux_net_test_access {
         mux.clear_flow_tx();
         mux.tx_ctrl_queue_.clear();
     }
+
+    static void CloseAndDrain(const std::shared_ptr<vmux_net>& mux) noexcept {
+        if (!mux) {
+            return;
+        }
+
+        const auto& context = mux->get_context();
+        if (!context) {
+            return;
+        }
+
+        context->restart();
+        mux->close_exec();
+        for (int i = 0; i < 64; ++i) {
+            const std::size_t n = context->poll();
+            context->restart();
+            if (n == 0) {
+                break;
+            }
+        }
+    }
 };
 
 } // namespace vmux
@@ -321,7 +342,40 @@ void Require(bool condition, const char* message) {
     }
 }
 
-std::shared_ptr<vmux::vmux_net> MakeMux() {
+class ScopedMux final {
+public:
+    explicit ScopedMux(std::shared_ptr<vmux::vmux_net> mux) noexcept
+        : mux_(std::move(mux)) {
+    }
+
+    ScopedMux(const ScopedMux&) = delete;
+    ScopedMux& operator=(const ScopedMux&) = delete;
+
+    ScopedMux(ScopedMux&& other) noexcept
+        : mux_(std::move(other.mux_)) {
+    }
+
+    ~ScopedMux() {
+        vmux::vmux_net_test_access::CloseAndDrain(mux_);
+    }
+
+    vmux::vmux_net* operator->() const noexcept {
+        return mux_.get();
+    }
+
+    vmux::vmux_net& operator*() const noexcept {
+        return *mux_;
+    }
+
+    operator const std::shared_ptr<vmux::vmux_net>&() const noexcept {
+        return mux_;
+    }
+
+private:
+    std::shared_ptr<vmux::vmux_net> mux_;
+};
+
+ScopedMux MakeMux() {
     auto context = std::make_shared<boost::asio::io_context>();
     auto strand = std::make_shared<Executors::Strand>(context->get_executor());
     auto mux = ppp::make_shared_object<vmux::vmux_net>(
@@ -331,7 +385,7 @@ std::shared_ptr<vmux::vmux_net> MakeMux() {
     Require(static_cast<bool>(cfg), "cfg allocation failed");
     cfg->mux.congestions = 0; // disable congestion accounting path in tests
     mux->AppConfiguration = cfg;
-    return mux;
+    return ScopedMux(std::move(mux));
 }
 
 void TestGapTimeoutResetsFlowWithoutHoleDelivery() {
