@@ -80,6 +80,12 @@ Depending on platform and role, OPENPPP2 may change:
 | IPv6 settings | If IPv6 enabled | If `server.ipv6` enabled |
 | Firewall rules | Not modified | May set rules |
 
+On Android, OpenPPP2 does not publish its local HTTP proxy as the VPN system
+proxy. The native listener cannot reserve the port until after the VPN is
+established, so publishing it earlier would allow a different local app to
+intercept proxy traffic. Use full-tunnel mode or configure trusted clients to
+use the local HTTP/SOCKS endpoint manually.
+
 ---
 
 ## Recommended Reading Order
