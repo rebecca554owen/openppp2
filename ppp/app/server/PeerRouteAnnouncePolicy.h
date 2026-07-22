@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/stdafx.h>
+#include <ppp/app/protocol/PeerPrefixRoute.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
 
@@ -26,6 +27,14 @@ struct PeerRouteAnnounceEntry final {
         return !network.empty() && prefix > 0;
     }
 };
+
+inline ppp::app::protocol::PeerPrefixRouteEntry BindPeerRouteGateway(
+    const ppp::app::protocol::PeerPrefixRouteEntry& route,
+    uint32_t virtual_ip) {
+    ppp::app::protocol::PeerPrefixRouteEntry snapshot = route;
+    snapshot.via = ppp::net::IPEndPoint::ToAddressString(virtual_ip);
+    return snapshot;
+}
 
 /** Normalize network+prefix into host-order network base; false if invalid. */
 inline bool ParsePeerPrefixNetwork(
