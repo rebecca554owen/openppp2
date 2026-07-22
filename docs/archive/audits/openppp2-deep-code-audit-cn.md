@@ -2393,7 +2393,7 @@ TAP 句柄以 `FILE_FLAG_OVERLAPPED` 打开。修复前 `OVERLAPPED` 在 `do/whi
 
 #### **R1-8：Android tun fd 所有权** ❌ 误报，不修
 
-复核 Java 侧日志（`ya-vpn/logs/*.txt`）出现 **`detached tun fd=54`**，证明 Java 通过 `ParcelFileDescriptor.detachFd()` 将 fd 所有权移交 native，Java 侧不再 close。因此 native 接管并在 `ITap::Finalize` 关闭该 fd 是**正确**的；若按原建议 `dup()`，反而会造成 fd 泄漏。本项判定为误报，不做修改。
+复核当时 Android Java 侧日志（历史工作区路径不在本文档中保留）出现 **`detached tun fd=54`**，证明 Java 通过 `ParcelFileDescriptor.detachFd()` 将 fd 所有权移交 native，Java 侧不再 close。因此 native 接管并在 `ITap::Finalize` 关闭该 fd 是**正确**的；若按原建议 `dup()`，反而会造成 fd 泄漏。本项判定为误报，不做修改。
 
 ### 18.4 已确认健壮的部分
 

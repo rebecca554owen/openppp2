@@ -1,196 +1,86 @@
 # OPENPPP2 远程订阅格式
-> Status: Active
-> Type: Guide
-> Last verified: 63fc030
 
-> **用途：**说明本主题的当前行为、配置或实现边界。
-> **适用对象：**OPENPPP2 用户、运维人员与开发者。
-> **当前状态：**当前有效。
-> **最后核对依据：**当前仓库结构、实现路径与文档链接，2026-07-18。
-> **上一层索引：**[返回索引](README_CN.md)
+> **状态：**当前发布端契约；客户端处理因平台而异
+> **类型：**指南
+> **最后核对：**原生管理器发布端以及随附 Android/iOS/桌面消费端源码，2026-07-22
+> **上一层索引：**[任务指南](README_CN.md) · **English：**[Remote Subscription Format](REMOTE_SUBSCRIPTION.md)
 
+## 范围
 
-本文定义 iOS 和 Android 客户端用于远程拉取节点的订阅格式。订阅端点必须返回 UTF-8 JSON，建议使用 HTTPS。
+原生 Go 管理器可以在 `GET /sub/{token}` 下发 `openppp2-subscription` v1 JSON 文档。URL token 是未认证 capability：持有该 URL 即可读取文档。因此 URL 和响应都应按含凭据材料处理。
 
-## HTTP 约定
+本文描述发布端稳定的 v1 形态。各客户端还接受一些兼容字段，但它们不是可跨平台依赖的订阅 schema。
 
-- 请求方法：`GET`
-- 推荐响应头：`Content-Type: application/json; charset=utf-8`
-- 客户端可发送：
-  - `Accept: application/json`
-  - `User-Agent: OpenPPP2/<platform>`
-- 服务端可发送：
-  - `ETag`：后续可用于增量刷新
-  - `Cache-Control`：控制客户端缓存
-- 响应体最大建议 2 MB。客户端应拒绝过大的订阅。
+## 已发布的 v1 形态
 
-## 顶层结构
+发布端输出以下顶层字段：
+
+| 字段 | 含义 |
+|---|---|
+| `type` | 固定为 `openppp2-subscription` |
+| `version` | 当前为 `1` |
+| `name` | 订阅显示名称 |
+| `profilePrefix` | 可选显示名称前缀 |
+| `updatedAt` | 发布端时间戳 |
+| `nodes` | 节点数组 |
+
+生成的紧凑节点包含 `id`、`name`、`subtitle`、`server`、`key`、`client.guid`、`options`。`id` 由管理器 server 记录生成；对按 ID 更新 profile 的客户端而言，它是稳定身份。
+
+示例只使用占位符，绝不能填写生产密钥：
 
 ```json
 {
   "type": "openppp2-subscription",
   "version": 1,
-  "name": "Example Nodes",
+  "name": "Example subscription",
   "profilePrefix": "Example",
-  "updatedAt": "2026-06-30T12:00:00Z",
-  "nodes": []
-}
-```
-
-字段说明：
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `type` | string | 是 | 固定为 `openppp2-subscription` |
-| `version` | number | 是 | 当前为 `1` |
-| `name` | string | 否 | 订阅名称 |
-| `profilePrefix` | string | 否 | 导入 profile 名称前缀 |
-| `updatedAt` | string | 否 | ISO-8601 更新时间 |
-| `nodes` | array | 是 | 节点列表 |
-
-## 节点结构
-
-节点支持两种形式：
-
-1. 完整配置：`config` 直接包含 OPENPPP2 客户端 `appsettings.json` 对象。
-2. 精简配置：使用 `server`、`key`、`websocket` 等字段覆盖客户端默认模板。
-
-```json
-{
-  "id": "hk-01",
-  "name": "Hong Kong 01",
-  "subtitle": "HK / BGP",
-  "flag": "HK",
-  "enabled": true,
-  "server": "ppp://hk.example.com:20000/",
-  "bandwidth": 0,
-  "key": {
-    "kf": 154543927,
-    "kx": 128,
-    "kl": 10,
-    "kh": 12,
-    "protocol": "aes-128-cfb",
-    "protocol-key": "protocol-secret",
-    "transport": "aes-256-cfb",
-    "transport-key": "transport-secret",
-    "masked": false,
-    "plaintext": false,
-    "delta-encode": false,
-    "shuffle-data": false
-  },
-  "websocket": {
-    "host": "",
-    "path": "/",
-    "verify-peer": true
-  },
-  "client": {
-    "guid": "{F4569420-4E49-4CBA-9C36-94E722C8E363}",
-    "http-proxy": { "bind": "127.0.0.1", "port": 8080 },
-    "socks-proxy": { "bind": "127.0.0.1", "port": 1080 }
-  },
-  "options": {
-    "tunIp": "10.0.0.2",
-    "tunMask": "255.255.255.0",
-    "tunPrefix": 24,
-    "gateway": "10.0.0.1",
-    "route": "0.0.0.0",
-    "routePrefix": 0,
-    "dns1": "8.8.8.8",
-    "dns2": "1.1.1.1",
-    "mtu": 1400,
-    "mux": 0,
-    "vnet": false,
-    "blockQuic": true,
-    "staticMode": false,
-    "allowLan": true
-  }
-}
-```
-
-字段说明：
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `id` | string | 是 | 节点稳定 ID。客户端用它识别更新同一节点 |
-| `name` | string | 是 | 导入后的 profile 名称 |
-| `subtitle` | string | 否 | 列表副标题 |
-| `flag` | string | 否 | 短文本图标；移动端不要求 emoji |
-| `enabled` | bool | 否 | `false` 时客户端跳过该节点 |
-| `server` | string | 精简必填 | OPENPPP2 服务端 URI |
-| `bandwidth` | number | 否 | 写入 `client.bandwidth` |
-| `key` | object | 精简必填 | 写入 `appsettings.key` |
-| `websocket` | object | 否 | 写入 `appsettings.websocket` |
-| `client` | object | 否 | 合并到 `appsettings.client` |
-| `options` | object | 否 | 移动端启动参数 |
-| `config` | object/string | 完整配置必填 | 完整 `appsettings.json` 对象或 JSON 字符串 |
-
-## server URI
-
-`server` 写入 `client.server`，支持：
-
-| URI | 传输 |
-| --- | --- |
-| `ppp://host:port/` | TCP |
-| `ppp://ws/host:port/` | WebSocket |
-| `ppp://wss/host:port/` | TLS WebSocket |
-
-IPv6 地址必须使用中括号：`ppp://[2001:db8::1]:20000/`。
-
-## 完整示例
-
-```json
-{
-  "type": "openppp2-subscription",
-  "version": 1,
-  "name": "OPENPPP2 Demo",
-  "profilePrefix": "Demo",
-  "updatedAt": "2026-06-30T12:00:00Z",
+  "updatedAt": "2026-07-22T00:00:00Z",
   "nodes": [
     {
-      "id": "demo-hk-01",
-      "name": "Hong Kong 01",
-      "subtitle": "hk.example.com:20000",
-      "flag": "HK",
-      "server": "ppp://hk.example.com:20000/",
-      "key": {
-        "kf": 154543927,
-        "kx": 128,
-        "kl": 10,
-        "kh": 12,
-        "protocol": "aes-128-cfb",
-        "protocol-key": "N6HMzdUs7IUnYHwq",
-        "transport": "aes-256-cfb",
-        "transport-key": "HWFweXu2g5RVMEpy",
-        "masked": false,
-        "plaintext": false,
-        "delta-encode": false,
-        "shuffle-data": false
-      }
-    },
-    {
-      "id": "demo-wss-01",
-      "name": "WSS 01",
-      "server": "ppp://wss/wss.example.com:443/",
+      "id": "server-1",
+      "name": "Example node",
+      "subtitle": "vpn.example.invalid:20000",
+      "server": "ppp://vpn.example.invalid:20000/",
       "key": {
         "protocol": "aes-128-cfb",
-        "protocol-key": "protocol-secret",
+        "protocol-key": "<provisioned-protocol-key>",
         "transport": "aes-256-cfb",
-        "transport-key": "transport-secret"
+        "transport-key": "<provisioned-transport-key>"
       },
-      "websocket": {
-        "host": "wss.example.com",
-        "path": "/openppp2",
-        "verify-peer": true
-      }
+      "client": {
+        "guid": "<assigned-client-guid>"
+      },
+      "options": {}
     }
   ]
 }
 ```
 
-## 客户端导入规则
+## 发布端与客户端边界
 
-- `id` 相同的订阅节点会更新已导入 profile，不重复新增。
-- 导入来源记录在 profile 内部元数据，不影响 native `appsettings.json`。
-- `enabled: false` 的节点不导入；已经导入的旧节点不会自动删除。
-- `config` 优先级最高；没有 `config` 时使用默认客户端配置模板并合并节点字段。
-- 客户端默认只接受 `https` 订阅 URL；仅允许 `localhost`、`127.0.0.1`、`::1` 等本机开发 HTTP 地址。客户端会拒绝降级到非本机 HTTP 的重定向（最多 5 次），避免订阅中的密钥和节点配置被明文传输或篡改。
+| 主题 | 当前行为 |
+|---|---|
+| `options` | 管理器从订阅记录复制任意 JSON map；各客户端只消费自身代码支持的选项。不要假设统一 `options` schema。 |
+| 额外节点形态 | 随附客户端支持紧凑节点、完整 `config` 对象/JSON 字符串等兼容路径。跨平台发布时不要依赖未文档化的额外字段。 |
+| 大小 | 已检查的随附客户端把文档限制为 2 MiB；应远小于该上限。 |
+| 刷新身份 | Android/iOS 使用订阅 URL 加 node ID 更新节点；桌面客户端维护自己的订阅缓存行为。不要由单一客户端推断删除语义。 |
+| ETag | 管理器会输出 ETag/cache 头，但已检查客户端不会发条件请求。应将 ETag 视为发布端支持，而不是刷新保证。 |
+
+## URL 与传输策略
+
+- Android 和 iOS 接受 HTTPS 订阅 URL，并只对 loopback HTTP 开发 URL 放宽；它们还限制重定向。
+- 实验性桌面客户端当前接受 HTTP 和 HTTPS URL。
+- 因此运维仍应使用 HTTPS 发布，不能把“客户端强制 HTTPS”描述为通用事实。
+
+## 安全与生命周期
+
+- 下发文档可能包含 protocol/transport key。不要把它写入日志、问题跟踪、截图或公开仓库。
+- 已检查发布端没有公开 token 的到期机制。需要终止访问时，应轮换 token、禁用/删除订阅或限制网络暴露。
+- 原生管理器 admin bearer token 与公开订阅 token 是不同凭据。
+- 直接 Go 服务不会自行终止 TLS；在不可信网络发布前，应部署由运维管理的 TLS 端点。
+
+## 相关页面
+
+- [管理后端](MANAGEMENT_BACKEND_CN.md)
+- [安全模型](../operations/SECURITY_CN.md)
+- [配置参考](../reference/CONFIGURATION_CN.md)

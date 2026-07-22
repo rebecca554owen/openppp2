@@ -1,181 +1,119 @@
 # Testing
 > Status: Active
-> Type: Development
-> Last verified: 63fc030
+> Type: Development guide
+> Last verified: 2026-07-22
+>
+> **Purpose:** Select and run the test entry point that actually covers the changed surface.
+> **Audience:** Contributors and CI maintainers.
+> **Parent index:** [Development](README.md) · **Chinese:** [测试](TESTING_CN.md)
 
-> **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
-> **Audience:** OPENPPP2 users, operators, and developers.
-> **Status:** Current.
-> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-18.
-> **Parent index:** [Back to index](README.md)
+## Choose the correct C++ test boundary
 
+The repository has two distinct C++ test paths. Do not describe one as a shortcut for the other.
 
-OpenPPP2 has unit tests for C++, Guardian Go logic, Flutter UI helpers, and iOS shared logic. GitHub Actions workflow **Test - Unit** runs these suites on pull requests to `main`.
+| Path | What it builds | When to use it |
+|---|---|---|
+| `tests/cpp` | Focused standalone executables registered with CTest | Fast unit/regression work without configuring the full native runtime. |
+| Root CMake + `ENABLE_TESTS=ON` | `ppp`, `openppp2_lib`, GTest-based `openppp2_tests`, and `openppp2_dns_cache_ttl_tests` | Changes that need the root native dependency graph or root-linked test behavior. |
 
-## RED/GREEN Policy
+### Standalone C++ suite
 
-1. Write or preserve a failing regression test first.
-2. Implement or fix until it passes.
-3. Record the break recipe in `tests/red-manifest/` for new regression suites.
-
-At least 40% of cases per suite should be negative, boundary, or regression tests when adding new coverage.
-
-## C++
-
-Top-level project tests:
-
-```bash
-cmake -B build-test -DENABLE_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-test
-ctest --test-dir build-test --output-on-failure
-```
-
-Standalone regression tests:
+The script configures `tests/cpp` with Ninja, builds it, and runs CTest:
 
 ```bash
 scripts/run-cpp-tests.sh
-scripts/run-cpp-coverage.sh
 ```
 
-The standalone C++ suite includes focused security and protocol regression tests that do not require a full native dependency tree, including DNS buffer parsing, P2P replay-window checks, Base64 handling, and Linux IPv6 sysctl validation.
+That project requires CMake 3.16 or newer, a C++17-capable compiler, OpenSSL, and Ninja because the script selects it explicitly. It writes its build tree to `build/test`.
 
-## Go Guardian
+### Root CMake tests
+
+Prepare the root dependency layout first, then configure the root project with `ENABLE_TESTS`:
 
 ```bash
-cd go/guardian
-go test ./...
+cmake -S . -B build/root-tests \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DENABLE_TESTS=ON \
+  -DTHIRD_PARTY_LIBRARY_DIR=third-party
+cmake --build build/root-tests
+ctest --test-dir build/root-tests --output-on-failure
 ```
 
-## Flutter
+`ENABLE_TESTS` defaults to `OFF`. When enabled, `tests/CMakeLists.txt` fetches GoogleTest v1.14.0, so a first configuration may need network access in addition to the root native dependencies. This is separate from `tests/cpp`.
 
-```bash
-cd android
-flutter test
-```
+## Coverage and sanitizers
 
-## iOS Logic
-
-```bash
-cd ios/App
-./run-tests.sh
-```
-
-## Coverage
-
-Top-level LLVM coverage:
-
-```bash
-chmod +x scripts/coverage.sh
-./scripts/coverage.sh
-```
-
-Standalone C++ coverage writes `build/coverage/summary.txt`:
+### Focused LLVM coverage
 
 ```bash
 scripts/run-cpp-coverage.sh
 ```
 
-## Smoke Test
+The script configures `tests/cpp` with coverage enabled, builds and runs only `p2p_replay_window_test`, `dns_buffer_test`, and `base64_test`, then writes `build/coverage/summary.txt`. It requires `llvm-profdata` and `llvm-cov` in addition to the standalone-suite prerequisites.
 
-Requires a built `bin/ppp` binary and a reachable server in the config:
-
-```bash
-chmod +x tools/proxy_mode_smoke.sh
-PPP_BIN=./bin/ppp CONFIG=./appsettings.json ./tools/proxy_mode_smoke.sh
-```
-
-## Client+server functional smoke
-
-Use the combined client/server smoke for interoperability changes that need the Android default key material in `tools/compat/`. It starts a local server, a proxy-mode client, and a TCP echo target with unique per-run ports:
+### Root runtime coverage
 
 ```bash
-sudo PPP_BIN=./bin/ppp COMPAT_MODE=match ./tools/client_server_compat_smoke.sh
-sudo PPP_BIN=./bin/ppp COMPAT_MODE=mismatch ./tools/client_server_compat_smoke.sh
+THIRD_PARTY_LIBRARY_DIR=third-party scripts/coverage.sh
 ```
 
-Pull request CI should prefer this functional smoke over emulator coverage when validating client/server interoperability.
+This script configures the root project with Clang, `ENABLE_TESTS=ON`, and `ENABLE_COVERAGE=ON`; it therefore requires the full native dependency layout. Root coverage instrumentation is not supported with MSVC.
 
-## Test Layout
-
-```text
-tests/
-  CMakeLists.txt
-  unit/
-    test_application_mode.cpp
-    test_tap_stub.cpp
-    test_proxy_defaults.cpp
-  cpp/
-    base64_test.cpp
-    dns_buffer_test.cpp
-    dns_message_test.cpp
-    dns_server_validation_test.cpp
-    dns_wire_validation_test.cpp
-    p2p_replay_window_test.cpp
-    sysctl_validation_test.cpp
-  red-manifest/
-```
-
-Android Flutter tests also include native-service static regressions such as `android/test/vpn_ipv6_leak_protection_test.dart`, which verifies the Kotlin VPN builder keeps IPv6 leak protection fail-closed.
-
-## Android Instrumentation
-
-Instrumentation tests live in `android/android/app/src/androidTest/` and need an emulator or device. The `device-test` job in `build-android.yml` runs the whole suite through `gradle :app:connectedDebugAndroidTest` on pull requests and on `main`.
-
-The sibling `Build Flutter APK` job needs the release signing secrets. A fork does not inherit them, so the job reports a notice and skips the signed build instead of failing the workflow and masking the build and test results in the same run.
-
-`app/src/debug/AndroidManifest.xml` removes `android:process` from `PppVpnService`, so instrumentation always runs the service in the app process. Anything that depends on the release multi-process layout — cross-process state delivery in particular — cannot be reproduced there and is covered by the source checks in `tests/tooling/test_runtime_ui_wiring.py` instead. Keep that in mind before concluding a cross-process path is proven by a green device run.
-
-## CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ENABLE_TESTS` | OFF | Build top-level `openppp2_tests` and register CTest targets |
-| `ENABLE_COVERAGE` | OFF | Add LLVM coverage flags where supported |
-
-Do not combine `ENABLE_COVERAGE` with `ENABLE_ASAN` in the same build.
-
-## Route and DNS Architecture Gates
+### Lifecycle sanitizer targets
 
 ```bash
-python3 -m unittest tests.tooling.test_repository_layout -v
-python3 tools/check_repository_layout.py
-python3 tools/check_vcxproj_sources.py
+scripts/run-lifecycle-sanitizers.sh
+```
+
+The script configures the standalone C++ project with `ENABLE_SANITIZERS=ON`, defaults to `clang++`, and builds/runs five named lifecycle, route, and DNS targets. Use it for lifecycle-sensitive changes; it is not a build of the complete native executable.
+
+## Runtime contract prerequisite
+
+`bash scripts/test-runtime-contract.sh cpp` assumes that `build/test` already exists. Configure the standalone project first; the script then builds and runs only `runtime_snapshot_test` after checking the shared fixture hashes.
+
+```bash
 cmake -S tests/cpp -B build/test -G Ninja
-cmake --build build/test
-ctest --test-dir build/test --output-on-failure
-```
-
-The layout check rejects concrete Switcher/Exchanger names in DNS and route public headers, legacy `RouteHostPorts`/`DnsHostPorts` service locators, mutable container ports, and new declaration-fragment `.inc` files.
-
-## Documentation and Runtime Contract Gates
-
-```bash
-python3 -m unittest tests.tooling.test_check_docs -v
-python3 tools/check_docs.py
 bash scripts/test-runtime-contract.sh cpp
 ```
 
-CI invokes the same runtime-contract script with `dart` and `swift` in the Flutter and macOS jobs. All three
-loaders use `tests/contracts/runtime-snapshot` directly, and `SHA256SUMS` prevents fixture drift.
+## Other checked-in component tests
 
-## Linux Namespace Route/DNS Rollback
-
-The integration test requires root and `iproute2`:
+Run these from the stated directories when changing those components:
 
 ```bash
-sudo bash tests/integration/linux/route_dns_rollback.sh
+# Guardian Go package
+( cd go/guardian && go test ./... )
+
+# Go manager/backend package checks used by CI
+( cd go && go vet ./ppp/... && go test ./ppp/... )
+
+# Android Flutter tests
+( cd android && flutter pub get && flutter test )
+
+# iOS logic tests
+( cd ios/App && ./run-tests.sh )
+
+# Experimental Desktop Client frontend and Rust shell
+( cd desktop/client && npm ci && npm test && npm run build \
+  && cargo test --manifest-path src-tauri/Cargo.toml )
 ```
 
-It compares the namespace route table and namespace-local resolver file with their baselines after both a normal
-stop and a partial apply failure. CI uploads the before/after snapshots for inspection.
+Some commands require their platform SDK/toolchain; do not treat a missing local SDK as a runtime failure.
 
-## Lifecycle Sanitizers
+## Root CMake test-related options
 
-```bash
-bash scripts/run-lifecycle-sanitizers.sh
-```
+All of these options default to `OFF`:
 
-The sanitizer gate builds the runtime lifecycle, ordered stop pipeline, 100-cycle client lifecycle stress,
-Route coordinator, and DNS controller tests with ASan/UBSan. The stress target covers every startup phase,
-concurrent duplicate Stop ownership, stale-generation completion, rollback failure, and deterministic resource
-release. Platform handle and namespace evidence remains the responsibility of the platform CI and device jobs.
+| Option | Effect |
+|---|---|
+| `ENABLE_TESTS` | Enables CTest and adds the root GTest/DNS test subdirectory. |
+| `ENABLE_COVERAGE` | Adds LLVM coverage instrumentation on non-MSVC toolchains. |
+| `ENABLE_VMUX_CHURN_TEST` | Builds and registers the root-linked VMUX carrier-churn integration test. |
+| `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` | Builds and registers the root-linked VMUX receive-semantics test. |
+| `ENABLE_ASAN`, `ENABLE_UBSAN` | Enable diagnostic sanitizer flags in the root project; not production build modes. |
+
+## CI coverage today
+
+`.github/workflows/test.yml` is the primary unit-test workflow. It runs the standalone C++/coverage path, lifecycle sanitizers, Guardian and Go checks, Flutter tests, and iOS logic tests. It does **not** run the experimental Desktop Client's npm or Cargo test commands.
+
+Native build workflows are separate from that unit workflow. Read the relevant workflow before calling a platform or feature combination CI-covered.

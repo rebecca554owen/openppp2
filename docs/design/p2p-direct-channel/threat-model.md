@@ -2,13 +2,13 @@
 
 > **Purpose:** Define threats and required controls for P2P direct channels.
 > **Audience:** Security, protocol, and platform maintainers.
-> **Status:** Current design evidence.
-> **Last verified against:** Latest main P2P integration evidence, 2026-07-18.
+> **Status:** Current design evidence; not an enabled production data path.
+> **Last verified against:** P2P integration and fail-closed production capability gate, 2026-07-22.
 > **Parent index:** [Design Documents](../README.md)
 
 > Status: Draft
 > Type: Design
-> Last verified: df3c89c
+> Last verified: 8c8a888
 
 ## Assets And Trust Boundaries
 
@@ -24,9 +24,11 @@ one compromised session from deriving another session's direct keys.
 
 ## Threats And Controls
 
+> **Implementation boundary:** This table states controls required before any production enablement. The current P2P path remains fail-closed; the table is not proof that every listed control—especially per-source and per-session rate limiting—is enforced today.
+
 | Threat | Required control | Failure behavior |
 |---|---|---|
-| Raw TCP or plaintext session claims P2P | Require authenticated exporter and capability | Relay-only |
+| Raw TCP or plaintext session claims P2P | Require an authenticated exporter and final production capability gate | Relay-only |
 | Version downgrade | Authenticate version and required features; never negotiate an unbound v0 | Relay-only |
 | Stolen or replayed offer token | Bind token to peers, both sessions, epoch, direction, candidates, offer and bounded receipt TTL | Drop silently |
 | Packet replay or uint32 ambiguity | Directional key, nonce uniqueness, 1024-bit window, half-range rejection | Drop packet; fall back on exhaustion |

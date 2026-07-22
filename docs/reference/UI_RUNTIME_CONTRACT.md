@@ -1,80 +1,114 @@
 # UI Runtime Contract
 
-> **Purpose:** Specify the current runtime state contract consumed by user interfaces.
-> **Audience:** Runtime, Android, iOS, and TUI developers.
-> **Status:** Current.
-> **Last verified against:** Latest main runtime and platform wiring, 2026-07-22.
-> **Parent index:** [Reference](README.md) · **Chinese:** [UI Runtime 契约](UI_RUNTIME_CONTRACT_CN.md)
-
-> Status: Stable
+> Status: Active
 > Type: Reference
-> Last verified: d8ddd71
+> Last verified: 8c8a888
+> Parent index: [Reference index](README.md)
+> Peer link: [中文](UI_RUNTIME_CONTRACT_CN.md)
+> Related: [Diagnostics error system](DIAGNOSTICS_ERROR_SYSTEM.md) · [VMUX validation](VMUX_VALIDATION.md)
 
-This document defines the version 1 state boundary between the native OpenPPP2
-runtime and the desktop, Android, and iOS user interfaces.
+This is the version 1 boundary for `RuntimeSnapshot` consumers. The native
+surface includes `GetRuntimeSnapshot`, `GetRuntimeSnapshotJson`,
+`SubscribeRuntimeSnapshots`, and `UnsubscribeRuntimeSnapshots`.
 
-## Snapshot fields
+## Required v1 fields
+
+A valid v1 JSON payload must contain all four fields below. Missing or invalid
+required fields fail decoding.
 
 | Field | Requirement |
 |---|---|
-| `schema_version` | Must equal `1`; other versions fail explicitly. |
-| `generation` | Increases for every start attempt. Lower generations are ignored. |
-| `monotonic_ms` | Increases within a generation. Duplicate or older events are ignored. |
-| `phase` | Authoritative lifecycle phase. |
-| `role`, `server`, `transport` | Runtime identity and selected transport. |
-| `requested_mux_mode`, `effective_mux_mode` | Requested and negotiated MUX behavior. |
-| `mux_fallback_reason` | Reason the effective MUX mode differs. |
-| `p2p_state`, `effective_path` | Typed P2P state and effective path; the path is always `relay` or `direct`, and only the `direct` state maps to `direct`. |
-| `traffic` | Cumulative `rx_bytes` and `tx_bytes`. Consumers derive rates from two snapshots using `monotonic_ms`; they must not accumulate per-tick deltas. |
-| `connected_monotonic_ms` | `monotonic_ms` at which the session entered `connected`, or 0 when it is not connected. Elapsed time is `monotonic_ms - connected_monotonic_ms`. Leaving `connected` clears it, so a reconnect starts a new interval. |
-| `last_error` | Code, severity, retryability, message key, and diagnostic detail. Populated on stop completion and on mobile start failure; mid-session failures do not currently set it. |
+| `schema_version` | Unsigned value exactly `1`. |
+| `generation` | Unsigned 64-bit generation ordering key. |
+| `monotonic_ms` | Unsigned 64-bit ordering key within a generation. |
+| `phase` | A supported phase string, including the literal `unknown`. |
 
-Consumers ignore unknown optional fields. Missing required ordering or phase
-fields, unknown phase strings, and unsupported schema versions are errors.
-`traffic` and `connected_monotonic_ms` are optional and default to zero.
+An unsupported version or an unrecognized phase string also fails decoding.
+`unknown` is a valid wire phase; it is distinct from an unrecognized string.
 
-## Phase sequence
+## Optional fields and forward compatibility
 
-`starting` → `preparing_host` → `connecting` → `handshaking` →
-`applying_policy` → `connected`.
+All other snapshot fields are optional to the native parser. Unknown optional
+root fields and unknown fields inside `traffic` or `last_error` are ignored.
+Absent or wrongly typed optional values fall back to their reader defaults;
+they do not make an otherwise valid required-field payload fail.
 
-Link recovery uses `reconnecting`. Stop uses `stopping` and finishes at `idle`
-or `failed`. `unknown` is a consumer presentation when the runtime snapshot is
-invalid or unavailable; it is not a successful native teardown state.
+Important shapes and ownership:
 
-## Connected gate
+| Field/group | Contract |
+|---|---|
+| `capabilities` | JSON array of strings, not an object. |
+| `role`, `server`, `transport` | Optional runtime identity strings. |
+| `requested_mux_mode`, `effective_mux_mode`, `mux_receiver_ordering`, `mux_fallback_reason`, `mux_active_links` | Optional MUX state and presentation. |
+| `mux_scheduler`, `mux_pool_policy`, `mux_turbo` | Current native serializer extensions; tolerated as unknown optional v1 keys. |
+| `p2p_state`, `effective_path` | `effective_path` is derived from `p2p_state` by serializers and is not authoritative input. |
+| `traffic`, `connected_monotonic_ms` | Optional cumulative traffic and connected-interval data. |
+| `last_error` | Optional producer-provided diagnostic payload. |
 
-All five readiness facts must be true:
+## Parse validity and ordering
 
-1. The session is established.
-2. The TAP/TUN adapter exists and is open.
-3. Route policy is applied, or routing is explicitly not required.
-4. DNS policy is configured with an active session, or DNS interception is
-   explicitly not required.
-5. Client open has completed and applied either explicit negotiated policy or
-   the implicit compatibility policy. An optional INFO payload is not required.
+Decoding validates shape and required fields; it does not decide freshness.
+The native publisher and mobile stores apply ordering after a valid snapshot is
+available: accept a higher `generation`, or the same generation only when
+`monotonic_ms` is strictly greater. Older or duplicate snapshots are rejected.
 
-Until then, a request for `connected` is published as `applying_policy`. Losing
-a readiness fact moves the presentation back to `applying_policy`.
+A consumer that decodes external JSON may turn a decode failure with valid
+ordering metadata into an ordered `unknown` presentation. A malformed payload
+without valid ordering metadata must not overwrite newer state. Native TUI
+adapters receive typed snapshots and do not themselves parse this JSON.
 
-For server mode, readiness is derived from the active listener runtime. A
-constructed, non-disposed server object alone is insufficient.
+## Lifecycle presentation
 
-## Subscription and UI rules
+The normal producer sequence is:
 
-`PppApplication` exposes snapshot get, JSON get, subscribe, and unsubscribe
-operations. Publisher callbacks receive an immutable copy and run outside the
-publisher mutex.
+```text
+starting → preparing_host → connecting → handshaking → applying_policy → connected
+```
 
-All surfaces use the phase-to-controls mapping in
-[ADR 0001](../adr/0001-runtime-ui-contract.md). Start/stop callbacks and legacy
-link-state signals may carry commands or diagnostics, but cannot update the
-lifecycle label. A decode failure with valid generation/timestamp metadata is
-ordered as `unknown`. A payload without ordering metadata is reported and cannot
-mutate newer state.
+`reconnecting` represents recovery; stop publishes `stopping` and completes as
+`idle` or `failed`. This sequence describes normal producer behavior, not a
+strict legal-transition table: lifecycle code validates generation/stop
+ownership, not every phase-to-phase edge.
 
-## Fixtures
+A request for `connected` is presented as `applying_policy` until all readiness
+facts are true. Leaving `connected` clears `connected_monotonic_ms`; a later
+connection begins a new interval.
 
-Canonical examples live in `tests/contracts/runtime-snapshot/`. C++, Dart, and
-Swift consume the same fixtures, and `tools/check_runtime_fixture_hashes.py`
-guards their hashes.
+## Connected readiness gate
+
+The five required facts are:
+
+1. session established;
+2. adapter open;
+3. route applied, or route explicitly not required;
+4. DNS configured and session-active, or DNS explicitly not required;
+5. policy negotiated.
+
+Current client wiring derives the policy fact from session establishment. For
+server mode, an active listener supplies all five readiness bits; constructing
+a server object alone is insufficient.
+
+## `last_error` boundary
+
+`last_error.code` is currently a producer-specific `uint32_t` numeric value.
+It is not guaranteed to be a `ppp::diagnostics::ErrorCode` ordinal. Producers
+supply its severity, retryability, message key, and diagnostic detail; consumers
+must not infer them from the diagnostics catalog.
+
+Successful stop clears `last_error`; a failed stop carries the error supplied
+to stop completion. A payload may also represent an error through diagnostic
+detail even when its numeric code is zero.
+
+## TUI command safety
+
+Console UI command handling recognizes the `openppp2` command namespace and
+reports unknown commands or subcommands locally with help text. Unknown TUI
+input is rejected; it is not forwarded to a shell or system-command executor.
+
+## Source references
+
+- `ppp/app/runtime/RuntimeSnapshot.h` and `RuntimeSnapshotJson.h`
+- `schemas/runtime-snapshot-v1.schema.json`
+- `ppp/app/runtime/RuntimeLifecycle.h` and `RuntimeReadiness.h`
+- `ppp/app/runtime/RuntimeError.h`
+- `ppp/app/ConsoleUI.cpp`

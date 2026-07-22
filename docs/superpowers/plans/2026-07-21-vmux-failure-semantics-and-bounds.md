@@ -1,8 +1,16 @@
 # VMUX Failure Semantics and Resource Bounds Implementation Plan
 
-> Status: Active
+> Status: Historical
 > Type: Plan
 > Last verified: 6b2e915
+
+> **Purpose:** Preserve the worktree-specific VMUX failure-semantics and resource-bounds plan.
+> **Audience:** Maintainers investigating the recorded VMUX design and implementation sequence.
+> **Status:** Historical worktree-specific execution record; not a current implementation contract.
+> **Last verified against:** Saved `fix/vmux-failure-semantics-bounds` plan record, 2026-07-21; historical boundary reviewed 2026-07-22.
+> **Parent index:** [Working Plan and Specification Records](../README.md)
+
+> **Verification warning:** This plan names an isolated worktree and records packages, source paths, test results, and completion states as of that record. Confirm the current checkout and rerun applicable tests before relying on any implementation claim.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-subagent-driven-development (recommended) or superpowers-executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,7 +19,7 @@
 **Architecture:** Keep competition send + orthogonal ordering. Fix receive semantics first (gap = explicit fail, not skip). Cap session-level reorder/flow resources second. Only then redesign base-link failure isolation together with per-link byte credit. P1/P2 are follow-on plans, not bundled into the P0 PR series.
 
 
-## Implementation progress (worktree)
+## Recorded implementation progress (worktree)
 
 - Worktree: `/tmp/openppp2-vmux-p0` (symlink: `openppp2/.worktrees/vmux-failure-semantics-bounds`)
 - Branch: `fix/vmux-failure-semantics-bounds`

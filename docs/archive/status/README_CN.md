@@ -18,3 +18,4 @@
 - [IPv6 实现分析与修复](IPV6_FIXES_CN.md)
 - [VMUX 设计缺陷台账与修复 / 优化方案](MUX_DEFECTS_AND_FIXES_CN.md)
 - [服务端自动下发 IPv4 方案](SERVER_IPV4_ASSIGNMENT_CN.md)
+- [历史 `docs/` 目录调试图](debug.md)

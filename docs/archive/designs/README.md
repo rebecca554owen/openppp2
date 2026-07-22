@@ -21,3 +21,4 @@ This section preserves historical material. Every entry is archived and is not c
 - [Per-Frame Read Timeout Design](PER_FRAME_READ_TIMEOUT_DESIGN.md)
 - [UDP 数据面模块解耦（Phase 2）设计](UDP_DECOUPLING_PHASE2_DESIGN.md)
 - [UDP 性能基准闸门（Phase 0）设计](UDP_PERF_BASELINE_DESIGN.md)
+- [VMUX P0-C Link Exit + Byte Credit Design（historical worktree record）](2026-07-21-vmux-p0c-link-credit-design.md)

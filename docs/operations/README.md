@@ -1,17 +1,20 @@
 # Operations
-> Status: Active
-> Type: Operations
-> Last verified: 63fc030
 
-> **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
-> **Audience:** OPENPPP2 users, operators, and developers.
-> **Status:** Current.
-> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-18.
-> **Parent index:** [Back to index](../README.md) · **Chinese:** [部署与运维](README_CN.md)
+> **Status:** Current
+> **Type:** Operations index
+> **Last verified:** Runtime CLI, lifecycle, manager, and platform sources, 2026-07-22
+> **Parent index:** [Documentation](../README.md) · **Chinese:** [部署与运维](README_CN.md)
 
+Use this section after selecting the feature guide that matches the workload.
 
-This section groups current documentation by user task and maintenance responsibility.
+| Operator task | Start here |
+|---|---|
+| Start a client, server, or proxy process safely | [Deployment model](DEPLOYMENT.md) · [中文](DEPLOYMENT_CN.md) |
+| Observe lifecycle, restart behavior, and diagnose a failed session | [Operations and troubleshooting](OPERATIONS.md) · [中文](OPERATIONS_CN.md) |
+| Protect configuration, management, subscription, and host-network surfaces | [Security model](SECURITY.md) · [中文](SECURITY_CN.md) |
 
-- [Deployment Model](DEPLOYMENT.md)
-- [Operations And Troubleshooting](OPERATIONS.md)
-- [Security Model](SECURITY.md)
+## Boundary
+
+These pages describe operational behavior implemented in this repository. They do not supply a universal installer, service unit, firewall policy, TLS terminator, or high-availability design. Those remain deployment-specific operator responsibilities.
+
+For feature-specific setup, return to [Task Guides](../guides/README.md).

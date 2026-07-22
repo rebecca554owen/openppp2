@@ -1,291 +1,54 @@
-# Boost 1.87+ 兼容性分析报告
-> Status: Active
-> Type: Development
-> Last verified: 63fc030
+# Boost 1.87+ 兼容性源码审计
+> Status: Historical — re-verification required
+> Type: Technical audit
+> Last verified: 2026-07-22
+>
+> **用途：**保留一次基于当前源码和 CI 配置的兼容性审计，不作为发布支持承诺。
+> **适用对象：**维护 Boost 工具链、CI 或相关 Asio 调用的贡献者。
+> **上一层索引：**[开发文档](README_CN.md)
+> **语言边界：**本文是带日期的中文技术审计，故意不配稳定 English 页面。
 
-> **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
-> **Audience:** OPENPPP2 users, operators, and developers.
-> **Status:** Current.
-> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-18.
-> **Parent index:** [Back to index](README.md)
+## 结论边界
 
+当前源码包含若干针对较新 Boost API 的版本条件，但本审计**不能**证明“全面支持 Boost 1.87+”，也不能替代在目标 triplet/平台上的实际构建和测试。
 
-**分析时间**: 2026-05-06
-**项目**: openppp2
-**当前 Boost 版本**:
-- Linux CI: Boost 1.86.0
-- Windows CI: vcpkg (最新版本，可能是 1.87+)
+- Linux amd64 CI 明确设置 `BOOST_VERSION=1.86.0`。
+- Windows CI 通过 vcpkg 安装 Boost 组件；工作流没有在仓库中固定一个可作为 Boost 1.87+ 支持证据的 Boost 版本。
+- 根 `CMakeLists.txt` 要求若干 Boost 组件，但没有一个 Boost 最低版本检查。
+- 下面仍保留 `cancel(ec)` 调用，因此升级 Boost 前必须在目标环境编译验证。
 
----
+因此，本文状态为 **Historical — re-verification required**，而不是 Active 兼容性矩阵。
 
-## 📊 总结
+## 已观察到的源码适配
 
-| 状态 | 说明 |
-|------|------|
-| ✅ **已支持** | 项目已针对 Boost 1.87+ 做了大量兼容性修复 |
-| ⚠️ **部分遗留** | 少数代码仍有 `cancel(ec)` 调用，但可能不影响编译 |
-| ✅ **CI 验证** | Windows CI 使用 vcpkg 最新 Boost，已验证可编译 |
+| 源码位置 | 当前观察 | 审计含义 |
+|---|---|---|
+| `ppp/stdafx.cpp` | 以 `BOOST_VERSION >= 108700` 选择 `boost/stacktrace/stacktrace.hpp`，否则使用旧头路径。 | 代码显式处理 stacktrace 头路径差异。 |
+| `ppp/auxiliary/StringAuxiliary.cpp` | 以 `BOOST_VERSION >= 108600` 选择 UUID 内存拷贝路径。 | 代码显式处理 UUID API/布局差异。 |
+| `common/aggligator/aggligator.cpp` | 以 `BOOST_VERSION >= 108000` 选择较新的 `boost::asio::spawn` 调用形式。 | 代码显式处理部分 Asio 调用差异。 |
+| `ppp/tap/ITap.cpp` | 仍存在 `stream->cancel(ec)`。 | 必须在目标 Boost/toolchain 上验证。 |
+| `ppp/net/Socket.cpp` | 仍存在 `stream->cancel(ec)`。 | 必须在目标 Boost/toolchain 上验证。 |
 
----
+这些观察只覆盖列出的路径；不能推导到所有 Boost 或 Asio API。
 
-## ✅ 已修复的 Boost 1.87+ 兼容性问题
+## CI 和构建证据
 
-### 1. stacktrace 头文件路径变更
+`build-linux-amd64.yml` 当前构建 Boost 1.86.0、OpenSSL 3.0.13 和 jemalloc 5.3.0 后，再向根 CMake 提供第三方目录。Windows x64 workflow 则以 vcpkg 的静态 triplet 安装 Boost、OpenSSL 和 jemalloc，然后构建 Windows 项目。
 
-**问题**: Boost 1.87+ 将 `boost/stacktrace.hpp` 移动到 `boost/stacktrace/stacktrace.hpp`
+这两条工作流说明当前维护的构建输入不同，不能把 Linux 的 1.86.0 结果等同于任意 vcpkg 快照，更不能自动外推到所有 1.87+ 版本。
 
-**修复位置**: `ppp/stdafx.cpp`
+## 重新验证建议
 
-```cpp
-#if BOOST_VERSION >= 108700
-#include <boost/stacktrace/stacktrace.hpp>
-#else
-#include <boost/stacktrace.hpp>
-#endif
-```
+升级或更换 Boost 时：
 
-**提交**: `e2cff17` - Fix Android build: add BOOST_VERSION guard for stacktrace include path
+1. 在目标平台准备与根 CMake 所需布局一致的 Boost、OpenSSL 和 jemalloc。
+2. 配置并构建目标原生项目；Windows 应使用目标 vcpkg triplet。
+3. 运行与改动相关的独立 C++ 套件或根 `ENABLE_TESTS` 套件；入口见[测试](TESTING_CN.md)。
+4. 对 Asio 取消、协程、解析器和网络接口路径的编译失败或行为变化建立回归测试，而不是只修改版本条件。
+5. 只有在目标平台 CI 和本地复现均通过后，才更新任何面向用户的支持声明。
 
----
+## 不应从本文推导的结论
 
-### 2. io_context::run(ec) 重载移除
-
-**问题**: Boost 1.87+ 移除了 `io_context::run(error_code&)` 重载
-
-**修复位置**:
-- `ppp/threading/Executors.cpp`
-- `common/libtcpip/netstack.cpp`
-- `common/chnroutes2/chnroutes2.cpp`
-
-**修复方式**: 替换为 `run()` + try/catch
-
-```cpp
-// 旧代码
-boost::system::error_code ec;
-context.run(ec);
-
-// 新代码
-try {
-    context.run();
-} catch (const std::exception&) {
-    // 处理异常
-}
-```
-
-**提交**: `4d8d17c` - Fix Windows Boost 1.87+ build: io_context.run(ec) overload removed
-
----
-
-### 3. boost::uuids::uuid::data 成员变更
-
-**问题**: Boost 1.86+ 改变了 `uuid::data` 的访问方式
-
-**修复位置**: `ppp/auxiliary/StringAuxiliary.cpp`
-
-```cpp
-#if BOOST_VERSION >= 108600
-    std::memcpy(&network_guid, &guid, sizeof(network_guid));
-#else
-    std::memcpy(&network_guid, guid.data, sizeof(network_guid));
-#endif
-```
-
-**提交**: `1891d4c` - Fix Windows CI: migrate all Boost.Asio deprecated APIs
-
----
-
-### 4. boost::asio::spawn API 变更
-
-**问题**: Boost 1.87+ 要求 `spawn` 传递 executor 和 detached 参数
-
-**修复位置**:
-- `common/aggligator/aggligator.cpp`
-- `ppp/app/mux/vmux.h`
-
-```cpp
-// 旧代码
-boost::asio::spawn(context, fx);
-
-// 新代码
-boost::asio::spawn(context.get_executor(), fx, boost::asio::detached);
-```
-
-**提交**: `1891d4c` - Fix Windows CI: migrate all Boost.Asio deprecated APIs
-
----
-
-### 5. resolver::query 弃用
-
-**问题**: Boost 1.87+ 弃用了 `resolver::query`，要求直接使用 `resolve()`
-
-**修复位置**: `ppp/net/asio/asio.h`
-
-```cpp
-// 旧代码
-resolver.query(hostname, service);
-results = resolver.resolve(query, ec);
-
-// 新代码
-results = resolver.resolve(hostname, service, ec);
-```
-
-**提交**: `1891d4c` - Fix Windows CI: migrate all Boost.Asio deprecated APIs
-
----
-
-### 6. address_v6::from_string 弃用
-
-**问题**: Boost 1.87+ 弃用了 `address_v6::from_string()`
-
-**修复位置**: 多个文件
-
-```cpp
-// 旧代码
-auto addr = boost::asio::ip::address_v6::from_string(str);
-
-// 新代码
-auto addr = boost::asio::ip::make_address_v6(str);
-```
-
-**提交**: `1891d4c` - Fix Windows CI: migrate all Boost.Asio deprecated APIs
-
----
-
-### 7. expires_from_now 弃用
-
-**问题**: Boost 1.87+ 弃用了 `expires_from_now()`
-
-**修复位置**: 多个文件
-
-```cpp
-// 旧代码
-timer.expires_from_now(boost::posix_time::seconds(30));
-
-// 新代码
-timer.expires_after(std::chrono::seconds(30));
-```
-
-**提交**: `1891d4c` - Fix Windows CI: migrate all Boost.Asio deprecated APIs
-
----
-
-## ⚠️ 可能存在的遗留问题
-
-### 1. cancel(ec) 调用
-
-**位置**:
-- `common/unix/net/UnixSocketAcceptor.cpp:327`
-- `ppp/net/Socket.cpp:1310`
-- `ppp/tap/ITap.cpp:59`
-
-**现状**: 仍然使用 `cancel(ec)` 调用
-
-**影响**:
-- Boost 1.87+ 移除了 `cancel(error_code&)` 重载
-- 但在某些平台/编译器组合下可能仍然可编译
-- Windows CI 已验证可编译，说明可能不影响
-
-**建议**: 考虑替换为 `cancel()` + try/catch
-
----
-
-### 2. 文档示例代码
-
-**位置**:
-- `docs/CONCURRENCY_MODEL_CN.md:429`
-- `docs/CONCURRENCY_MODEL.md:429`
-- `docs/STARTUP_AND_LIFECYCLE_CN.md:391-392`
-
-**现状**: 文档中仍使用旧 API 示例
-
-**影响**: 仅影响文档，不影响编译
-
-**建议**: 更新文档中的示例代码
-
----
-
-## 📋 Boost 版本兼容性矩阵
-
-| Boost 版本 | 状态 | 说明 |
-|------------|------|------|
-| 1.76 以下 | ❌ 不支持 | 缺少必要特性 |
-| 1.76 - 1.85 | ✅ 支持 | 基础支持 |
-| 1.86 | ✅ 支持 | uuid API 变更已处理 |
-| 1.87+ | ✅ 支持 | 已做全面兼容性修复 |
-
----
-
-## 🔧 已应用的兼容性宏
-
-```cpp
-// stacktrace 头文件路径
-#if BOOST_VERSION >= 108700
-#include <boost/stacktrace/stacktrace.hpp>
-#else
-#include <boost/stacktrace.hpp>
-#endif
-
-// uuid::data 访问方式
-#if BOOST_VERSION >= 108600
-    std::memcpy(&network_guid, &guid, sizeof(network_guid));
-#else
-    std::memcpy(&network_guid, guid.data, sizeof(network_guid));
-#endif
-
-// boost::asio::spawn 调用方式
-#if BOOST_VERSION >= 108000
-    boost::asio::spawn(executor, fx, boost::asio::detached);
-#else
-    boost::asio::spawn(context, fx);
-#endif
-```
-
----
-
-## 📈 相关提交历史
-
-| 提交 | 日期 | 说明 |
-|------|------|------|
-| `4d8d17c` | 2026-05-03 | Fix Windows Boost 1.87+ build: io_context.run(ec) overload removed |
-| `1891d4c` | 2026-05-03 | Fix Windows CI: migrate all Boost.Asio deprecated APIs for Boost 1.87+ compatibility |
-| `e2cff17` | 2026-05-03 | Fix Android build: add BOOST_VERSION guard for stacktrace include path |
-| `a1175d8` | 2026-05-03 | Fix Android build: guard boost::asio::spawn with BOOST_VERSION check |
-| `c66b267` | 2026-05-03 | Add missing <algorithm> include to stdafx.h |
-
----
-
-## ✅ 验证状态
-
-| 平台 | Boost 版本 | 编译状态 | 说明 |
-|------|------------|----------|------|
-| Windows x64 | vcpkg (最新) | ✅ 通过 | CI 验证 |
-| Linux amd64 | 1.86.0 | ✅ 通过 | CI 验证 |
-| macOS | 系统版本 | ✅ 通过 | CI 验证 |
-| Android | NDK | ✅ 通过 | CI 验证 |
-
----
-
-## 💡 建议
-
-### 短期（可选）
-
-1. **替换 `cancel(ec)` 调用**: 将剩余的 `cancel(ec)` 替换为 `cancel()` + try/catch
-2. **更新文档**: 更新文档中的旧 API 示例代码
-
-### 长期
-
-1. **统一 Boost 版本**: 考虑将 Linux CI 也升级到 Boost 1.87+
-2. **添加版本检测**: 在 CMakeLists.txt 中添加 Boost 版本检测和警告
-3. **自动化测试**: 添加 Boost 版本兼容性测试
-
----
-
-## 📚 参考资料
-
-- [Boost 1.87 Release Notes](https://www.boost.org/users/history/version_1_87_0.html)
-- [Boost.Asio Migration Guide](https://www.boost.org/doc/libs/1_87_0/doc/html/boost_asio.html)
-- [vcpkg Boost Port](https://github.com/microsoft/vcpkg/tree/master/ports/boost)
-
----
-
-**结论**: 项目已全面支持 Boost 1.87+，Windows CI 使用 vcpkg 最新版本已验证可编译。仅有少量遗留的 `cancel(ec)` 调用，但不影响当前编译。
+- 不应据此声明所有 Boost 1.87+ 版本、所有平台或所有 vcpkg 快照均已支持。
+- 不应把仓库中的条件编译视为完整 ABI 或运行时兼容性测试。
+- 不应将诊断/实验性构建结果作为生产兼容性承诺。

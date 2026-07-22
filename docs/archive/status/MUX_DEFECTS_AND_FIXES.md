@@ -1,4 +1,5 @@
 # VMUX Defect Ledger and Fix / Optimization Plan
+> Status: Archived
 > Type: Archive
 > Last verified: 63fc030
 
@@ -11,7 +12,7 @@
 > **Archive notice:** This page is historical context only and must not be used as current installation, configuration, or runtime guidance.
 
 
-> Status: in progress (defects surfaced by the issue #5 multi-link flow rework). This is a stable working ledger of confirmed/suspected defects, root causes, fixes, and priorities. Chinese pair: `MUX_DEFECTS_AND_FIXES_CN.md`.
+> **Recorded status:** “in progress” is this ledger’s historical snapshot, not a current development state. It records the then-confirmed/suspected defects, root causes, fixes, and priorities. Chinese pair: `MUX_DEFECTS_AND_FIXES_CN.md`.
 
 ## Background and trade-off (what VMUX is)
 
