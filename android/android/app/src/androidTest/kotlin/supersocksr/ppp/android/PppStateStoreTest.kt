@@ -23,6 +23,7 @@ class PppStateStoreTest {
         PppStateStore.clearRuntimeSnapshot(context)
         PppStateStore.clearLastError(context)
         PppStateStore.clearLinkState(context)
+        PppStateStore.clearHeartbeat(context)
     }
 
     @Test
@@ -66,11 +67,13 @@ class PppStateStoreTest {
         val snapshot = """{"schema_version":1,"generation":7,"monotonic_ms":10,"phase":"connected"}"""
         PppStateStore.setRuntimeSnapshot(context, snapshot)
         PppStateStore.setLinkState(context, 0)
+        PppStateStore.touchHeartbeat(context)
         assertTrue(PppStateStore.isVpnAlive(context))
         assertEquals(snapshot, PppStateStore.getRuntimeSnapshotIfAlive(context))
 
         // Both liveness signals must be gone; a fresh snapshot alone still
-        // means the session is publishing (native push before link poll).
+        // means the session is publishing (native push before heartbeat).
+        PppStateStore.clearHeartbeat(context)
         PppStateStore.clearLinkState(context)
         PppStateStore.clearRuntimeSnapshot(context)
         assertFalse(PppStateStore.isVpnAlive(context))
@@ -91,8 +94,9 @@ class PppStateStoreTest {
         val snapshot = """{"schema_version":1,"generation":7,"monotonic_ms":10,"phase":"connected"}"""
         PppStateStore.setRuntimeSnapshot(context, snapshot)
         PppStateStore.setLinkState(context, 0)
+        PppStateStore.touchHeartbeat(context)
 
-        val heartbeat = File(context.filesDir, "openppp2-linkstate.txt")
+        val heartbeat = File(context.filesDir, "openppp2-heartbeat.txt")
         val snapshotFile = File(context.filesDir, "openppp2-runtime-snapshot.json")
         val aged = System.currentTimeMillis() - PppStateStore.HEARTBEAT_STALE_MS - 5_000L
         if (!heartbeat.setLastModified(aged) || !snapshotFile.setLastModified(aged)) {
@@ -101,6 +105,25 @@ class PppStateStoreTest {
 
         assertFalse(PppStateStore.isVpnAlive(context))
         assertNull(PppStateStore.getRuntimeSnapshotIfAlive(context))
+    }
+
+    @Test
+    fun dedicatedHeartbeatKeepsSnapshotAliveWhenNativeStateSamplingStalls() {
+        val snapshot = """{"schema_version":1,"generation":7,"monotonic_ms":10,"phase":"connected"}"""
+        PppStateStore.setRuntimeSnapshot(context, snapshot)
+        PppStateStore.setLinkState(context, 0)
+
+        val linkState = File(context.filesDir, "openppp2-linkstate.txt")
+        val snapshotFile = File(context.filesDir, "openppp2-runtime-snapshot.json")
+        val aged = System.currentTimeMillis() - PppStateStore.HEARTBEAT_STALE_MS - 5_000L
+        if (!linkState.setLastModified(aged) || !snapshotFile.setLastModified(aged)) {
+            return
+        }
+
+        PppStateStore.touchHeartbeat(context)
+
+        assertTrue(PppStateStore.isVpnAlive(context))
+        assertEquals(snapshot, PppStateStore.getRuntimeSnapshotIfAlive(context))
     }
 
     @Test
