@@ -56,10 +56,18 @@ class RepositoryLayoutTests(unittest.TestCase):
         ]
 
         self.assertIn(
-            "route.via = IPEndPoint::ToAddressString(record.VirtualIP);",
+            "table.routes.emplace_back(BindPeerRouteGateway(prefix, record.VirtualIP));",
             snapshot,
         )
         self.assertNotIn("route.via.empty()", snapshot)
+
+        policy = (
+            ROOT / "ppp/app/server/PeerRouteAnnouncePolicy.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "snapshot.via = ppp::net::IPEndPoint::ToAddressString(virtual_ip);",
+            policy,
+        )
 
     def test_route_public_header_cannot_expose_switcher(self) -> None:
         root = self.fixture(
