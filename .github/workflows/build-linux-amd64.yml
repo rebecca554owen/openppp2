@@ -312,16 +312,19 @@ jobs:
             -DENABLE_ASAN=ON \
             -DENABLE_UBSAN=ON \
             -DENABLE_VMUX_CHURN_TEST=ON \
+            -DENABLE_VMUX_RECEIVE_SEMANTICS_TEST=ON \
             -DENABLE_SYSNAT=OFF \
             -DENABLE_IO_URING=OFF \
             -DENABLE_SIMD=OFF
           make -j$(nproc)
 
-      - name: Run VMUX carrier churn sanitizers
+      - name: Run VMUX sanitizer tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
-          ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:strict_string_checks=1" \
-          UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
-            bin/vmux_net_churn_integration_test
+          bin/vmux_net_churn_integration_test
+          bin/vmux_receive_semantics_test
 
       - name: Collect ASan artifact
         run: |
