@@ -126,15 +126,15 @@ class ServerEndpoint {
 
   /// Emits a dial URL for the endpoint's scheme (ppp/ws/wss).
   String toUrl({String? forceScheme}) {
-    final scheme = (forceScheme ?? scheme).toLowerCase();
+    final effectiveScheme = (forceScheme ?? this.scheme).toLowerCase();
     final normalizedHost = host.trim();
     final urlHost = _needsIpv6Brackets(normalizedHost)
         ? '[$normalizedHost]'
         : normalizedHost;
     final portPart = port != null && port! > 0 ? ':$port' : '';
-    if (scheme == 'ws' || scheme == 'wss') {
+    if (effectiveScheme == 'ws' || effectiveScheme == 'wss') {
       final pathPart = _normalizePath(path);
-      return '$scheme://$urlHost$portPart$pathPart';
+      return '$effectiveScheme://$urlHost$portPart$pathPart';
     }
     // Native TCP transport.
     return 'ppp://$urlHost$portPart/';
