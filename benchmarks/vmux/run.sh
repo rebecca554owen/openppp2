@@ -39,6 +39,10 @@ carrier-delay          one carrier with added delay
 carrier-loss           one carrier with packet loss
 carrier-removal        runtime carrier removal
 turbo-churn            turbo grow/shrink churn
+reliability-loss-0.5   reliability on, one carrier with 0.5% packet loss
+reliability-loss-2     reliability on, one carrier with 2% packet loss
+reliability-loss-5     reliability on, one carrier with 5% packet loss
+fec-loss-2             reliability + FEC on, one carrier with 2% packet loss
 EOF
 }
 
@@ -86,6 +90,10 @@ case "$SCENARIO" in
     carrier-loss) MODE=balance; FLOWS=8; PROFILE=carrier-loss; ACTION=none ;;
     carrier-removal) MODE=balance; FLOWS=8; PROFILE=none; ACTION=carrier-removal ;;
     turbo-churn) MODE=flow; FLOWS=8; PROFILE=none; ACTION=turbo-churn ;;
+    reliability-loss-0.5) MODE=balance; FLOWS=8; PROFILE=carrier-loss-0.5; ACTION=none ;;
+    reliability-loss-2) MODE=balance; FLOWS=8; PROFILE=carrier-loss; ACTION=none ;;
+    reliability-loss-5) MODE=balance; FLOWS=8; PROFILE=carrier-loss-5; ACTION=none ;;
+    fec-loss-2) MODE=balance; FLOWS=8; PROFILE=carrier-loss; ACTION=none ;;
     *) echo "unknown scenario: '$SCENARIO'" >&2; list_scenarios >&2; exit 2 ;;
 esac
 

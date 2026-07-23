@@ -15,7 +15,7 @@
 #include <ppp/stdafx.h>
 
 namespace ppp { namespace configurations { class AppConfiguration; } }
-namespace ppp { namespace dns { class DnsResolver; } }
+namespace ppp { namespace dns { class DnsResolver; class DnsUdpFlowRegistry; } }
 
 #if defined(_LINUX)
 namespace ppp { namespace net { class ProtectorNetwork; } }
@@ -54,6 +54,8 @@ namespace ppp {
                         bool intercept_unmatched,
                         const ppp::function<void(uint32_t)>& add_tunnel_ip,
                         const ppp::function<void(uint32_t)>& add_nic_ip) noexcept;
+                    void SetUdpFlowRegistry(
+                        const std::shared_ptr<ppp::dns::DnsUdpFlowRegistry>& registry) noexcept override;
 
                     boost::asio::ip::address RewriteFakeIpAddress(
                         const boost::asio::ip::address& address) const noexcept override;
@@ -81,6 +83,7 @@ namespace ppp {
 
                     std::shared_ptr<ppp::configurations::AppConfiguration> configuration_;
                     std::shared_ptr<ppp::dns::DnsResolver> dns_resolver_;
+                    std::shared_ptr<ppp::dns::DnsUdpFlowRegistry> udp_flow_registry_;
                     std::shared_ptr<FakeIpPool> fake_ip_pool_ = make_shared_object<FakeIpPool>();
                     RuleMap dns_ruless_[3];
                 };

@@ -764,6 +764,12 @@ namespace ppp {
             protect_socket_ = cb;
         }
 
+        void DnsResolver::SetUdpFlowRegistry(
+            const std::shared_ptr<DnsUdpFlowRegistry>& registry) noexcept {
+
+            udp_flow_registry_ = registry;
+        }
+
         void DnsResolver::SetExitIP(const boost::asio::ip::address& ip) noexcept {
             exit_ip_ = ip;
             ClearStunEcsCache();
@@ -1973,6 +1979,22 @@ namespace ppp {
                 state->Complete(ppp::vector<Byte>());
                 return;
             }
+            socket->bind(udp::endpoint(remote.protocol(), 0), ec);
+            if (ec) {
+                CountDnsTransport(Protocol::UDP, DnsTransportStage::Socket, DnsTransportReason::OpenFailed);
+                state->Complete(ppp::vector<Byte>());
+                return;
+            }
+            if (udp_flow_registry_) {
+                const udp::endpoint local = socket->local_endpoint(ec);
+                if (ec || !udp_flow_registry_->Register(
+                        local.port(), remote,
+                        std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS))) {
+                    CountDnsTransport(Protocol::UDP, DnsTransportStage::Socket, DnsTransportReason::Failed);
+                    state->Complete(ppp::vector<Byte>());
+                    return;
+                }
+            }
 
             timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS));
             timer->async_wait([state](const boost::system::error_code& ec_) noexcept {
@@ -2592,7 +2614,7 @@ namespace ppp {
                         }
                         ppp::telemetry::Log(Level::kTrace, "dns", "STUN resolving hostname candidate host=%s port=%d",
                             hc.hostname.c_str(), hc.port);
-                        ResolveHostnameAsync(resolver->context_, hc.hostname,
+                        resolver->ResolveHostnameAsync(hc.hostname,
                             [resolver_weak, hc, next](const boost::asio::ip::address& resolved_ip) noexcept {
                                 if (resolved_ip.is_unspecified()) {
                                     (*next)(resolved_ip);
@@ -2964,13 +2986,12 @@ namespace ppp {
         }
 
         void DnsResolver::ResolveHostnameAsync(
-            boost::asio::io_context& context,
             const ppp::string& hostname,
             const ExitIpCallback& callback) noexcept {
 
             if (NULLPTR == callback || hostname.empty()) {
                 if (NULLPTR != callback) {
-                    boost::asio::post(context, [callback]() noexcept {
+                    boost::asio::post(context_, [callback]() noexcept {
                         callback(boost::asio::ip::address());
                     });
                 }
@@ -2980,7 +3001,7 @@ namespace ppp {
             /* Build the DNS A-record query. */
             auto query = make_shared_object<ppp::vector<Byte> >();
             if (NULLPTR == query || !BuildDnsAQuery(hostname, *query)) {
-                boost::asio::post(context, [callback]() noexcept {
+                boost::asio::post(context_, [callback]() noexcept {
                     callback(boost::asio::ip::address());
                 });
                 return;
@@ -2991,14 +3012,14 @@ namespace ppp {
             boost::asio::ip::address dns_ip = boost::asio::ip::address_v4(0x08080808);
             udp::endpoint remote(dns_ip, PPP_DNS_SYS_PORT);
 
-            std::shared_ptr<udp::socket> socket = make_shared_object<udp::socket>(context);
-            std::shared_ptr<boost::asio::steady_timer> timer = make_shared_object<boost::asio::steady_timer>(context);
+            std::shared_ptr<udp::socket> socket = make_shared_object<udp::socket>(context_);
+            std::shared_ptr<boost::asio::steady_timer> timer = make_shared_object<boost::asio::steady_timer>(context_);
             std::shared_ptr<ppp::vector<Byte> > recv_buf = make_shared_object<ppp::vector<Byte> >(PPP_DNS_RESOLVER_UDP_BUFFER_SIZE);
             std::shared_ptr<udp::endpoint> recv_ep = make_shared_object<udp::endpoint>();
             std::shared_ptr<std::atomic<bool> > done = make_shared_object<std::atomic<bool> >(false);
 
             if (NULLPTR == socket || NULLPTR == timer || NULLPTR == recv_buf || NULLPTR == recv_ep || NULLPTR == done) {
-                boost::asio::post(context, [callback]() noexcept {
+                boost::asio::post(context_, [callback]() noexcept {
                     callback(boost::asio::ip::address());
                 });
                 return;
@@ -3006,7 +3027,7 @@ namespace ppp {
 
             socket->open(udp::v4(), ec);
             if (ec) {
-                boost::asio::post(context, [callback]() noexcept {
+                boost::asio::post(context_, [callback]() noexcept {
                     callback(boost::asio::ip::address());
                 });
                 return;
@@ -3016,6 +3037,24 @@ namespace ppp {
             ppp::net::Socket::SetTypeOfService(socket->native_handle());
             ppp::net::Socket::SetSignalPipeline(socket->native_handle(), false);
             ppp::net::Socket::ReuseSocketAddress(socket->native_handle(), true);
+            socket->bind(udp::endpoint(remote.protocol(), 0), ec);
+            if (ec) {
+                boost::asio::post(context_, [callback]() noexcept {
+                    callback(boost::asio::ip::address());
+                });
+                return;
+            }
+            if (udp_flow_registry_) {
+                const udp::endpoint local = socket->local_endpoint(ec);
+                if (ec || !udp_flow_registry_->Register(
+                        local.port(), remote,
+                        std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS))) {
+                    boost::asio::post(context_, [callback]() noexcept {
+                        callback(boost::asio::ip::address());
+                    });
+                    return;
+                }
+            }
 
             /* Timeout. */
             timer->expires_after(std::chrono::milliseconds(PPP_DNS_RESOLVER_UDP_TIMEOUT_MS));

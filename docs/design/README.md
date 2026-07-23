@@ -21,4 +21,5 @@ stable-reference claims.
 - [OpenPPP2 Sub / Client 方案设计](SUB_CLIENT_DESIGN_CN.md)
 - [桌面客户端手动节点与启动参数设计](CLIENT_MANUAL_PROFILES_DESIGN_CN.md)
 - [OpenPPP2 Client 管理器 UI/UX 设计](CLIENT_UIUX_DESIGN_CN.md)
+- [VMUX 可靠性子协议设计(ACK + 快速重传 + FEC)](MUX_RELIABILITY_FEC_DESIGN_CN.md)
 - [Client UI mockup](mockups/client-connected.html)

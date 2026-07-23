@@ -53,7 +53,8 @@ namespace ppp {
                         const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                         const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                         const boost::asio::ip::address& serverIP,
-                        const boost::asio::ip::address& destinationIP) noexcept;
+                        const boost::asio::ip::address& destinationIP,
+                        bool use_underlying_nic) noexcept;
 
                     static bool RunCoroutine(
                         const DnsQueryContext& context,
@@ -66,7 +67,8 @@ namespace ppp {
                         const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                         const std::shared_ptr<boost::asio::io_context>& io_context,
                         const boost::asio::ip::udp::endpoint& sourceEP,
-                        const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
+                        const boost::asio::ip::udp::endpoint& destinationEP,
+                        bool use_underlying_nic) noexcept;
                 };
 
             }

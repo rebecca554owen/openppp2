@@ -89,6 +89,14 @@ openppp2_add_cpp_test(vmux_runtime_state_test SOURCES
     vmux_runtime_state_test.cpp)
 openppp2_add_cpp_test(vmux_negotiation_test SOURCES
     vmux_negotiation_test.cpp)
+openppp2_add_cpp_test(vmux_reliability_negotiation_test SOURCES
+    vmux_reliability_negotiation_test.cpp)
+openppp2_add_cpp_test(vmux_ack_tracker_test SOURCES
+    vmux_ack_tracker_test.cpp)
+openppp2_add_cpp_test(vmux_retransmit_buffer_test SOURCES
+    vmux_retransmit_buffer_test.cpp)
+openppp2_add_cpp_test(vmux_fec_codec_test SOURCES
+    vmux_fec_codec_test.cpp)
 openppp2_add_cpp_test(vmux_flow_reorder_test SOURCES
     vmux_flow_reorder_test.cpp)
 openppp2_add_cpp_test(vmux_flow_context_admission_test SOURCES
@@ -215,6 +223,10 @@ openppp2_add_cpp_test(dns_reachability_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsReachabilityParse.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsReachability.cpp"
     "${OPENPPP2_ROOT}/ppp/dns/DnsProviderCatalog.cpp")
+openppp2_add_cpp_test(dns_udp_flow_registry_test SOURCES
+    dns_udp_flow_registry_test.cpp
+    "${OPENPPP2_ROOT}/ppp/dns/DnsUdpFlowRegistry.cpp")
+target_link_libraries(dns_udp_flow_registry_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(dns_response_handler_test SOURCES
     dns_response_handler_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
@@ -231,6 +243,7 @@ openppp2_add_cpp_test(dns_session_context_test SOURCES
 openppp2_add_cpp_test(dns_controller_test SOURCES
     dns_controller_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsController.cpp"
+    "${OPENPPP2_ROOT}/ppp/dns/DnsUdpFlowRegistry.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsSessionContext.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")

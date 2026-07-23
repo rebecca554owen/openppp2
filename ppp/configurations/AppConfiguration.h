@@ -151,6 +151,24 @@ namespace ppp {
                     ppp::string                                             key;            ///< Shared debug secret (`--debug-key`); empty disables remote mux-mode control.
                     ppp::string                                             set_mode;       ///< Transient `--mux-mode-set` request; pushes a mode change to the peer once at startup.
                 }                                                           debug;          ///< Debug-only remote control of the peer's scheduler mode.
+                struct {
+                    bool                                                    enabled;        ///< QUIC-style reliability sub-protocol (ACK + fast retransmit + PTO); negotiated, falls back when the peer lacks it.
+                    struct {
+                        int                                                 bytes;          ///< Session-wide retransmit buffer byte cap; strictly > 0.
+                        int                                                 max_attempts;   ///< Per-frame retransmit attempts before flow reset / session rebuild; strictly > 0.
+                    }                                                       rtx;
+                    struct {
+                        int                                                 delay;          ///< Max delayed-ACK wait in milliseconds; strictly > 0.
+                    }                                                       ack;
+                    struct {
+                        int                                                 timeout;        ///< Gap wait timeout in milliseconds when reliability is active; strictly > 0.
+                    }                                                       gap;
+                }                                                           reliability;    ///< Negotiated frame-level reliability (ACK / fast retransmit / PTO) parameters.
+                struct {
+                    bool                                                    enabled;        ///< XOR parity FEC over reliable data frames; requires reliability; default false (bandwidth overhead).
+                    int                                                     group;          ///< Data frames per parity group; strictly > 0.
+                    int                                                     flush;          ///< Milliseconds a partial group may age before being flushed; strictly > 0.
+                }                                                           fec;            ///< Forward-error-correction parameters.
             }                                                               mux;            ///< Multiplexed connection channel parameters.
             struct {
                 struct {

@@ -51,7 +51,8 @@ namespace ppp {
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                     const std::shared_ptr<boost::asio::io_context>& context,
                     const boost::asio::ip::udp::endpoint& sourceEP,
-                    const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
+                    const boost::asio::ip::udp::endpoint& destinationEP,
+                    bool use_underlying_nic) noexcept {
 
                     (void)session;
                     const auto fallback_tunnel = [query, messages, sourceEP, destinationEP]() noexcept {
@@ -81,16 +82,14 @@ namespace ppp {
                     ppp::net::Socket::SetSignalPipeline(handle, false);
                     ppp::net::Socket::ReuseSocketAddress(handle, true);
 
-#if defined(_LINUX)
+#if defined(_ANDROID)
                     if (!serverIP.is_loopback()) {
                         auto protector_network = query.protector_network;
                         if (NULLPTR != protector_network) {
                             if (!protector_network->Protect(handle, y)) {
-#if defined(_ANDROID)
                                 __android_log_print(ANDROID_LOG_ERROR, "openppp2", "dns_redirect protect failed fd=%d server=%s",
                                     handle,
                                     serverIP.to_string().c_str());
-#endif
                                 fallback_tunnel();
                                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                             }
@@ -98,13 +97,36 @@ namespace ppp {
                                 handle,
                                 serverIP.to_string().c_str());
                         }
-#if defined(_ANDROID)
                         else {
                             __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect protector missing fd=%d server=%s",
                                 handle,
                                 serverIP.to_string().c_str());
                         }
-#endif
+                    }
+#elif defined(_LINUX)
+                    if (!serverIP.is_loopback()) {
+                        if (use_underlying_nic) {
+                            auto protector_network = query.protector_network;
+                            if (NULLPTR != protector_network && !protector_network->Protect(handle, y)) {
+                                fallback_tunnel();
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
+                            }
+                        }
+                        else {
+                            socket->bind(boost::asio::ip::udp::endpoint(serverEP.protocol(), 0), ec);
+                            if (ec || NULLPTR == query.udp_flow_registry) {
+                                fallback_tunnel();
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
+                            }
+
+                            const boost::asio::ip::udp::endpoint localEP = socket->local_endpoint(ec);
+                            if (ec || !query.udp_flow_registry->Register(
+                                    localEP.port(), serverEP,
+                                    std::chrono::seconds(query.configuration->udp.dns.timeout + 1))) {
+                                fallback_tunnel();
+                                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
+                            }
+                        }
                     }
 #endif
 
@@ -209,7 +231,8 @@ namespace ppp {
                     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
                     const boost::asio::ip::address& serverIP,
-                    const boost::asio::ip::address& destinationIP) noexcept {
+                    const boost::asio::ip::address& destinationIP,
+                    bool use_underlying_nic) noexcept {
 
                     if (!CanSpawn(query, session)) {
                         return false;
@@ -239,10 +262,11 @@ namespace ppp {
                     const boost::asio::ip::udp::endpoint destinationEP(destinationIP, frame->Destination.Port);
 
                     return ppp::coroutines::YieldContext::Spawn(query.allocator.get(), *context,
-                        [query, socket, buffer, frame, messages, packet, context, serverIP, sourceEP, destinationEP, session](ppp::coroutines::YieldContext& y) noexcept {
+                        [query, socket, buffer, frame, messages, packet, context, serverIP, sourceEP, destinationEP, session, use_underlying_nic](ppp::coroutines::YieldContext& y) noexcept {
                             (void)packet;
                             return DnsUdpRelay::RunCoroutine(
-                                query, y, socket, buffer, serverIP, session, frame, messages, context, sourceEP, destinationEP);
+                                query, y, socket, buffer, serverIP, session, frame, messages, context, sourceEP, destinationEP,
+                                use_underlying_nic);
                         });
                 }
 
