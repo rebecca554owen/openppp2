@@ -137,6 +137,7 @@ namespace ppp {
                     if (NULLPTR == dns_resolver_) {
                         return true;
                     }
+                    dns_resolver_->SetUdpFlowRegistry(udp_flow_registry_);
 
 #if defined(_ANDROID)
                     dns_resolver_->SetProtectSocketCallback(
@@ -144,19 +145,9 @@ namespace ppp {
                             return ppp::android::ProtectSocketFd(handle);
                         });
 #elif defined(_LINUX)
-                    if (NULLPTR != protect_network) {
-                        auto pn = protect_network;
-                        dns_resolver_->SetProtectSocketCallback(
-                            [pn](int handle) noexcept -> bool {
-                                return pn->ProtectSync(handle);
-                            });
-                    }
-                    else {
-                        dns_resolver_->SetProtectSocketCallback(
-                            [](int /*handle*/) noexcept -> bool {
-                                return true;
-                            });
-                    }
+                    // Linux route policy installs explicit provider /32 routes. Binding every
+                    // resolver socket to the physical NIC would override those routes.
+                    (void)protect_network;
 #endif
 
                     ppp::string domestic = configuration->dns.servers.domestic;
@@ -261,7 +252,16 @@ namespace ppp {
                     }
 
                     if (intercept_unmatched) {
-                        DnsReachability::CollectInterceptReachabilityIps(configuration, add_nic_ip);
+                        DnsReachability::CollectInterceptReachabilityIps(configuration, add_tunnel_ip);
+                    }
+                }
+
+                void DnsInterceptor::SetUdpFlowRegistry(
+                    const std::shared_ptr<ppp::dns::DnsUdpFlowRegistry>& registry) noexcept {
+
+                    udp_flow_registry_ = registry;
+                    if (dns_resolver_) {
+                        dns_resolver_->SetUdpFlowRegistry(registry);
                     }
                 }
 
@@ -511,8 +511,11 @@ namespace ppp {
                         return true;
                     };
                     dispatch_ports.udp_relay = [&](const boost::asio::ip::address& relay_target) noexcept {
+                        const bool use_underlying_nic =
+                            NULLPTR != plan_input.rule && plan_input.rule->Nic;
                         return DnsUdpRelay::Spawn(
-                            context, session, packet, frame, messages, relay_target, destinationIP);
+                            context, session, packet, frame, messages, relay_target, destinationIP,
+                            use_underlying_nic);
                     };
                     dispatch_ports.resolve_unmatched = [&]() noexcept {
                         std::shared_ptr<ppp::dns::DnsResolver> resolver = dns_resolver_;

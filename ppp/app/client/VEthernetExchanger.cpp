@@ -1415,6 +1415,14 @@ namespace ppp {
                                 // of the current scheduler preset. Whether it is *used* is decided
                                 // later by mode_requires_flow_v2 + peer intersection.
                                 Byte ordering_caps = (Byte)vmux::vmux_net::ordering_caps_flow_v2;
+                                // Advertise reliability / FEC when enabled locally; the server
+                                // intersects both ends and echoes the authoritative result.
+                                if (NULLPTR != configuration && configuration->mux.reliability.enabled) {
+                                    ordering_caps |= (Byte)vmux::vmux_net::ordering_caps_reliability;
+                                    if (configuration->mux.fec.enabled) {
+                                        ordering_caps |= (Byte)vmux::vmux_net::ordering_caps_fec;
+                                    }
+                                }
                                 ok = DoMux(vnet_transmission, mux->Vlan, max_connections, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_REMOTE) != 0, ordering_caps, y);
                             }
 
@@ -1833,7 +1841,11 @@ namespace ppp {
                             // Capability is always true on this build; usage depends on mode+turbo.
                             const bool agreed_flow_v2 =
                                 (ordering_caps & vmux::vmux_net::ordering_caps_flow_v2) != 0;
-                            mux->apply_agreed_ordering(agreed_flow_v2);
+                            const bool agreed_reliability =
+                                (ordering_caps & vmux::vmux_net::ordering_caps_reliability) != 0;
+                            const bool agreed_fec =
+                                (ordering_caps & vmux::vmux_net::ordering_caps_fec) != 0;
+                            mux->apply_agreed_ordering(agreed_flow_v2, agreed_reliability, agreed_fec);
 
                             successed = MuxConnectAllLinklayers(allocator, mux);
                         }

@@ -258,6 +258,7 @@ namespace ppp {
 
                 // Check whether dns resolution packets need to be redirected.
                 int destinationPort = frame->Destination.Port;
+                bool resolver_udp_flow = false;
                 if (destinationPort == PPP_DNS_SYS_PORT) {
 #if defined(_ANDROID)
 ANDROID_DNS_REDIRECT_TRACE(
@@ -267,24 +268,26 @@ ANDROID_DNS_REDIRECT_TRACE(
                         NULLPTR != messages ? (int)messages->Length : -1,
                         Ipep::ToAddress(packet->Destination).to_string().c_str());
 #endif
-                    if (NULLPTR != owner_->dns_controller_ &&
-                        owner_->dns_controller_->HandleQuery(owner_->dns_session_, packet, frame, messages)) {
+                    const boost::asio::ip::udp::endpoint sourceEP =
+                        IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
+                    const boost::asio::ip::udp::endpoint destEP(
+                        Ipep::ToAddress(packet->Destination), PPP_DNS_SYS_PORT);
+                    resolver_udp_flow = NULLPTR != owner_->dns_controller_ &&
+                        owner_->dns_controller_->ConsumeUdpFlow(sourceEP.port(), destEP);
+                    if (!resolver_udp_flow) {
+                        if (NULLPTR != owner_->dns_controller_ &&
+                            owner_->dns_controller_->HandleQuery(owner_->dns_session_, packet, frame, messages)) {
 #if defined(_ANDROID)
     ANDROID_DNS_REDIRECT_TRACE( "dns_redirect udp53 handled");
 #endif
-                        return true;
-                    }
-                    {
-                        const boost::asio::ip::udp::endpoint sourceEP =
-                            IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
-                        const boost::asio::ip::udp::endpoint destEP(
-                            Ipep::ToAddress(packet->Destination), PPP_DNS_SYS_PORT);
+                            return true;
+                        }
                         if (NULLPTR != owner_->dns_controller_) {
                             owner_->dns_controller_->HandleResolverResponse(
                                 owner_->dns_session_, messages, sourceEP, destEP, ppp::vector<Byte>{});
                         }
+                        return true;
                     }
-                    return true;
                 }
 
                 if (owner_->block_quic_ && destinationPort == PPP_HTTPS_SYS_PORT) {
@@ -294,7 +297,7 @@ ANDROID_DNS_REDIRECT_TRACE(
                 }
 
                 // If the VPN uses static transmission mode, ensure that the link is link ready.
-                if (owner_->static_mode_) {
+                if (owner_->static_mode_ && !resolver_udp_flow) {
                     auto& static_ = owner_->configuration_->udp.static_;
                     if (static_.quic && destinationPort == PPP_HTTPS_SYS_PORT) {
                         if (exchanger->StaticEchoAllocated()) {

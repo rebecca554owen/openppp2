@@ -306,6 +306,14 @@ namespace ppp {
             config.mux.tx.ctrl.budget_frames = PPP_MUX_TX_CTRL_BUDGET_FRAMES;
             config.mux.debug.key = "";
             config.mux.debug.set_mode = "";
+            config.mux.reliability.enabled = true;
+            config.mux.reliability.rtx.bytes = PPP_MUX_RELIABILITY_RTX_BYTES;
+            config.mux.reliability.rtx.max_attempts = PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS;
+            config.mux.reliability.ack.delay = PPP_MUX_RELIABILITY_ACK_DELAY;
+            config.mux.reliability.gap.timeout = PPP_MUX_RELIABILITY_GAP_TIMEOUT;
+            config.mux.fec.enabled = false;
+            config.mux.fec.group = PPP_MUX_FEC_GROUP;
+            config.mux.fec.flush = PPP_MUX_FEC_FLUSH;
 
             config.websocket.listen.ws = IPEndPoint::MinPort;
             config.websocket.listen.wss = IPEndPoint::MinPort;
@@ -743,6 +751,30 @@ namespace ppp {
 
             if (config.mux.tx.ctrl.budget_frames <= 0) {
                 config.mux.tx.ctrl.budget_frames = PPP_MUX_TX_CTRL_BUDGET_FRAMES;
+            }
+
+            if (config.mux.reliability.rtx.bytes <= 0) {
+                config.mux.reliability.rtx.bytes = PPP_MUX_RELIABILITY_RTX_BYTES;
+            }
+
+            if (config.mux.reliability.rtx.max_attempts <= 0) {
+                config.mux.reliability.rtx.max_attempts = PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS;
+            }
+
+            if (config.mux.reliability.ack.delay <= 0) {
+                config.mux.reliability.ack.delay = PPP_MUX_RELIABILITY_ACK_DELAY;
+            }
+
+            if (config.mux.reliability.gap.timeout <= 0) {
+                config.mux.reliability.gap.timeout = PPP_MUX_RELIABILITY_GAP_TIMEOUT;
+            }
+
+            if (config.mux.fec.group <= 0) {
+                config.mux.fec.group = PPP_MUX_FEC_GROUP;
+            }
+
+            if (config.mux.fec.flush <= 0) {
+                config.mux.fec.flush = PPP_MUX_FEC_FLUSH;
             }
 
             if (config.udp.static_.aggligator < 0) {
@@ -1712,6 +1744,14 @@ namespace ppp {
             config.mux.tx.queue.max = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["queue"]["max"]);
             config.mux.tx.queue.stall = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["queue"]["stall"]);
             config.mux.tx.ctrl.budget_frames = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["ctrl"]["budget_frames"]);
+            AssignBoolIfPresent(config.mux.reliability.enabled, json["mux"]["reliability"]["enabled"]);
+            config.mux.reliability.rtx.bytes = JsonAuxiliary::AsValue<int>(json["mux"]["reliability"]["rtx"]["bytes"]);
+            config.mux.reliability.rtx.max_attempts = JsonAuxiliary::AsValue<int>(json["mux"]["reliability"]["rtx"]["max_attempts"]);
+            config.mux.reliability.ack.delay = JsonAuxiliary::AsValue<int>(json["mux"]["reliability"]["ack"]["delay"]);
+            config.mux.reliability.gap.timeout = JsonAuxiliary::AsValue<int>(json["mux"]["reliability"]["gap"]["timeout"]);
+            AssignBoolIfPresent(config.mux.fec.enabled, json["mux"]["fec"]["enabled"]);
+            config.mux.fec.group = JsonAuxiliary::AsValue<int>(json["mux"]["fec"]["group"]);
+            config.mux.fec.flush = JsonAuxiliary::AsValue<int>(json["mux"]["fec"]["flush"]);
             config.mux.debug.key = JsonAuxiliary::AsValue<ppp::string>(json["mux"]["debug"]["key"]);
             config.mux.keep_alived[0] = JsonAuxiliary::AsValue<int>(json["mux"]["keep-alived"][0]);
             config.mux.keep_alived[1] = JsonAuxiliary::AsValue<int>(json["mux"]["keep-alived"][1]);
@@ -2051,6 +2091,14 @@ namespace ppp {
             mux["tx"]["queue"]["max"] = config.mux.tx.queue.max;
             mux["tx"]["queue"]["stall"] = config.mux.tx.queue.stall;
             mux["tx"]["ctrl"]["budget_frames"] = config.mux.tx.ctrl.budget_frames;
+            mux["reliability"]["enabled"] = config.mux.reliability.enabled;
+            mux["reliability"]["rtx"]["bytes"] = config.mux.reliability.rtx.bytes;
+            mux["reliability"]["rtx"]["max_attempts"] = config.mux.reliability.rtx.max_attempts;
+            mux["reliability"]["ack"]["delay"] = config.mux.reliability.ack.delay;
+            mux["reliability"]["gap"]["timeout"] = config.mux.reliability.gap.timeout;
+            mux["fec"]["enabled"] = config.mux.fec.enabled;
+            mux["fec"]["group"] = config.mux.fec.group;
+            mux["fec"]["flush"] = config.mux.fec.flush;
             if (!config.mux.debug.key.empty()) {
                 mux["debug"]["key"] = config.mux.debug.key;
             }

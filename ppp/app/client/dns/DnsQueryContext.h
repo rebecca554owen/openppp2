@@ -7,6 +7,7 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/udp.hpp>
+#include <ppp/dns/DnsUdpFlowRegistry.h>
 #include <ppp/stdafx.h>
 
 namespace ppp {
@@ -39,6 +40,7 @@ struct DnsQueryContext final {
         const std::shared_ptr<std::function<void(ppp::threading::Timer*)>>&)> emplace_timeout;
     std::function<bool(void*)> delete_timeout;
     std::function<void(const Byte*, int)> write_cache;
+    std::shared_ptr<ppp::dns::DnsUdpFlowRegistry> udp_flow_registry;
 
 #if defined(_LINUX)
     std::shared_ptr<ppp::net::ProtectorNetwork> protector_network;

@@ -13,6 +13,8 @@ struct MuxRuntimeState final {
     std::string scheduler;           ///< competition|round_robin (derived from effective_mode)
     std::string pool_policy;         ///< fixed|adaptive (derived from effective_mode + turbo)
     bool turbo = false;              ///< flow turbo active (adaptive pool / best-link SYN)
+    bool reliability = false;        ///< reliability sub-protocol agreed (ACK + retransmission)
+    bool fec = false;                ///< XOR parity FEC agreed (implies reliability)
     std::uint16_t active_links = 0;
     std::string fallback_reason;
 };
@@ -40,22 +42,34 @@ inline bool ModeRequiresFlowV2(const std::string& mode, bool turbo) noexcept {
 }
 
 /**
- * Negotiate effective preset + receiver ordering.
+ * Negotiate effective preset + receiver ordering + reliability capabilities.
  * @param local_supports_flow_v2 Implementation capability (independent of current preset).
  * @param peer_supports_flow_v2 Peer advertised capability bit.
  * @param turbo Local turbo request (only meaningful with flow preset).
+ * @param local_reliability Local reliability sub-protocol enabled (config).
+ * @param peer_reliability Peer advertised reliability capability bit.
+ * @param local_fec Local FEC enabled (config); requires reliability to take effect.
+ * @param peer_fec Peer advertised FEC capability bit.
  */
 inline MuxRuntimeState NegotiateMuxRuntimeState(
     std::string requested_mode,
     bool local_supports_flow_v2,
     bool peer_supports_flow_v2,
     std::uint16_t active_links = 0,
-    bool turbo = false) {
+    bool turbo = false,
+    bool local_reliability = false,
+    bool peer_reliability = false,
+    bool local_fec = false,
+    bool peer_fec = false) {
     MuxRuntimeState state;
     state.requested_mode = std::move(requested_mode);
     state.effective_mode = state.requested_mode;
     state.active_links = active_links;
     state.turbo = turbo && state.requested_mode == "flow";
+    // Reliability is orthogonal to the scheduler preset and receiver ordering:
+    // it runs in both compat and flow_v2 modes, so it never forces a fallback.
+    state.reliability = local_reliability && peer_reliability;
+    state.fec = state.reliability && local_fec && peer_fec;
 
     const bool known = state.requested_mode == "compat" ||
         state.requested_mode == "flow" ||
@@ -102,19 +116,26 @@ inline MuxRuntimeState NegotiateMuxRuntimeState(
     return state;
 }
 
-/** Apply the ordering selected by the peer's authoritative handshake reply. */
+/** Apply the capabilities selected by the peer's authoritative handshake reply. */
 inline MuxRuntimeState ApplyAgreedMuxRuntimeState(
     std::string requested_mode,
     bool agreed_flow_v2,
     std::uint16_t active_links = 0,
-    bool turbo = false) {
+    bool turbo = false,
+    bool agreed_reliability = false,
+    bool agreed_fec = false) {
     const bool known = requested_mode == "compat" ||
         requested_mode == "flow" ||
         requested_mode == "balance" ||
         requested_mode == "stripe";
     if (!known || !agreed_flow_v2) {
-        return NegotiateMuxRuntimeState(
+        MuxRuntimeState state = NegotiateMuxRuntimeState(
             std::move(requested_mode), true, false, active_links, turbo);
+        // Ordering fell back, but the peer's authoritative reliability result
+        // still applies (reliability runs in compat mode too).
+        state.reliability = agreed_reliability;
+        state.fec = agreed_reliability && agreed_fec;
+        return state;
     }
 
     MuxRuntimeState state;
@@ -123,6 +144,8 @@ inline MuxRuntimeState ApplyAgreedMuxRuntimeState(
     state.receiver_ordering = "flow_v2";
     state.active_links = active_links;
     state.turbo = turbo && state.requested_mode == "flow";
+    state.reliability = agreed_reliability;
+    state.fec = agreed_reliability && agreed_fec;
     FillMuxPresentation(state);
     return state;
 }

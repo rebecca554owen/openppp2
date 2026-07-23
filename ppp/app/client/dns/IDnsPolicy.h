@@ -6,6 +6,7 @@
 
 namespace ppp::net::packet { class IPFrame; class UdpFrame; class BufferSegment; }
 namespace ppp::configurations { class AppConfiguration; }
+namespace ppp::dns { class DnsUdpFlowRegistry; }
 namespace ppp::app::protocol { struct VirtualEthernetInformationExtensions; }
 #if defined(_LINUX)
 namespace ppp::net { class ProtectorNetwork; }
@@ -35,6 +36,7 @@ public:
         bool,
         const ppp::function<void(uint32_t)>&,
         const ppp::function<void(uint32_t)>&) noexcept {}
+    virtual void SetUdpFlowRegistry(const std::shared_ptr<ppp::dns::DnsUdpFlowRegistry>&) noexcept {}
     virtual boost::asio::ip::address RewriteFakeIpAddress(
         const boost::asio::ip::address& address) const noexcept { return address; }
     virtual bool GetFakeIpRoute(uint32_t&, int&) const noexcept { return false; }

@@ -21,10 +21,22 @@
 | `scheduler` | 推导的展示字段：`stripe` 为 `round_robin`，其他为 `competition`。 |
 | `pool_policy` | 推导的展示字段：仅有效 `flow` 且启用 turbo 时为 `adaptive`，其他为 `fixed`。 |
 | `turbo` | 生效的 flow-turbo 标志；它是选项，不是第五种模式。 |
+| `reliability` | 协商成功的可靠性子协议（ACK + 快速重传 + PTO）；与排序正交，compat 下也可启用。 |
+| `fec` | 协商成功的 XOR 奇偶 FEC（蕴含 `reliability`）。 |
 | `active_links` | 已完成握手且未 retire 的链路数，展示时会被钳制。 |
 | `fallback_reason` | 能力回退或会话未激活的机器可读原因。 |
 
 `receiver_ordering` 不是 `effective_mode` 的同义词；消费者必须单独使用该排序事实。
+
+## 可靠性子协议（ACK + 快速重传 + FEC）
+
+MUX 握手 `ordering_caps` 字节新增 bit1（`RELIABILITY`）与 bit2（`FEC`）：客户端按
+`mux.reliability.enabled`（默认 true）/ `mux.fec.enabled`（默认 false）宣告，服务端取交集并权威回显。
+可靠性在 compat 与 flow_v2 下均可运行：接收侧按序号空间（compat 全局 / flow_v2 per-flow DSN）累积报告已收区间，
+发送侧在重传缓冲（默认 8 MiB 上限）内以**原序号**跨链路补发丢失帧（dup-ACK 距离 ≥3 快速重传，PTO 200ms–3s 兜底）；
+单帧重传次数或缓冲超限后退化为既有 `fail_flow` / 会话重建。`cmd_ack`/`cmd_fec` 是无序控制帧，
+只在协商成功后发送（旧端遇未知 cmd 会断会话）。FEC 为 XOR 奇偶组（默认 8 帧一组），单组单丢失即时恢复，
+缺两帧及以上交给重传。协议细节见 [VMUX 可靠性子协议设计](../design/MUX_RELIABILITY_FEC_DESIGN_CN.md)。
 
 ## 回退行为
 

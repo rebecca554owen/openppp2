@@ -12,6 +12,9 @@
 #include <ppp/app/mux/IMuxTransport.h>
 #include <ppp/app/mux/MuxLinkDrainState.h>
 #include <ppp/app/mux/MuxRuntimeState.h>
+#include <ppp/app/mux/MuxAckTracker.h>
+#include <ppp/app/mux/MuxRetransmitBuffer.h>
+#include <ppp/app/mux/MuxFecCodec.h>
 
 namespace vmux {
     class vmux_skt;
@@ -107,8 +110,9 @@ namespace vmux {
          *   - cmd           (1 byte)  – vmux command identifier (see anonymous enum below).
          *   - connection_id (4 bytes) – logical connection this frame belongs to.
          *
-         * @note All fields are in host byte order within the vmux subsystem;
-         *       callers must not apply htonl/ntohs unless crossing a protocol boundary.
+         * @note Multi-byte fields (seq, connection_id) are stored in NETWORK byte
+         *       order on the wire: senders apply htonl when framing and receivers
+         *       apply ntohl on parse (see post_internal / packet_input_unorder).
          */
         typedef struct
 #if defined(__GNUC__) || defined(__clang__)
@@ -136,6 +140,8 @@ namespace vmux {
             cmd_keep_alived,              ///< KEEP-ALIVE — heartbeat probe frame.
             cmd_acceleration,             ///< ACCELERATION — enable/disable fast-path flag.
             cmd_mux_mode_set,             ///< MUX-MODE-SET — debug-only request to switch the peer's scheduler mode.
+            cmd_ack,                      ///< ACK — reliability feedback (received-sequence ranges); negotiated, unordered, never retransmitted.
+            cmd_fec,                      ///< FEC — XOR parity over a group of reliable data frames; negotiated, unordered, never retransmitted.
             cmd_max,                      ///< Sentinel — one past the last valid command.
 
             max_buffers_size = UINT16_MAX - sizeof(vmux_hdr), ///< Maximum payload bytes per vmux frame.
@@ -229,6 +235,8 @@ namespace vmux {
         /** @brief MUX capability bit advertised in the handshake (bit0 = FLOW_V2). */
         enum {
             ordering_caps_flow_v2 = 0x01,
+            ordering_caps_reliability = 0x02, ///< RELIABILITY — ACK feedback + retransmission sub-protocol.
+            ordering_caps_fec = 0x04,         ///< FEC — XOR parity groups (implies RELIABILITY when agreed).
         };
 
     public:
@@ -280,9 +288,13 @@ namespace vmux {
          */
         void                                                                        set_ordering_mode(receiver_ordering_mode m) noexcept;
         /** @brief Applies peer capability negotiation before establishment. */
-        void                                                                        apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2) noexcept;
-        /** @brief Applies the peer's authoritative ordering result on the client. */
-        void                                                                        apply_agreed_ordering(bool agreed_flow_v2) noexcept;
+        void                                                                        apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2, bool local_reliability, bool peer_reliability, bool local_fec, bool peer_fec) noexcept;
+        /** @brief Applies the peer's authoritative negotiation result on the client. */
+        void                                                                        apply_agreed_ordering(bool agreed_flow_v2, bool agreed_reliability, bool agreed_fec) noexcept;
+        /** @brief True when the reliability sub-protocol (ACK + retransmit) was negotiated. */
+        bool                                                                        reliability_agreed() const noexcept { return reliability_on_; }
+        /** @brief True when XOR parity FEC was negotiated (implies reliability_agreed). */
+        bool                                                                        fec_agreed() const noexcept { return fec_on_; }
         /** @brief Returns the latest observable scheduler/link state. */
         ppp::app::mux::MuxRuntimeState                                               get_runtime_state() const noexcept;
         /** @brief True for session-level control frames (keep-alive / mux-mode-set). */
@@ -292,6 +304,15 @@ namespace vmux {
         /** @brief True for connection-level control frames (syn / syn-ok / acceleration). */
         static bool                                                                 is_connection_control(Byte cmd) noexcept {
             return cmd == cmd_syn || cmd == cmd_syn_ok || cmd == cmd_acceleration;
+        }
+        /**
+         * @brief True for reliability control frames (ack / fec).
+         * @details These are unordered: they carry seq=0, are delivered inline by
+         *          the receiver in BOTH ordering modes, and are themselves never
+         *          ACKed, retransmitted, or FEC-protected (no ack-of-ack).
+         */
+        static bool                                                                 is_reliability_control(Byte cmd) noexcept {
+            return cmd == cmd_ack || cmd == cmd_fec;
         }
         /** @brief True for per-flow data frames carrying a per-connection DSN (push / fin). */
         static bool                                                                 is_per_flow_data(Byte cmd) noexcept {
@@ -464,6 +485,48 @@ namespace vmux {
         void                                                                        note_flow_unbuffered(size_t bytes) noexcept;
         /** @brief Release a flow context once its FIN was delivered and buffer drained. */
         void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
+
+        /**
+         * @brief Reliability sub-protocol (negotiated; strand-affine).
+         * @details ACK feedback + retransmission: the receiver records received
+         *          sequences per sequence space (global under compat, per-flow
+         *          DSN under flow_v2) and periodically emits cmd_ack frames; the
+         *          sender retains frames in rtx_ until acked and re-sends holes
+         *          (fast retransmit on dup-ACK distance, PTO as backstop) on any
+         *          live carrier with the ORIGINAL sequence number.
+         */
+        /** @brief Record one received reliable frame for ACK generation (strand-affine). */
+        void                                                                        note_ack_pending(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
+        /** @brief Emit a cmd_ack frame when the delayed-ACK policy says so (strand-affine). */
+        void                                                                        maybe_send_ack(uint64_t now, bool force) noexcept;
+        /** @brief Process an inbound cmd_ack payload: release acked frames, drive fast retransmit. */
+        void                                                                        packet_input_ack(Byte* buffer, int buffer_size, uint64_t now) noexcept;
+        /** @brief Process an inbound cmd_fec payload: cache the group, attempt single-loss recovery. */
+        void                                                                        packet_input_fec(const vmux_linklayer_ptr& linklayer, Byte* buffer, int buffer_size, uint64_t now) noexcept;
+        /** @brief Retain a just-sent reliable frame in the retransmit buffer (strand-affine). @return true when this was the first send of the frame. */
+        bool                                                                        track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept;
+        /** @brief Record ACK/FEC state for one inbound frame before dispatch (strand-affine). */
+        void                                                                        note_inbound_reliability_frame(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& frame, vmux_hdr* h, int length, uint64_t now) noexcept;
+        /** @brief Latch the negotiated reliability/FEC flags and their config bounds (pre-establishment). */
+        void                                                                        latch_reliability(bool agreed_reliability, bool agreed_fec) noexcept;
+        /** @brief Re-send scheduled lost frames on live carriers, bounded per turn (strand-affine). */
+        void                                                                        retransmit_pending(uint64_t now) noexcept;
+        /** @brief Current probe-timeout derived from the smoothed RTT estimate. */
+        uint64_t                                                                    current_pto() const noexcept;
+        /** @brief Periodic reliability maintenance: ACK delay flush, PTO scan, FEC flush (strand-affine). */
+        void                                                                        reliability_tick() noexcept;
+        /** @brief Arm the reliability maintenance timer (no-op unless negotiated). */
+        void                                                                        start_reliability_timer() noexcept;
+        /** @brief Drop reliability state of one connection space (flow reset / release). */
+        void                                                                        release_flow_reliability_state(uint32_t connection_id) noexcept;
+        /** @brief Fold one sent data frame into the running FEC group (strand-affine). */
+        void                                                                        fec_note_sent(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept;
+        /** @brief Cache one received data frame and advance pending FEC groups (strand-affine). */
+        void                                                                        fec_note_received(const vmux_linklayer_ptr& linklayer, uint32_t connection_id, uint32_t seq, const std::shared_ptr<Byte>& buffer, int length, uint64_t now) noexcept;
+        /** @brief Emit the running FEC group as a cmd_fec frame when non-empty (strand-affine). */
+        void                                                                        fec_flush_group() noexcept;
+        /** @brief Attempt single-loss recovery for every group that references (cid, seq). */
+        void                                                                        fec_try_recover_groups(const vmux_linklayer_ptr& linklayer, uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
 
         /** @brief Process SYN request and create connecting vmux socket state. */
         bool                                                                        process_rx_connecting(std::shared_ptr<vmux_skt>& skt, uint32_t connection_id, const char* host, int host_size) noexcept;
@@ -687,5 +750,42 @@ namespace vmux {
 
         vmux_linklayer_vector                                                       rx_links_;          ///< All link-layer endpoints available for inbound.
         vmux_linklayer_list                                                         tx_links_;          ///< Link-layer endpoints ordered by transmit usage.
+
+        /** @brief One pending receive-side FEC group (parity + slots for covered frames). */
+        struct fec_rx_group {
+            ppp::app::mux::MuxFecFrameView                                        view;               ///< Parsed parity frame (entries + parity block).
+            vmux::vector<std::shared_ptr<Byte>>                                   frames;             ///< Received frames aligned with view.entries (null = missing).
+            vmux::vector<int>                                                     lengths;            ///< Frame lengths aligned with view.entries.
+            int                                                                   missing = 0;        ///< Slots not yet received/recovered.
+        };
+        /** @brief One cached received data frame kept for FEC single-loss recovery. */
+        struct fec_cached_frame {
+            std::shared_ptr<Byte>                                                 buffer;
+            int                                                                   length = 0;
+        };
+
+        bool                                                                        reliability_on_ = false;   ///< Negotiated reliability sub-protocol active.
+        bool                                                                        fec_on_ = false;           ///< Negotiated FEC active (implies reliability_on_).
+        size_t                                                                      rtx_cap_bytes_ = (size_t)PPP_MUX_RELIABILITY_RTX_BYTES;   ///< Retransmit buffer byte cap (from config).
+        uint32_t                                                                    rtx_max_attempts_ = (uint32_t)PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS; ///< Per-frame retransmit attempt cap (from config).
+        uint64_t                                                                    ack_delay_ms_ = (uint64_t)PPP_MUX_RELIABILITY_ACK_DELAY;  ///< Delayed-ACK wait in ms (from config).
+        uint64_t                                                                    reliability_gap_timeout_ms_ = (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT; ///< Gap timeout when reliability is active (from config).
+        int                                                                         fec_group_k_ = PPP_MUX_FEC_GROUP;       ///< Data frames per FEC parity group (from config).
+        uint64_t                                                                    fec_flush_ms_ = (uint64_t)PPP_MUX_FEC_FLUSH;            ///< Partial-group flush delay in ms (from config).
+        bool                                                                        fec_flush_due_ = false;   ///< Full FEC group awaiting deferred emission on the maintenance tick.
+
+        ppp::app::mux::MuxRetransmitBuffer                                          rtx_;               ///< Sender-side retransmit buffer (strand-affine).
+        vmux::unordered_map<uint32_t, ppp::app::mux::MuxAckTracker>                 ack_trackers_;      ///< Received-sequence trackers; cid 0 = compat global space (strand-affine).
+        uint32_t                                                                    ack_pending_count_ = 0;      ///< Reliable frames received since the last emitted ACK.
+        uint64_t                                                                    ack_first_pending_tick_ = 0; ///< Tick the oldest un-ACKed frame arrived (delayed-ACK base).
+        uint64_t                                                                    srtt_ms_ = 0;              ///< Smoothed RTT estimate in ms (0 = no sample yet).
+        std::vector<uint64_t>                                                       rtx_pending_;       ///< Retransmit-buffer keys scheduled for re-send.
+        std::shared_ptr<boost::asio::steady_timer>                                  reliability_timer_; ///< Maintenance timer (ACK delay / PTO / FEC flush).
+
+        ppp::app::mux::MuxFecEncoder                                                fec_encoder_;       ///< Send-side running parity group (strand-affine).
+        vmux::list<fec_rx_group>                                                    fec_groups_;        ///< Receive-side pending parity groups (strand-affine).
+        vmux::unordered_map<uint64_t, fec_cached_frame>                             fec_frame_cache_;   ///< Recent received data frames keyed by (cid, seq) (strand-affine).
+        vmux::list<uint64_t>                                                        fec_frame_cache_order_; ///< FIFO eviction order for fec_frame_cache_.
+        size_t                                                                      fec_frame_cache_bytes_ = 0; ///< Byte total of fec_frame_cache_ (bound enforcement).
     };
 }

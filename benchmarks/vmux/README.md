@@ -17,8 +17,19 @@ wire protocol or the default mode. `compat` remains the production default.
 | `carrier-loss` | balance, eight flows | one carrier: random loss 2%, correlation 0%, rate 100 Mbit/s, seed 71214 |
 | `carrier-removal` | balance, eight flows | remove one carrier at runtime |
 | `turbo-churn` | flow, eight flows | repeated grow/shrink action hook |
+| `reliability-loss-0.5` | balance, eight flows, reliability on | one carrier: random loss 0.5%, seed 51503 |
+| `reliability-loss-2` | balance, eight flows, reliability on | one carrier: random loss 2%, seed 71214 |
+| `reliability-loss-5` | balance, eight flows, reliability on | one carrier: random loss 5%, seed 90512 |
+| `fec-loss-2` | balance, eight flows, reliability + FEC on | one carrier: random loss 2%, seed 71214 |
 
 `one-flow` is a convenience alias for `compat-one-flow`.
+
+The `reliability-*` and `fec-*` scenarios compare the negotiated reliability
+sub-protocol (ACK + fast retransmit + PTO) and the optional XOR parity FEC
+against the `carrier-loss` baseline at the same loss rates. The prepare hook
+receives the scenario name and must enable `mux.reliability.enabled` (all
+`reliability-*` and `fec-*` runs) and `mux.fec.enabled` (`fec-*` runs only)
+when configuring the tunnel.
 
 ## Safe local validation
 
@@ -116,6 +127,8 @@ loopback, option-like, and shell-metacharacter names. Its fixed profiles are:
 ```text
 carrier-delay: delay 40ms 0ms rate 100mbit
 carrier-loss: loss random 2% 0% rate 100mbit seed 71214
+carrier-loss-0.5: loss random 0.5% 0% rate 100mbit seed 51503
+carrier-loss-5: loss random 5% 0% rate 100mbit seed 90512
 ```
 
 Both `run.sh` and `netem.sh run` install cleanup traps so their qdisc is

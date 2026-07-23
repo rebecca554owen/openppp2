@@ -168,7 +168,7 @@ namespace vmux {
             normalized == ordering_flow_v2 ? "flow-v2" : "compat");
     }
 
-    void vmux_net::apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2) noexcept {
+    void vmux_net::apply_negotiation(bool local_supports_flow_v2, bool peer_supports_flow_v2, bool local_reliability, bool peer_reliability, bool local_fec, bool peer_fec) noexcept {
         ppp::app::mux::MuxRuntimeState state;
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
@@ -179,12 +179,17 @@ namespace vmux {
                 local_supports_flow_v2,
                 peer_supports_flow_v2,
                 runtime_state_.active_links,
-                turbo_ || runtime_state_.turbo);
+                turbo_ || runtime_state_.turbo,
+                local_reliability,
+                peer_reliability,
+                local_fec,
+                peer_fec);
             runtime_state_ = state;
             publish_runtime_snapshot_locked();
         }
         set_mode(parse_mode(ppp::string(state.effective_mode.data(), state.effective_mode.size())));
         set_ordering_mode(state.receiver_ordering == "flow_v2" ? ordering_flow_v2 : ordering_compat);
+        latch_reliability(state.reliability, state.fec);
         // Keep presentation fields in sync after ordering/turbo latch.
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
@@ -194,7 +199,7 @@ namespace vmux {
         }
     }
 
-    void vmux_net::apply_agreed_ordering(bool agreed_flow_v2) noexcept {
+    void vmux_net::apply_agreed_ordering(bool agreed_flow_v2, bool agreed_reliability, bool agreed_fec) noexcept {
         ppp::app::mux::MuxRuntimeState state;
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
@@ -202,7 +207,9 @@ namespace vmux {
                 runtime_state_.requested_mode,
                 agreed_flow_v2,
                 runtime_state_.active_links,
-                turbo_ || runtime_state_.turbo);
+                turbo_ || runtime_state_.turbo,
+                agreed_reliability,
+                agreed_fec);
             runtime_state_ = state;
             publish_runtime_snapshot_locked();
         }
@@ -211,6 +218,7 @@ namespace vmux {
         set_ordering_mode(state.receiver_ordering == "flow_v2"
             ? ordering_flow_v2
             : ordering_compat);
+        latch_reliability(state.reliability, state.fec);
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
             runtime_state_.turbo = turbo_;
@@ -416,6 +424,26 @@ namespace vmux {
             stripe_cursor_ = 0;
             flows_.clear();
             tx_flow_seq_.clear();
+
+            // Reliability sub-protocol teardown: stop the maintenance timer and
+            // drop all ACK / retransmit / FEC state with the session.
+            if (NULLPTR != reliability_timer_) {
+                boost::system::error_code timer_ec;
+                reliability_timer_->cancel(timer_ec);
+                reliability_timer_.reset();
+            }
+            rtx_.Clear();
+            rtx_pending_.clear();
+            ack_trackers_.clear();
+            ack_pending_count_ = 0;
+            ack_first_pending_tick_ = 0;
+            srtt_ms_ = 0;
+            fec_encoder_.Reset(now_tick());
+            fec_groups_.clear();
+            fec_frame_cache_.clear();
+            fec_frame_cache_order_.clear();
+            fec_frame_cache_bytes_ = 0;
+            fec_flush_due_ = false;
             break;
         }
 
@@ -896,6 +924,15 @@ namespace vmux {
             }
             (void)linklayer->drain_.AbortWrite(write);
         }
+
+        // Reliability: retain a copy for retransmission and fold data frames
+        // into the running FEC parity group once the frame is on the wire.
+        if (queued) {
+            const uint64_t sent_now = now_tick();
+            if (track_sent_frame(packet, packet_length, sent_now)) {
+                fec_note_sent(packet, packet_length, sent_now);
+            }
+        }
         return queued;
     }
 
@@ -1068,6 +1105,19 @@ namespace vmux {
 
         ppp::telemetry::Count("mux.link.recv", 1);
 
+        // Reliability control frames are unordered in both modes: handle them
+        // inline before any sequence-space reasoning (they carry seq=0).
+        if (is_reliability_control(h->cmd)) {
+            if (!packet_input(h->cmd, (Byte*)h, length, now)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                return false;
+            }
+
+            active(now);
+            linklayer_update(linklayer);
+            return true;
+        }
+
         uint32_t seq = ntohl(h->seq);
         if (status_.rx_ack_ == seq) {
                 if (packet_input(h->cmd, (Byte*)h, length, now)) {
@@ -1147,6 +1197,13 @@ namespace vmux {
 
             bool inserted = rx_queue_.emplace(std::make_pair(seq, packet)).second;
             if (!inserted) {
+                // Duplicate of an already-buffered out-of-order frame (a
+                // retransmit): with reliability negotiated this is expected.
+                if (reliability_on_) {
+                    active(now);
+                    linklayer_update(linklayer);
+                    return true;
+                }
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
             }
             else {
@@ -1162,6 +1219,14 @@ namespace vmux {
             return inserted;
         }
         else {
+            // Stale/duplicate (already delivered): with reliability negotiated
+            // this is an expected retransmit duplicate — drop it silently.
+            if (reliability_on_) {
+                active(now);
+                linklayer_update(linklayer);
+                return true;
+            }
+
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
@@ -1251,6 +1316,14 @@ namespace vmux {
         }
         elif(cmd == cmd_mux_mode_set) {
             packet_input_mux_mode_set(buffer, buffer_size);
+            active(now);
+        }
+        elif(cmd == cmd_ack) {
+            packet_input_ack(buffer, buffer_size, now);
+            active(now);
+        }
+        elif(cmd == cmd_fec) {
+            packet_input_fec(NULLPTR, buffer, buffer_size, now);
             active(now);
         }
         else {
@@ -1370,6 +1443,7 @@ namespace vmux {
         if (fx.fin_seen_ && fx.flow_reorder_.empty()) {
             flows_.erase(connection_id);
             tx_flow_seq_.erase(connection_id);
+            release_flow_reliability_state(connection_id);
         }
     }
 
@@ -1444,6 +1518,7 @@ namespace vmux {
             flows_.erase(fit);
         }
         tx_flow_seq_.erase(connection_id);
+        release_flow_reliability_state(connection_id);
 
         vmux_skt_ptr skt = get_connection(connection_id);
         if (NULLPTR != skt) {
@@ -1474,7 +1549,7 @@ namespace vmux {
         Byte cmd = h->cmd;
 
         // Control frames are not gated by any per-flow DSN; handle them inline.
-        if (is_session_control(cmd) || is_connection_control(cmd)) {
+        if (is_session_control(cmd) || is_connection_control(cmd) || is_reliability_control(cmd)) {
             if (!packet_input(cmd, (Byte*)h, length, now)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false;
@@ -1657,12 +1732,18 @@ namespace vmux {
             return;
         }
 
+        // With reliability negotiated, retransmission fills gaps first; use the
+        // wider reliability gap timeout as the final backstop.
+        const uint64_t gap_timeout = (reliability_on_ && reliability_gap_timeout_ms_ > 0)
+            ? reliability_gap_timeout_ms_
+            : flow_reorder_timeout_;
+
         // Collect first: fail_flow erases from flows_ while we iterate.
         ppp::vector<uint32_t> expired;
         for (vmux_flow_map::iterator it = flows_.begin(); it != flows_.end(); ++it) {
             flow_rx_context& fx = it->second;
             if (!fx.flow_reorder_.empty() && fx.oldest_buffered_tick_ != 0 &&
-                (now - fx.oldest_buffered_tick_) > flow_reorder_timeout_) {
+                (now - fx.oldest_buffered_tick_) > gap_timeout) {
                 expired.emplace_back(it->first);
             }
         }
@@ -1690,6 +1771,9 @@ namespace vmux {
         if (timeout == 0) {
             timeout = (uint64_t)PPP_MUX_FLOW_REORDER_TIMEOUT;
         }
+        if (reliability_on_ && reliability_gap_timeout_ms_ > 0) {
+            timeout = reliability_gap_timeout_ms_;
+        }
         if ((now - rx_gap_oldest_tick_) <= timeout) {
             return;
         }
@@ -1702,6 +1786,595 @@ namespace vmux {
         close_exec();
     }
     
+    // ------------------------------------------------------------------------
+    // Reliability sub-protocol (negotiated): ACK feedback, retransmission, FEC.
+    // All state below is strand-affine unless noted otherwise.
+    // ------------------------------------------------------------------------
+
+    void vmux_net::latch_reliability(bool agreed_reliability, bool agreed_fec) noexcept {
+        reliability_on_ = agreed_reliability;
+        fec_on_ = agreed_fec && agreed_reliability;
+
+        if (NULLPTR != AppConfiguration) {
+            const int rtx_bytes = AppConfiguration->mux.reliability.rtx.bytes;
+            const int rtx_attempts = AppConfiguration->mux.reliability.rtx.max_attempts;
+            const int ack_delay = AppConfiguration->mux.reliability.ack.delay;
+            const int gap_timeout = AppConfiguration->mux.reliability.gap.timeout;
+            rtx_cap_bytes_ = (rtx_bytes > 0) ? (size_t)rtx_bytes : (size_t)PPP_MUX_RELIABILITY_RTX_BYTES;
+            rtx_max_attempts_ = (rtx_attempts > 0) ? (uint32_t)rtx_attempts : (uint32_t)PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS;
+            ack_delay_ms_ = (ack_delay > 0) ? (uint64_t)ack_delay : (uint64_t)PPP_MUX_RELIABILITY_ACK_DELAY;
+            reliability_gap_timeout_ms_ = (gap_timeout > 0) ? (uint64_t)gap_timeout : (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT;
+
+            const int fec_group = AppConfiguration->mux.fec.group;
+            const int fec_flush = AppConfiguration->mux.fec.flush;
+            fec_group_k_ = (fec_group > 0) ? fec_group : PPP_MUX_FEC_GROUP;
+            fec_flush_ms_ = (fec_flush > 0) ? (uint64_t)fec_flush : (uint64_t)PPP_MUX_FEC_FLUSH;
+        }
+
+        {
+            std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            runtime_state_.reliability = reliability_on_;
+            runtime_state_.fec = fec_on_;
+            publish_runtime_snapshot_locked();
+        }
+
+        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "reliability=%d fec=%d",
+            reliability_on_ ? 1 : 0,
+            fec_on_ ? 1 : 0);
+        start_reliability_timer();
+    }
+
+    void vmux_net::note_inbound_reliability_frame(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& frame, vmux_hdr* h, int length, uint64_t now) noexcept {
+        if (!reliability_on_ || NULLPTR == h) {
+            return;
+        }
+
+        const Byte cmd = h->cmd;
+        if (is_reliability_control(cmd)) {
+            return; // ACK/FEC frames are never themselves ACKed or protected.
+        }
+
+        const uint32_t cid = ntohl(h->connection_id);
+        const uint32_t seq = ntohl(h->seq);
+        if (ordering_mode_ == ordering_flow_v2) {
+            // flow_v2: only per-flow data frames participate in the DSN spaces.
+            if (!is_per_flow_data(cmd)) {
+                return;
+            }
+            note_ack_pending(cid, seq, now);
+            fec_note_received(linklayer, cid, seq, frame, length, now);
+        }
+        else {
+            // compat: every sequenced frame shares the global space (cid 0).
+            note_ack_pending(0, seq, now);
+            if (is_per_flow_data(cmd)) {
+                fec_note_received(linklayer, cid, seq, frame, length, now);
+            }
+        }
+    }
+
+    void vmux_net::note_ack_pending(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept {
+        if (!reliability_on_) {
+            return;
+        }
+
+        const uint32_t key_cid = (ordering_mode_ == ordering_compat) ? 0u : connection_id;
+        ack_trackers_[key_cid].Add(seq, (size_t)PPP_MUX_ACK_MAX_RANGES);
+        if (ack_pending_count_ == 0) {
+            ack_first_pending_tick_ = now;
+        }
+        ack_pending_count_++;
+        maybe_send_ack(now, false);
+    }
+
+    void vmux_net::maybe_send_ack(uint64_t now, bool force) noexcept {
+        if (!reliability_on_ || !base_.established_ || ack_pending_count_ == 0) {
+            return;
+        }
+        if (!force && ack_pending_count_ < 2 && (now - ack_first_pending_tick_) < ack_delay_ms_) {
+            return;
+        }
+
+        ppp::app::mux::MuxAckBlock blocks[PPP_MUX_ACK_MAX_BLOCKS];
+        size_t block_count = 0;
+        for (const std::pair<const uint32_t, ppp::app::mux::MuxAckTracker>& kv : ack_trackers_) {
+            if (block_count >= (size_t)PPP_MUX_ACK_MAX_BLOCKS) {
+                break; // Remaining sequence spaces are carried by the next ACK.
+            }
+            if (kv.second.empty()) {
+                continue;
+            }
+
+            ppp::app::mux::MuxAckBlock& block = blocks[block_count++];
+            block.connection_id = kv.first;
+            block.largest = kv.second.largest();
+            block.ranges = kv.second.ranges();
+        }
+        if (block_count == 0) {
+            ack_pending_count_ = 0;
+            return;
+        }
+
+        const size_t payload_cap = ppp::app::mux::MuxAckFrameMaxSize(
+            (size_t)PPP_MUX_ACK_MAX_BLOCKS, (size_t)PPP_MUX_ACK_MAX_RANGES);
+        std::shared_ptr<Byte> packet = make_byte_array((int)(sizeof(vmux_hdr) + payload_cap));
+        if (NULLPTR == packet) {
+            return;
+        }
+
+        const size_t payload_len = ppp::app::mux::EncodeMuxAckFrame(
+            blocks, block_count, packet.get() + sizeof(vmux_hdr), payload_cap, (size_t)PPP_MUX_ACK_MAX_RANGES);
+        if (payload_len == 0) {
+            return;
+        }
+
+        vmux_hdr* h = (vmux_hdr*)packet.get();
+        h->cmd = cmd_ack;
+        h->connection_id = htonl(0);
+
+        // Best-effort: ACK frames are periodic and cumulative, so a queueing
+        // failure must not tear the session down (post() would close_exec).
+        PostInternalAsynchronousCallback null_ac;
+        if (post_internal(packet, (int)(sizeof(vmux_hdr) + payload_len), false, null_ac)) {
+            ack_pending_count_ = 0;
+            ppp::telemetry::Count("mux.ack.send", 1);
+        }
+    }
+
+    void vmux_net::packet_input_ack(Byte* buffer, int buffer_size, uint64_t now) noexcept {
+        if (!reliability_on_) {
+            ppp::telemetry::Count("mux.ack.unexpected", 1);
+            return;
+        }
+
+        std::vector<ppp::app::mux::MuxAckBlock> blocks;
+        if (!ppp::app::mux::DecodeMuxAckFrame((const uint8_t*)buffer, (size_t)std::max(0, buffer_size),
+            (size_t)PPP_MUX_ACK_MAX_BLOCKS, (size_t)PPP_MUX_ACK_MAX_RANGES, blocks)) {
+            // Malformed feedback: drop the frame, never kill the session.
+            ppp::telemetry::Count("mux.ack.malformed", 1);
+            return;
+        }
+
+        ppp::telemetry::Count("mux.ack.recv", 1);
+        for (const ppp::app::mux::MuxAckBlock& block : blocks) {
+            const uint32_t key_cid = (ordering_mode_ == ordering_compat) ? 0u : block.connection_id;
+            std::vector<uint64_t> candidates;
+            const uint64_t sample = rtx_.Ack(key_cid, block.largest, block.ranges, now,
+                (uint32_t)PPP_MUX_FAST_RETX_THRESHOLD, candidates);
+            if (sample > 0) {
+                srtt_ms_ = (srtt_ms_ == 0) ? sample : (srtt_ms_ * 7 + sample) / 8;
+            }
+            for (uint64_t key : candidates) {
+                rtx_pending_.emplace_back(key);
+            }
+        }
+
+        if (!rtx_pending_.empty()) {
+            ppp::telemetry::Count("mux.rtx.fast", (int64_t)rtx_pending_.size());
+            retransmit_pending(now);
+        }
+    }
+
+    bool vmux_net::track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept {
+        if (!reliability_on_ || NULLPTR == packet || packet_length < (int)sizeof(vmux_hdr)) {
+            return false;
+        }
+
+        const vmux_hdr* h = (const vmux_hdr*)packet.get();
+        const Byte cmd = h->cmd;
+        if (is_reliability_control(cmd)) {
+            return false;
+        }
+
+        const uint32_t cid = ntohl(h->connection_id);
+        const uint32_t seq = ntohl(h->seq);
+        uint32_t key_cid = cid;
+        if (ordering_mode_ == ordering_flow_v2) {
+            // flow_v2: control frames carry no DSN and are not tracked; their
+            // loss is tolerated (connect timeout / periodic retry covers them).
+            if (!is_per_flow_data(cmd)) {
+                return false;
+            }
+        }
+        else {
+            key_cid = 0; // compat: one global sequence space.
+        }
+
+        const uint64_t key = ppp::app::mux::MuxRetransmitBuffer::Key(key_cid, seq);
+        if (NULLPTR != rtx_.Find(key)) {
+            return false; // A retransmission, not a first send.
+        }
+        if (!rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_)) {
+            // Retransmit buffer exhausted: degrade exactly like an unrecovered gap.
+            ppp::telemetry::Count("mux.rtx.cap", 1);
+            if (ordering_mode_ == ordering_flow_v2) {
+                fail_flow(cid, "rtx_buffer_overflow");
+            }
+            else {
+                close_exec();
+            }
+            return false;
+        }
+        return true;
+    }
+
+    void vmux_net::retransmit_pending(uint64_t now) noexcept {
+        if (rtx_pending_.empty() || base_.disposed_.load(std::memory_order_acquire)) {
+            return;
+        }
+
+        size_t burst = (size_t)PPP_MUX_RELIABILITY_RXT_BURST;
+        std::vector<uint64_t> leftover;
+        for (uint64_t key : rtx_pending_) {
+            ppp::app::mux::MuxRtxEntry* entry = rtx_.Find(key);
+            if (NULLPTR == entry) {
+                continue; // ACKed/released since it was scheduled.
+            }
+            if (burst == 0) {
+                leftover.emplace_back(key);
+                continue;
+            }
+            if (entry->last_sent_tick == now) {
+                continue; // Already (re)sent this turn (duplicate schedule).
+            }
+            if (entry->attempts >= rtx_max_attempts_) {
+                // Unrecoverable frame: degrade exactly like an unrecovered gap.
+                ppp::telemetry::Count("mux.rtx.exhausted", 1);
+                const uint32_t cid = ppp::app::mux::MuxRetransmitBuffer::KeyCid(key);
+                if (ordering_mode_ == ordering_flow_v2) {
+                    fail_flow(cid, "rtx_exhausted");
+                    continue;
+                }
+
+                close_exec();
+                return;
+            }
+
+            // Pick any free link with byte credit; retransmissions keep the
+            // ORIGINAL sequence number so the receiver deduplicates them.
+            vmux_linklayer_ptr chosen;
+            for (vmux_linklayer_list::iterator it = tx_links_.begin(); it != tx_links_.end(); ++it) {
+                if (link_has_byte_credit(*it, entry->length)) {
+                    chosen = *it;
+                    tx_links_.erase(it);
+                    break;
+                }
+            }
+            if (NULLPTR == chosen) {
+                leftover.emplace_back(key); // No credit right now; a completion re-drives us.
+                continue;
+            }
+
+            PostInternalAsynchronousCallback null_ac;
+            if (!underlyin_sent(chosen, entry->buffer, entry->length, null_ac)) {
+                leftover.emplace_back(key);
+                continue;
+            }
+
+            rtx_.MarkRetransmitted(key, now);
+            ppp::telemetry::Count("mux.rtx.send", 1);
+            --burst;
+        }
+        rtx_pending_.swap(leftover);
+    }
+
+    uint64_t vmux_net::current_pto() const noexcept {
+        uint64_t pto = (srtt_ms_ > 0) ? (srtt_ms_ * 2) : (uint64_t)PPP_MUX_RELIABILITY_PTO_INIT;
+        if (pto < (uint64_t)PPP_MUX_RELIABILITY_PTO_MIN) {
+            pto = (uint64_t)PPP_MUX_RELIABILITY_PTO_MIN;
+        }
+        if (pto > (uint64_t)PPP_MUX_RELIABILITY_PTO_MAX) {
+            pto = (uint64_t)PPP_MUX_RELIABILITY_PTO_MAX;
+        }
+        return pto;
+    }
+
+    void vmux_net::reliability_tick() noexcept {
+        if (base_.disposed_.load(std::memory_order_acquire) || NULLPTR == reliability_timer_) {
+            return;
+        }
+
+        const uint64_t now = now_tick();
+        if (base_.established_ && reliability_on_) {
+            maybe_send_ack(now, false);
+
+            rtx_.CollectExpired(now, current_pto(), (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_);
+            if (!rtx_pending_.empty()) {
+                ppp::telemetry::Count("mux.rtx.pto", 1);
+                retransmit_pending(now);
+            }
+
+            if (fec_on_ && fec_encoder_.count() > 0 &&
+                (fec_flush_due_ || (now - fec_encoder_.first_add_tick()) >= fec_flush_ms_)) {
+                fec_flush_due_ = false;
+                fec_flush_group();
+            }
+        }
+
+        std::weak_ptr<vmux_net> weak = weak_from_this();
+        reliability_timer_->expires_after(std::chrono::milliseconds(PPP_MUX_RELIABILITY_TIMER_MS));
+        reliability_timer_->async_wait(
+            [weak](const boost::system::error_code& ec) noexcept {
+                if (ec) {
+                    return;
+                }
+                if (std::shared_ptr<vmux_net> self = weak.lock()) {
+                    self->reliability_tick();
+                }
+            });
+    }
+
+    void vmux_net::start_reliability_timer() noexcept {
+        if (!reliability_on_ || NULLPTR != reliability_timer_ || NULLPTR == strand_) {
+            return;
+        }
+
+        reliability_timer_ = std::make_shared<boost::asio::steady_timer>(*strand_);
+        reliability_tick(); // Arms the wait chain; work is a no-op pre-establishment.
+    }
+
+    void vmux_net::release_flow_reliability_state(uint32_t connection_id) noexcept {
+        if (ordering_mode_ == ordering_flow_v2) {
+            rtx_.EraseCid(connection_id);
+            ack_trackers_.erase(connection_id);
+        }
+        if (!fec_on_) {
+            return;
+        }
+
+        for (vmux::list<uint64_t>::iterator it = fec_frame_cache_order_.begin(); it != fec_frame_cache_order_.end();) {
+            if (ppp::app::mux::MuxRetransmitBuffer::KeyCid(*it) == connection_id) {
+                vmux::unordered_map<uint64_t, fec_cached_frame>::iterator cit = fec_frame_cache_.find(*it);
+                if (cit != fec_frame_cache_.end()) {
+                    fec_frame_cache_bytes_ -= (size_t)cit->second.length;
+                    fec_frame_cache_.erase(cit);
+                }
+                it = fec_frame_cache_order_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+        for (vmux::list<fec_rx_group>::iterator it = fec_groups_.begin(); it != fec_groups_.end();) {
+            bool references = false;
+            for (const ppp::app::mux::MuxFecFrameId& id : it->view.entries) {
+                if (id.connection_id == connection_id) {
+                    references = true;
+                    break;
+                }
+            }
+            if (references) {
+                it = fec_groups_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+
+    void vmux_net::fec_note_sent(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept {
+        if (!fec_on_ || NULLPTR == packet) {
+            return;
+        }
+        if (packet_length < (int)sizeof(vmux_hdr) || packet_length > PPP_MUX_FEC_MAX_FRAME) {
+            return; // Oversize frames stay retransmit-only (parity must fit one frame).
+        }
+
+        const vmux_hdr* h = (const vmux_hdr*)packet.get();
+        if (!is_per_flow_data(h->cmd)) {
+            return; // Parity covers reliable data frames only.
+        }
+
+        if (fec_encoder_.count() == 0) {
+            fec_encoder_.Reset(now);
+        }
+        fec_encoder_.Add(ntohl(h->connection_id), ntohl(h->seq), packet.get(), packet_length);
+        if (fec_encoder_.count() >= fec_group_k_) {
+            // Defer emission to the maintenance tick: fec_note_sent runs inside
+            // the transmit drain, where re-entering the scheduler would corrupt it.
+            fec_flush_due_ = true;
+        }
+    }
+
+    void vmux_net::fec_flush_group() noexcept {
+        if (fec_encoder_.count() == 0) {
+            return;
+        }
+
+        const uint64_t now = now_tick();
+        do {
+            if (!fec_on_ || !base_.established_) {
+                break;
+            }
+
+            const int payload_cap = (int)fec_encoder_.MaxPayloadSize();
+            std::shared_ptr<Byte> packet = make_byte_array((int)sizeof(vmux_hdr) + payload_cap);
+            if (NULLPTR == packet) {
+                break;
+            }
+
+            const int payload_len = fec_encoder_.Build(packet.get() + sizeof(vmux_hdr), payload_cap);
+            if (payload_len <= 0) {
+                break;
+            }
+
+            vmux_hdr* h = (vmux_hdr*)packet.get();
+            h->cmd = cmd_fec;
+            h->connection_id = htonl(0);
+
+            PostInternalAsynchronousCallback null_ac;
+            if (post_internal(packet, (int)sizeof(vmux_hdr) + payload_len, false, null_ac)) {
+                ppp::telemetry::Count("mux.fec.send", 1);
+            }
+        } while (false);
+
+        fec_encoder_.Reset(now);
+    }
+
+    void vmux_net::fec_note_received(const vmux_linklayer_ptr& linklayer, uint32_t connection_id, uint32_t seq, const std::shared_ptr<Byte>& buffer, int length, uint64_t now) noexcept {
+        if (!fec_on_ || NULLPTR == buffer || length < (int)sizeof(vmux_hdr)) {
+            return;
+        }
+
+        // Cache the frame for later single-loss recovery (bounded FIFO).
+        const uint64_t key = ppp::app::mux::MuxRetransmitBuffer::Key(connection_id, seq);
+        if (fec_frame_cache_.find(key) == fec_frame_cache_.end()) {
+            const size_t entry_cap = (size_t)PPP_MUX_FEC_WINDOW_GROUPS * (size_t)std::max(1, fec_group_k_);
+            while (!fec_frame_cache_order_.empty() &&
+                (fec_frame_cache_bytes_ + (size_t)length > (size_t)PPP_MUX_FEC_CACHE_BYTES ||
+                    fec_frame_cache_.size() >= entry_cap)) {
+                const uint64_t victim = fec_frame_cache_order_.front();
+                fec_frame_cache_order_.pop_front();
+                vmux::unordered_map<uint64_t, fec_cached_frame>::iterator vit = fec_frame_cache_.find(victim);
+                if (vit != fec_frame_cache_.end()) {
+                    fec_frame_cache_bytes_ -= (size_t)vit->second.length;
+                    fec_frame_cache_.erase(vit);
+                }
+            }
+
+            fec_cached_frame cached;
+            cached.buffer = buffer;
+            cached.length = length;
+            fec_frame_cache_.emplace(key, cached);
+            fec_frame_cache_order_.emplace_back(key);
+            fec_frame_cache_bytes_ += (size_t)length;
+        }
+
+        fec_try_recover_groups(linklayer, connection_id, seq, now);
+    }
+
+    void vmux_net::fec_try_recover_groups(const vmux_linklayer_ptr& linklayer, uint32_t connection_id, uint32_t seq, uint64_t now) noexcept {
+        for (vmux::list<fec_rx_group>::iterator git = fec_groups_.begin(); git != fec_groups_.end();) {
+            fec_rx_group& group = *git;
+
+            int slot = -1;
+            for (size_t i = 0; i < group.view.entries.size(); ++i) {
+                if (group.view.entries[i].connection_id == connection_id &&
+                    group.view.entries[i].sequence == seq) {
+                    slot = (int)i;
+                    break;
+                }
+            }
+            if (slot < 0) {
+                ++git;
+                continue;
+            }
+
+            if (NULLPTR == group.frames[slot]) {
+                vmux::unordered_map<uint64_t, fec_cached_frame>::iterator cit =
+                    fec_frame_cache_.find(ppp::app::mux::MuxRetransmitBuffer::Key(connection_id, seq));
+                if (cit != fec_frame_cache_.end()) {
+                    group.frames[slot] = cit->second.buffer;
+                    group.lengths[slot] = cit->second.length;
+                    group.missing--;
+                }
+            }
+
+            bool erase_group = false;
+            if (group.missing <= 0) {
+                erase_group = true; // Complete without needing recovery.
+            }
+            else if (group.missing == 1) {
+                int missing_index = -1;
+                std::vector<const uint8_t*> present(group.frames.size(), nullptr);
+                std::vector<int> present_lengths(group.lengths.size(), 0);
+                for (size_t i = 0; i < group.frames.size(); ++i) {
+                    if (NULLPTR == group.frames[i]) {
+                        missing_index = (int)i;
+                    }
+                    else {
+                        present[i] = group.frames[i].get();
+                        present_lengths[i] = group.lengths[i];
+                    }
+                }
+
+                const int cap = (int)group.view.parity.size();
+                std::shared_ptr<Byte> recovered = make_byte_array(std::max(cap, (int)sizeof(vmux_hdr)));
+                const int recovered_length = (NULLPTR != recovered)
+                    ? ppp::app::mux::MuxFecRecover(group.view, present.data(), present_lengths.data(),
+                        missing_index, recovered.get(), cap)
+                    : 0;
+                if (recovered_length >= (int)sizeof(vmux_hdr)) {
+                    vmux_hdr* rh = (vmux_hdr*)recovered.get();
+                    const ppp::app::mux::MuxFecFrameId& want = group.view.entries[missing_index];
+                    if (is_per_flow_data(rh->cmd) &&
+                        ntohl(rh->connection_id) == want.connection_id &&
+                        ntohl(rh->seq) == want.sequence) {
+                        ppp::telemetry::Count("mux.fec.recovered", 1);
+                        note_ack_pending(want.connection_id, want.sequence, now);
+                        const bool delivered = (ordering_mode_ == ordering_flow_v2)
+                            ? packet_input_flow(linklayer, rh, recovered_length, now)
+                            : packet_input_unorder(linklayer, rh, recovered_length, now);
+                        if (!delivered) {
+                            close_exec();
+                            return;
+                        }
+                    }
+                    else {
+                        ppp::telemetry::Count("mux.fec.recover_invalid", 1);
+                    }
+                }
+                else {
+                    ppp::telemetry::Count("mux.fec.recover_failed", 1);
+                }
+                erase_group = true;
+            }
+
+            if (erase_group) {
+                git = fec_groups_.erase(git);
+            }
+            else {
+                ++git;
+            }
+        }
+    }
+
+    void vmux_net::packet_input_fec(const vmux_linklayer_ptr& linklayer, Byte* buffer, int buffer_size, uint64_t now) noexcept {
+        if (!fec_on_) {
+            ppp::telemetry::Count("mux.fec.unexpected", 1);
+            return;
+        }
+
+        ppp::app::mux::MuxFecFrameView view;
+        const int max_count = std::max(1, fec_group_k_ * 4);
+        if (!ppp::app::mux::ParseMuxFecFrame((const uint8_t*)buffer, buffer_size, max_count, view)) {
+            ppp::telemetry::Count("mux.fec.malformed", 1);
+            return;
+        }
+
+        ppp::telemetry::Count("mux.fec.recv", 1);
+        while (fec_groups_.size() >= (size_t)PPP_MUX_FEC_WINDOW_GROUPS) {
+            fec_groups_.pop_front();
+            ppp::telemetry::Count("mux.fec.group.evict", 1);
+        }
+
+        fec_rx_group group;
+        group.frames.resize(view.entries.size());
+        group.lengths.resize(view.entries.size(), 0);
+        group.missing = 0;
+        for (size_t i = 0; i < view.entries.size(); ++i) {
+            const ppp::app::mux::MuxFecFrameId& id = view.entries[i];
+            vmux::unordered_map<uint64_t, fec_cached_frame>::iterator cit =
+                fec_frame_cache_.find(ppp::app::mux::MuxRetransmitBuffer::Key(id.connection_id, id.sequence));
+            if (cit != fec_frame_cache_.end()) {
+                group.frames[i] = cit->second.buffer;
+                group.lengths[i] = cit->second.length;
+            }
+            else {
+                group.missing++;
+            }
+        }
+        group.view = std::move(view);
+        fec_groups_.emplace_back(std::move(group));
+
+        // Slots were filled from the cache above; evaluate immediately in case
+        // the group is already one frame short (or complete).
+        if (!fec_groups_.empty() && !fec_groups_.back().view.entries.empty()) {
+            const ppp::app::mux::MuxFecFrameId& first = fec_groups_.back().view.entries.front();
+            fec_try_recover_groups(linklayer, first.connection_id, first.sequence, now);
+        }
+    }
+
     /**
      * @brief Handles remote SYN by creating and accepting a vmux socket instance.
      */
@@ -1855,7 +2528,13 @@ namespace vmux {
 
         vmux_hdr* h = (vmux_hdr*)packet.get();
         bool prioritize_ctrl = false;
-        if (ordering_mode_ == ordering_flow_v2) {
+        if (is_reliability_control(h->cmd)) {
+            // Reliability control frames (ack/fec) are unordered in BOTH modes:
+            // seq=0, never DSN-gated, never ACKed/retransmitted/FEC-protected.
+            h->seq = htonl(0);
+            prioritize_ctrl = (ordering_mode_ == ordering_flow_v2);
+        }
+        else if (ordering_mode_ == ordering_flow_v2) {
             // flow v2: per-flow data frames carry a per-connection DSN; control
             // frames carry seq=0 (the receiver ignores their DSN). This keeps the
             // wire header unchanged while letting the receiver order each
@@ -2838,6 +3517,7 @@ namespace vmux {
             bool posted = vmux_post_exec(context_, strand_,
                 [self, this, linklayer, buffer_memory, h, buffer_size]() noexcept {
                     uint64_t now = now_tick();
+                    note_inbound_reliability_frame(linklayer, buffer_memory, h, buffer_size, now);
                     bool delivered = (ordering_mode_ == ordering_flow_v2)
                         ? packet_input_flow(linklayer, h, buffer_size, now)
                         : packet_input_unorder(linklayer, h, buffer_size, now);

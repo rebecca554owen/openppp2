@@ -6,6 +6,7 @@
 
 #include <ppp/app/client/dns/DnsSessionContext.h>
 #include <ppp/app/client/dns/IDnsPolicy.h>
+#include <ppp/dns/DnsUdpFlowRegistry.h>
 #include <ppp/app/client/dns/IDnsTimerScheduler.h>
 
 namespace ppp::configurations { class AppConfiguration; }
@@ -43,6 +44,9 @@ public:
     boost::asio::ip::address RewriteFakeIpAddress(
         const boost::asio::ip::address& address) const noexcept;
     bool GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept;
+    bool ConsumeUdpFlow(
+        uint16_t local_port,
+        const boost::asio::ip::udp::endpoint& remote) noexcept;
 
     std::shared_ptr<const DnsSessionContext> OpenSession(
         const std::shared_ptr<IDnsTunnelTransport>& transport) noexcept;
@@ -67,6 +71,8 @@ private:
     std::unique_ptr<IDnsPolicy> policy_;
     std::shared_ptr<IDnsTimerScheduler> timers_;
     std::shared_ptr<DnsSessionContext> active_session_;
+    std::shared_ptr<ppp::dns::DnsUdpFlowRegistry> udp_flow_registry_ =
+        std::make_shared<ppp::dns::DnsUdpFlowRegistry>();
     DnsQueryContext context_;
     std::atomic_uint64_t generation_{0};
     std::atomic_bool closed_{false};

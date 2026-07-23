@@ -13,6 +13,8 @@ Usage:
 Profiles:
   carrier-delay  delay 40ms 0ms rate 100mbit
   carrier-loss   loss random 2% 0% rate 100mbit seed 71214
+  carrier-loss-0.5  loss random 0.5% 0% rate 100mbit seed 51503
+  carrier-loss-5    loss random 5% 0% rate 100mbit seed 90512
 EOF
 }
 
@@ -28,6 +30,8 @@ profile_args() {
     case "${1:-}" in
         carrier-delay) printf '%s\n' delay 40ms 0ms rate 100mbit ;;
         carrier-loss) printf '%s\n' loss random 2% 0% rate 100mbit seed 71214 ;;
+        carrier-loss-0.5) printf '%s\n' loss random 0.5% 0% rate 100mbit seed 51503 ;;
+        carrier-loss-5) printf '%s\n' loss random 5% 0% rate 100mbit seed 90512 ;;
         *) echo "unknown netem profile: '${1:-}'" >&2; return 2 ;;
     esac
 }
@@ -67,7 +71,9 @@ case "$command" in
     profiles)
         printf '%s\n' \
             'carrier-delay: delay 40ms 0ms rate 100mbit' \
-            'carrier-loss: loss random 2% 0% rate 100mbit seed 71214'
+            'carrier-loss: loss random 2% 0% rate 100mbit seed 71214' \
+            'carrier-loss-0.5: loss random 0.5% 0% rate 100mbit seed 51503' \
+            'carrier-loss-5: loss random 5% 0% rate 100mbit seed 90512'
         ;;
     validate-interface)
         validate_interface "${2:-}"

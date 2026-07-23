@@ -6,6 +6,7 @@
  */
 
 #include <ppp/stdafx.h>
+#include <ppp/dns/DnsUdpFlowRegistry.h>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -68,6 +69,7 @@ namespace ppp {
             ~DnsResolver() noexcept;
 
             void                                            SetProtectSocketCallback(const ProtectSocketCallback& cb) noexcept;
+            void                                            SetUdpFlowRegistry(const std::shared_ptr<DnsUdpFlowRegistry>& registry) noexcept;
 
             /**
              * @brief Sets the client exit IP used as the ECS source address.
@@ -350,14 +352,14 @@ namespace ppp {
              * @param callback  Invoked with the first resolved IPv4 address, or
              *                  an unspecified address on failure/timeout.
              */
-            static void                                     ResolveHostnameAsync(
-                boost::asio::io_context&                    context,
+            void                                            ResolveHostnameAsync(
                 const ppp::string&                          hostname,
                 const ExitIpCallback&                       callback) noexcept;
 
         private:
             boost::asio::io_context&                        context_;
             ProtectSocketCallback                           protect_socket_;
+            std::shared_ptr<DnsUdpFlowRegistry>             udp_flow_registry_;
             ppp::string                                     default_domestic_;
             ppp::string                                     default_foreign_;
             boost::asio::ip::address                        exit_ip_;

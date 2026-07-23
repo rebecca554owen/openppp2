@@ -23,7 +23,11 @@ bool DnsController::Open(
     , const std::shared_ptr<ppp::net::ProtectorNetwork>& protect_network
 #endif
 ) noexcept {
-    return policy_ && policy_->Open(
+    if (!policy_) {
+        return false;
+    }
+    policy_->SetUdpFlowRegistry(udp_flow_registry_);
+    return policy_->Open(
         configuration,
         context,
         proxy_only
@@ -65,6 +69,13 @@ bool DnsController::GetFakeIpRoute(uint32_t& network, int& prefix) const noexcep
     return policy_ && policy_->GetFakeIpRoute(network, prefix);
 }
 
+bool DnsController::ConsumeUdpFlow(
+    uint16_t local_port,
+    const boost::asio::ip::udp::endpoint& remote) noexcept {
+
+    return udp_flow_registry_ && udp_flow_registry_->Consume(local_port, remote);
+}
+
 std::shared_ptr<const DnsSessionContext> DnsController::OpenSession(
     const std::shared_ptr<IDnsTunnelTransport>& transport) noexcept {
     if (nullptr == transport || closed_.load(std::memory_order_acquire)) {
@@ -89,6 +100,7 @@ bool DnsController::Configure(DnsQueryContext context) noexcept {
         return false;
     }
     std::lock_guard<std::mutex> scope(syncobj_);
+    context.udp_flow_registry = udp_flow_registry_;
     context_ = std::move(context);
     configured_.store(true, std::memory_order_release);
     return true;

@@ -23,11 +23,32 @@ for a default change; it does not claim that a performance gate has passed.
 | `scheduler` | Derived presentation: `round_robin` for `stripe`, otherwise `competition`. |
 | `pool_policy` | Derived presentation: `adaptive` only for effective `flow` with turbo; otherwise `fixed`. |
 | `turbo` | Active flow-turbo flag; it is an option, not a fifth mode. |
+| `reliability` | Negotiated reliability sub-protocol (ACK + fast retransmit + PTO); orthogonal to ordering, also runs in compat. |
+| `fec` | Negotiated XOR parity FEC (implies `reliability`). |
 | `active_links` | Handshake-complete, non-retiring links, clamped for presentation. |
 | `fallback_reason` | Machine-readable reason for a capability or inactive-session fallback. |
 
 `receiver_ordering` is not a synonym for `effective_mode`; consumers must use
 the separately reported ordering fact.
+
+## Reliability sub-protocol (ACK + fast retransmit + FEC)
+
+The MUX handshake `ordering_caps` byte gains bit1 (`RELIABILITY`) and bit2
+(`FEC`): the client advertises them per `mux.reliability.enabled` (default
+true) / `mux.fec.enabled` (default false), and the server intersects both ends
+and echoes the authoritative result. Reliability runs in both compat and
+flow_v2: the receiver cumulatively reports received ranges per sequence space
+(global under compat, per-flow DSN under flow_v2), and the sender re-sends
+lost frames with their ORIGINAL sequence numbers on any live carrier from a
+bounded retransmit buffer (8 MiB default) — fast retransmit at dup-ACK
+distance >= 3, PTO 200 ms–3 s as backstop. Exhausting per-frame attempts or
+the buffer degrades to the existing `fail_flow` / session-rebuild behavior.
+`cmd_ack`/`cmd_fec` are unordered control frames sent only after negotiation
+succeeds (older peers kill the session on unknown commands). FEC is an XOR
+parity group (default 8 frames); one loss per group is recovered immediately,
+two or more are left to retransmission. Protocol details:
+[VMUX reliability sub-protocol design](../design/MUX_RELIABILITY_FEC_DESIGN_CN.md)
+(Chinese).
 
 ## Fallback behavior
 

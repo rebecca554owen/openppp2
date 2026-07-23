@@ -401,6 +401,23 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_TX_BACKLOG_STALL_TIMEOUT = 8000;    /* ms the data tx queue may stay backlogged before the session is rebuilt (D11 watchdog) */
 static constexpr int                                                        PPP_MUX_TURBO_FACTOR_MAX        = 3;        /* turbo dynamic pool: max multiplier of the --tun-mux base (pool_hard_max = base * this) */
 static constexpr int                                                        PPP_MUX_TURBO_CONTROL_COOLDOWN  = 3000;     /* ms minimum interval between turbo pool grow/shrink steps (hysteresis vs jitter) */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_BYTES   = 8 << 20;  /* 8 MiB session-wide retransmit buffer byte cap */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS = 8;   /* per-frame retransmit attempts before flow/session teardown */
+static constexpr int                                                        PPP_MUX_RELIABILITY_ACK_DELAY   = 10;       /* ms max delayed-ACK wait before flushing an ACK frame */
+static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT = 3000;     /* ms gap timeout when reliability is negotiated (replaces the 400ms default) */
+static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_INIT    = 500;      /* ms initial probe-timeout before any RTT sample */
+static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_MIN     = 200;      /* ms lower clamp for the probe-timeout */
+static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_MAX     = 3000;     /* ms upper clamp for the probe-timeout */
+static constexpr int                                                        PPP_MUX_RELIABILITY_TIMER_MS    = 10;       /* ms reliability maintenance tick (ACK delay / PTO / FEC flush) */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RXT_BURST   = 32;       /* max frames retransmitted per maintenance turn */
+static constexpr int                                                        PPP_MUX_ACK_MAX_RANGES          = 24;       /* hard cap on tracked ACK ranges per sequence space (wire bloat / DoS bound) */
+static constexpr int                                                        PPP_MUX_ACK_MAX_BLOCKS          = 8;        /* hard cap on per-flow blocks carried by one ACK frame */
+static constexpr int                                                        PPP_MUX_FAST_RETX_THRESHOLD     = 3;        /* acked-seq distance above a hole that triggers fast retransmit */
+static constexpr int                                                        PPP_MUX_FEC_GROUP               = 8;        /* data frames per XOR parity group */
+static constexpr int                                                        PPP_MUX_FEC_FLUSH               = 20;       /* ms a partial FEC group may age before being flushed */
+static constexpr int                                                        PPP_MUX_FEC_MAX_FRAME           = 60000;    /* frames larger than this are not FEC-protected (parity must fit one vmux frame) */
+static constexpr int                                                        PPP_MUX_FEC_WINDOW_GROUPS       = 64;       /* max pending/cached FEC groups on the receive side */
+static constexpr int                                                        PPP_MUX_FEC_CACHE_BYTES         = 4 << 20;  /* 4 MiB receive-side frame cache for FEC recovery */
 static constexpr int                                                        PPP_UDP_INACTIVE_TIMEOUT        = 72;
 static constexpr int                                                        PPP_UDP_KEEP_ALIVED_MIN_TIMEOUT = 20;
 static constexpr int                                                        PPP_UDP_KEEP_ALIVED_MAX_TIMEOUT = 60;
