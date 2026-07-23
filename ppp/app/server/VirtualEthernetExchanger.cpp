@@ -11,6 +11,8 @@
 #include <ppp/app/server/VirtualEthernetDatagramPortStatic.h>
 #include <ppp/app/server/VirtualEthernetNamespaceCache.h>
 #include <ppp/app/protocol/VirtualEthernetIPv6.h>
+#include <ppp/app/protocol/VirtualEthernetPathMtu.h>
+#include <ppp/app/protocol/VirtualEthernetTcpMss.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Timer.h>
@@ -1579,7 +1581,28 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
+                app::protocol::IcmpPathMtuError control_error;
+                const bool is_control_error = app::protocol::TryParseIcmpPathMtuError(
+                    packet, packet_length, control_error);
+                if (ip->proto == ppp::net::native::ip_hdr::IP_PROTO_ICMP && !is_control_error) {
+                    return false;
+                }
+
                 VES::NatInformationPtr source = switcher_->FindNatInformation(ip->src);
+                if (is_control_error) {
+                    // This packet entered through a client session, so both RFC 792
+                    // address relationships must hold: the client originated the
+                    // error for the quoted destination and the outer destination owns
+                    // the quoted source. This prevents a client from forging a PMTU
+                    // update for an unrelated peer flow.
+                    const bool related_to_outer_packet =
+                        control_error.QuotedDestination == control_error.OuterSource &&
+                        control_error.QuotedSource == control_error.OuterDestination;
+                    if (!related_to_outer_packet) {
+                        ppp::telemetry::Count("pmtu.error_rejected", 1);
+                        return false;
+                    }
+                }
                 if (NULLPTR == source) {
                     return false;
                 }
@@ -1611,6 +1634,11 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
                         ITransmissionPtr transmission = exchanger->GetTransmission();
                         if (NULLPTR != transmission) {
+                            // Keep the static tunnel-safe clamp as a fallback. Learned PMTU is
+                            // applied by the destination client before its next outbound SYN.
+                            app::protocol::ClampTcpMssIPv4(packet, packet_length,
+                                app::protocol::ComputeDynamicTcpMss(true, app::protocol::kVEthernetTunnelOverhead));
+
                             // Fix #2: NAT relay MUST execute first. P2P offer is best-effort and
                             // must never block or affect the relay forward status.
                             if (exchanger->DoNat(transmission, packet, packet_length, y)) {
@@ -1631,7 +1659,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     };
 
                 if (uint32_t destination = ip->dest; destination != IPEndPoint::BroadcastAddress) {
-                    int status = forward(switcher_.get(), ip->src, destination, packet, packet_length, y);
+                    int status = forward(switcher_.get(), source->IPAddress, destination, packet, packet_length, y);
                     // NOTE: NAT classification observations must come from actual UDP
                     // relay traffic (e.g., static-echo or UDP sendto paths), NOT from
                     // TCP control channel endpoints.  TCP endpoints reflect TCP NAT

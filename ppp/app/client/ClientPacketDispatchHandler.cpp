@@ -101,6 +101,16 @@ namespace ppp {
                     }
                 }
 
+                // Clamp outbound TCP SYN MSS to the static tunnel budget and, when an
+                // authenticated ICMP Fragmentation Needed was received, the learned PMTU.
+                if (proto == ppp::net::native::ip_hdr::IP_PROTO_TCP) {
+                    const int path_mtu = app::protocol::GetVirtualEthernetPathMtuCache().Lookup(
+                        destination, Executors::GetTickCount());
+                    app::protocol::ClampTcpMssIPv4(reinterpret_cast<Byte*>(packet), packet_length,
+                        app::protocol::ComputeDynamicTcpMss(true,
+                            app::protocol::kVEthernetTunnelOverhead, path_mtu));
+                }
+
                 exchanger->Nat(packet, packet_length);
                 return true;
             }
@@ -420,19 +430,22 @@ ANDROID_DNS_REDIRECT_TRACE(
                     return false;
                 }
 
-                // The mobile TUN can feed locally generated ICMP errors such as
-                // destination-unreachable/port-unreachable for short-lived UDP
-                // sockets. The echo forwarding path only supports echo probes;
-                // forwarding ICMP errors through it can dereference stale timer
-                // state in the native exchanger and crash the VPN process.
+                // ICMP control errors cannot use the echo state machine. Preserve a
+                // validated raw error through PacketAction_NAT so its quoted packet and
+                // RFC 1191 next-hop MTU reach the peer that owns the original flow.
                 if (frame->Type != IcmpType::ICMP_ECHO && frame->Type != IcmpType::ICMP_ER) {
-#if defined(_ANDROID)
-ANDROID_DNS_REDIRECT_TRACE( "icmp_drop unsupported type=%d code=%d dst=%s",
-                        (int)frame->Type,
-                        (int)frame->Code,
-                        Ipep::ToAddress(packet->Destination).to_string().c_str());
-#endif
-                    return false;
+                    std::shared_ptr<BufferSegment> raw = IPFrame::ToArray(allocator, packet.get());
+                    app::protocol::IcmpPathMtuError error;
+                    if (NULLPTR == raw || NULLPTR == raw->Buffer ||
+                        !app::protocol::TryParseIcmpPathMtuError(raw->Buffer.get(), raw->Length, error) ||
+                        error.OuterSource != tap->IPAddress || error.QuotedDestination != tap->IPAddress ||
+                        error.OuterDestination == tap->IPAddress) {
+                        ppp::telemetry::Count("pmtu.error_rejected", 1);
+                        return false;
+                    }
+
+                    ppp::telemetry::Count("pmtu.error_forwarded", 1);
+                    return exchanger->Nat(raw->Buffer.get(), raw->Length);
                 }
 
                 elif(owner_->IPAddressIsGatewayServer(frame->Destination, tap->GatewayServer, tap->SubmaskAddress)) {
