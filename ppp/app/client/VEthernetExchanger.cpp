@@ -6,6 +6,7 @@
 #include <ppp/app/client/udp/ClientDatagramPortManager.h>
 #include <ppp/app/client/ClientFrpRegistry.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
+#include <ppp/app/protocol/VirtualEthernetPathMtu.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/mux/MuxTransportAdapter.h>
 #include <ppp/app/mux/MuxCoordinator.h>
@@ -1793,19 +1794,20 @@ namespace ppp {
 
             /** @brief Forwards NAT payload from remote side to local switcher output. */
             bool VEthernetExchanger::OnNat(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                if (NULLPTR == switcher_) {
+                if (NULLPTR == switcher_ || NULLPTR == packet || packet_length < 1) {
+                    return false;
+                }
+
+                std::shared_ptr<ppp::tap::ITap> tap = switcher_->GetTap();
+                if (NULLPTR == tap) {
                     return false;
                 }
 
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR != configuration && !configuration->client.peer_gateway_forward) {
-                    ppp::net::native::ip_hdr* ip = ppp::net::native::ip_hdr::Parse(packet, packet_length);
+                    int ip_length = packet_length;
+                    ppp::net::native::ip_hdr* ip = ppp::net::native::ip_hdr::Parse(packet, ip_length);
                     if (NULLPTR == ip) {
-                        return false;
-                    }
-
-                    std::shared_ptr<ppp::tap::ITap> tap = switcher_->GetTap();
-                    if (NULLPTR == tap) {
                         return false;
                     }
 
@@ -1813,6 +1815,16 @@ namespace ppp {
                         ppp::telemetry::Log(Level::kInfo, "client_exchanger", "peer gateway forward rejected");
                         ppp::telemetry::Count("client.peer_gateway_forward.rejected", 1);
                         return false;
+                    }
+                }
+
+                app::protocol::IcmpPathMtuError error;
+                if (app::protocol::TryParseIcmpPathMtuError(packet, packet_length, error) &&
+                    error.IsPathMtuUpdate && error.OuterDestination == tap->IPAddress &&
+                    error.QuotedSource == tap->IPAddress) {
+                    if (app::protocol::GetVirtualEthernetPathMtuCache().Observe(
+                            error.QuotedDestination, error.NextHopMtu, Executors::GetTickCount())) {
+                        ppp::telemetry::Count("pmtu.cache_update", 1);
                     }
                 }
 
