@@ -63,6 +63,7 @@ function(openppp2_add_cpp_test target)
         target_link_options(${target} PRIVATE -fsanitize=address,undefined)
     endif()
     if(ENABLE_TSAN AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_definitions(${target} PRIVATE PPP_COROUTINES_TSAN_ENABLED=1)
         target_compile_options(${target} PRIVATE
             -fsanitize=thread
             -fno-omit-frame-pointer)

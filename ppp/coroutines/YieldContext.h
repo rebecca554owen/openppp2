@@ -419,6 +419,12 @@ namespace ppp
             std::shared_ptr<Byte>                                               stack_;
             /** @brief Allocator used to allocate this object; null means heap via `Malloc`. */
             ppp::threading::BufferswapAllocator*                                allocator_  = NULLPTR;
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+            /** @brief ThreadSanitizer identity for the coroutine stack. */
+            void*                                                               sanitizer_fiber_ = NULLPTR;
+            /** @brief ThreadSanitizer identity of the Asio runner currently calling in. */
+            void*                                                               sanitizer_caller_fiber_ = NULLPTR;
+#endif
         };
     }
 }

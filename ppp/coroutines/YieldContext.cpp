@@ -1,5 +1,8 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+#include <sanitizer/tsan_interface.h>
+#endif
 
 namespace ppp
 {
@@ -41,12 +44,23 @@ namespace ppp
             }
 
             stack_ = ppp::threading::BufferswapAllocator::MakeByteArray(heap, stack_size);
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+            sanitizer_fiber_ = __tsan_create_fiber(0);
+#endif
         }
 
         /** @brief Releases references and owned state fields. */
         YieldContext::~YieldContext() noexcept
         {
             YieldContext* y = this;
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+            if (y->sanitizer_fiber_)
+            {
+                __tsan_destroy_fiber(y->sanitizer_fiber_);
+                y->sanitizer_fiber_ = NULLPTR;
+            }
+            y->sanitizer_caller_fiber_ = NULLPTR;
+#endif
             y->h_          = NULLPTR;
             y->stack_      = NULLPTR;
             y->stack_size_ = 0;
@@ -80,6 +94,9 @@ namespace ppp
             }
 
             /** @brief The mutex is released before jumping; never hold it across fcontext switches. */
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+            __tsan_switch_to_fiber(y->sanitizer_caller_fiber_, 0);
+#endif
             y->caller_.exchange(
                 boost::context::detail::jump_fcontext(
                     y->caller_.exchange(NULLPTR), y).fctx);
@@ -124,6 +141,10 @@ namespace ppp
                 }
             }
 
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+            y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
+            __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
+#endif
             return Switch(
                 boost::context::detail::jump_fcontext(
                     y->callee_.exchange(NULLPTR), y), y);
@@ -141,6 +162,10 @@ namespace ppp
             {
                 boost::context::detail::fcontext_t callee =
                     boost::context::detail::make_fcontext(stack + stack_size_, stack_size_, &YieldContext::Handle);
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+                y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
+                __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
+#endif
                 Switch(boost::context::detail::jump_fcontext(callee, y), y);
             }
             else
@@ -217,6 +242,10 @@ namespace ppp
                  * @brief A wakeup was latched while the coroutine was parking; re-enter
                  *        it immediately so the suspend is never allowed to block.
                  */
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+                y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
+                __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
+#endif
                 boost::context::detail::transfer_t r =
                     boost::context::detail::jump_fcontext(
                         y->callee_.exchange(NULLPTR), y);
@@ -274,6 +303,9 @@ namespace ppp
                     h = NULLPTR;
                 }
 
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+                __tsan_switch_to_fiber(y->sanitizer_caller_fiber_, 0);
+#endif
                 Jump(y->caller_.exchange(NULLPTR), NULLPTR);
 
                 // If execution reaches here the coroutine was resumed after completion.
@@ -299,6 +331,10 @@ namespace ppp
             }
 
             stack_size = std::max<int>(stack_size, PPP_MEMORY_ALIGNMENT_SIZE);
+#if defined(PPP_COROUTINES_TSAN_ENABLED)
+            /** @brief TSan instrumentation needs substantially more stack than production code. */
+            stack_size = std::max<int>(stack_size, 1 << 20);
+#endif
 
             /**
              * @brief Instantiates context object before posting execution.
