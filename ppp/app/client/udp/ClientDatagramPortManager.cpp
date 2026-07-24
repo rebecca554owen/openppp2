@@ -29,34 +29,45 @@ namespace ppp {
 
                 VEthernetDatagramPortPtr ClientDatagramPortManager::AddNewDatagramPort(
                     const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& source) noexcept {
-                    VEthernetDatagramPortPtr datagram = GetDatagramPort(source);
-                    if (NULLPTR != datagram) {
-                        return datagram;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        if (closed_) {
+                            return NULLPTR;
+                        }
+
+                        VEthernetDatagramPortPtr winner =
+                            ppp::collections::Dictionary::FindObjectByKey(datagrams_, source);
+                        if (NULLPTR != winner) {
+                            return winner;
+                        }
                     }
 
                     if (ports_.is_disposed && ports_.is_disposed()) {
                         return NULLPTR;
                     }
 
-                    // create_port (the exchanger's NewDatagramPort) validates the transmission and
-                    // allocates the concrete port; a null result propagates the failure unchanged.
-                    datagram = ports_.create_port(transmission, source);
-                    if (NULLPTR == datagram) {
+                    // Port creation may block or re-enter the host, so it stays outside the manager lock.
+                    VEthernetDatagramPortPtr candidate = ports_.create_port(transmission, source);
+                    if (NULLPTR == candidate) {
                         return NULLPTR;
                     }
 
-                    bool ok;
+                    VEthernetDatagramPortPtr winner;
                     {
                         std::lock_guard<std::mutex> scope(syncobj_);
-                        ok = datagrams_.emplace(source, datagram).second;
+                        if (!closed_) {
+                            winner = ppp::collections::Dictionary::FindObjectByKey(datagrams_, source);
+                            if (NULLPTR == winner) {
+                                datagrams_.emplace(source, candidate);
+                                return candidate;
+                            }
+                        }
                     }
 
-                    if (!ok) {
-                        datagram->Dispose();
-                        return NULLPTR;
-                    }
-
-                    return datagram;
+                    // A candidate that lost publication must never finalize or erase the winner.
+                    candidate->MarkFinalize();
+                    candidate->Dispose();
+                    return winner;
                 }
 
                 VEthernetDatagramPortPtr ClientDatagramPortManager::GetDatagramPort(
@@ -69,6 +80,24 @@ namespace ppp {
                     const boost::asio::ip::udp::endpoint& source) noexcept {
                     std::lock_guard<std::mutex> scope(syncobj_);
                     return ppp::collections::Dictionary::ReleaseObjectByKey(datagrams_, source);
+                }
+
+                VEthernetDatagramPortPtr ClientDatagramPortManager::ReleaseDatagramPortIf(
+                    const boost::asio::ip::udp::endpoint& source,
+                    const VEthernetDatagramPort* expected) noexcept {
+                    if (NULLPTR == expected) {
+                        return NULLPTR;
+                    }
+
+                    std::lock_guard<std::mutex> scope(syncobj_);
+                    auto tail = datagrams_.find(source);
+                    if (tail == datagrams_.end() || tail->second.get() != expected) {
+                        return NULLPTR;
+                    }
+
+                    VEthernetDatagramPortPtr datagram = std::move(tail->second);
+                    datagrams_.erase(tail);
+                    return datagram;
                 }
 
                 bool ClientDatagramPortManager::SendTo(const boost::asio::ip::udp::endpoint& source,
@@ -160,6 +189,9 @@ namespace ppp {
                     }
 
                     std::lock_guard<std::mutex> scope(syncobj_);
+                    if (closed_) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    }
                     datagram_handlers_[source] = handler;
                     return true;
                 }
@@ -231,6 +263,7 @@ namespace ppp {
                     ppp::vector<VEthernetDatagramPortPtr> stale;
                     {
                         std::lock_guard<std::mutex> scope(syncobj_);
+                        closed_ = true;
                         for (auto&& kv : datagrams_) {
                             if (NULLPTR != kv.second) {
                                 stale.emplace_back(kv.second);

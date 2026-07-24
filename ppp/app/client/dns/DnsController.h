@@ -79,6 +79,7 @@ private:
     std::atomic_uint64_t generation_{0};
     std::atomic_bool closed_{false};
     std::atomic_bool configured_{false};
+    mutable std::recursive_mutex lifecycle_gate_;
     mutable std::mutex syncobj_;
 };
 

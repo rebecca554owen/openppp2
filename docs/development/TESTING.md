@@ -1,7 +1,7 @@
 # Testing
 > Status: Active
 > Type: Development guide
-> Last verified: 2026-07-22
+> Last verified: 2026-07-24
 >
 > **Purpose:** Select and run the test entry point that actually covers the changed surface.
 > **Audience:** Contributors and CI maintainers.
@@ -67,6 +67,16 @@ scripts/run-lifecycle-sanitizers.sh
 
 The script configures the standalone C++ project with `ENABLE_SANITIZERS=ON`, defaults to `clang++`, and builds/runs five named lifecycle, route, and DNS targets. Use it for lifecycle-sensitive changes; it is not a build of the complete native executable.
 
+### ThreadSanitizer
+
+```bash
+CXX=clang++ scripts/run-cpp-tsan-tests.sh
+```
+
+The script configures the complete standalone C++ suite in `build/test-tsan` with `ENABLE_TSAN=ON`, then builds and runs every registered CTest target. TSan is mutually exclusive with `ENABLE_SANITIZERS` (ASan/UBSan), requires a compiler with a working ThreadSanitizer runtime, and does not build the root native executable. Use `CXX=g++` when the local Clang TSan runtime is unavailable. Every standalone test registered through `openppp2_add_cpp_test()` has a 120-second watchdog so a deadlock fails instead of hanging CI.
+
+Key deterministic concurrency tests in this batch are `yield_context_test`, `spinlock_test`, `asynchronous_write_io_queue_test`, `dns_udp_relay_test`, `client_datagram_port_manager_test`, `protector_network_request_test`, `transmission_qos_concurrency_test`, `vdns_request_lifecycle_test`, `mapping_port_connect_reentrancy_test`, and `dns_controller_test`.
+
 ## Runtime contract prerequisite
 
 `bash scripts/test-runtime-contract.sh cpp` assumes that `build/test` already exists. Configure the standalone project first; the script then builds and runs only `runtime_snapshot_test` after checking the shared fixture hashes.
@@ -114,6 +124,6 @@ All of these options default to `OFF`:
 
 ## CI coverage today
 
-`.github/workflows/test.yml` is the primary unit-test workflow. It runs the standalone C++/coverage path, lifecycle sanitizers, Guardian and Go checks, Flutter tests, and iOS logic tests. It does **not** run the experimental Desktop Client's npm or Cargo test commands.
+`.github/workflows/test.yml` is the primary unit-test workflow. It runs the standalone C++/coverage path, a separate full-suite ThreadSanitizer job, lifecycle sanitizers, Guardian and Go checks, Flutter tests, and iOS logic tests. It does **not** run the experimental Desktop Client's npm or Cargo test commands.
 
 Native build workflows are separate from that unit workflow. Read the relevant workflow before calling a platform or feature combination CI-covered.

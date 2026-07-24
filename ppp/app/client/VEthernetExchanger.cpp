@@ -190,7 +190,10 @@ namespace ppp {
                         return self->DoSendTo(transmission, source, destination, packet, packet_length, y);
                     };
                 host.release_port =
-                    [self](const boost::asio::ip::udp::endpoint& source) noexcept { self->ReleaseDatagramPort(source); };
+                    [self](const boost::asio::ip::udp::endpoint& source,
+                           const VEthernetDatagramPort* expected) noexcept {
+                        self->ReleaseDatagramPortIf(source, expected);
+                    };
                 host.emplace_timeout = [](int64_t, ppp::function<void()>) noexcept {};
 #if defined(_ANDROID)
                 host.is_bypass_ip =
@@ -1356,7 +1359,13 @@ namespace ppp {
                     if (NULLPTR == vmux_context) {
                         break;
                     }
-                    else {
+                    if (NULLPTR == vmux_strand) {
+                        vmux_strand = make_shared_object<ppp::threading::Executors::Strand>(vmux_context->get_executor());
+                        if (NULLPTR == vmux_strand) {
+                            break;
+                        }
+                    }
+                    {
                         vmux::vmux_net::mux_mode mux_mode = vmux::vmux_net::parse_mode(configuration->GetEffectiveMuxMode());
                         mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0, mux_mode);
                         if (NULLPTR == mux) {
@@ -2853,6 +2862,13 @@ namespace ppp {
             /** @brief Removes and returns datagram relay port by source endpoint key. */
             VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept {
                 return datagram_manager_->ReleaseDatagramPort(sourceEP);
+            }
+
+            /** @brief Removes source only when it still maps to the self-finalizing port. */
+            VEthernetExchanger::VEthernetDatagramPortPtr VEthernetExchanger::ReleaseDatagramPortIf(
+                const boost::asio::ip::udp::endpoint& sourceEP,
+                const VEthernetDatagramPort* expected) noexcept {
+                return datagram_manager_->ReleaseDatagramPortIf(sourceEP, expected);
             }
 
             /** @brief Sends scheduled keepalive echo and handles stale-link timeout. */

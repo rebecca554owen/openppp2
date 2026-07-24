@@ -84,7 +84,7 @@ namespace ppp {
                     break;
                 }
 
-                ports_.release_port(sourceEP_);
+                ports_.release_port(sourceEP_, this);
                 /**
                  * @brief Notify upstream path about closure when this mapping already transmitted data.
                  */

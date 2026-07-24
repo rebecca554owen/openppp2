@@ -94,7 +94,7 @@ namespace vmux {
 
         /** @brief Push peer payload into local output queue. */
         bool                                            input(Byte* payload, int payload_size) noexcept;
-        /** @brief Send local payload to peer over vmux channel. */
+        /** @brief Send local payload to peer; synchronously rejects calls outside the mux strand. */
         bool                                            send_to_peer(const void* packet, int packet_length, const SendAsynchronousCallback& ac) noexcept;
         
         /** @brief Update activity timestamp using provided tick value. */

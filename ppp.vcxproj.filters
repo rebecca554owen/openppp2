@@ -489,6 +489,9 @@
     <ClCompile Include="ppp\dns\DnsProviderCatalog.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\dns\DnsUdpFlowRegistry.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\client\GeoRuleGenerator.cpp">
       <Filter>源文件</Filter>
     </ClCompile>

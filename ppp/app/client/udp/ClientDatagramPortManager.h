@@ -44,6 +44,10 @@ namespace ppp {
                     VEthernetDatagramPortPtr GetDatagramPort(const boost::asio::ip::udp::endpoint& source) noexcept;
                     /** @brief Remove and return the datagram port for source, or null. */
                     VEthernetDatagramPortPtr ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& source) noexcept;
+                    /** @brief Remove source only when it still maps to the self-finalizing port. */
+                    VEthernetDatagramPortPtr ReleaseDatagramPortIf(
+                        const boost::asio::ip::udp::endpoint& source,
+                        const VEthernetDatagramPort* expected) noexcept;
 
                     /** @brief Send a UDP datagram to the server via the source-bound relay port. */
                     bool SendTo(const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
@@ -72,8 +76,10 @@ namespace ppp {
 
                 private:
                     UdpRelayHostPorts                                                    ports_;
-                    /** @brief Independent lock guarding datagrams_ and datagram_handlers_. */
+                    /** @brief Independent lock guarding closed_, datagrams_, and datagram_handlers_. */
                     std::mutex                                                          syncobj_;
+                    /** @brief Permanent manager-local admission gate, closed by Release(). */
+                    bool                                                                closed_ = false;
                     /** @brief Active UDP datagram relay port table. */
                     ppp::unordered_map<boost::asio::ip::udp::endpoint,
                         VEthernetDatagramPortPtr>                                       datagrams_;

@@ -8,6 +8,7 @@
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
+#include <ppp/app/protocol/MappingPortConnectReentrancy.h>
 #include <ppp/IDisposable.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
@@ -1216,9 +1217,10 @@ namespace ppp {
                     }
 
                     if (NULLPTR != client) {
-                        // Remove connection from client's dictionary
+                        // A late finalizer must not erase a replacement using the same id.
                         std::lock_guard<std::mutex> lock(mapping_port_->socket_connections_mutex_);
-                        ppp::collections::Dictionary::TryRemove(client->socket_connections_, connection_id_);
+                        MappingPortConnectReentrancy::EraseIfOwner(
+                            client->socket_connections_, connection_id_, this);
                     }
                 }
             }
@@ -1402,23 +1404,30 @@ namespace ppp {
                     }
                 }
 
-                // Insert the placeholder before starting async_connect: the connect completion
-                // may dispose/finalize the connection and remove it from the table first.
-                bool ok;
-                {
-                    std::lock_guard<std::mutex> lock(socket_connections_mutex_);
-                    ok = ppp::collections::Dictionary::TryAdd(client->socket_connections_, connection_id, connection);
-                }
+                // Publish before starting async_connect because start may synchronously
+                // dispose/finalize and remove this exact owner from the table.
+                bool published = false;
+                bool ok = MappingPortConnectReentrancy::PublishThenStart(
+                    [this, &client, &connection, connection_id, &published]() noexcept {
+                        std::lock_guard<std::mutex> lock(socket_connections_mutex_);
+                        published = ppp::collections::Dictionary::TryAdd(
+                            client->socket_connections_, connection_id, connection);
+                        return published;
+                    },
+                    [&connection]() noexcept {
+                        return connection->ConnectToDestinationServer();
+                    },
+                    [this, &client, &connection, connection_id]() noexcept {
+                        std::lock_guard<std::mutex> lock(socket_connections_mutex_);
+                        return MappingPortConnectReentrancy::IsOwner(
+                            client->socket_connections_, connection_id, connection.get());
+                    },
+                    [&connection]() noexcept {
+                        connection->Dispose();
+                    });
 
-                if (!ok) {
+                if (!published) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
-                }
-                else {
-                    ok = connection->ConnectToDestinationServer();   // Connect to local destination
-                }
-
-                if (!ok) {
-                    connection->Dispose();   // Removes the placeholder from the table
                 }
                 return ok;
             }

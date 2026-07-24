@@ -60,6 +60,12 @@ namespace ppp {
             void VEthernetDatagramPort::Dispose() noexcept {
                 disposed_ = true;
                 udp::test::DatagramPortSpyInstance().dispose++;
+                if (finalize_.load()) {
+                    udp::test::DatagramPortSpyInstance().finalize++;
+                }
+                if (ports_.release_port) {
+                    ports_.release_port(sourceEP_, this);
+                }
             }
 
             bool VEthernetDatagramPort::SendTo(const void*, int, const boost::asio::ip::udp::endpoint&) noexcept {

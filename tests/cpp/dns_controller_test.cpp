@@ -17,24 +17,68 @@ public:
 
 class FakeTransport final : public dns::IDnsTunnelTransport {
 public:
+    int sends = 0;
+
     bool SendDnsDatagram(
         const boost::asio::ip::udp::endpoint&,
         const boost::asio::ip::udp::endpoint&,
-        const void*, int) noexcept override { return true; }
+        const void*, int) noexcept override {
+        ++sends;
+        return true;
+    }
+};
+
+struct ResolverCallbackState final {
+    decltype(dns::DnsQueryContext::handle_resolver_response) callback;
+
+    void Trigger() const {
+        BOOST_REQUIRE(callback);
+        callback(
+            nullptr,
+            boost::asio::ip::udp::endpoint(),
+            boost::asio::ip::udp::endpoint(),
+            ppp::vector<ppp::Byte>{0x12, 0x34});
+    }
 };
 
 class FakePolicy final : public dns::IDnsPolicy {
 public:
+    explicit FakePolicy(std::shared_ptr<ResolverCallbackState> state = nullptr) noexcept
+        : state_(std::move(state)) {
+    }
+
     bool HandleQuery(
-        const dns::DnsQueryContext&,
+        const dns::DnsQueryContext& context,
         const std::shared_ptr<const dns::DnsSessionContext>&,
         const std::shared_ptr<ppp::net::packet::IPFrame>&,
         const std::shared_ptr<ppp::net::packet::UdpFrame>&,
         const std::shared_ptr<ppp::net::packet::BufferSegment>&) noexcept override {
-        return false;
+        if (state_) {
+            state_->callback = context.handle_resolver_response;
+        }
+        return true;
     }
     void Close() noexcept override {}
+
+private:
+    std::shared_ptr<ResolverCallbackState> state_;
 };
+
+dns::DnsQueryContext MakeQueryContext(int& datagram_outputs) {
+    dns::DnsQueryContext context;
+    context.datagram_output = [&datagram_outputs](const auto&, const auto&, void*, int, bool) {
+        ++datagram_outputs;
+        return true;
+    };
+    context.tap = std::shared_ptr<ppp::tap::ITap>(reinterpret_cast<ppp::tap::ITap*>(1), [](auto*) {});
+    context.configuration = std::shared_ptr<ppp::configurations::AppConfiguration>(
+        reinterpret_cast<ppp::configurations::AppConfiguration*>(1), [](auto*) {});
+    context.io_context = std::make_shared<boost::asio::io_context>();
+    context.emplace_timeout = [](void*, const auto&) { return true; };
+    context.delete_timeout = [](void*) { return true; };
+    context.handle_resolver_response = [](const auto&, const auto&, const auto&, auto) {};
+    return context;
+}
 
 }
 
@@ -76,16 +120,49 @@ BOOST_AUTO_TEST_CASE(fake_ip_rewrite_is_owned_by_controller) {
 }
 
 BOOST_AUTO_TEST_CASE(query_context_accepts_standard_allocator_fallback) {
-    dns::DnsQueryContext context;
-    context.datagram_output = [](const auto&, const auto&, void*, int, bool) { return true; };
-    context.tap = std::shared_ptr<ppp::tap::ITap>(reinterpret_cast<ppp::tap::ITap*>(1), [](auto*) {});
-    context.configuration = std::shared_ptr<ppp::configurations::AppConfiguration>(
-        reinterpret_cast<ppp::configurations::AppConfiguration*>(1), [](auto*) {});
-    context.io_context = std::make_shared<boost::asio::io_context>();
-    context.emplace_timeout = [](void*, const auto&) { return true; };
-    context.delete_timeout = [](void*) { return true; };
-    context.handle_resolver_response = [](const auto&, const auto&, const auto&, auto) {};
+    int datagram_outputs = 0;
+    dns::DnsQueryContext context = MakeQueryContext(datagram_outputs);
 
     BOOST_TEST(context.allocator == nullptr);
     BOOST_TEST(context.IsValid());
+}
+
+BOOST_AUTO_TEST_CASE(late_resolver_callback_after_close_has_no_output) {
+    int datagram_outputs = 0;
+    auto callback_state = std::make_shared<ResolverCallbackState>();
+    auto transport = std::make_shared<FakeTransport>();
+    auto controller = std::make_shared<dns::DnsController>(
+        std::make_unique<FakePolicy>(callback_state),
+        std::make_shared<FakeTimers>());
+
+    BOOST_REQUIRE(controller->Configure(MakeQueryContext(datagram_outputs)));
+    auto session = controller->OpenSession(transport);
+    BOOST_REQUIRE(session != nullptr);
+    BOOST_REQUIRE(controller->HandleQuery(session, nullptr, nullptr, nullptr));
+
+    controller->Close();
+    callback_state->Trigger();
+
+    BOOST_TEST(datagram_outputs == 0);
+    BOOST_TEST(transport->sends == 0);
+}
+
+BOOST_AUTO_TEST_CASE(late_resolver_callback_after_controller_destruction_is_safe) {
+    int datagram_outputs = 0;
+    auto callback_state = std::make_shared<ResolverCallbackState>();
+    auto transport = std::make_shared<FakeTransport>();
+    auto controller = std::make_shared<dns::DnsController>(
+        std::make_unique<FakePolicy>(callback_state),
+        std::make_shared<FakeTimers>());
+
+    BOOST_REQUIRE(controller->Configure(MakeQueryContext(datagram_outputs)));
+    auto session = controller->OpenSession(transport);
+    BOOST_REQUIRE(session != nullptr);
+    BOOST_REQUIRE(controller->HandleQuery(session, nullptr, nullptr, nullptr));
+
+    controller.reset();
+    callback_state->Trigger();
+
+    BOOST_TEST(datagram_outputs == 0);
+    BOOST_TEST(transport->sends == 0);
 }

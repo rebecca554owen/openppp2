@@ -613,6 +613,7 @@ namespace ppp {
                  * @note Acquires syncobj_ internally. Port disposal is the caller's responsibility.
                  */
                 virtual VEthernetDatagramPortPtr                                        ReleaseDatagramPort(const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
+                virtual VEthernetDatagramPortPtr                                        ReleaseDatagramPortIf(const boost::asio::ip::udp::endpoint& sourceEP, const VEthernetDatagramPort* expected) noexcept;
 
             protected:
                 /**

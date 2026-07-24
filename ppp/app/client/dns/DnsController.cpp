@@ -96,9 +96,15 @@ std::shared_ptr<const DnsSessionContext> DnsController::OpenSession(
 }
 
 bool DnsController::Configure(DnsQueryContext context) noexcept {
-    if (closed_.load(std::memory_order_acquire) || !context.IsValid()) {
+    if (!context.IsValid()) {
         return false;
     }
+
+    std::lock_guard<std::recursive_mutex> lifecycle_scope(lifecycle_gate_);
+    if (closed_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
     std::lock_guard<std::mutex> scope(syncobj_);
     context.udp_flow_registry = udp_flow_registry_;
     context_ = std::move(context);
@@ -111,9 +117,15 @@ bool DnsController::HandleQuery(
     const std::shared_ptr<ppp::net::packet::IPFrame>& packet,
     const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept {
-    if (closed_.load(std::memory_order_acquire) || !policy_ || !session || !session->IsActive()) {
+    if (!policy_ || !session || !session->IsActive()) {
         return false;
     }
+
+    std::lock_guard<std::recursive_mutex> lifecycle_scope(lifecycle_gate_);
+    if (closed_.load(std::memory_order_acquire) || !session->IsActive()) {
+        return false;
+    }
+
     DnsQueryContext context;
     {
         std::lock_guard<std::mutex> scope(syncobj_);
@@ -139,6 +151,15 @@ void DnsController::HandleResolverResponse(
     const boost::asio::ip::udp::endpoint& source,
     const boost::asio::ip::udp::endpoint& destination,
     ppp::vector<Byte> response) noexcept {
+    if (!session) {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lifecycle_scope(lifecycle_gate_);
+    if (closed_.load(std::memory_order_acquire) || !session->IsActive()) {
+        return;
+    }
+
     DnsQueryContext context;
     {
         std::lock_guard<std::mutex> scope(syncobj_);
@@ -167,13 +188,18 @@ void DnsController::Close() noexcept {
 
     std::shared_ptr<DnsSessionContext> session;
     {
-        std::lock_guard<std::mutex> scope(syncobj_);
-        session = std::move(active_session_);
-        context_ = DnsQueryContext();
-        configured_.store(false, std::memory_order_release);
-    }
-    if (session) {
-        session->Close();
+        // Drain any response already producing output, then publish the closed state
+        // without holding this gate across policy/timer shutdown callbacks.
+        std::lock_guard<std::recursive_mutex> lifecycle_scope(lifecycle_gate_);
+        {
+            std::lock_guard<std::mutex> scope(syncobj_);
+            session = std::move(active_session_);
+            context_ = DnsQueryContext();
+            configured_.store(false, std::memory_order_release);
+        }
+        if (session) {
+            session->Close();
+        }
     }
     if (timers_) {
         timers_->CancelAll();
