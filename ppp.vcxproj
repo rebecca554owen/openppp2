@@ -485,6 +485,7 @@
     <ClCompile Include="ppp\app\protocol\VirtualEthernetTcpipConnection.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetDatagramPort.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetExchanger.cpp" />
+    <ClCompile Include="ppp\app\server\SessionResumeEstablishTransaction.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetManagedServer.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetNetworkTcpipConnection.cpp" />
     <ClCompile Include="ppp\app\server\VirtualEthernetSwitcher.cpp" />
@@ -832,6 +833,7 @@
     <ClInclude Include="ppp\app\server\VirtualEthernetDatagramPort.h" />
     <ClInclude Include="ppp\app\server\VirtualEthernetExchanger.h" />
     <ClInclude Include="ppp\app\server\SessionRecoveryState.h" />
+    <ClInclude Include="ppp\app\server\SessionResumeEstablishTransaction.h" />
     <ClInclude Include="ppp\app\server\SessionResumeFallbackDecision.h" />
     <ClInclude Include="ppp\app\server\VirtualEthernetManagedServer.h" />
     <ClInclude Include="ppp\app\server\VirtualEthernetNetworkTcpipConnection.h" />

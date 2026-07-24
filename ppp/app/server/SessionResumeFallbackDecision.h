@@ -7,6 +7,8 @@ namespace ppp {
         namespace server {
 
             enum class SessionResumeFallbackReason : std::uint8_t {
+                ResumeDisabled,
+                IneligibleCarrier,
                 LookupMiss,
                 BeginRejected,
                 OtherResumeFailure,
@@ -19,7 +21,11 @@ namespace ppp {
 
             constexpr SessionResumeFallbackDecision DecideSessionResumeFallback(
                 SessionResumeFallbackReason reason) noexcept {
-                return reason == SessionResumeFallbackReason::LookupMiss
+                // Preserve pre-resume replacement behavior only when the feature
+                // is explicitly disabled.  Once enabled, a channel already exists
+                // for the session ID, so carrier eligibility and authenticated
+                // control must fail closed instead of replacing that channel.
+                return reason == SessionResumeFallbackReason::ResumeDisabled
                     ? SessionResumeFallbackDecision::Fresh
                     : SessionResumeFallbackDecision::Reject;
             }

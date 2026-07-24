@@ -5,17 +5,19 @@
 
 namespace server = ppp::app::server;
 
-BOOST_AUTO_TEST_CASE(only_lookup_miss_starts_fresh_session) {
+BOOST_AUTO_TEST_CASE(disabled_feature_preserves_legacy_replacement) {
     BOOST_TEST(static_cast<int>(server::DecideSessionResumeFallback(
-        server::SessionResumeFallbackReason::LookupMiss)) ==
+        server::SessionResumeFallbackReason::ResumeDisabled)) ==
         static_cast<int>(server::SessionResumeFallbackDecision::Fresh));
 }
 
-BOOST_AUTO_TEST_CASE(existing_session_failures_reject_candidate_carrier) {
-    BOOST_TEST(static_cast<int>(server::DecideSessionResumeFallback(
-        server::SessionResumeFallbackReason::BeginRejected)) ==
-        static_cast<int>(server::SessionResumeFallbackDecision::Reject));
-    BOOST_TEST(static_cast<int>(server::DecideSessionResumeFallback(
-        server::SessionResumeFallbackReason::OtherResumeFailure)) ==
-        static_cast<int>(server::SessionResumeFallbackDecision::Reject));
+BOOST_AUTO_TEST_CASE(enabled_feature_rejects_unauthenticated_replacement) {
+    for (const auto reason : {
+            server::SessionResumeFallbackReason::IneligibleCarrier,
+            server::SessionResumeFallbackReason::LookupMiss,
+            server::SessionResumeFallbackReason::BeginRejected,
+            server::SessionResumeFallbackReason::OtherResumeFailure}) {
+        BOOST_TEST(static_cast<int>(server::DecideSessionResumeFallback(reason)) ==
+            static_cast<int>(server::SessionResumeFallbackDecision::Reject));
+    }
 }
