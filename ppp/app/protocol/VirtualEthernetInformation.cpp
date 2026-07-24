@@ -9,10 +9,80 @@
 #include <ppp/net/Ipep.h>
 
 #include <cstring>
+#include <limits>
 
 using ppp::auxiliary::JsonAuxiliary;
 
 namespace {
+    static bool IsCanonicalLowerHex(const ppp::string& value, std::size_t length) noexcept {
+        if (value.size() != length) {
+            return false;
+        }
+        for (char ch : value) {
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool ParseJsonUInt32(const Json::Value& json, std::uint32_t& value) noexcept {
+        if (json.type() == Json::intValue) {
+            const Json::Int64 parsed = json.asInt64();
+            if (parsed < 0 || static_cast<Json::UInt64>(parsed) >
+                std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            value = static_cast<std::uint32_t>(parsed);
+            return true;
+        }
+        if (json.type() == Json::uintValue) {
+            const Json::UInt64 parsed = json.asUInt64();
+            if (parsed > std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            value = static_cast<std::uint32_t>(parsed);
+            return true;
+        }
+        return false;
+    }
+
+    static bool ParseCanonicalUInt64(const Json::Value& json, std::uint64_t& value) noexcept {
+        if (!json.isString()) {
+            return false;
+        }
+        const ppp::string text = json.asString();
+        if (text.empty() || (text.size() > 1 && text.front() == '0')) {
+            return false;
+        }
+
+        std::uint64_t parsed = 0;
+        for (char ch : text) {
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+            const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
+            if (parsed > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+                return false;
+            }
+            parsed = parsed * 10 + digit;
+        }
+        value = parsed;
+        return true;
+    }
+
+    static bool IsBoundedReasonToken(const ppp::string& reason) noexcept {
+        if (reason.size() > ppp::app::protocol::SessionResumeControl::MaximumReasonLength) {
+            return false;
+        }
+        for (char ch : reason) {
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static ppp::string P2PIPv4ToString(uint32_t ip) noexcept {
         if (ip == 0) {
             return ppp::string();
@@ -134,6 +204,7 @@ namespace ppp {
                 ClientIPv4Req.Clear();
                 ClientIPv4Assign.Clear();
                 P2P.Clear();
+                SessionResume.Clear();
                 PeerRouteAnnounce.Clear();
                 PeerRouteTable.Clear();
             }
@@ -156,6 +227,7 @@ namespace ppp {
                     ClientIPv4Req.HasAny() ||
                     ClientIPv4Assign.HasAny() ||
                     P2P.HasAny() ||
+                    SessionResume.HasAny() ||
                     PeerRouteAnnounce.HasAny() ||
                     PeerRouteTable.HasAny();
             }
@@ -223,6 +295,12 @@ namespace ppp {
                     Json::Value p2p;
                     P2P.ToJson(p2p);
                     json["p2p"] = p2p;
+                }
+
+                if (SessionResume.Valid()) {
+                    Json::Value session_resume;
+                    SessionResume.ToJson(session_resume);
+                    json["session-resume"] = session_resume;
                 }
 
                 if (PeerRouteAnnounce.HasAny()) {
@@ -342,6 +420,11 @@ namespace ppp {
                     P2PControlMessage::FromJson(value.P2P, json["p2p"]);
                 }
 
+                if (json.isMember("session-resume") &&
+                    !SessionResumeControl::FromJson(value.SessionResume, json["session-resume"])) {
+                    return false;
+                }
+
                 if (json.isMember("peer-route-announce") && json["peer-route-announce"].isObject()) {
                     PeerRouteAnnounceMessage::FromJson(value.PeerRouteAnnounce, json["peer-route-announce"]);
                 }
@@ -350,7 +433,7 @@ namespace ppp {
                     PeerRouteTableMessage::FromJson(value.PeerRouteTable, json["peer-route-table"]);
                 }
 
-                return value.HasAny();
+                return true;
             }
 
             // ---- P2P control ----
@@ -481,6 +564,278 @@ namespace ppp {
                 }
 
                 return value.HasAny();
+            }
+
+            // ---- Session resume control ----
+
+            void SessionResumeControl::Clear() noexcept {
+                version = ProtocolVersion;
+                action = Action::None;
+                capabilities = 0;
+                session_id.clear();
+                generation = 0;
+                client_nonce.clear();
+                server_nonce.clear();
+                candidate_binding.clear();
+                proof.clear();
+                reason.clear();
+            }
+
+            bool SessionResumeControl::HasAny() const noexcept {
+                return action != Action::None;
+            }
+
+            bool SessionResumeControl::Valid() const noexcept {
+                if (version != ProtocolVersion || !HasAny() ||
+                    !IsBoundedReasonToken(reason)) {
+                    return false;
+                }
+
+                const bool identity = capabilities == CapabilityV1 &&
+                    IsCanonicalLowerHex(session_id, 32);
+                const bool client_nonce_valid = IsCanonicalLowerHex(client_nonce, 64);
+                const bool server_nonce_valid = IsCanonicalLowerHex(server_nonce, 64);
+                switch (action) {
+                    case Action::Offer:
+                        return identity && generation == 0 && client_nonce.empty() &&
+                            server_nonce_valid && candidate_binding.empty() &&
+                            proof.empty() && reason.empty();
+                    case Action::Accepted:
+                        return identity && generation == 0 && client_nonce_valid &&
+                            server_nonce_valid && candidate_binding.empty() &&
+                            IsCanonicalLowerHex(proof, 64) && reason.empty();
+                    case Action::ResumeRequest:
+                    case Action::GenerationSync:
+                        return identity && client_nonce_valid && server_nonce.empty() &&
+                            IsCanonicalLowerHex(candidate_binding, 64) &&
+                            IsCanonicalLowerHex(proof, 64) && reason.empty();
+                    case Action::ResumeAccept:
+                    case Action::ResumeConfirm:
+                    case Action::ResumeCommitted:
+                        return identity && client_nonce_valid && server_nonce_valid &&
+                            IsCanonicalLowerHex(candidate_binding, 64) &&
+                            IsCanonicalLowerHex(proof, 64) && reason.empty();
+                    case Action::Reject: {
+                        if (reason.empty()) {
+                            return false;
+                        }
+                        const bool bare = capabilities == 0 && session_id.empty() &&
+                            generation == 0 && client_nonce.empty() && server_nonce.empty() &&
+                            candidate_binding.empty() && proof.empty();
+                        const bool authenticated = identity && client_nonce_valid &&
+                            server_nonce_valid && IsCanonicalLowerHex(candidate_binding, 64) &&
+                            IsCanonicalLowerHex(proof, 64);
+                        return bare || authenticated;
+                    }
+                    default:
+                        return false;
+                }
+            }
+
+            const char* SessionResumeControl::ActionToString(Action action) noexcept {
+                switch (action) {
+                    case Action::Offer: return "offer";
+                    case Action::Accepted: return "accepted";
+                    case Action::ResumeRequest: return "resume-request";
+                    case Action::GenerationSync: return "generation-sync";
+                    case Action::ResumeAccept: return "resume-accept";
+                    case Action::ResumeConfirm: return "resume-confirm";
+                    case Action::ResumeCommitted: return "resume-committed";
+                    case Action::Reject: return "reject";
+                    default: return "";
+                }
+            }
+
+            bool SessionResumeControl::ActionFromString(const ppp::string& text, Action& action) noexcept {
+                if (text == "offer") action = Action::Offer;
+                else if (text == "accepted") action = Action::Accepted;
+                else if (text == "resume-request") action = Action::ResumeRequest;
+                else if (text == "generation-sync") action = Action::GenerationSync;
+                else if (text == "resume-accept") action = Action::ResumeAccept;
+                else if (text == "resume-confirm") action = Action::ResumeConfirm;
+                else if (text == "resume-committed") action = Action::ResumeCommitted;
+                else if (text == "reject") action = Action::Reject;
+                else {
+                    action = Action::None;
+                    return false;
+                }
+                return true;
+            }
+
+            void SessionResumeControl::ToJson(Json::Value& json) const noexcept {
+                if (!Valid()) {
+                    return;
+                }
+
+                json["version"] = Json::UInt(version);
+                json["action"] = Json::Value(ActionToString(action));
+                if (capabilities != 0) {
+                    json["capabilities"] = Json::UInt(capabilities);
+                }
+                if (!session_id.empty()) {
+                    json["session-id"] = Json::Value(session_id.c_str());
+                }
+
+                const bool resume_action = action == Action::ResumeRequest ||
+                    action == Action::GenerationSync || action == Action::ResumeAccept ||
+                    action == Action::ResumeConfirm || action == Action::ResumeCommitted;
+                const bool authenticated_reject = action == Action::Reject &&
+                    (capabilities != 0 || !session_id.empty() || !client_nonce.empty() ||
+                        !server_nonce.empty() || !candidate_binding.empty() || !proof.empty());
+                if (resume_action || authenticated_reject) {
+                    json["generation"] = Json::Value(
+                        stl::to_string<ppp::string>(generation).c_str());
+                }
+                if (!client_nonce.empty()) {
+                    json["client-nonce"] = Json::Value(client_nonce.c_str());
+                }
+                if (!server_nonce.empty()) {
+                    json["server-nonce"] = Json::Value(server_nonce.c_str());
+                }
+                if (!candidate_binding.empty()) {
+                    json["candidate-binding"] = Json::Value(candidate_binding.c_str());
+                }
+                if (!proof.empty()) {
+                    json["proof"] = Json::Value(proof.c_str());
+                }
+                if (!reason.empty()) {
+                    json["reason"] = Json::Value(reason.c_str());
+                }
+            }
+
+            ppp::string SessionResumeControl::ToJson() const noexcept {
+                Json::Value json;
+                ToJson(json);
+                return JsonAuxiliary::ToString(json);
+            }
+
+            bool SessionResumeControl::FromJson(
+                SessionResumeControl& value, const ppp::string& json) noexcept {
+                value.Clear();
+                if (json.empty()) {
+                    return false;
+                }
+                return FromJson(value, JsonAuxiliary::FromString(json));
+            }
+
+            bool SessionResumeControl::FromJson(
+                SessionResumeControl& value, const Json::Value& json) noexcept {
+                value.Clear();
+                if (!json.isObject()) {
+                    return false;
+                }
+
+                const bool has_version = json.isMember("version");
+                const bool has_action = json.isMember("action");
+                const bool has_capabilities = json.isMember("capabilities");
+                const bool has_session_id = json.isMember("session-id");
+                const bool has_generation = json.isMember("generation");
+                const bool has_client_nonce = json.isMember("client-nonce");
+                const bool has_server_nonce = json.isMember("server-nonce");
+                const bool has_candidate_binding = json.isMember("candidate-binding");
+                const bool has_proof = json.isMember("proof");
+                const bool has_reason = json.isMember("reason");
+
+                SessionResumeControl parsed;
+                std::uint32_t parsed_version = 0;
+                if (!has_version || !ParseJsonUInt32(json["version"], parsed_version) ||
+                    parsed_version != ProtocolVersion ||
+                    !has_action || !json["action"].isString() ||
+                    !ActionFromString(json["action"].asString(), parsed.action)) {
+                    return false;
+                }
+
+                if (has_capabilities) {
+                    if (!ParseJsonUInt32(json["capabilities"], parsed.capabilities) ||
+                        (parsed.capabilities & ~CapabilityV1) != 0) {
+                        return false;
+                    }
+                }
+                if (has_session_id) {
+                    if (!json["session-id"].isString()) {
+                        return false;
+                    }
+                    parsed.session_id = json["session-id"].asString();
+                    if (!IsCanonicalLowerHex(parsed.session_id, 32)) {
+                        return false;
+                    }
+                }
+                if (has_generation && !ParseCanonicalUInt64(json["generation"], parsed.generation)) {
+                    return false;
+                }
+
+                const auto parse_hex = [&json](const char* name, bool present,
+                    ppp::string& output) noexcept -> bool {
+                    if (!present) {
+                        return true;
+                    }
+                    if (!json[name].isString()) {
+                        return false;
+                    }
+                    output = json[name].asString();
+                    return IsCanonicalLowerHex(output, 64);
+                };
+                if (!parse_hex("client-nonce", has_client_nonce, parsed.client_nonce) ||
+                    !parse_hex("server-nonce", has_server_nonce, parsed.server_nonce) ||
+                    !parse_hex("candidate-binding", has_candidate_binding, parsed.candidate_binding) ||
+                    !parse_hex("proof", has_proof, parsed.proof)) {
+                    return false;
+                }
+                if (has_reason) {
+                    if (!json["reason"].isString()) {
+                        return false;
+                    }
+                    parsed.reason = json["reason"].asString();
+                    if (!IsBoundedReasonToken(parsed.reason)) {
+                        return false;
+                    }
+                }
+
+                const bool base = has_capabilities && parsed.capabilities == CapabilityV1 &&
+                    has_session_id;
+                bool valid = false;
+                switch (parsed.action) {
+                    case Action::Offer:
+                        valid = base && !has_client_nonce && !has_generation &&
+                            has_server_nonce && !has_candidate_binding && !has_proof &&
+                            parsed.reason.empty();
+                        break;
+                    case Action::Accepted:
+                        valid = base && has_client_nonce && has_server_nonce && has_proof &&
+                            !has_generation && !has_candidate_binding && parsed.reason.empty();
+                        break;
+                    case Action::ResumeRequest:
+                    case Action::GenerationSync:
+                        valid = base && has_generation && has_client_nonce &&
+                            !has_server_nonce && has_candidate_binding && has_proof &&
+                            parsed.reason.empty();
+                        break;
+                    case Action::ResumeAccept:
+                    case Action::ResumeConfirm:
+                    case Action::ResumeCommitted:
+                        valid = base && has_generation && has_client_nonce &&
+                            has_server_nonce && has_candidate_binding && has_proof &&
+                            parsed.reason.empty();
+                        break;
+                    case Action::Reject: {
+                        const bool any_authentication_field = has_capabilities || has_session_id ||
+                            has_generation || has_client_nonce || has_server_nonce ||
+                            has_candidate_binding || has_proof;
+                        const bool complete_authentication_fields = base && has_generation &&
+                            has_client_nonce && has_server_nonce && has_candidate_binding && has_proof;
+                        valid = has_reason && !parsed.reason.empty() &&
+                            (!any_authentication_field || complete_authentication_fields);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+
+                if (!valid || !parsed.Valid()) {
+                    return false;
+                }
+                value = std::move(parsed);
+                return true;
             }
 
             // ---- ClientIPv4Request ----

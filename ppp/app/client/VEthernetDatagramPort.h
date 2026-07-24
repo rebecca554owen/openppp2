@@ -192,6 +192,13 @@ namespace ppp {
                  */
                 virtual bool                                            SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
 
+                /**
+                 * @brief Replaces the tunnel carrier while retaining this logical UDP flow.
+                 * @param transmission New carrier, or null while the L3 session is suspended.
+                 * @return true when the replacement uses this port's io_context and was installed.
+                 */
+                bool                                                    RebindTransmission(const ITransmissionPtr& transmission) noexcept;
+
 #if defined(_ANDROID)
             public:
                 /**

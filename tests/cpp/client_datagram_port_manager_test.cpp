@@ -189,6 +189,50 @@ BOOST_AUTO_TEST_CASE(tick_on_empty_table_is_noop) {
     BOOST_TEST(spy_ns::DatagramPortSpyInstance().dispose == 0);
 }
 
+BOOST_AUTO_TEST_CASE(rebind_retained_ports_switches_carrier) {
+    spy_ns::DatagramPortSpyInstance().Reset();
+    udp_client::ClientDatagramPortManager m(MakeFilledPorts());
+    static int old_marker = 0;
+    static int new_marker = 0;
+    udp_client::ITransmissionPtr old_transmission(std::shared_ptr<void>(),
+        reinterpret_cast<ppp::transmissions::ITransmission*>(&old_marker));
+    udp_client::ITransmissionPtr new_transmission(std::shared_ptr<void>(),
+        reinterpret_cast<ppp::transmissions::ITransmission*>(&new_marker));
+    const auto source = Ep("10.0.0.9", 1300);
+    m.AddNewDatagramPort(old_transmission, source);
+
+    BOOST_TEST(m.RebindTransmission(udp_client::ITransmissionPtr()));
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().transmission == nullptr);
+    BOOST_TEST(m.RebindTransmission(new_transmission));
+
+    unsigned char packet = 1;
+    BOOST_TEST(m.SendTo(source, Ep("8.8.8.8", 53), &packet, 1));
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().transmission == new_transmission.get());
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().rebind == 2);
+}
+
+BOOST_AUTO_TEST_CASE(reset_ports_preserves_registered_handlers) {
+    spy_ns::DatagramPortSpyInstance().Reset();
+    udp_client::ClientDatagramPortManager m(MakeFilledPorts());
+    const auto source = Ep("10.0.0.10", 1400);
+    m.AddNewDatagramPort(udp_client::ITransmissionPtr(), source);
+    int handled = 0;
+    BOOST_REQUIRE(m.RegisterDatagramHandler(source,
+        [&handled](const boost::asio::ip::udp::endpoint&,
+                   const boost::asio::ip::udp::endpoint&, void*, int) noexcept {
+            ++handled;
+            return true;
+        }));
+
+    m.ResetPorts();
+
+    BOOST_TEST((m.GetDatagramPort(source) == nullptr));
+    unsigned char packet = 1;
+    BOOST_TEST(m.ReceiveFromDestination(source, Ep("1.1.1.1", 53), &packet, 1));
+    BOOST_TEST(handled == 1);
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().dispose == 1);
+}
+
 BOOST_AUTO_TEST_CASE(release_disposes_all_and_clears_tables) {
     spy_ns::DatagramPortSpyInstance().Reset();
     udp_client::ClientDatagramPortManager m(MakeFilledPorts());

@@ -1,7 +1,7 @@
 # 配置参考
 > Status: Active
 > Type: Reference
-> Last verified: 8c8a888
+> Last verified: 82643dc
 > Parent index: [参考索引](README_CN.md)
 > Peer link: [English](CONFIGURATION.md)
 
@@ -42,6 +42,8 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules
 | `websocket.ssl` | `certificate-file`、`certificate-key-file`、`certificate-chain-file`、`certificate-key-password`、`ciphersuites`、`verify-peer`。 |
 | `mux` | `mode`、`turbo`、`flow`、`tx` 和可选的 `debug.key`；嵌套字段拼写以 `ToJson()` 为准。 |
 | `server.ipv6` | `mode`、`cidr`、`gateway`、`dns1`、`dns2`、`lease-time`、`static-addresses`；前缀长度包含在 CIDR 内。 |
+| `server.session_resume` | `enabled` 与 `grace_ms`；服务端总开关和挂起会话宽限期。 |
+| `client.session_resume` | `enabled`；客户端认证 L3 roaming 总开关。 |
 | `key` | `kf`、`kh`、`kl`、`kx`、`sb`、cipher 名称/密钥与变换开关。 |
 | `client` | mappings、routes、代理设置、重连超时、身份、服务端和带宽。 |
 
@@ -61,6 +63,8 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules
 | `websocket.listen.ws` / `websocket.listen.wss` | `0` / `0`（关闭） |
 | `websocket.ssl.verify-peer` | `true` |
 | `websocket.ssl.ciphersuites` | `GetDefaultCipherSuites()` |
+| `client.session_resume.enabled` / `server.session_resume.enabled` | `false` / `false` |
+| `server.session_resume.grace_ms` | `60000` 毫秒 |
 | `key.kf` | `154543927` |
 | `key.kh` | `12` |
 | `key.kl` | `10` |
@@ -73,6 +77,12 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules
 | `vbgp.update-interval` | `3600` 秒 |
 
 `plaintext=true` 会使握手后的 base94 封装继续生效，启动安全诊断也明确说明数据包是在未加密状态下发送。它不适用于不可信网络。实际部署必须设为 `false`，并替换两项默认密钥；两端还必须一致使用影响分帧的 key 开关。
+
+## 认证 L3 会话漫游
+
+`client.session_resume.enabled` 与 `server.session_resume.enabled` 是相互独立的总开关，默认均为 `false`。只有双方启用并在 WSS 上协商 v1 capability，且具体 `ISslWebsocketTransmission` 提供认证 TLS session exporter 时才启用 roaming。plain TCP、plain WebSocket、CDN、无 exporter 的 WSS 与 capability 不一致都 fail closed，回到普通 fresh-session 行为。
+
+`server.session_resume.grace_ms` 限制服务端在合格 carrier 故障后只保留 L3 session/IP/NAT/UDP-manager 状态的时长；FRP mapping 和 VMUX 仍会关闭。认证 root 只驻留进程内且不序列化，因此服务端重启必然 fresh authenticate。启用 roaming 时，WSS listener 固定到 switcher owner `io_context`，以避免跨 executor handoff，但可能降低 accept/handshake 并行度。协议、威胁模型与 rollout 限制见 [认证 L3 会话漫游](../design/session-recovery/l3-roaming.md)。
 
 ## 安全相关示例片段
 

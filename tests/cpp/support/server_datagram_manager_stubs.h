@@ -22,6 +22,7 @@ namespace ppp {
                         std::atomic<int> dispose{0};
                         std::atomic<int> open{0};
                         std::atomic<int> sendto{0};
+                        std::atomic<int> rebind{0};
 
                         void Reset() noexcept;
                     };
