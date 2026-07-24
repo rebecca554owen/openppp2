@@ -13,6 +13,7 @@
 #include <ppp/app/protocol/VirtualEthernetIPv6.h>
 #include <ppp/app/protocol/VirtualEthernetPathMtu.h>
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
+#include <ppp/transmissions/IWebsocketTransmission.h>
 #include <ppp/auxiliary/StringAuxiliary.h>
 #include <ppp/collections/Dictionary.h>
 #include <ppp/threading/Timer.h>
@@ -30,6 +31,8 @@
 #include <ppp/ipv6/IPv6Packet.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
+
+#include <openssl/crypto.h>
 
 /**
  * @file VirtualEthernetExchanger.cpp
@@ -53,6 +56,142 @@ typedef ppp::threading::Executors                                   Executors;
 typedef ppp::collections::Dictionary                                Dictionary;
 
 namespace {
+    using ppp::app::protocol::SessionResumeAction;
+    using ppp::app::protocol::SessionResumeCandidateBinding;
+    using ppp::app::protocol::SessionResumeControl;
+    using ppp::app::protocol::SessionResumeExporter;
+    using ppp::app::protocol::SessionResumeId;
+    using ppp::app::protocol::SessionResumeNonce;
+    using ppp::app::protocol::SessionResumePendingAttempt;
+    using ppp::app::protocol::SessionResumeProof;
+    using ppp::app::protocol::SessionResumeTranscriptFields;
+
+    template<std::size_t Size>
+    static bool DecodeLowerHex(const ppp::string& text,
+        std::array<std::uint8_t, Size>& output) noexcept {
+        if (text.size() != Size * 2) {
+            return false;
+        }
+
+        auto nibble = [](char value, std::uint8_t& decoded) noexcept {
+            if (value >= '0' && value <= '9') {
+                decoded = static_cast<std::uint8_t>(value - '0');
+                return true;
+            }
+            if (value >= 'a' && value <= 'f') {
+                decoded = static_cast<std::uint8_t>(value - 'a' + 10);
+                return true;
+            }
+            return false;
+        };
+
+        std::array<std::uint8_t, Size> decoded{};
+        for (std::size_t i = 0; i < Size; ++i) {
+            std::uint8_t high = 0;
+            std::uint8_t low = 0;
+            if (!nibble(text[i * 2], high) || !nibble(text[i * 2 + 1], low)) {
+                OPENSSL_cleanse(decoded.data(), decoded.size());
+                return false;
+            }
+            decoded[i] = static_cast<std::uint8_t>((high << 4) | low);
+        }
+        output = decoded;
+        OPENSSL_cleanse(decoded.data(), decoded.size());
+        return true;
+    }
+
+    template<std::size_t Size>
+    static ppp::string EncodeLowerHex(const std::array<std::uint8_t, Size>& value) {
+        static constexpr char Hex[] = "0123456789abcdef";
+        ppp::string text;
+        text.resize(Size * 2);
+        for (std::size_t i = 0; i < Size; ++i) {
+            text[i * 2] = Hex[value[i] >> 4];
+            text[i * 2 + 1] = Hex[value[i] & 0x0f];
+        }
+        return text;
+    }
+
+    template<std::size_t Size>
+    static bool IsZero(const std::array<std::uint8_t, Size>& value) noexcept {
+        std::uint8_t combined = 0;
+        for (std::uint8_t byte : value) {
+            combined |= byte;
+        }
+        return combined == 0;
+    }
+
+    static bool BuildSessionResumeId(const ppp::Int128& id,
+        SessionResumeId& binary, ppp::string& canonical) noexcept {
+        ppp::string guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(id);
+        canonical.clear();
+        canonical.reserve(ppp::app::protocol::SessionResumeIdSize * 2);
+        for (char value : guid) {
+            if (value != '-') {
+                canonical.push_back(value);
+            }
+        }
+        return DecodeLowerHex(canonical, binary);
+    }
+
+    static bool IsEligibleRecoveryCarrier(
+        const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+        const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        return configuration && configuration->server.session_resume.enabled && transmission &&
+            std::dynamic_pointer_cast<ppp::transmissions::ISslWebsocketTransmission>(transmission) &&
+            transmission->HasAuthenticatedSessionExporter();
+    }
+
+    static SessionResumeExporter MakeSessionResumeExporter(
+        const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        return [transmission](const char* label, const std::uint8_t* context,
+            std::size_t context_length, std::uint8_t* output,
+            std::size_t output_length) noexcept {
+                return transmission && transmission->ExportAuthenticatedSessionKey(
+                    label, context, context_length, output, output_length);
+            };
+    }
+
+    static void FillResumeControl(const SessionResumeTranscriptFields& fields,
+        const SessionResumeProof& proof, SessionResumeControl& control) {
+        control.Clear();
+        control.version = SessionResumeControl::ProtocolVersion;
+        control.action = fields.action;
+        control.capabilities = fields.capabilities;
+        control.session_id = EncodeLowerHex(fields.session_id);
+        control.generation = fields.generation;
+        control.client_nonce = EncodeLowerHex(fields.client_nonce);
+        if (fields.action != SessionResumeAction::ResumeRequest &&
+            fields.action != SessionResumeAction::GenerationSync) {
+            control.server_nonce = EncodeLowerHex(fields.server_nonce);
+        }
+        control.candidate_binding = EncodeLowerHex(fields.candidate_binding);
+        control.proof = EncodeLowerHex(proof);
+    }
+
+    static bool DecodeResumeControl(const SessionResumeControl& control,
+        SessionResumeAction expected_action, const SessionResumeId& expected_session_id,
+        SessionResumeTranscriptFields& fields, SessionResumeProof& proof) noexcept {
+        if (!control.Valid() || !control.reason.empty() ||
+            control.version != SessionResumeControl::ProtocolVersion ||
+            control.action != expected_action ||
+            control.capabilities != SessionResumeControl::CapabilityV1 ||
+            control.session_id != EncodeLowerHex(expected_session_id) ||
+            !DecodeLowerHex(control.client_nonce, fields.client_nonce) ||
+            (!control.server_nonce.empty() &&
+                !DecodeLowerHex(control.server_nonce, fields.server_nonce)) ||
+            !DecodeLowerHex(control.candidate_binding, fields.candidate_binding) ||
+            !DecodeLowerHex(control.proof, proof)) {
+            return false;
+        }
+
+        fields.action = expected_action;
+        fields.capabilities = control.capabilities;
+        fields.session_id = expected_session_id;
+        fields.generation = control.generation;
+        return true;
+    }
+
     /**
      * @brief Extracts the destination port from a first-fragment IPv6 TCP/UDP packet.
      * @param packet Raw IPv6 packet buffer.
@@ -213,6 +352,9 @@ namespace ppp {
                 , transmission_(transmission)
                 , static_echo_session_id_(0) {
 
+                ppp::string canonical_session_id;
+                BuildSessionResumeId(id, recovery_session_id_, canonical_session_id);
+
                 std::shared_ptr<boost::asio::io_context> context = transmission->GetContext();
                 buffer_ = Executors::GetCachedBuffer(context);
                 mux_coordinator_ = std::make_unique<ppp::app::mux::MuxCoordinator>();
@@ -222,7 +364,7 @@ namespace ppp {
                 static_datagram_manager_ = std::make_unique<udp::StaticDatagramPortManager>(BuildStaticUdpRelayHostPorts());
 
                 for (;;) {
-                    ITransmissionPtr transmission = transmission_;
+                    ITransmissionPtr transmission = GetTransmission();
                     if (NULLPTR != transmission) {
                         std::shared_ptr<ITransmissionStatistics> statistics = transmission->Statistics;
                         if (NULLPTR != statistics) {
@@ -239,6 +381,437 @@ namespace ppp {
 
                 ppp::telemetry::Log(Level::kInfo, "exchanger", "constructed");
                 ppp::telemetry::Count("exchanger.create", 1);
+            }
+
+            VirtualEthernetExchanger::ITransmissionPtr VirtualEthernetExchanger::GetTransmission() noexcept {
+                std::lock_guard<std::mutex> lock(carrier_mutex_);
+                return transmission_;
+            }
+
+            std::uint64_t VirtualEthernetExchanger::GetCarrierGeneration() noexcept {
+                std::lock_guard<std::mutex> lock(carrier_mutex_);
+                return recovery_state_.GetGeneration();
+            }
+
+            bool VirtualEthernetExchanger::PrepareFreshResumeOffer(
+                const ITransmissionPtr& transmission, SessionResumeControl& offer) noexcept {
+                AppConfigurationPtr configuration = GetConfiguration();
+                if (disposed_ || NULLPTR == transmission || transmission->GetContext() != GetContext() ||
+                    !IsEligibleRecoveryCarrier(configuration, transmission) ||
+                    IsZero(recovery_session_id_)) {
+                    return false;
+                }
+
+                ppp::app::protocol::SessionResumeSecret root;
+                SessionResumeNonce server_nonce{};
+                if (!ppp::app::protocol::DeriveSessionResumeRetainedRoot(
+                        MakeSessionResumeExporter(transmission), recovery_session_id_, root) ||
+                    !ppp::app::protocol::GenerateSessionResumeNonce(server_nonce)) {
+                    return false;
+                }
+
+                const UInt64 now = Executors::GetTickCount();
+                const UInt64 timeout = static_cast<UInt64>(
+                    std::max(1, configuration->tcp.connect.timeout)) * 1000;
+                const UInt64 maximum = std::numeric_limits<UInt64>::max();
+                const UInt64 deadline = timeout > maximum - now
+                    ? maximum : now + timeout;
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    if (disposed_ || transmission_ != transmission ||
+                        recovery_state_.GetState() != SessionRecoveryState::State::Active ||
+                        recovery_armed_ || pending_fresh_root_.IsSet() ||
+                        pending_fresh_transmission_ || resume_attempt_.IsActive()) {
+                        OPENSSL_cleanse(server_nonce.data(), server_nonce.size());
+                        return false;
+                    }
+                    pending_fresh_root_ = std::move(root);
+                    pending_fresh_server_nonce_ = server_nonce;
+                    pending_fresh_transmission_ = transmission;
+                    pending_fresh_deadline_ = deadline;
+                }
+
+                offer.Clear();
+                offer.version = SessionResumeControl::ProtocolVersion;
+                offer.action = SessionResumeAction::Offer;
+                offer.capabilities = SessionResumeControl::CapabilityV1;
+                offer.session_id = EncodeLowerHex(recovery_session_id_);
+                offer.generation = 0;
+                offer.server_nonce = EncodeLowerHex(server_nonce);
+                OPENSSL_cleanse(server_nonce.data(), server_nonce.size());
+                return true;
+            }
+
+            VirtualEthernetExchanger::ResumeBeginStatus VirtualEthernetExchanger::BeginResume(
+                const ITransmissionPtr& transmission, const SessionResumeControl& request,
+                const SessionResumeCandidateBinding& candidate, UInt64 now,
+                std::uint64_t& reservation_token, SessionResumeControl& response) noexcept {
+                reservation_token = 0;
+                response.Clear();
+
+                AppConfigurationPtr configuration = GetConfiguration();
+                if (disposed_ || NULLPTR == transmission || transmission->GetContext() != GetContext() ||
+                    !IsEligibleRecoveryCarrier(configuration, transmission)) {
+                    return ResumeBeginStatus::Rejected;
+                }
+
+                SessionResumePendingAttempt request_attempt;
+                SessionResumeTranscriptFields& request_fields = request_attempt.fields;
+                SessionResumeProof& request_proof = request_attempt.proof;
+                if (!DecodeResumeControl(request, SessionResumeAction::ResumeRequest,
+                        recovery_session_id_, request_fields, request_proof) ||
+                    request_fields.candidate_binding != candidate ||
+                    !IsZero(request_fields.server_nonce)) {
+                    return ResumeBeginStatus::Rejected;
+                }
+
+                std::lock_guard<std::mutex> lock(carrier_mutex_);
+                if (disposed_ || !recovery_armed_ || !retained_root_.IsSet() ||
+                    transmission_ || resume_attempt_.IsActive() ||
+                    !recovery_state_.IsSuspended(now) ||
+                    !ppp::app::protocol::VerifySessionResumeProof(
+                        retained_root_, request_fields, request_proof)) {
+                    return ResumeBeginStatus::Rejected;
+                }
+
+                SessionResumePendingAttempt response_attempt;
+                SessionResumeTranscriptFields& response_fields = response_attempt.fields;
+                SessionResumeProof& response_proof = response_attempt.proof;
+                response_fields.action = request_fields.generation == recovery_state_.GetGeneration()
+                    ? SessionResumeAction::ResumeAccept
+                    : SessionResumeAction::GenerationSync;
+                response_fields.capabilities = SessionResumeControl::CapabilityV1;
+                response_fields.session_id = recovery_session_id_;
+                response_fields.generation = recovery_state_.GetGeneration();
+                response_fields.client_nonce = request_fields.client_nonce;
+                response_fields.candidate_binding = request_fields.candidate_binding;
+
+                SessionResumeNonce server_nonce{};
+                if (response_fields.action == SessionResumeAction::ResumeAccept &&
+                    !ppp::app::protocol::GenerateSessionResumeNonce(server_nonce)) {
+                    return ResumeBeginStatus::Rejected;
+                }
+                response_fields.server_nonce = server_nonce;
+
+                if (!ppp::app::protocol::ComputeSessionResumeProof(
+                        retained_root_, response_fields, response_proof)) {
+                    OPENSSL_cleanse(server_nonce.data(), server_nonce.size());
+                    return ResumeBeginStatus::Rejected;
+                }
+
+                if (response_fields.action == SessionResumeAction::GenerationSync) {
+                    FillResumeControl(response_fields, response_proof, response);
+                    OPENSSL_cleanse(response_proof.data(), response_proof.size());
+                    return ResumeBeginStatus::GenerationSync;
+                }
+
+                do {
+                    ++next_resume_token_;
+                } while (next_resume_token_ == 0);
+                if (!recovery_state_.ReserveResume(
+                        response_fields.generation, now, next_resume_token_)) {
+                    OPENSSL_cleanse(server_nonce.data(), server_nonce.size());
+                    OPENSSL_cleanse(response_proof.data(), response_proof.size());
+                    return ResumeBeginStatus::Rejected;
+                }
+
+                resume_attempt_.Clear();
+                resume_attempt_.active = true;
+                resume_attempt_.fields = response_fields;
+                resume_attempt_.proof = response_proof;
+                resume_candidate_ = transmission;
+                reservation_token = next_resume_token_;
+                FillResumeControl(response_fields, response_proof, response);
+                OPENSSL_cleanse(server_nonce.data(), server_nonce.size());
+                OPENSSL_cleanse(response_proof.data(), response_proof.size());
+                return ResumeBeginStatus::Reserved;
+            }
+
+            /** @brief Bounded window for publishing the data plane after a committed resume. */
+            static constexpr std::uint64_t kResumePublishGraceMs = 10000;
+
+            bool VirtualEthernetExchanger::CommitResume(
+                const ITransmissionPtr& transmission, const SessionResumeControl& confirm,
+                const SessionResumeCandidateBinding& candidate,
+                std::uint64_t reservation_token, UInt64 now,
+                SessionResumeControl& committed) noexcept {
+                committed.Clear();
+                AppConfigurationPtr configuration = GetConfiguration();
+                if (reservation_token == 0 || disposed_ || NULLPTR == transmission ||
+                    transmission->GetContext() != GetContext() ||
+                    !IsEligibleRecoveryCarrier(configuration, transmission)) {
+                    return false;
+                }
+
+                SessionResumePendingAttempt confirm_attempt;
+                SessionResumeTranscriptFields& confirm_fields = confirm_attempt.fields;
+                SessionResumeProof& confirm_proof = confirm_attempt.proof;
+                if (!DecodeResumeControl(confirm, SessionResumeAction::ResumeConfirm,
+                        recovery_session_id_, confirm_fields, confirm_proof) ||
+                    confirm_fields.candidate_binding != candidate) {
+                    return false;
+                }
+
+                bool candidate_valid = false;
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    const SessionResumeTranscriptFields& accepted = resume_attempt_.fields;
+                    candidate_valid = !disposed_ && resume_candidate_ == transmission &&
+                        resume_attempt_.IsActive() && NULLPTR == transmission_ &&
+                        NULLPTR == resume_replacement_echo_ &&
+                        recovery_state_.CanCommitResume(
+                            accepted.generation, now, reservation_token) &&
+                        confirm_fields.generation == accepted.generation &&
+                        confirm_fields.client_nonce == accepted.client_nonce &&
+                        confirm_fields.server_nonce == accepted.server_nonce &&
+                        confirm_fields.candidate_binding == accepted.candidate_binding &&
+                        ppp::app::protocol::VerifySessionResumeProof(
+                            retained_root_, confirm_fields, confirm_proof);
+                }
+                if (!candidate_valid) {
+                    return false;
+                }
+
+                VirtualInternetControlMessageProtocolPtr replacement_echo =
+                    NewEchoTransmissions(transmission);
+                if (NULLPTR == replacement_echo) {
+                    return false;
+                }
+
+                bool prepared = false;
+                const UInt64 prepare_now = std::max<UInt64>(now, Executors::GetTickCount());
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    const SessionResumeTranscriptFields& accepted = resume_attempt_.fields;
+                    if (!disposed_ && resume_candidate_ == transmission &&
+                        resume_attempt_.IsActive() && NULLPTR == transmission_ &&
+                        NULLPTR == resume_replacement_echo_ &&
+                        recovery_state_.CanCommitResume(
+                            accepted.generation, prepare_now, reservation_token) &&
+                        confirm_fields.generation == accepted.generation &&
+                        confirm_fields.client_nonce == accepted.client_nonce &&
+                        confirm_fields.server_nonce == accepted.server_nonce &&
+                        confirm_fields.candidate_binding == accepted.candidate_binding &&
+                        ppp::app::protocol::VerifySessionResumeProof(
+                            retained_root_, confirm_fields, confirm_proof) &&
+                        accepted.generation != std::numeric_limits<std::uint64_t>::max()) {
+                        SessionResumePendingAttempt committed_attempt;
+                        SessionResumeTranscriptFields& committed_fields =
+                            committed_attempt.fields;
+                        SessionResumeProof& committed_proof = committed_attempt.proof;
+                        committed_fields = accepted;
+                        committed_fields.action = SessionResumeAction::ResumeCommitted;
+                        committed_fields.generation = accepted.generation + 1;
+                        SessionResumeControl prepared_committed;
+                        if (ppp::app::protocol::ComputeSessionResumeProof(
+                                retained_root_, committed_fields, committed_proof)) {
+                            FillResumeControl(
+                                committed_fields, committed_proof, prepared_committed);
+                            if (prepared_committed.Valid() &&
+                                recovery_state_.MarkResumeCommitted(
+                                    reservation_token, prepare_now,
+                                    kResumePublishGraceMs)) {
+                                resume_replacement_echo_ = std::move(replacement_echo);
+                                resume_replacement_statistics_ = transmission->Statistics;
+                                committed = std::move(prepared_committed);
+                                prepared = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!prepared) {
+                    replacement_echo->Dispose();
+                }
+                return prepared;
+            }
+
+            bool VirtualEthernetExchanger::PublishCommittedResume(
+                const ITransmissionPtr& transmission,
+                std::uint64_t reservation_token, UInt64 now) noexcept {
+                if (reservation_token == 0 || disposed_ || NULLPTR == transmission) {
+                    return false;
+                }
+
+                bool resumed = false;
+                VirtualInternetControlMessageProtocolPtr previous_echo;
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    const SessionResumeTranscriptFields& accepted = resume_attempt_.fields;
+                    if (!disposed_ && resume_candidate_ == transmission &&
+                        resume_attempt_.IsActive() && NULLPTR == transmission_ &&
+                        NULLPTR != resume_replacement_echo_ &&
+                        recovery_state_.CanCommitResume(
+                            accepted.generation, now, reservation_token)) {
+                        resumed = CommitSessionResumeAndPublish(
+                            recovery_state_, accepted.generation, now,
+                            reservation_token,
+                            [&](std::uint64_t committed_generation) noexcept {
+                                (void)committed_generation;
+                                if (NULLPTR == statistics_) {
+                                    statistics_ = resume_replacement_statistics_;
+                                }
+                                elif (NULLPTR != resume_replacement_statistics_ &&
+                                    resume_replacement_statistics_ != statistics_) {
+                                    statistics_->AddIncomingTraffic(
+                                        resume_replacement_statistics_->IncomingTraffic.load());
+                                    statistics_->AddOutgoingTraffic(
+                                        resume_replacement_statistics_->OutgoingTraffic.load());
+                                }
+                                if (NULLPTR != statistics_) {
+                                    transmission->Statistics = statistics_;
+                                }
+
+                                datagram_manager_->RebindTransmission(transmission);
+                                previous_echo = std::move(echo_);
+                                echo_ = std::move(resume_replacement_echo_);
+                                resume_replacement_statistics_.reset();
+                                transmission_ = transmission;
+                                resume_attempt_.Clear();
+                                resume_candidate_.reset();
+                            });
+                    }
+                }
+
+                if (!resumed) {
+                    return false;
+                }
+                if (NULLPTR != previous_echo) {
+                    previous_echo->Dispose();
+                }
+
+                ppp::telemetry::Count("server.session.resumed", 1);
+                ppp::telemetry::Log(Level::kInfo, "exchanger", "session carrier resumed");
+                return true;
+            }
+
+            void VirtualEthernetExchanger::CancelResume(
+                const ITransmissionPtr& transmission,
+                std::uint64_t reservation_token) noexcept {
+                if (reservation_token == 0) {
+                    return;
+                }
+
+                VirtualInternetControlMessageProtocolPtr replacement_echo;
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    if (resume_candidate_ == transmission &&
+                        recovery_state_.CancelResume(reservation_token)) {
+                        resume_attempt_.Clear();
+                        resume_candidate_.reset();
+                        replacement_echo = std::move(resume_replacement_echo_);
+                        resume_replacement_statistics_.reset();
+                    }
+                }
+                if (NULLPTR != replacement_echo) {
+                    replacement_echo->Dispose();
+                }
+            }
+
+            VirtualEthernetExchanger::CarrierStopResult VirtualEthernetExchanger::OnCarrierStopped(
+                const ITransmissionPtr& transmission, std::uint64_t generation,
+                ppp::diagnostics::ErrorCode error, UInt64 now) noexcept {
+                auto is_recoverable_error = [](ppp::diagnostics::ErrorCode value) noexcept {
+                    using ErrorCode = ppp::diagnostics::ErrorCode;
+                    switch (value) {
+                    case ErrorCode::TunnelReadFailed:
+                    case ErrorCode::TunnelWriteFailed:
+                    case ErrorCode::SocketDisconnected:
+                    case ErrorCode::SocketReadFailed:
+                    case ErrorCode::SocketWriteFailed:
+                    case ErrorCode::SocketTimeout:
+                    case ErrorCode::TcpReceiveFailed:
+                    case ErrorCode::WebSocketClosed:
+                    case ErrorCode::WebSocketReadFailed:
+                    case ErrorCode::WebSocketWriteFailed:
+                        return true;
+                    default:
+                        return false;
+                    }
+                };
+
+                AppConfigurationPtr configuration = GetConfiguration();
+                const bool eligible = IsEligibleRecoveryCarrier(configuration, transmission);
+                const UInt64 grace = eligible
+                    ? static_cast<UInt64>(configuration->server.session_resume.grace_ms)
+                    : 0;
+
+                VirtualInternetControlMessageProtocolPtr previous_echo;
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    if (recovery_state_.GetGeneration() != generation || transmission_ != transmission) {
+                        return CarrierStopResult::Stale;
+                    }
+
+                    if (disposed_ || !eligible || !recovery_armed_ ||
+                        !retained_root_.IsSet() || resume_attempt_.IsActive() ||
+                        !is_recoverable_error(error) ||
+                        !recovery_state_.Suspend(generation, now, grace)) {
+                        retained_root_.Clear();
+                        pending_fresh_root_.Clear();
+                        OPENSSL_cleanse(pending_fresh_server_nonce_.data(),
+                            pending_fresh_server_nonce_.size());
+                        pending_fresh_transmission_.reset();
+                        pending_fresh_deadline_ = 0;
+                        recovery_armed_ = false;
+                        resume_attempt_.Clear();
+                        resume_candidate_.reset();
+                        return CarrierStopResult::Terminal;
+                    }
+
+                    pending_fresh_root_.Clear();
+                    OPENSSL_cleanse(pending_fresh_server_nonce_.data(),
+                        pending_fresh_server_nonce_.size());
+                    pending_fresh_transmission_.reset();
+                    pending_fresh_deadline_ = 0;
+                    transmission_.reset();
+                    previous_echo = std::move(echo_);
+                }
+
+                datagram_manager_->RebindTransmission(NULLPTR);
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    Dictionary::ReleaseAllObjects(mappings_);
+                    mappings_.clear();
+                }
+
+                if (std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Take(); NULLPTR != mux) {
+                    mux->close_exec();
+                }
+                if (NULLPTR != previous_echo) {
+                    previous_echo->Dispose();
+                }
+
+                // Static echo is carrier-adjacent state, not part of the retained
+                // logical L3/NAT/UDP relay session. The client negotiates it again
+                // after resume commit, so release its socket, ports and allocation.
+                std::shared_ptr<VirtualInternetControlMessageProtocolStatic> previous_static_echo =
+                    std::move(static_echo_);
+                if (NULLPTR != previous_static_echo) {
+                    previous_static_echo->Dispose();
+                }
+                static_datagram_manager_->Release();
+                static_echo_source_ep_ = boost::asio::ip::udp::endpoint(
+                    boost::asio::ip::address_v4::any(), 0);
+                static_allocated_context_.reset();
+                const int freed_static_echo_id = static_echo_session_id_.exchange(0);
+                if (freed_static_echo_id != 0 && NULLPTR != switcher_) {
+                    switcher_->StaticEchoUnallocated(freed_static_echo_id);
+                }
+
+                ppp::telemetry::Count("server.session.suspended", 1);
+                ppp::telemetry::Log(Level::kInfo, "exchanger", "session carrier suspended");
+                return CarrierStopResult::Suspended;
+            }
+
+            bool VirtualEthernetExchanger::IsRecoveryExpired(UInt64 now) noexcept {
+                std::lock_guard<std::mutex> lock(carrier_mutex_);
+                return recovery_state_.IsExpired(now);
+            }
+
+            bool VirtualEthernetExchanger::IsSuspended(UInt64 now) noexcept {
+                std::lock_guard<std::mutex> lock(carrier_mutex_);
+                return recovery_state_.IsSuspended(now);
             }
 
             udp::ServerUdpRelayHostPorts VirtualEthernetExchanger::BuildServerUdpRelayHostPorts() noexcept {
@@ -305,7 +878,7 @@ namespace ppp {
                     [self](const udp::VirtualEthernetDatagramPortStaticPtr& port) noexcept {
                         VirtualEthernetLoggerPtr logger = self->switcher_->GetLogger();
                         if (NULLPTR != logger) {
-                            logger->Port(self->GetId(), self->transmission_, port->GetSourceEndPoint(), port->GetLocalEndPoint());
+                            logger->Port(self->GetId(), self->GetTransmission(), port->GetSourceEndPoint(), port->GetLocalEndPoint());
                         }
 
                         ppp::telemetry::Log(Level::kDebug, "exchanger", "static_echo datagram port opened");
@@ -372,13 +945,33 @@ namespace ppp {
                     Timer::ReleaseAllTimeouts(timeouts_);
                     timeouts_.clear();
 
-                    VirtualInternetControlMessageProtocolPtr echo = std::move(echo_);
+                    VirtualInternetControlMessageProtocolPtr echo;
+                    VirtualInternetControlMessageProtocolPtr replacement_echo;
+                    ITransmissionPtr transmission;
+                    {
+                        std::lock_guard<std::mutex> lock(carrier_mutex_);
+                        echo = std::move(echo_);
+                        replacement_echo = std::move(resume_replacement_echo_);
+                        resume_replacement_statistics_.reset();
+                        transmission = std::move(transmission_);
+                        retained_root_.Clear();
+                        pending_fresh_root_.Clear();
+                        OPENSSL_cleanse(pending_fresh_server_nonce_.data(),
+                            pending_fresh_server_nonce_.size());
+                        pending_fresh_transmission_.reset();
+                        pending_fresh_deadline_ = 0;
+                        recovery_armed_ = false;
+                        resume_attempt_.Clear();
+                        resume_candidate_.reset();
+                    }
                     std::shared_ptr<VirtualInternetControlMessageProtocolStatic> static_echo = std::move(static_echo_);
-                    ITransmissionPtr transmission = std::move(transmission_);
                     std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Take();
 
                     if (NULLPTR != echo) {
                         echo->Dispose();
+                    }
+                    if (NULLPTR != replacement_echo) {
+                        replacement_echo->Dispose();
                     }
 
                     if (NULLPTR != static_echo) {
@@ -479,13 +1072,20 @@ namespace ppp {
                     return true;
                 }
 
-                VirtualEthernetInformation info;
-                info.Clear();
-                info.BandwidthQoS    = 0;
-                info.IncomingTraffic = std::numeric_limits<UInt64>::max();
-                info.OutgoingTraffic = std::numeric_limits<UInt64>::max();
-                info.ExpiredTime     = std::numeric_limits<UInt32>::max();
-                return DoInformation(transmission, info, y);
+                InformationEnvelope response;
+                response.Base.Clear();
+                response.Base.BandwidthQoS = 0;
+                response.Base.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                response.Base.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                response.Base.ExpiredTime = std::numeric_limits<UInt32>::max();
+                response.Extensions.Clear();
+
+                SessionResumeControl offer;
+                if (PrepareFreshResumeOffer(transmission, offer)) {
+                    response.Extensions.SessionResume = offer;
+                    response.ExtendedJson = response.Extensions.ToJson();
+                }
+                return DoInformation(transmission, response, y);
             }
 
             /** @brief Processes extended information packets, including IPv4/IPv6 assignment requests. */
@@ -496,6 +1096,107 @@ namespace ppp {
                 }
 
                 const VirtualEthernetInformationExtensions& request = information.Extensions;
+                const SessionResumeControl& resume = request.SessionResume;
+                if (resume.HasAny()) {
+                    VirtualEthernetInformationExtensions other_extensions = request;
+                    other_extensions.SessionResume.Clear();
+
+                    // A retained client can reach a fresh exchanger after server restart.
+                    // If an initial offer is already in flight, consume its ResumeRequest and
+                    // wait for Accepted. Otherwise reject the stale resume, then send a fresh
+                    // offer (or plain INFO when recovery is unavailable) on the same carrier.
+                    const bool restart_probe = !other_extensions.HasAny() && resume.Valid() &&
+                        resume.version == SessionResumeControl::ProtocolVersion &&
+                        resume.action == SessionResumeAction::ResumeRequest &&
+                        resume.capabilities == SessionResumeControl::CapabilityV1 &&
+                        resume.session_id == EncodeLowerHex(recovery_session_id_) &&
+                        resume.reason.empty();
+                    if (restart_probe) {
+                        const UInt64 now = Executors::GetTickCount();
+                        bool pending_offer = false;
+                        {
+                            std::lock_guard<std::mutex> lock(carrier_mutex_);
+                            if (pending_fresh_deadline_ != 0 &&
+                                now >= pending_fresh_deadline_) {
+                                pending_fresh_root_.Clear();
+                                OPENSSL_cleanse(pending_fresh_server_nonce_.data(),
+                                    pending_fresh_server_nonce_.size());
+                                pending_fresh_transmission_.reset();
+                                pending_fresh_deadline_ = 0;
+                            }
+                            pending_offer = !disposed_ && transmission_ == transmission &&
+                                pending_fresh_transmission_ == transmission &&
+                                pending_fresh_root_.IsSet() && !retained_root_.IsSet() &&
+                                !recovery_armed_ && pending_fresh_deadline_ != 0;
+                        }
+                        /**
+                         * A probe that arrives here is always late: this carrier has
+                         * already completed a fresh establish, and the configuration
+                         * INFO sent there is what the client takes as its fresh
+                         * negotiation answer (a frame without SessionResume control
+                         * means Fresh on every client negotiation path).  Replying
+                         * with Reject + an empty plain INFO would be applied by the
+                         * client as a configuration frame and revoke the IPv4/IPv6/
+                         * DNS state it just installed, so the probe is consumed
+                         * silently instead.
+                         */
+                        (void)pending_offer;
+                        return true;
+                    }
+
+                    SessionResumePendingAttempt accepted_attempt;
+                    SessionResumeTranscriptFields& accepted_fields = accepted_attempt.fields;
+                    SessionResumeProof& accepted_proof = accepted_attempt.proof;
+                    accepted_fields.action = SessionResumeAction::Accepted;
+                    accepted_fields.capabilities = resume.capabilities;
+                    accepted_fields.session_id = recovery_session_id_;
+                    accepted_fields.generation = resume.generation;
+                    const bool decoded =
+                        !other_extensions.HasAny() && resume.Valid() &&
+                        resume.version == SessionResumeControl::ProtocolVersion &&
+                        resume.action == SessionResumeAction::Accepted &&
+                        resume.capabilities == SessionResumeControl::CapabilityV1 &&
+                        resume.session_id == EncodeLowerHex(recovery_session_id_) &&
+                        resume.generation == 0 && resume.candidate_binding.empty() &&
+                        resume.reason.empty() &&
+                        DecodeLowerHex(resume.client_nonce, accepted_fields.client_nonce) &&
+                        DecodeLowerHex(resume.server_nonce, accepted_fields.server_nonce) &&
+                        DecodeLowerHex(resume.proof, accepted_proof) &&
+                        !IsZero(accepted_fields.client_nonce) &&
+                        !IsZero(accepted_fields.server_nonce);
+
+                    bool accepted = false;
+                    {
+                        std::lock_guard<std::mutex> lock(carrier_mutex_);
+                        if (decoded && !disposed_ && transmission_ == transmission &&
+                            pending_fresh_transmission_ == transmission &&
+                            pending_fresh_root_.IsSet() && !retained_root_.IsSet() &&
+                            !recovery_armed_ && pending_fresh_deadline_ != 0 &&
+                            Executors::GetTickCount() < pending_fresh_deadline_ &&
+                            accepted_fields.server_nonce == pending_fresh_server_nonce_ &&
+                            ppp::app::protocol::VerifySessionResumeProof(
+                                pending_fresh_root_, accepted_fields, accepted_proof)) {
+                            retained_root_ = std::move(pending_fresh_root_);
+                            recovery_armed_ = true;
+                            accepted = true;
+                        }
+
+                        if (pending_fresh_transmission_ == transmission) {
+                            pending_fresh_root_.Clear();
+                            OPENSSL_cleanse(pending_fresh_server_nonce_.data(),
+                                pending_fresh_server_nonce_.size());
+                            pending_fresh_transmission_.reset();
+                            pending_fresh_deadline_ = 0;
+                        }
+                    }
+                    OPENSSL_cleanse(accepted_proof.data(), accepted_proof.size());
+                    if (!accepted) {
+                        ppp::diagnostics::SetLastErrorCode(
+                            ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                    }
+                    return accepted;
+                }
+
                 bool has_ipv6_request = request.RequestedIPv6Address.is_v6();
                 bool has_ipv4_request = request.ClientIPv4Req.enabled;
                 bool has_p2p_request = request.P2P.HasAny();
@@ -757,7 +1458,7 @@ namespace ppp {
                 if (gateway.is_v6()) {
                     if (HandleIPv6GatewayEchoReply(packet, packet_length, gateway.to_v6())) {
                         ppp::telemetry::Log(Level::kDebug, "exchanger", "IPv6 gateway echo reply handled");
-                        return DoNat(transmission_, packet, packet_length, y);
+                        return DoNat(GetTransmission(), packet, packet_length, y);
                     }
                 }
 
@@ -1363,7 +2064,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
 
             /** @brief Schedules periodic maintenance for all exchanger-owned runtime objects. */
             bool VirtualEthernetExchanger::Update(UInt64 now) noexcept {
-                if (disposed_) {
+                if (disposed_ || IsRecoveryExpired(now)) {
                     return false;
                 }
 
@@ -1371,16 +2072,41 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::post(*context,
                     [self, this, now]() noexcept {
+                        {
+                            std::lock_guard<std::mutex> lock(carrier_mutex_);
+                            if (pending_fresh_deadline_ != 0 &&
+                                now >= pending_fresh_deadline_) {
+                                pending_fresh_root_.Clear();
+                                OPENSSL_cleanse(pending_fresh_server_nonce_.data(),
+                                    pending_fresh_server_nonce_.size());
+                                pending_fresh_transmission_.reset();
+                                pending_fresh_deadline_ = 0;
+                            }
+                        }
+
                         int session_id = static_echo_session_id_.load();
                         if (session_id != 0) {
                             static_datagram_manager_->Tick(now);
                         }
 
+                        datagram_manager_->Tick(now);
+                        if (IsSuspended(now)) {
+                            return;
+                        }
+
                         UploadTrafficToManagedServer();
                         DoMuxEvents();
-                        DoKeepAlived(GetTransmission(), now);
-
-                        datagram_manager_->Tick(now);
+                        ITransmissionPtr transmission = GetTransmission();
+                        if (NULLPTR != transmission && !DoKeepAlived(transmission, now)) {
+                            bool current = false;
+                            {
+                                std::lock_guard<std::mutex> lock(carrier_mutex_);
+                                current = transmission_ == transmission;
+                            }
+                            if (current) {
+                                transmission->Dispose();
+                            }
+                        }
                         Dictionary::UpdateAllObjects2(mappings_, now);
                     });
                 return true;
@@ -1417,7 +2143,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                ITransmissionPtr transmission = transmission_;
+                ITransmissionPtr transmission = GetTransmission();
                 if (NULLPTR == transmission) {
                     return false;
                 }
@@ -1537,7 +2263,14 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                VirtualInternetControlMessageProtocolPtr echo = echo_;
+                VirtualInternetControlMessageProtocolPtr echo;
+                {
+                    std::lock_guard<std::mutex> lock(carrier_mutex_);
+                    if (transmission_ != transmission) {
+                        return false;
+                    }
+                    echo = echo_;
+                }
                 if (NULLPTR == echo) {
                     return false;
                 }
@@ -1761,7 +2494,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                ITransmissionPtr transmission = transmission_;
+                ITransmissionPtr transmission = GetTransmission();
                 if (NULLPTR == transmission) {
                     return false;
                 }
@@ -1835,7 +2568,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     }
                 };
 
-                ITransmissionPtr transmission = transmission_;
+                ITransmissionPtr transmission = GetTransmission();
                 if (NULLPTR == transmission) {
                     return NULLPTR;
                 }
@@ -1849,18 +2582,13 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 return VirtualEthernetMappingPort::FindMappingPort(mappings_, in, tcp, remote_port);
             }
 
-            /** @brief Runs keepalive and disposes exchanger when keepalive fails. */
+            /** @brief Runs keepalive without finalizing recoverable session state. */
             bool VirtualEthernetExchanger::DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept {
                 if (disposed_) {
                     return false;
                 }
 
-                if (VirtualEthernetLinklayer::DoKeepAlived(transmission, now)) {
-                    return true;
-                }
-
-                IDisposable::Dispose(this);
-                return false;
+                return VirtualEthernetLinklayer::DoKeepAlived(transmission, now);
             }
 
             /** @brief Handles static-echo ICMP packet and relays via static echo engine. */
@@ -1873,7 +2601,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                ITransmissionPtr transmission = transmission_;
+                ITransmissionPtr transmission = GetTransmission();
                 if (NULLPTR == transmission) {
                     return false;
                 }
@@ -1938,7 +2666,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                ITransmissionPtr transmission = transmission_;
+                ITransmissionPtr transmission = GetTransmission();
                 if (NULLPTR == transmission) {
                     return false;
                 }

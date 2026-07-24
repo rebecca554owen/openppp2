@@ -97,6 +97,37 @@ openppp2_add_cpp_test(client_lifecycle_stress_test SOURCES
     client_lifecycle_stress_test.cpp)
 openppp2_add_cpp_test(client_keepalive_policy_test SOURCES
     client_keepalive_policy_test.cpp)
+openppp2_add_cpp_test(client_reconnection_policy_test SOURCES
+    client_reconnection_policy_test.cpp)
+openppp2_add_cpp_test(session_recovery_state_test SOURCES
+    session_recovery_state_test.cpp)
+openppp2_add_cpp_test(session_resume_fallback_decision_test SOURCES
+    session_resume_fallback_decision_test.cpp)
+openppp2_add_cpp_test(session_resume_information_test SOURCES
+    session_resume_information_test.cpp
+    support/peer_prefix_route_test_stubs.cpp
+    support/peer_prefix_json_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/app/protocol/VirtualEthernetInformation.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_link_libraries(session_resume_information_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(session_resume_handshake_state_test SOURCES
+    session_resume_handshake_state_test.cpp
+    support/peer_prefix_route_test_stubs.cpp
+    support/peer_prefix_json_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/app/protocol/VirtualEthernetInformation.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_link_libraries(session_resume_handshake_state_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(session_resume_authenticator_test SOURCES
+    session_resume_authenticator_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp")
+target_link_libraries(session_resume_authenticator_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(runtime_snapshot_publisher_test SOURCES
     runtime_snapshot_publisher_test.cpp)
 openppp2_add_cpp_test(vmux_runtime_state_test SOURCES

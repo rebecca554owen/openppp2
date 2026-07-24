@@ -145,6 +145,17 @@ BOOST_AUTO_TEST_CASE(send_to_destination_fin_without_port_returns_false) {
     BOOST_TEST(spy_ns::ServerDatagramPortSpyInstance().open == 0);     // fin never opens a fresh port
 }
 
+BOOST_AUTO_TEST_CASE(rebind_updates_every_retained_port) {
+    spy_ns::ServerDatagramPortSpyInstance().Reset();
+    udp_server::ServerDatagramPortManager m(MakeFilledPorts());
+    m.AddNewDatagramPort(udp_server::ITransmissionPtr(), Ep("10.0.0.10", 1400));
+    m.AddNewDatagramPort(udp_server::ITransmissionPtr(), Ep("10.0.0.11", 1500));
+
+    m.RebindTransmission(udp_server::ITransmissionPtr());
+
+    BOOST_TEST(spy_ns::ServerDatagramPortSpyInstance().rebind == 2);
+}
+
 BOOST_AUTO_TEST_CASE(tick_disposes_aging_ports) {
     spy_ns::ServerDatagramPortSpyInstance().Reset();
     udp_server::ServerDatagramPortManager m(MakeFilledPorts());

@@ -21,7 +21,8 @@ namespace ppp {
                 namespace test {
 
                     void DatagramPortSpy::Reset() noexcept {
-                        construct = destruct = dispose = sendto = onmessage = finalize = 0;
+                        construct = destruct = dispose = sendto = onmessage = finalize = rebind = 0;
+                        transmission = nullptr;
                     }
 
                     DatagramPortSpy& DatagramPortSpyInstance() noexcept {
@@ -63,7 +64,21 @@ namespace ppp {
             }
 
             bool VEthernetDatagramPort::SendTo(const void*, int, const boost::asio::ip::udp::endpoint&) noexcept {
+                SynchronizedObjectScope scope(syncobj_);
                 udp::test::DatagramPortSpyInstance().sendto++;
+                udp::test::DatagramPortSpyInstance().transmission = transmission_.get();
+                return NULLPTR != transmission_;
+            }
+
+            bool VEthernetDatagramPort::RebindTransmission(
+                const ITransmissionPtr& transmission) noexcept {
+                SynchronizedObjectScope scope(syncobj_);
+                if (disposed_) {
+                    return false;
+                }
+                transmission_ = transmission;
+                udp::test::DatagramPortSpyInstance().rebind++;
+                udp::test::DatagramPortSpyInstance().transmission = transmission_.get();
                 return true;
             }
 

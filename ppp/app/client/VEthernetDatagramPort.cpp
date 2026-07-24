@@ -64,11 +64,12 @@ namespace ppp {
              * @note If packets were sent before finalization, a terminal notification send is attempted.
              */
             void VEthernetDatagramPort::Finalize() noexcept {
-                std::shared_ptr<ITransmission> transmission = std::move(transmission_);
-                bool fin = false; 
+                std::shared_ptr<ITransmission> transmission;
+                bool fin = false;
 
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
+                    transmission = std::move(transmission_);
                     if (sendto_ && !finalize_) {
                         fin = true;
                     }
@@ -115,13 +116,32 @@ namespace ppp {
              * @return true if the payload is accepted for sending; otherwise false.
              * @note Android bypass mode may queue packets until local UDP socket opening completes.
              */
+            bool VEthernetDatagramPort::RebindTransmission(
+                const ITransmissionPtr& transmission) noexcept {
+                if (NULLPTR != transmission && transmission->GetContext() != context_) {
+                    return false;
+                }
+
+                SynchronizedObjectScope scope(syncobj_);
+                if (disposed_) {
+                    return false;
+                }
+                transmission_ = transmission;
+                return true;
+            }
+
             bool VEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
 
-                if (disposed_) {
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
+                std::shared_ptr<ITransmission> transmission;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    }
+                    transmission = transmission_;
                 }
 
                 int destinationPort = destinationEP.port();
@@ -141,10 +161,10 @@ namespace ppp {
                  * @brief Select direct physical-network bypass or VPN tunnel forwarding.
                  */
                 do {
-                    std::shared_ptr<ITransmission> transmission = transmission_;
                     if (NULLPTR == transmission) {
+                        // Suspension intentionally detaches the carrier without deleting
+                        // the logical UDP flow; a committed resume will rebind it.
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
-                        fin = true;
                         break;
                     }
 

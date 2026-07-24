@@ -41,9 +41,12 @@
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
+#include <ppp/app/protocol/SessionResumeAuthenticator.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
+#include <ppp/app/server/SessionRecoveryState.h>
 #include <ppp/app/server/udp/ServerUdpRelayHost.h>
 #include <ppp/app/server/udp/StaticUdpRelayHost.h>
+#include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
@@ -100,6 +103,18 @@ namespace ppp {
                 typedef VirtualEthernetSwitcher::VirtualEthernetStaticEchoAllocatedContext  VirtualEthernetStaticEchoAllocatedContext;
                 /** @brief Shared pointer alias for the static-echo allocation context. */
                 typedef std::shared_ptr<VirtualEthernetStaticEchoAllocatedContext>          VirtualEthernetStaticEchoAllocatedContextPtr;
+
+                enum class CarrierStopResult : std::uint8_t {
+                    Suspended,
+                    Stale,
+                    Terminal,
+                };
+
+                enum class ResumeBeginStatus : std::uint8_t {
+                    Reserved,
+                    GenerationSync,
+                    Rejected,
+                };
 
             private:    
                 typedef std::mutex                                                          SynchronizedObject;
@@ -177,8 +192,26 @@ namespace ppp {
                 bool                                                                        IsDisposed() noexcept       { return disposed_.load(std::memory_order_acquire); }
                 /** @brief Returns the parent switcher. */
                 VirtualEthernetSwitcherPtr                                                  GetSwitcher() noexcept      { return switcher_; }
-                /** @brief Returns the active transmission channel for this session. */
-                ITransmissionPtr                                                            GetTransmission() noexcept  { return transmission_; }
+                /** @brief Returns a locked snapshot of the active carrier. */
+                ITransmissionPtr                                                            GetTransmission() noexcept;
+                /** @brief Returns the generation that fences the current carrier. */
+                std::uint64_t                                                               GetCarrierGeneration() noexcept;
+                /** @brief Prepares an authenticated recovery offer for a fresh secure carrier. */
+                bool                                                                        PrepareFreshResumeOffer(const ITransmissionPtr& transmission, ppp::app::protocol::SessionResumeControl& offer) noexcept;
+                /** @brief Authenticates and reserves a suspended session for one candidate carrier. */
+                ResumeBeginStatus                                                           BeginResume(const ITransmissionPtr& transmission, const ppp::app::protocol::SessionResumeControl& request, const ppp::app::protocol::SessionResumeCandidateBinding& candidate, UInt64 now, std::uint64_t& reservation_token, ppp::app::protocol::SessionResumeControl& response) noexcept;
+                /** @brief Verifies confirmation and prepares the committed response without publishing data-plane state. */
+                bool                                                                        CommitResume(const ITransmissionPtr& transmission, const ppp::app::protocol::SessionResumeControl& confirm, const ppp::app::protocol::SessionResumeCandidateBinding& candidate, std::uint64_t reservation_token, UInt64 now, ppp::app::protocol::SessionResumeControl& committed) noexcept;
+                /** @brief Publishes the prepared replacement carrier after the committed response is sent. */
+                bool                                                                        PublishCommittedResume(const ITransmissionPtr& transmission, std::uint64_t reservation_token, UInt64 now) noexcept;
+                /** @brief Cancels only the matching candidate reservation without expiring the session. */
+                void                                                                        CancelResume(const ITransmissionPtr& transmission, std::uint64_t reservation_token) noexcept;
+                /** @brief Handles one carrier completion with pointer and generation fencing. */
+                CarrierStopResult                                                           OnCarrierStopped(const ITransmissionPtr& transmission, std::uint64_t generation, ppp::diagnostics::ErrorCode error, UInt64 now) noexcept;
+                /** @brief Returns true after a suspended recovery grace deadline expires. */
+                bool                                                                        IsRecoveryExpired(UInt64 now) noexcept;
+                /** @brief Returns true while this session is awaiting an eligible replacement carrier. */
+                bool                                                                        IsSuspended(UInt64 now) noexcept;
                 /** @brief Returns the Go managed-server bridge (may be null). */
                 VirtualEthernetManagedServerPtr                                             GetManagedServer() noexcept { return managed_server_; }
                 /** @brief Returns the traffic statistics object for this session. */
@@ -591,11 +624,11 @@ namespace ppp {
     
             private:    
                 /**
-                 * @brief Extends the base keepalive logic and disposes the session on timeout.
+                 * @brief Runs the base keepalive logic without deciding session recovery lifecycle.
                  *
                  * @param transmission Active transmission channel.
                  * @param now          Current tick count in milliseconds.
-                 * @return True if keepalive sent; false if the session timed out and is disposed.
+                 * @return True if keepalive sent; false when the carrier should stop.
                  */
                 virtual bool                                                                DoKeepAlived(const ITransmissionPtr& transmission, uint64_t now) noexcept override;
 
@@ -674,6 +707,20 @@ namespace ppp {
                 VirtualInternetControlMessageProtocolPtr                                    echo_;                      ///< ICMP echo forwarding helper.
                 std::unique_ptr<udp::ServerDatagramPortManager>                             datagram_manager_;          ///< Owns the UDP relay session table (extracted P2-e).
                 std::unique_ptr<udp::StaticDatagramPortManager>                             static_datagram_manager_;   ///< Owns the static-echo relay session table (extracted P2-f).
+                mutable std::mutex                                                          carrier_mutex_;             ///< Guards carrier pointer, generation, and authenticated recovery state.
+                SessionRecoveryState                                                        recovery_state_;            ///< Same-process carrier recovery state machine.
+                ppp::app::protocol::SessionResumeId                                         recovery_session_id_{};      ///< Canonical binary session identifier.
+                ppp::app::protocol::SessionResumeSecret                                     retained_root_;             ///< Root retained only after authenticated fresh acceptance.
+                ppp::app::protocol::SessionResumeSecret                                     pending_fresh_root_;        ///< Temporary root awaiting fresh acceptance.
+                ppp::app::protocol::SessionResumeNonce                                      pending_fresh_server_nonce_{}; ///< Fresh offer nonce.
+                ITransmissionPtr                                                            pending_fresh_transmission_; ///< Carrier allowed to accept the fresh offer.
+                UInt64                                                                      pending_fresh_deadline_ = 0; ///< Monotonic deadline for unaccepted fresh offers.
+                bool                                                                        recovery_armed_ = false;      ///< True only after fresh proof verification.
+                ppp::app::protocol::SessionResumePendingAttempt                             resume_attempt_;            ///< Authenticated reserved resume transaction.
+                ITransmissionPtr                                                            resume_candidate_;          ///< Carrier owning the current reservation.
+                VirtualInternetControlMessageProtocolPtr                                    resume_replacement_echo_;   ///< Prepared echo helper, unpublished until committed INFO is sent.
+                ITransmissionStatisticsPtr                                                  resume_replacement_statistics_; ///< Prepared carrier statistics for publication.
+                std::uint64_t                                                               next_resume_token_ = 0;      ///< Monotonic nonzero local reservation token.
                 ITransmissionPtr                                                            transmission_;              ///< Active session transmission channel.
                 VirtualEthernetManagedServerPtr                                             managed_server_;            ///< Go managed-server bridge reference.
                 ITransmissionStatisticsPtr                                                  statistics_last_;           ///< Statistics snapshot from the previous upload tick.

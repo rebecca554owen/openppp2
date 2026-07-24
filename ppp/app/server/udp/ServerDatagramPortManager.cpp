@@ -94,6 +94,21 @@ namespace ppp {
                     return datagram->SendTo(packet, packet_length, destination);
                 }
 
+                void ServerDatagramPortManager::RebindTransmission(
+                    const ITransmissionPtr& transmission) noexcept {
+                    // Lock-free by invariant: the resume carrier is pinned to the
+                    // exchanger's own io_context (see VirtualEthernetSwitcher
+                    // acceptor context pinning), so this walk and the per-port
+                    // rebind always run on the manager's single context thread.
+                    // If that pinning is ever relaxed, this needs a mutex.
+                    for (const auto& entry : datagrams_) {
+                        const VirtualEthernetDatagramPortPtr& datagram = entry.second;
+                        if (NULLPTR != datagram) {
+                            datagram->RebindTransmission(transmission);
+                        }
+                    }
+                }
+
                 void ServerDatagramPortManager::Tick(UInt64 now) noexcept {
                     // Single io_context thread: the library sweep (dispose-on-IsPortAging) is the exact
                     // GC the exchanger ran inline at UpdateAllObjects(datagrams_, now).
